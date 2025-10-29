@@ -63,13 +63,8 @@ run_t3000_ttfabric_tests() {
   # TODO (issue: #24335) disabled slow dispatch tests for now, need to re-evaluate if need to add in a different pool
   #TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 
-  # Offline test for Cluster Validation Tool and FSD generation
+  # Offline test for Cluster Validation Tool
   ./build/tools/scaleout/run_cluster_validation --global-descriptor-path tools/tests/scaleout/global_system_descriptors/proto/4_lb_superpod_physical_desc.textproto --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/16_n300_lb_cluster.textproto --deployment-descriptor-path tools/tests/scaleout/deployment_descriptors/16_lb_deployment.textproto --print-connectivity --hard-fail
-  ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="*SingleNodeType*"
-  ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="*16LB*"
-  ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="*5LB*"
-  ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="*5WHGalaxyYTorus*"
-
 
   # these tests cover mux fixture as well
   TT_METAL_FABRIC_TELEMETRY=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"

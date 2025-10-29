@@ -42,10 +42,6 @@ on:
         required: false
         type: boolean
         default: false
-      scaleout-tests:
-        required: false
-        type: boolean
-        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -108,16 +104,6 @@ jobs:
     with:
       arch: wormhole_b0
       runner-label: tt-ubuntu-2204-n300-stable
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  scaleout-tests:
-    if: ${{ inputs.scaleout-tests }}
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/scaleout-tests.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
