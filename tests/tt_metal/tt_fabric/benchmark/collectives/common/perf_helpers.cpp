@@ -9,7 +9,6 @@
 #include <numeric>
 
 #include <tt-metalium/device_pool.hpp>
-using tt::DevicePool;
 
 namespace tt::tt_fabric::bench {
 
@@ -96,8 +95,8 @@ PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_
     return aggregate_stats(pts);
 }
 
-tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id) {
-    auto devices = DevicePool::instance().get_all_active_devices();
+tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id) {
+    auto devices = tt::DevicePool::instance().get_all_active_devices();
     for (auto* d : devices) {
         if (d->id() == phys_id) {
             return d;

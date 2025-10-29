@@ -19,11 +19,12 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "This function is for RM->RM");
     TT_FATAL(
-        input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
+        input_tensor_a.dtype() == tt::tt_metal::DataType::UINT16 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT16 or
             input_tensor_a.dtype() == tt::tt_metal::DataType::UINT32 or
-            input_tensor_a.dtype() == tt::tt_metal::DataType::FLOAT32 or
-            input_tensor_a.dtype() == tt::tt_metal::DataType::INT32,
-        "Can only work with bfloat16/float32 or int32/uint32 tensors");
+            input_tensor_a.dtype() == tt::tt_metal::DataType::INT32 or
+            input_tensor_a.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "Can only work with UINT16, BFLOAT16, UINT32, INT32, FLOAT32 data types");
     // is this relevant?
     TT_FATAL(
         this->m_output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),

@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_broadcast import run_all_broadcast_impl
+from tests.nightly.t3000.ccl.test_new_all_broadcast import run_all_broadcast_impl
 
 
 # Enumerate the post-commit cases explicitly
@@ -66,3 +66,31 @@ def test_all_broadcast_trace(
         trace_mode=True,
         mesh_mapper_config=mesh_mapper_config,
     )
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 16)], indirect=True)
+@pytest.mark.parametrize("output_shape", [[8, 16, 128, 576]])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_all_broadcast_quad_host_mesh(mesh_device, output_shape, num_links, input_dtype, layout):
+    import torch
+
+    torch.manual_seed(0)
+    input_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], mesh_device.shape)
+    mesh_mapper = ttnn.create_mesh_mapper(mesh_device, mesh_mapper_config)
+    input_tensor_tt = ttnn.from_torch(
+        input_tensor, device=mesh_device, layout=layout, dtype=input_dtype, mesh_mapper=mesh_mapper
+    )
+    output_tensors = ttnn.experimental.all_broadcast_async(
+        input_tensor_tt, num_links=num_links, topology=ttnn.Topology.Linear, cluster_axis=0
+    )
+    for i, output_tensor in enumerate(output_tensors):
+        result_torch = ttnn.to_torch(
+            output_tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=mesh_device.shape),
+        )
+        for j in range(mesh_device.shape[0]):
+            assert torch.allclose(result_torch[j, :, :, :], input_tensor[i, :, :, :])

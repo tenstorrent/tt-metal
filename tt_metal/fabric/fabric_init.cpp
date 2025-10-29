@@ -19,6 +19,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include <fmt/ranges.h>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -33,8 +34,8 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
     const tt::tt_fabric::RoutingDirection direction,
     tt::tt_fabric::MeshId mesh_id0,
     tt::tt_fabric::MeshId mesh_id1,
-    chip_id_t chip0,
-    chip_id_t chip1,
+    ChipId chip0,
+    ChipId chip1,
     bool wrap_around_mesh) {
     auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
     auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
@@ -46,7 +47,8 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         return {fabric_edm_type, fabric_edm_axis};
     }
 
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0);
+    // Need global mesh shape to determine dateline placement for multi-host setups
+    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0, tt::tt_fabric::MeshScope::GLOBAL);
     TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
 
     auto mesh_num_rows = physical_mesh_shape[0];
@@ -166,8 +168,15 @@ void build_tt_fabric_program(
 
     if (is_TG && device->is_mmio_capable()) {
         const auto& edm_config = fabric_context.get_fabric_router_config();
+
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
+            log_debug(
+                tt::LogOp,
+                "FabricEriscDatamoverConfig for device {}: eth_chan={}, direction={}",
+                device->id(),
+                eth_chan,
+                eth_direction);
             // remote_fabric_node_id is only used to determine the handshake master, no functional impact
             // for now treat the mmio chips as the handshake master
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
@@ -225,7 +234,7 @@ void build_tt_fabric_program(
         // assume same neighbor per direction
         TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
         TT_FATAL(
-            std::set<chip_id_t>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
+            std::set<ChipId>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
             "Multiple neighbors per direction is currently unsupported");
 
         // 1D fabric only supports intramesh connections apart from TG gateways
@@ -247,11 +256,13 @@ void build_tt_fabric_program(
         active_fabric_eth_channels.insert({direction, active_eth_chans});
         log_debug(
             tt::LogMetal,
-            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
+            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans.size(): {}, "
+            "active_eth_chans: [{}]",
             device->id(),
             control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
             direction,
-            active_eth_chans.size());
+            active_eth_chans.size(),
+            fmt::join(active_eth_chans, ", "));
     }
 
     if (active_fabric_eth_channels.empty()) {
@@ -491,10 +502,6 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             ct_args.push_back(router_channels_mask);
 
             auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                // Force fabric to run on erisc1
-                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
-            }
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto kernel = tt::tt_metal::CreateKernel(

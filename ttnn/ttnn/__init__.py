@@ -12,12 +12,6 @@ from types import ModuleType
 
 from loguru import logger
 
-# Sets env and updates shared libs rpath
-# This is a tweak required for a proper wheel functioning
-import ttnn.library_tweaks
-
-library_tweaks.setup_ttnn_so()
-
 import ttnn._ttnn
 
 
@@ -253,6 +247,7 @@ from ttnn.device import (
     SubDeviceId,
     SubDeviceManagerId,
     init_device_compute_kernel_config,
+    SetRootDir,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
@@ -349,6 +344,7 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormDistributedDefaultProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
@@ -396,6 +392,7 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -411,3 +408,30 @@ from ttnn._ttnn.device import get_arch_name as _get_arch_name
 
 def get_arch_name():
     return _get_arch_name()
+
+
+from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+
+import pathlib
+import importlib.util
+
+
+def _is_editable():
+    spec = importlib.util.find_spec(__package__)
+    if not spec or not spec.origin:
+        return False
+    path = pathlib.Path(spec.origin).resolve()
+    return "site-packages" not in str(path) and "dist-packages" not in str(path)
+
+
+if "TT_METAL_RUNTIME_ROOT" not in os.environ:
+    this_dir = pathlib.Path(__file__).resolve().parent
+
+    if _is_editable():
+        # Go two levels up from the package's __init__.py location
+        root_dir = this_dir.parent.parent
+    else:
+        # For installed packages, reference bundled data directory
+        root_dir = this_dir
+
+    SetRootDir(str(root_dir))

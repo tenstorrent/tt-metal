@@ -40,7 +40,7 @@ jobs:
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
       - id: compute-outputs
         shell: bash
@@ -69,7 +69,7 @@ jobs:
     runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
+      image: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!'}}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache

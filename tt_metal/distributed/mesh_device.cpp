@@ -51,7 +51,7 @@
 #include <env_lib.hpp>
 
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/sub_device/sub_device_manager.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
@@ -217,12 +217,12 @@ MeshDevice::MeshDevice(
     std::unique_ptr<MeshDeviceView> mesh_device_view,
     std::shared_ptr<MeshDevice> parent_mesh) :
     scoped_devices_(std::move(mesh_handle)),
-    view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
+    view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
+    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
+    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -466,7 +466,7 @@ MeshDevice::~MeshDevice() {
     close();
 }
 
-IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
+IDevice* MeshDevice::get_device(ChipId physical_device_id) const {
     for (auto device : this->get_devices()) {
         if (device->id() == physical_device_id) {
             return device;
@@ -620,10 +620,11 @@ const MeshDeviceView& MeshDevice::get_view() const {
 
 int MeshDevice::id() const { return mesh_id_; }
 // For a mesh, build id is the same as the device id for the reference device
-chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
+ChipId MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_ == nullptr; }
 
+const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return parent_mesh_; }
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const {
     std::vector<std::shared_ptr<MeshDevice>> result;
     result.reserve(submeshes_.size());
@@ -747,7 +748,7 @@ bool MeshDevice::is_inactive_ethernet_core(CoreCoord /*logical_core*/) const {
     TT_THROW("is_inactive_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-std::tuple<chip_id_t, CoreCoord> MeshDevice::get_connected_ethernet_core(CoreCoord /*eth_core*/) const {
+std::tuple<ChipId, CoreCoord> MeshDevice::get_connected_ethernet_core(CoreCoord /*eth_core*/) const {
     TT_THROW("get_connected_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
@@ -755,7 +756,7 @@ bool MeshDevice::is_active_ethernet_core(CoreCoord /*logical_core*/, bool /*skip
     TT_THROW("is_active_ethernet_core() is not supported on MeshDevice - use individual devices instead");
 }
 
-std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(chip_id_t /*connected_chip_id*/) const {
+std::vector<CoreCoord> MeshDevice::get_ethernet_sockets(ChipId /*connected_chip_id*/) const {
     TT_THROW("get_ethernet_sockets() is not supported on MeshDevice - use individual devices instead");
 }
 

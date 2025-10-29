@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "blackhole/noc_nonblocking_api.h"
-#include "ethernet/tunneling.h"
+#include "noc_nonblocking_api.h"
+#include "hw/inc/ethernet/tunneling.h"
 #include "risc_common.h"
 #include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 

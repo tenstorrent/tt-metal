@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import ttnn
 
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
+from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,
 )
@@ -44,19 +44,23 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("axis", [0, 1])
+@pytest.mark.parametrize("axis", [0, 1], ids=["axis_0", "axis_1"])
 @pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq", [1, 2])
-@pytest.mark.parametrize("local_reduce", [False, True])
+@pytest.mark.parametrize("seq", [1, 2], ids=["s1", "s2"])
+@pytest.mark.parametrize("local_reduce", [False, True], ids=["dense", "sparse"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [4, 1])
+@pytest.mark.parametrize("num_links", [4, 1], ids=["num_links_4", "num_links_1"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_input", "l1_input"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_output", "l1_output"]
+)
 def test_all_to_all_combine_no_trace(
     mesh_device,
     trace_mode,

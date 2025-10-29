@@ -68,7 +68,7 @@ struct ToMemoryConfig {
                 } else {
                     // for row-major tensors where shard-spec[1] is different for input shard and output shard
 
-                    TT_FATAL(memory_config.is_sharded(), "Error");
+                    TT_FATAL(memory_config.is_sharded(), "Memory config must be sharded for this operation");
                     Tensor temp = tt::tt_metal::operation::run(
                                       data_movement::ShardedToInterleavedDeviceOperation{
                                           .output_mem_config = ttnn::DRAM_MEMORY_CONFIG,
