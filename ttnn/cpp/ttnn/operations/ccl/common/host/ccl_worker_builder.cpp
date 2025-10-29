@@ -31,9 +31,9 @@ CCLWorkerArgBuilder::CCLWorkerArgBuilder(
     ttnn::ccl::TensorPartition const& output_tensor_partition,
     std::size_t operating_dim) :
     device(device),
-    op_config(op_config),
     input_tensor_partition(input_tensor_partition),
     output_tensor_partition(output_tensor_partition),
+    op_config(op_config),
     operating_dim(operating_dim) {}
 
 Shape4D<uint32_t> to_4d_shape(Shape4D<uint32_t> const& shape) { return shape; }
