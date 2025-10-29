@@ -72,7 +72,7 @@ struct OpIdHasher {
 };
 
 struct AnalysisResultsConfig {
-    std::string analysis_name{};
+    std::string analysis_name;
     bool display_start_and_end_timestamps = false;
     std::optional<std::string> start_timestamp_header = std::nullopt;
     std::optional<std::string> end_timestamp_header = std::nullopt;
@@ -109,7 +109,7 @@ struct AnalysisResults {
 struct AnalysisStartEndConfig {
     AnalysisRiscTypes risc_types = AnalysisRiscTypesAny;
     AnalysisMarkerTypes marker_types = AnalysisMarkerTypesAny;
-    AnalysisMarkerNameKeywords marker_name_keywords = {};
+    AnalysisMarkerNameKeywords marker_name_keywords;
 };
 
 struct AnalysisConfig {
@@ -123,7 +123,7 @@ struct AnalysisConfig {
 struct OpsPerfResults {
     struct SingleOpPerfResults {
         struct OpMetaData {
-            ChipId device_id;
+            ChipId device_id = 0;
             ARCH device_arch = ARCH::Invalid;
             std::string op_name;
             uint32_t num_fw_cores = 0;
