@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 
 //
-// Reader for elemwise y=ax+b
+// Reader for elemwise y = ax + b
 // Assumptions:
 // - a, x and b are of the same tile size.
 //
@@ -43,8 +43,8 @@ void kernel_main() {
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
+        read_tile_for_buffer(i, b_accessor, cb_id_b);
         read_tile_for_buffer(i, a_accessor, cb_id_a);
         read_tile_for_buffer(i, x_accessor, cb_id_x);
-        read_tile_for_buffer(i, b_accessor, cb_id_b);
     }
 }

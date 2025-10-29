@@ -6,14 +6,16 @@
 #include "hostdevcommon/kernel_structs.h"
 
 //
-// Writer for elemwise y=ax+b
+// Writer for elemwise y = ax + b
+// Assumptions
+// - y is stored in cb_16
 //
 void kernel_main() {
     uint32_t y_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_id_y = tt : tt::CBIndex::cb_15;
+    constexpr uint32_t cb_id_y = tt::CBIndex::c_16;
     constexpr auto y_args = TensorAccessorArgs<1>();
 
     auto y_accessor = TensorAccessor(y_args, y_addr, get_tile_size(cb_id_y));
