@@ -289,21 +289,26 @@ jobs:
             fi
           }
 
-          comparison_result="$(compare_versions "$latestRCVersion" "$latestProdVersion")"
-          case "$comparison_result" in
-            2)
-              echo "RC and production versions are equal ($latestRCVersion ≈ $latestProdVersion), using production release"
-              latestReleaseVersion="$latestProdVersion"
-              ;;
-            0)
-              echo "RC version ($latestRCVersion) is newer than production ($latestProdVersion), using RC"
-              latestReleaseVersion="$latestRCVersion"
-              ;;
-            1)
-              echo "Production version ($latestProdVersion) is newer than RC ($latestRCVersion), using production"
-              latestReleaseVersion="$latestProdVersion"
-              ;;
-          esac
+          if [ -z "$latestRCVersion" ] || [ "$latestRCVersion" = "null" ]; then
+            echo "No release candidate found, using latest production release"
+            latestReleaseVersion="$latestProdVersion"
+          else
+            comparison_result="$(compare_versions "$latestRCVersion" "$latestProdVersion")"
+            case "$comparison_result" in
+              2)
+                echo "RC and production versions are equal ($latestRCVersion ≈ $latestProdVersion), using production release"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+              0)
+                echo "RC version ($latestRCVersion) is newer than production ($latestProdVersion), using RC"
+                latestReleaseVersion="$latestRCVersion"
+                ;;
+              1)
+                echo "Production version ($latestProdVersion) is newer than RC ($latestRCVersion), using production"
+                latestReleaseVersion="$latestProdVersion"
+                ;;
+            esac
+          fi
 
           echo "Selected version for comparison: $latestReleaseVersion"
           echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
