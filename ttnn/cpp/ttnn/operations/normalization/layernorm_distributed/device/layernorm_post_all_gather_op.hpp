@@ -45,7 +45,7 @@ struct LayerNormPostAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<bool> use_2d_core_grid;
-    LayerNormDefaultProgramConfig program_config;
+    LayerNormProgramConfig program_config;
 
     void validate(
         const std::vector<Tensor>& input_tensors,
