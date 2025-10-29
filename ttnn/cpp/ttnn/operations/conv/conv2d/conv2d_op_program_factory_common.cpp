@@ -121,18 +121,7 @@ std::vector<CBInfo> get_cb_info(
 
     // Block dims
     if (!split_reader_enabled || is_1d_depthwise_conv) {
-        if (!conv_config.enable_activation_reuse) {
-            act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
-        } else {
-            act_block_num_tiles = calculate_act_cb_size_with_reuse(
-                block_config.act_block_h_ntiles,
-                block_config.act_block_w_ntiles,
-                output_image_width,
-                padded_in_channels,
-                kernel_size,
-                input_tile_size,
-                input_datatype);
-        }
+        act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
     } else {
         // Calculate split reader parameters
         uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
