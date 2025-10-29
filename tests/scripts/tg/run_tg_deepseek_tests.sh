@@ -10,8 +10,6 @@ run_tg_deepseek_v3_tests() {
 
   echo "LOG_METAL: Running run_tg_deepseek_v3_tests"
 
-  # Only this test for now; parallelize via pytest-xdist
-  export FAKE_DEVICE=TG
   pytest -n auto \
     models/demos/deepseek_v3/demo/test_demo_exact_word_match.py \
     --timeout 1000
