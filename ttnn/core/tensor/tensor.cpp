@@ -733,7 +733,7 @@ struct TensorPreparedConversion {
     /// Use this layout to construct the initial tensor -- extra conversion might be done
     /// after the tensor has been moved to device.
     Layout construct_with_layout = Layout::TILE;
-    DataType host_convert_data_type = DataType::INVALID;
+    DataType construct_with_data_type = DataType::INVALID;
 };
 
 template <typename T>
@@ -858,15 +858,20 @@ struct HostBufferConversionInputHash {
 };
 
 std::optional<TensorPreparedConversion> prepare_tensor_conversion(
-    const host_buffer_data_type& host_data_type, const TensorLayout& tensor_layout, bool has_device) {
+    const host_buffer_data_type& host_data_type,
+    const MemoryConfig& memory_config,
+    DataType data_type,
+    const std::optional<Tile>& optional_tile,
+    Layout layout,
+    bool has_device) {
     // Early exit conditions -- on-device strategy is not supported
 
     if (!has_device ||
         // Device is required
-        tensor_layout.get_memory_config().is_sharded() ||
+        memory_config.is_sharded() ||
         // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
-        (((tensor_layout.get_tile().get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
-         ((tensor_layout.get_tile().get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))
+        (optional_tile.has_value() && ((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
+         ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))
         // on-device tiling operation expects 32x32 row
     ) {
         return std::nullopt;
@@ -1047,8 +1052,8 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
 
     HostBufferConversionInput input{
         .host_type = host_data_type,
-        .target_type = tensor_layout.get_data_type(),
-        .layout = tensor_layout.get_layout(),
+        .target_type = data_type,
+        .layout = layout,
     };
 
     auto it = conversion_map.find(input);
@@ -1062,24 +1067,28 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
 
 Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     const ttnn::Shape& tensor_shape,
-    const TensorLayout& tensor_layout,
+    DataType data_type,
+    Layout layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
     const host_buffer_data_type& host_data_type,
     std::function<HostBuffer(DataType)> get_host_data,
-    ttnn::distributed::MeshDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     ZoneScoped;
 
-    auto strategy = prepare_tensor_conversion(host_data_type, tensor_layout, device != nullptr);
+    auto strategy =
+        prepare_tensor_conversion(host_data_type, memory_config, data_type, optional_tile, layout, device != nullptr);
     Tensor output;
 
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
-        tensor_layout.get_data_type(),
-        tensor_layout.get_layout(),
-        tensor_layout.get_tile(),
-        tensor_layout.get_memory_config(),
+        data_type,
+        layout,
+        optional_tile,
+        memory_config,
         device,
         cq_id,
         pad_value,
@@ -1087,13 +1096,12 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
 
     DataType host_dtype;
     if (strategy) {
-        host_dtype = strategy->host_convert_data_type;
+        host_dtype = strategy->construct_with_data_type;
     } else {
-        if (tensor_layout.get_data_type() == DataType::BFLOAT4_B ||
-            tensor_layout.get_data_type() == DataType::BFLOAT8_B) {
+        if (data_type == DataType::BFLOAT4_B || data_type == DataType::BFLOAT8_B) {
             host_dtype = DataType::FLOAT32;
         } else {
-            host_dtype = tensor_layout.get_data_type();
+            host_dtype = data_type;
         }
     }
 
@@ -1108,43 +1116,34 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     if (strategy && !host_data.view_bytes().empty()) {
         // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
         // the tensor must be constructed on host.
+        auto tensor_layout = TensorLayout(
+            strategy->construct_with_data_type,
+            PageConfig(strategy->construct_with_layout, optional_tile),
+            memory_config);
+
         output = create_tt_tensor_from_host_data(
-            host_data,
-            tensor_shape,
-            TensorLayout(
-                strategy->host_convert_data_type,
-                PageConfig(strategy->construct_with_layout, tensor_layout.get_tile()),
-                tensor_layout.get_memory_config(),
-                tensor_layout.get_alignment()),
-            device,
-            cq_id,
-            pad_value,
-            mesh_mapper);
+            host_data, tensor_shape, tensor_layout, device, cq_id, pad_value, mesh_mapper);
 
         output = tt::tt_metal::set_tensor_id(output);
 
-        auto set_layout = [&](Layout target) {
-            if (output.layout() != target) {
-                output = ttnn::to_layout(output, target, std::nullopt, tensor_layout.get_memory_config());
-            }
-        };
-
-        if (output.dtype() != tensor_layout.get_data_type()) {
+        if (output.dtype() != data_type) {
             // Need to perform final data conversion on device, typecast requires TILE layout.
-            set_layout(Layout::TILE);
-            output = ttnn::typecast(output, tensor_layout.get_data_type());
+            output = ttnn::to_layout(output, Layout::TILE, data_type, tensor_layout.get_memory_config());
         }
 
-        set_layout(tensor_layout.get_layout());
+        if (output.layout() != layout) {
+            output = ttnn::to_layout(output, layout, std::nullopt, tensor_layout.get_memory_config());
+        }
     } else {
         // Convert on host
-        if (tensor_layout.get_data_type() == DataType::BFLOAT8_B ||
-            tensor_layout.get_data_type() == DataType::BFLOAT4_B) {
+        if (data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B) {
             TT_FATAL(
-                tensor_layout.get_layout() == Layout::TILE,
+                layout == Layout::TILE,
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
-                tensor_layout.get_layout());
+                layout);
         }
+
+        auto tensor_layout = TensorLayout(data_type, PageConfig(layout, optional_tile), memory_config);
 
         output = create_tt_tensor_from_host_data(
             host_data, tensor_shape, tensor_layout, device, cq_id, pad_value, mesh_mapper);
@@ -1154,7 +1153,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     GraphTracker::instance().track_function_end(output);
 
     if (device) {
-        output = output.to_device(device, tensor_layout.get_memory_config(), cq_id);
+        output = output.to_device(device, memory_config, cq_id);
     }
 
     return output;

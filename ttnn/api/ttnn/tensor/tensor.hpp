@@ -342,7 +342,10 @@ enum class host_buffer_data_type {
 
 Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::Shape& tensor_shape,
-    const TensorLayout& tensor_layout,
+    DataType optional_data_type,
+    Layout optional_layout,
+    const std::optional<Tile>& optional_tile,
+    const MemoryConfig& memory_config,
     const host_buffer_data_type& host_data_type,
     std::function<HostBuffer(DataType)> get_host_data,
     tt::tt_metal::distributed::MeshDevice* device,
