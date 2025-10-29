@@ -18,37 +18,36 @@ namespace ttnn::operations::ccl {
 
 void py_bind_all_reduce(py::module& module) {
     auto doc =
-        R"doc(all_reduce(input_tensor: ttnn.Tensor, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -> ttnn.Tensor
+        R"doc(
+        All-reduce operation across devices with Sum reduction. If cluster axis is specified, the all-reduce is performed along the cluster axis. All-reduce is a collective operation that reduces data from all devices using the Sum operation and returns the result to all devices.
 
-            All-reduce operation across devices with Sum reduction. If cluster axis is specified, the all-reduce is performed along the cluster axis. All-reduce is a collective operation that reduces data from all devices using the Sum operation and returns the result to all devices.
+        Args:
+            input_tensor (ttnn.Tensor): Input tensor to be reduced.
 
-            Args:
-                input_tensor (ttnn.Tensor): Input tensor to be reduced.
+        Keyword Args:
+            cluster_axis (int, optional): The axis on the mesh device to reduce across. Defaults to `None`.
+            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            num_links (int, optional): Number of links to use for the all_reduce operation. Defaults to `None`.
+            topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
 
-            Keyword Args:
-                cluster_axis (int, optional): The axis on the mesh device to reduce across. Defaults to `None`.
-                subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
-                memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
-                num_links (int, optional): Number of links to use for the all_reduce operation. Defaults to `None`.
-                topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
+        Returns:
+            ttnn.Tensor: The reduced tensor with the same shape as the input tensor.
 
-           Returns:
-               ttnn.Tensor: The reduced tensor with the same shape as the input tensor.
-
-            Example:
-                >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-                >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
-                >>> ttnn_tensor = ttnn.from_torch(
-                                full_tensor,
-                                dtype=input_dtype,
-                                device=mesh_device,
-                                layout=layout,
-                                memory_config=mem_config,
-                                mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
-                >>> output = ttnn.all_reduce(ttnn_tensor)
-                >>> print(output.shape)
-                [1, 1, 32, 256]
-                )doc";
+        Example:
+            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+            >>> ttnn_tensor = ttnn.from_torch(
+                            full_tensor,
+                            dtype=input_dtype,
+                            device=mesh_device,
+                            layout=layout,
+                            memory_config=mem_config,
+                            mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
+            >>> output = ttnn.all_reduce(ttnn_tensor)
+            >>> print(output.shape)
+            [1, 1, 32, 256]
+        )doc";
 
     using OperationType = decltype(ttnn::all_reduce);
     ttnn::bind_registered_operation(
