@@ -21,6 +21,8 @@ uint32_t page_size(const ttnn::Tensor& input_tensor) {
                                 : tt::tt_metal::hal::get_l1_alignment();
     const auto& shape = input_tensor.logical_shape();  // in anticipation of RM padding
     return tt::round_up(shape[-1] * input_tensor.element_size(), BUFFER_ALIGNMENT);
+    // TODO can simply:
+    // return input_tensor.buffer()->aligned_page_size();
 }
 
 std::vector<uint32_t> get_row_strides(const ttnn::Shape& shape) {
@@ -250,7 +252,7 @@ PermuteDeviceOperation::DramShardedRowInvariant::create(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
-    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0, 0, 0};
+    std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0, 0};
 
     auto input_shape_view = input_tensor.logical_shape().view();
     auto output_strides = detail::get_row_strides(output_tensor.logical_shape());  // in anticipation of RM padding
@@ -263,19 +265,18 @@ PermuteDeviceOperation::DramShardedRowInvariant::create(
 
     uint32_t start_row = 0;
     uint32_t num_rows_per_core = num_rows / all_cores_list.size();
-    std::vector<uint32_t> bank_ids;
+    std::vector<uint32_t> vcs;
     for (int i = 0; i < all_cores_list.size(); i++) {
         auto core = all_cores_list[i];
 
-        uint32_t bank_id = i;
-        uint32_t vc = bank_id & 0x3;
+        uint32_t vc = i & 0x3;
 
-        bank_ids.push_back(bank_id);
+        vcs.push_back(vc);
 
         for (int j = 0; j < i; ++j) {
             auto core_ = all_cores_list[j];
 
-            if (core_.y == core.y and ((bank_id & 0x3) == (bank_ids[j] & 0x3))) {  // same vc and same row
+            if (core_.y == core.y and vc == vcs[j]) {  // same vc and same row
                 vc = (vc + 1) & 0x3;
                 break;
             }
@@ -284,8 +285,7 @@ PermuteDeviceOperation::DramShardedRowInvariant::create(
         uint32_t end_row = (i == all_cores_list.size() - 1) ? num_rows : start_row + num_rows_per_core;
         reader_runtime_args[1] = start_row;
         reader_runtime_args[2] = end_row;
-        reader_runtime_args[3] = bank_id;
-        reader_runtime_args[4] = vc;
+        reader_runtime_args[3] = vc;
         writer_runtime_args[1] = start_row;
         writer_runtime_args[2] = end_row;
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
