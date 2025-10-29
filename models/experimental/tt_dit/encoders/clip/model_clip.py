@@ -580,6 +580,22 @@ class TextEmbeddings(Module):
             state_dict["position_embedding.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
 
+    # TODO: Move to parameters to reuse module functionality
+    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
+        cache_dict = {}
+        token_embedding_weights_path = path_prefix + "token_embedding_weights" + path_suffix
+        position_embedding_weights_path = path_prefix + "position_embedding_weights" + path_suffix
+        ttnn.dump_tensor(token_embedding_weights_path, self.token_embedding)
+        ttnn.dump_tensor(position_embedding_weights_path, self.position_embedding)
+        cache_dict["token_embedding"] = token_embedding_weights_path
+        cache_dict["position_embedding"] = position_embedding_weights_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.token_embedding = ttnn.load_tensor(cache_dict["token_embedding"], device=self.mesh_device)
+        self.position_embedding = ttnn.load_tensor(cache_dict["position_embedding"], device=self.mesh_device)
+
     def forward(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         seq_len = prompt.shape[-1]
 

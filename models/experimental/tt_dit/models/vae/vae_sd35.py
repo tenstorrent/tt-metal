@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 
 import ttnn
 
@@ -13,6 +14,9 @@ from ...layers.normalization import GroupNorm
 from ...layers.linear import ColParallelLinear, Linear
 from ...utils.substate import substate, indexed_substates
 from ...parallel.config import vae_all_gather
+
+if TYPE_CHECKING:
+    pass
 
 
 # TODO: Cleanup the use of torch ref
@@ -35,10 +39,8 @@ class ResnetBlock:
             eps=eps,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            filter_mesh_axis=True,
             core_grid=norm_core_grid,
             torch_ref=torch_ref.norm1 if torch_ref is not None else None,
-            ccl_manager=ccl_manager,
         )
         self.norm2 = GroupNorm(
             num_groups=num_groups,
@@ -46,10 +48,8 @@ class ResnetBlock:
             eps=eps,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            filter_mesh_axis=True,
             core_grid=norm_core_grid,
             torch_ref=torch_ref.norm2 if torch_ref is not None else None,
-            ccl_manager=ccl_manager,
         )
         self.conv1 = Conv2d(
             in_channels,
@@ -57,6 +57,7 @@ class ResnetBlock:
             kernel_size=(3, 3),
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            sp_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv1 if torch_ref is not None else None,
         )
@@ -66,6 +67,7 @@ class ResnetBlock:
             kernel_size=(3, 3),
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            sp_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv2 if torch_ref is not None else None,
         )
@@ -78,6 +80,7 @@ class ResnetBlock:
                 padding=(0, 0),
                 mesh_device=mesh_device,
                 out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                sp_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 torch_ref=torch_ref.conv_shortcut,
             )
@@ -143,10 +146,12 @@ class Upsample2D:
             kernel_size=(3, 3),
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            sp_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv if torch_ref is not None else None,
         )
 
+    # Fix to align with constructor
     @classmethod
     def from_torch(cls, torch_ref, mesh_device=None, mesh_axis=None, parallel_manager=None):
         layer = cls(
@@ -285,8 +290,6 @@ class Attention:
             eps=torch_ref.group_norm.eps,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            filter_mesh_axis=True,
-            ccl_manager=ccl_manager,
         )
 
         if torch_ref is not None:
@@ -492,8 +495,6 @@ class VAEDecoder:
                 num_channels=block_out_channels[0],
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                filter_mesh_axis=True,
-                ccl_manager=ccl_manager,
             )
 
             self.conv_out = Conv2d(
@@ -502,7 +503,8 @@ class VAEDecoder:
                 kernel_size=(3, 3),
                 padding=(1, 1),
                 mesh_device=mesh_device,
-                out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                out_mesh_axis=None,
+                sp_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
 
@@ -511,6 +513,7 @@ class VAEDecoder:
                 torch_ref.conv_in,
                 mesh_device=mesh_device,
                 out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                sp_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
             self.mid_block = UnetMidBlock2D.from_torch(
@@ -534,12 +537,14 @@ class VAEDecoder:
                 torch_ref=torch_ref.conv_norm_out,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                ccl_manager=ccl_manager,
-                filter_mesh_axis=True,
             )
 
             self.conv_out = Conv2d.from_torch(
-                torch_ref.conv_out, mesh_device=mesh_device, out_mesh_axis=None, ccl_manager=ccl_manager
+                torch_ref.conv_out,
+                mesh_device=mesh_device,
+                out_mesh_axis=None,
+                sp_axis=parallel_config.tensor_parallel.mesh_axis,
+                ccl_manager=ccl_manager,
             )
 
     @classmethod

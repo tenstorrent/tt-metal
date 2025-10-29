@@ -127,6 +127,11 @@ class T5Stack(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
+        # self.layers = [
+        #    T5EncoderLayer(self.config, self.mesh_device, self.ccl_manager, self.parallel_config)
+        #    for _ in range(self.config.num_hidden_layers)
+        # ]
+
         self.layers = ModuleList(
             T5EncoderLayer(self.config, self.mesh_device, self.ccl_manager, self.parallel_config)
             for _ in range(self.config.num_hidden_layers)

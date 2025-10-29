@@ -25,9 +25,10 @@ from time import time
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
-        pytest.param((1, 8), (1, 8), 0, 1, 1, "1x8sp0tp1", id="1x8sp0tp1"),
+        pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
         pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
         pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
     ],
@@ -50,15 +51,15 @@ def test_single_transformer_block(
     prompt_seq_len: int,
     spatial_seq_len: int,
     id: str,
+    model_location_generator,
     is_ci_env: bool,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
-    parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
-    )
+    model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
+    parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
     torch_model = parent_torch_model.single_transformer_blocks[0]
     assert isinstance(torch_model, reference.models.transformers.transformer_flux.FluxSingleTransformerBlock)
     torch_model.eval()
@@ -173,7 +174,11 @@ def test_single_transformer_block(
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
+        pytest.param((1, 4), (1, 4), 0, 1, 1, "1x4sp0tp1", id="1x4sp0tp1"),
         pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, 4, "4x8sp1tp0", id="4x8sp1tp0"),
         pytest.param((4, 8), (4, 8), 0, 1, 4, "4x8sp0tp1", id="4x8sp0tp1"),
     ],
     indirect=["mesh_device"],
@@ -199,6 +204,7 @@ def test_transformer(
     spatial_seq_len: int,
     prompt_seq_len: int,
     id: str,
+    model_location_generator,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
 
@@ -206,9 +212,8 @@ def test_transformer(
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
     # Flux.1 variant "dev" is like "schnell" but with additional guidance parameter.
-    torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
-    )
+    model_name = model_location_generator(f"black-forest-labs/FLUX.1-dev", model_subdir="transformer")
+    torch_model = reference.FluxTransformer2DModel.from_pretrained(model_name, subfolder="transformer")
     assert isinstance(torch_model, reference.FluxTransformer2DModel)
     torch_model.eval()
 

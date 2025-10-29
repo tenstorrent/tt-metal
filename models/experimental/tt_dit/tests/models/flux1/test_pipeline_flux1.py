@@ -22,7 +22,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 34000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -37,8 +37,6 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [
         pytest.param((1, 4), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
         pytest.param((2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        # pytest.param((2, 4), (4, 1), (2, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"), #Encoder OOM
-        # pytest.param((1, 8), (1, 0), (8, 1), (1, 0), (8, 1), ttnn.Topology.Linear, 1, "1x8sp0tp1", id="1x8sp0tp1"), # Encoder OOM
         pytest.param((4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp0tp1", id="4x8sp0tp1"),
         pytest.param((4, 8), (8, 1), (4, 0), (4, 0), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
     ],
@@ -165,7 +163,7 @@ def test_flux1_pipeline(
         )
 
         output_filename = f"{filename_prefix}_{number}.png"
-        images.save(output_filename)
+        images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
         timing_data = timing_collector.get_timing_data()

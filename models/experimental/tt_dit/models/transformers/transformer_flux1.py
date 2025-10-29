@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from ...blocks.attention import Attention
-from ...blocks.transformer_block import TransformerBlock
+from ...blocks.transformer_block import TransformerBlock, _chunk_time3d
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
@@ -119,15 +119,12 @@ class Flux1SingleTransformerBlock(Module):
     def forward(
         self,
         *,
-        # combined: ttnn.Tensor,
         spatial: ttnn.Tensor,
         prompt: ttnn.Tensor,
         time_embed: ttnn.Tensor,
-        # rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         skip_time_embed_activation_fn: bool = False,
-        # sequence_length: int,
         spatial_sequence_length: int,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the model forward.
@@ -143,18 +140,13 @@ class Flux1SingleTransformerBlock(Module):
             time_embed = ttnn.silu(time_embed)
         time = self.time_embed(time_embed)
 
-        # combined_normed = ttnn.squeeze(self.norm(ttnn.unsqueeze(combined, 0)), 0)
         spatial_normed = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0)), 0)
         prompt_normed = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0)), 0)
 
         shift_msa, scale_msa, gate_msa = _chunk_time3d(time, 3)
-        # norm_combined = combined_normed * (1 + scale_msa) + shift_msa
         norm_spatial = spatial_normed * (1 + scale_msa) + shift_msa
         norm_prompt = prompt_normed * (1 + scale_msa) + shift_msa
 
-        # norm_combined = self.ccl_manager.all_gather_persistent_buffer(
-        #     norm_combined, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-        # )
         norm_spatial = self.ccl_manager.all_gather_persistent_buffer(
             norm_spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
@@ -163,17 +155,13 @@ class Flux1SingleTransformerBlock(Module):
         )
 
         # call `unsqueeze` since RowParallelLinear currently requires rank 4 tensors
-        # mlp_combined = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_combined, 0)), 0)
         mlp_spatial = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_spatial, 0)), 0)  # OOM
         mlp_prompt = ttnn.squeeze(self.proj_mlp(ttnn.unsqueeze(norm_prompt, 0)), 0)
 
         # Fusing the activation function currently gives worse PCC
-        # ttnn.gelu(mlp_combined, output_tensor=mlp_combined, fast_and_approximate_mode=False)
         ttnn.gelu(mlp_spatial, output_tensor=mlp_spatial, fast_and_approximate_mode=False)
         ttnn.gelu(mlp_prompt, output_tensor=mlp_prompt, fast_and_approximate_mode=False)
-        # PCC of attn seems a bit low
-        # attn, _ = self.attn.forward(spatial=norm_combined, spatial_rope=rope, spatial_sequence_length=sequence_length)
-        # del norm_combined
+
         attn_spatial, attn_prompt = self.attn.forward(
             spatial=norm_spatial,
             prompt=norm_prompt,
@@ -183,18 +171,15 @@ class Flux1SingleTransformerBlock(Module):
         )
         del norm_spatial, norm_prompt
 
-        # additional = ttnn.concat([attn, mlp_combined], dim=-1)
         additional_spatial = ttnn.concat([attn_spatial, mlp_spatial], dim=-1)
         additional_prompt = ttnn.concat([attn_prompt, mlp_prompt], dim=-1)
+
         # call `unsqueeze` since RowParallelLinear currently requires rank 4 tensors
-        # additional = ttnn.squeeze(self.proj_out(ttnn.unsqueeze(additional, 0)), 0)
         additional_spatial = ttnn.squeeze(self.proj_out(ttnn.unsqueeze(additional_spatial, 0)), 0)
         additional_prompt = ttnn.squeeze(self.proj_out(ttnn.unsqueeze(additional_prompt, 0)), 0)
-        # additional = gate_msa * additional
         additional_spatial = gate_msa * additional_spatial
         additional_prompt = gate_msa * additional_prompt
 
-        # combined += additional
         spatial += additional_spatial
         prompt += additional_prompt
 
@@ -349,7 +334,6 @@ class Flux1Transformer(Module):
         guidance: ttnn.Tensor,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor],
-        # combined_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         spatial_sequence_length: int,
         prompt_sequence_length: int,
     ) -> ttnn.Tensor:
@@ -384,33 +368,18 @@ class Flux1Transformer(Module):
                 skip_time_embed_activation_fn=True,
             )
 
-            if i % 6 == 0:
-                ttnn.ReadDeviceProfiler(spatial.device())
-
         prompt = ttnn.clone(prompt, dtype=spatial.dtype)
-
-        # combined = ttnn.concat([prompt, spatial], dim=1)
-        # del prompt, spatial
 
         for i, block in enumerate(self.single_transformer_blocks, start=1):
             spatial, prompt = block.forward(
-                # combined=combined,
                 spatial=spatial,
                 prompt=prompt,
                 time_embed=time_embed,
-                # rope=combined_rope,
                 spatial_rope=spatial_rope,
                 prompt_rope=prompt_rope,
-                # sequence_length=spatial_sequence_length + prompt_sequence_length,
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
             )
-
-            if i % 6 == 0:
-                ttnn.ReadDeviceProfiler(self.mesh_device)
-
-        # spatial = combined[:, prompt_sequence_length:]
-        # del combined
 
         spatial = ttnn.squeeze(self.norm_out(ttnn.unsqueeze(spatial, 0)), 0)
 
@@ -422,8 +391,3 @@ class Flux1Transformer(Module):
         spatial = spatial * (1 + scale) + shift
 
         return self.proj_out(spatial)
-
-
-def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
-    size = t.shape[-1] // count
-    return [t[:, :, i * size : (i + 1) * size] for i in range(count)]

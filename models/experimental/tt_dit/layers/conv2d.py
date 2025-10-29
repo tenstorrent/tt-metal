@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
-from ..parallel.config import estimate_mesh_axis, vae_all_gather
+from ..parallel.config import vae_all_gather
 from ..parallel.manager import CCLManager
 from .module import Module, Parameter
 
@@ -35,7 +35,6 @@ class Conv2d(Module):
         packer_l1_acc=False,
     )
 
-    # slice_params[mesh_shape][tuple(height, width, in_channels, out_channels)] = num_slices
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
@@ -100,7 +99,7 @@ class Conv2d(Module):
             (1024, 1024, 128, 3): 8,
         },
     }
-    slice_defaut = {
+    slice_default = {
         (512, 512, 512, 64): 16,
         (128, 128, 16, 512): 8,
         (128, 128, 512, 512): 4,
@@ -117,18 +116,18 @@ class Conv2d(Module):
     # TODO: Allow weight initilization?
     def __init__(
         self,
-        in_channels: int | None,  # TODO: make manatory when torch_ref is removed
-        out_channels: int | None,  # TODO: make manatory when torch_ref is removed
+        in_channels: int | None,
+        out_channels: int | None,
         *,
-        kernel_size: Sequence[int] | int | None = None,  # TODO: make manatory when torch_ref is removed
+        kernel_size: Sequence[int] | int | None = None,
         stride: Sequence[int] | int = 1,
         padding: Sequence[int] | int = 0,
         dilation: Sequence[int] | int = 1,
         mesh_device: ttnn.MeshDevice,
+        sp_axis: int | None = None,
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
-        # TODO: remove torch_ref, use from_torch instead
         torch_ref: torch.nn.Conv2d | None = None,
     ) -> None:
         """
@@ -143,6 +142,7 @@ class Conv2d(Module):
             dilation: Dilation of the convolution.
             mesh_device: Mesh device to use.
             mesh_axis: Axis to use for mesh parallelism.
+            sp_axis: Axis to use for sequence parallelism. Currently only used for gather before computation
             ccl_manager: CCL manager to use.
             torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
         """
@@ -203,6 +203,7 @@ class Conv2d(Module):
         self.padding = padding
         self.dilation = dilation
         self.mesh_device = mesh_device
+        self.sp_axis = sp_axis
         self.out_mesh_axis = out_mesh_axis
         self.in_mesh_axis = in_mesh_axis
         self.in_mesh_axis_size = in_mesh_axis_size
@@ -219,6 +220,7 @@ class Conv2d(Module):
         mesh_device: ttnn.MeshDevice,
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
+        sp_axis: int | None,
         ccl_manager: CCLManager | None,
     ) -> Self:
         assert not isinstance(torch_ref.padding, str)
@@ -233,6 +235,7 @@ class Conv2d(Module):
             mesh_device=mesh_device,
             out_mesh_axis=out_mesh_axis,
             in_mesh_axis=in_mesh_axis,
+            sp_axis=sp_axis,
             ccl_manager=ccl_manager,
         )
 
@@ -248,18 +251,6 @@ class Conv2d(Module):
             bias_zeros = torch.zeros([self.in_mesh_axis_size - 1, 1, 1, out_dim])
             state["bias"] = torch.cat([bias, bias_zeros])
 
-    def estimate_input_mesh_axis(self, x):
-        """
-        Estimate the mesh axis based on the shape of the input tensor. Ans mesh device.
-        If device shape is a square, TP is assumed to be axis 0.
-        """
-        if self.in_channels == self.mesh_device.shape[0] * x.shape[3]:
-            return 0
-        elif self.in_channels == self.mesh_device.shape[1] * x.shape[3]:
-            return 1
-        else:
-            return None
-
     def is_sharded_tensor(self, x):
         """
         Check if the tensor is sharded.
@@ -273,12 +264,12 @@ class Conv2d(Module):
         Data is left in the state of the final compute. The burden is on the next layer to prepare its input as needed.
         TODO: Add support for DP and SP
         """
-        if self.out_mesh_axis is not None and self.is_sharded_tensor(x):
-            x = vae_all_gather(self.ccl_manager, x, estimate_mesh_axis(x, 3, self.in_channels))
+        if self.in_mesh_axis is None and self.is_sharded_tensor(x):
+            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.sp_axis)
 
         b, h, w, c = x.shape
         slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_defaut)[
+            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
                 (h, w, self.in_channels, self.out_channels)
             ],
             slice_type=ttnn.Conv2dDRAMSliceWidth,

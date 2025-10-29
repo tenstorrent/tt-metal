@@ -22,17 +22,17 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     "mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
         [(2, 4), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (8, 1), (4, 0), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
+        [(4, 8), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "2x4sp0tp1",
-        "4x8sp1tp0",
+        "4x8sp0tp1",
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 34000000}],
     indirect=True,
 )
 def test_flux1_pipeline_performance(
@@ -104,7 +104,7 @@ def test_flux1_pipeline_performance(
     images = pipeline.run_single_prompt(
         width=image_w, height=image_h, prompt=prompts[0], num_inference_steps=num_inference_steps, seed=0, traced=True
     )
-    images.save(f"flux1_dev_{image_w}_{image_h}_warmup.png")
+    images[0].save(f"flux1_dev_{image_w}_{image_h}_warmup.png")
 
     warmup_timing = timer.get_timing_data()
     logger.info(f"Warmup completed in {warmup_timing.total_time:.2f}s")
@@ -140,7 +140,7 @@ def test_flux1_pipeline_performance(
                     seed=0,
                     traced=True,
                 )
-            images.save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
+            images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
 
             # Collect timing data
             timing_data = timer.get_timing_data()
@@ -254,12 +254,12 @@ def test_flux1_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "clip_encoding_time": 0.2,
-            "t5_encoding_time": 0.12,
-            "total_encoding_time": 0.6,
-            "denoising_steps_time": 4.2,
-            "vae_decoding_time": 1.35,
-            "total_time": 5.9,
+            "clip_encoding_time": 0.1,
+            "t5_encoding_time": 0.21,
+            "total_encoding_time": 0.3,
+            "denoising_steps_time": 0.3 * num_inference_steps,
+            "vae_decoding_time": 1.4,
+            "total_time": 9.0,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"

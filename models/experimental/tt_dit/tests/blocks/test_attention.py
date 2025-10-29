@@ -19,19 +19,20 @@ from ...utils.tensor import bf16_tensor
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "sp_axis", "tp_axis"),
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis"),
     [
-        pytest.param((1, 1), 0, 1, id="1x1sp0tp1"),
-        pytest.param((1, 2), 0, 1, id="1x2sp0tp1"),
-        pytest.param((1, 2), 1, 0, id="1x2sp1tp0"),
-        pytest.param((2, 1), 0, 1, id="2x1sp0tp1"),
-        pytest.param((2, 1), 1, 0, id="2x1sp1tp0"),
-        pytest.param((2, 2), 0, 1, id="2x2sp0tp1"),
-        pytest.param((2, 2), 1, 0, id="2x2sp1tp0"),
-        pytest.param((2, 4), 0, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), 1, 0, id="2x4sp1tp0"),
-        pytest.param((4, 8), 0, 1, id="4x8sp0tp1"),
-        pytest.param((4, 8), 1, 0, id="4x8sp1tp0"),
+        pytest.param((2, 4), (1, 1), 0, 1, id="1x1sp0tp1"),
+        pytest.param((2, 4), (1, 2), 0, 1, id="1x2sp0tp1"),
+        pytest.param((2, 4), (1, 2), 1, 0, id="1x2sp1tp0"),
+        pytest.param((2, 4), (2, 1), 0, 1, id="2x1sp0tp1"),
+        pytest.param((2, 4), (2, 1), 1, 0, id="2x1sp1tp0"),
+        pytest.param((2, 4), (2, 2), 0, 1, id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 2), 1, 0, id="2x2sp1tp0"),
+        pytest.param((2, 4), (2, 4), 0, 1, id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, id="2x4sp1tp0"),
+        pytest.param((4, 8), (4, 4), 0, 1, id="4x4sp0tp1"),
+        pytest.param((4, 8), (4, 8), 0, 1, id="4x8sp0tp1"),
+        pytest.param((4, 8), (4, 8), 1, 0, id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
@@ -46,12 +47,16 @@ from ...utils.tensor import bf16_tensor
 def test_attention_flux(
     *,
     mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     batch_size: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
 ) -> None:
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
     torch.manual_seed(0)
 
     query_dim = 3072
