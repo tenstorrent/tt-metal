@@ -54,19 +54,6 @@ class DeepseekGenerator:
       prefill by iterating decode steps over the prompt tokens (updates caches).
     - Batch size in configs is tied to USERS_PER_ROW; for simplicity we decode
       up to that many sequences. If fewer are provided, we pad/ignore extras.
-
-    Usage:
-    - Context manager (recommended):
-      ```python
-      with DeepseekGenerator(...) as gen:
-          output = gen.generate(...)
-      ```
-    - Manual cleanup:
-      ```python
-      gen = DeepseekGenerator(...)
-      output = gen.generate(...)
-      gen.cleanup_all()  # Cleanup is mandatory
-      ```
     """
 
     def __init__(
@@ -111,8 +98,7 @@ class DeepseekGenerator:
         self.ccl = CCL(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
-        # Weight cache to avoid loading weights multiple times
-        self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
+
         # Paged attention setup
         self.paged_config = MLA1D.get_valid_paged_config(self.hf_config.max_seq_len, USERS_PER_ROW, self.dp_factor)
         self.page_tables_tt = [
@@ -225,7 +211,6 @@ class DeepseekGenerator:
                 self.model_weight_config,
                 self.model_state,
                 self.model_shared_state,
-                cached_ttnn_weights=self._weight_ttnn_cache,
             )
         elif mode == "decode":
             logger.info("Creating model decode config...")
@@ -243,7 +228,6 @@ class DeepseekGenerator:
                 self.model_weight_config,
                 self.model_state,
                 self.model_shared_state,
-                cached_ttnn_weights=self._weight_ttnn_cache,
             )
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
@@ -263,101 +247,6 @@ class DeepseekGenerator:
                 logger.info("No decode run config to cleanup")
         else:
             raise ValueError(f"Unknown run config mode: {mode}")
-
-    def clear_ttnn_weight_cache(self) -> None:
-        """Clear the TTNN weight cache to free up memory."""
-        # Deallocate all TTNN tensors before clearing the cache
-        for tensor_path, tensor in self._weight_ttnn_cache.items():
-            try:
-                ttnn.deallocate(tensor)
-            except Exception as e:
-                logger.warning(f"Failed to deallocate tensor {tensor_path}: {e}")
-        self._weight_ttnn_cache.clear()
-
-    def cleanup_all(self) -> None:
-        """Comprehensive cleanup of all resources managed by the generator."""
-        # Clear TTNN weight cache
-        try:
-            self.clear_ttnn_weight_cache()
-        except Exception as e:
-            logger.warning(f"Failed to clear weight cache: {e}")
-
-        # Clean up run configs
-        try:
-            self._cleanup_run_configs("prefill")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup prefill run config: {e}")
-
-        try:
-            self._cleanup_run_configs("decode")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup decode run config: {e}")
-
-        # Clean up model states
-        try:
-            if hasattr(self, "model_state") and self.model_state is not None:
-                del self.model_state
-        except Exception as e:
-            logger.warning(f"Failed to cleanup model state: {e}")
-
-        try:
-            if hasattr(self, "model_shared_state") and self.model_shared_state is not None:
-                del self.model_shared_state
-        except Exception as e:
-            logger.warning(f"Failed to cleanup model shared state: {e}")
-
-        # Clean up page tables (TTNN tensors)
-        try:
-            if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
-                for i, page_table in enumerate(self.page_tables_tt):
-                    try:
-                        ttnn.deallocate(page_table)
-                    except Exception as e:
-                        logger.warning(f"Failed to deallocate page table {i}: {e}")
-                del self.page_tables_tt
-        except Exception as e:
-            logger.warning(f"Failed to cleanup page tables: {e}")
-
-        # Clean up RoPE setup
-        try:
-            if hasattr(self, "rope") and self.rope is not None:
-                del self.rope
-        except Exception as e:
-            logger.warning(f"Failed to cleanup RoPE setup: {e}")
-
-        # Clean up CCL
-        try:
-            if hasattr(self, "ccl") and self.ccl is not None:
-                del self.ccl
-        except Exception as e:
-            logger.warning(f"Failed to cleanup CCL: {e}")
-
-        # Clean up configs
-        try:
-            if hasattr(self, "model_prefill_cfg") and self.model_prefill_cfg is not None:
-                del self.model_prefill_cfg
-            if hasattr(self, "model_decode_cfg") and self.model_decode_cfg is not None:
-                del self.model_decode_cfg
-            if hasattr(self, "model_weight_config") and self.model_weight_config is not None:
-                del self.model_weight_config
-
-        except Exception as e:
-            logger.warning(f"Failed to cleanup model configs: {e}")
-
-        # Clean up paged config
-        try:
-            if hasattr(self, "paged_config") and self.paged_config is not None:
-                del self.paged_config
-        except Exception as e:
-            logger.warning(f"Failed to cleanup paged config: {e}")
-
-    def __enter__(self):
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit with automatic cleanup."""
-        self.cleanup_all()
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
@@ -508,8 +397,6 @@ class DeepseekGenerator:
         """
         prompts = list(prompts)
         assert 1 <= len(prompts) <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
-        self._prepare_run_configs("prefill")
-        self._prepare_run_configs("decode")
 
         # Tokenize using HF chat template
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
@@ -517,14 +404,15 @@ class DeepseekGenerator:
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
         # Prefill
+        self._prepare_run_configs("prefill")
         num_of_users = tokens_batched.shape[0]
         last_logits = []
         for user_id in range(num_of_users):
             if lengths[user_id] == 0:
-                logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
+                logger.info(f"Skipping prefill for user {user_id} as prompt length is 0")
                 last_logits.append(torch.zeros(self.hf_config.vocab_size))
                 continue
-            logger.info(f"Running prefill for user_id: {user_id}")
+            logger.info(f"Running prefill for {user_id}")
             logger.info(
                 f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
             )
@@ -533,6 +421,7 @@ class DeepseekGenerator:
             last_logits.append(user_out)
         last_logits = torch.stack(last_logits)
 
+        self._cleanup_run_configs("prefill")
         assert len(last_logits) == num_of_users
 
         logger.info(f"Finished prefill for all users...")
@@ -541,6 +430,7 @@ class DeepseekGenerator:
         next_tokens = self._sample_greedy(last_logits)
 
         # Decode
+        self._prepare_run_configs("decode")
         positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
 
         # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
@@ -550,7 +440,6 @@ class DeepseekGenerator:
             next_tokens[0] = int(forced)
 
         generations: List[List[int]] = [[] for _ in range(len(prompts))]
-        logger.info(f"Generating {max_new_tokens} tokens for {len(prompts)} user(s)...")
         if early_print_first_user:
             logger.info("===== Generation for first user =====")
         for gen_idx in range(max_new_tokens):
@@ -573,6 +462,7 @@ class DeepseekGenerator:
         if early_print_first_user:
             logger.info("\n===== Done =====")
 
+        self._cleanup_run_configs("decode")
         return generations
 
     def _encode_prompt(self, prompt: str) -> List[int]:
