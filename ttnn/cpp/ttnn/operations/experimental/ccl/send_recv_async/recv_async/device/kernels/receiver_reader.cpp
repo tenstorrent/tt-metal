@@ -29,6 +29,8 @@ void kernel_main() {
     uint32_t num_blocks = get_arg_val<uint32_t>(rt_args_idx++);             // blocks for this core
     uint32_t num_pages_per_block = get_arg_val<uint32_t>(rt_args_idx++);    // pages per block
     uint32_t block_remainder_pages = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
+    DPRINT << "RECEIVER_READER: blocks=" << num_blocks << " pages_per_block=" << num_pages_per_block
+           << " remainder=" << block_remainder_pages << ENDL();
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -63,6 +65,7 @@ void kernel_main() {
         socket_wait_for_pages(receiver_socket, 1);
         cb_reserve_back(scratch_buffer_cb_id, block_remainder_pages);
         auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
+
         auto l1_write_addr = get_write_ptr(scratch_buffer_cb_id);
         uint32_t remainder_size = block_remainder_pages * socket_page_size;
         noc_async_read(remote_read_addr, l1_write_addr, remainder_size);

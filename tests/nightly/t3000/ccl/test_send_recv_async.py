@@ -20,16 +20,13 @@ def run_send_recv_test(
     tensor_dtype,
     tensor_layout,
 ):
-    mesh_shape = send_device.shape
-    # sender_logical_coord = ttnn.CoreCoord(0, 0)
-    # recv_logical_coord = ttnn.CoreCoord(0, 1)
+    mesh_shape = send_device.shape  # Multi-core test - this is where the fabric routing issue occurs
     sender_logical_coord = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0)]
     recv_logical_coord = [ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1), ttnn.CoreCoord(3, 1)]
 
     socket_connections = []
     for coord in ttnn.MeshCoordinateRange(mesh_shape):
         for i in range(len(sender_logical_coord)):
-            # for i in range(1):
             socket_connections.append(
                 ttnn.SocketConnection(
                     ttnn.MeshCoreCoord(coord, sender_logical_coord[i]), ttnn.MeshCoreCoord(coord, recv_logical_coord[i])
@@ -56,6 +53,8 @@ def run_send_recv_test(
     input_data = ttnn.to_torch(input_tensor, mesh_composer=ttnn.ConcatMeshToTensor(send_device, dim=0))
     output_data = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(recv_device, dim=0))
     eq, output = comp_equal(input_data, output_data)
+    print("input_data:", input_data)
+    print("output_data:", output_data)
     assert eq, output
 
 
@@ -64,7 +63,7 @@ def run_send_recv_test(
     "per_chip_shape",
     [
         ([1, 1, 32, 4096]),
-        # ([1, 1, 64, 8192]),
+        ([1, 1, 64, 8192]),
     ],
 )
 @pytest.mark.parametrize(
@@ -77,13 +76,13 @@ def run_send_recv_test(
     "dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
-        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
