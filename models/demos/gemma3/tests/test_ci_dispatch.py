@@ -55,36 +55,8 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
         tests = ci_v1_tests
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
-<<<<<<< HEAD
     exit_code = pytest.main(tests + ["-x"])
     if exit_code != pytest.ExitCode.OK:
-=======
-    exit_code = pytest.main(
-        [
-            "models/demos/siglip/tests/test_attention.py",
-            "models/demos/gemma3/tests/test_mmp.py",
-            "models/demos/gemma3/tests/test_patch_embedding.py",
-            "models/demos/gemma3/tests/test_vision_attention.py",
-            "models/demos/gemma3/tests/test_vision_cross_attention_transformer.py",
-            "models/demos/gemma3/tests/test_vision_embedding.py",
-            "models/demos/gemma3/tests/test_vision_layernorm.py",
-            "models/demos/gemma3/tests/test_vision_mlp.py",
-            "models/demos/gemma3/tests/test_vision_pipeline.py",
-            # "models/demos/gemma3/tests/test_vision_rmsnorm.py",
-            "models/demos/gemma3/tests/test_vision_transformer_block.py",
-            "models/demos/gemma3/tests/test_vision_transformer.py",
-            "models/tt_transformers/tests/test_embedding.py",
-            "models/tt_transformers/tests/test_rms_norm.py",
-            "models/tt_transformers/tests/test_mlp.py",
-            # "models/tt_transformers/tests/test_attention.py",
-            # "models/tt_transformers/tests/test_attention_prefill.py",
-            "models/tt_transformers/tests/test_decoder.py",
-            "models/tt_transformers/tests/test_decoder_prefill.py",
-        ]
-        + ["-x"]  # Fail if one of the tests fails
-    )
-    if exit_code == pytest.ExitCode.TESTS_FAILED:
->>>>>>> cb25b73173 (Mstojko/test vision cross attention transformer benchmark (#29699))
         pytest.fail(
             f"Pytest failed with exit code {exit_code} for {hf_model_name}. " "Check logs above for details.",
             pytrace=False,
