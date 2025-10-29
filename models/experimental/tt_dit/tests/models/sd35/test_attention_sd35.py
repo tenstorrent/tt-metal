@@ -7,12 +7,12 @@ import pytest
 import torch
 import ttnn
 
-from ...utils.tensor import bf16_tensor
-from ...utils.check import assert_quality
-from ...models.transformers.attention_sd35 import SD35JointAttention
-from ...parallel.manager import CCLManager
-from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
-from ...utils.padding import PaddingConfig
+from ....utils.tensor import bf16_tensor
+from ....utils.check import assert_quality
+from ....models.transformers.attention_sd35 import SD35JointAttention
+from ....parallel.manager import CCLManager
+from .....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from ....utils.padding import PaddingConfig
 
 
 @pytest.mark.parametrize(
