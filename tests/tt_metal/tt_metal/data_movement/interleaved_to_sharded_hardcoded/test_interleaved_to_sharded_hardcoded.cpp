@@ -6,6 +6,8 @@
 #include "tt_metal.hpp"
 #include "dm_common.hpp"
 
+#include <tt-metalium/tt_align.hpp>
+
 namespace tt::tt_metal {
 
 using namespace std;
@@ -73,7 +75,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
@@ -127,7 +129,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
@@ -180,7 +182,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
     tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -235,7 +237,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
     tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
@@ -289,7 +291,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -344,7 +346,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 

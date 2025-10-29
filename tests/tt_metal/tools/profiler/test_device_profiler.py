@@ -8,11 +8,13 @@ import re
 import inspect
 import pytest
 import subprocess
+import ast
 from loguru import logger
 from conftest import is_6u
 
 import pandas as pd
 import numpy as np
+import multiprocessing as mp
 
 from tracy.common import (
     TT_METAL_HOME,
@@ -23,7 +25,7 @@ from tracy.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
@@ -112,7 +114,6 @@ def get_function_name():
     return frame.f_code.co_name
 
 
-@skip_for_grayskull()
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
@@ -256,6 +257,75 @@ def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
     ), f"Not all required stats (i.e. {statTypesSet}) were found in the device stats (i.e. {verifiedStat})"
 
 
+def verify_trace_markers(devicesData, num_non_trace_ops, num_trace_ops, num_repeats_per_trace_op):
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for core, coreData in deviceData["cores"].items():
+            for risc, riscData in coreData["riscs"].items():
+                non_trace_ops = set()
+                trace_ops_to_trace_ids = {}
+                trace_ids_to_counts = {}
+                for marker in riscData["timeseries"]:
+                    marker_data = ast.literal_eval(marker)[0]
+                    runtime_id = marker_data["run_host_id"]
+                    trace_id = marker_data["trace_id"]
+                    if trace_id == -1:
+                        non_trace_ops.add(runtime_id)
+                    else:
+                        if runtime_id not in trace_ops_to_trace_ids:
+                            trace_ops_to_trace_ids[runtime_id] = trace_id
+                        else:
+                            assert (
+                                trace_ops_to_trace_ids[runtime_id] == trace_id
+                            ), f"Detected multiple trace ids for runtime id {runtime_id}"
+
+                        if trace_id not in trace_ids_to_counts:
+                            trace_ids_to_counts[trace_id] = set()
+                        trace_ids_to_counts[trace_id].add(int(marker_data["trace_id_count"]))
+
+                # The ops that are being traced may not run on every core on the device. If we detect a core
+                # that only runs the first two non-trace ops, we skip it
+                if len(non_trace_ops) == 2 and len(trace_ops_to_trace_ids) == 0:
+                    continue
+
+                assert (
+                    len(non_trace_ops) <= num_non_trace_ops
+                ), f"Wrong number of non-trace ops for device {device}, core {core}, risc {risc} - expected at most {num_non_trace_ops}, read {len(non_trace_ops)}"
+                assert (
+                    len(trace_ops_to_trace_ids) == num_trace_ops
+                ), f"Wrong number of trace ops for device {device}, core {core}, risc {risc} - expected {num_trace_ops}, read {len(trace_ops_to_trace_ids)}"
+
+                for trace_id, trace_id_counts in trace_ids_to_counts.items():
+                    assert (
+                        len(trace_id_counts) == num_repeats_per_trace_op
+                    ), f"Wrong number of trace repeats for device {device}, core {core}, risc {risc}, trace {trace_id} - expected {num_repeats_per_trace_op}, read {len(trace_id_counts)}"
+                    assert (
+                        max(trace_id_counts) == num_repeats_per_trace_op
+                    ), f"Wrong maximum trace id counter value for device {device}, core {core}, risc {risc}, trace {trace_id} - expected {num_repeats_per_trace_op}, read {max(trace_id_counts)}"
+                    assert (
+                        min(trace_id_counts) == 1
+                    ), f"Wrong minimum trace id counter value for device {device}, core {core}, risc {risc}, trace {trace_id} - expected 1, read {min(trace_id_counts)}"
+
+
+def test_trace_run():
+    verify_trace_markers(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_multiple_trace_ids"
+        ),
+        num_non_trace_ops=3,
+        num_trace_ops=5,
+        num_repeats_per_trace_op=3,
+    )
+
+    verify_trace_markers(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_trace_with_non_trace"
+        ),
+        num_non_trace_ops=12,
+        num_trace_ops=10,
+        num_repeats_per_trace_op=2,
+    )
+
+
 def test_device_trace_run():
     verify_stats(
         run_device_profiler_test(
@@ -290,8 +360,8 @@ def test_dispatch_cores():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [600, 760, 1310, 2330],
         "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
-        "dispatch_total_cq_cmd_op_time": [206],
-        "dispatch_go_send_wait_time": [206],
+        "dispatch_total_cq_cmd_op_time": [236],
+        "dispatch_go_send_wait_time": [236],
     }
 
     verify_stats(
@@ -337,7 +407,6 @@ def test_dispatch_cores():
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
-@skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
     devicesData = run_device_profiler_test(
@@ -379,7 +448,6 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
 
-@skip_for_grayskull()
 def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
@@ -393,6 +461,9 @@ def test_profiler_host_device_sync():
 
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
+    available_devices = sorted(int(device_id) for device_id in deviceData["data"]["devices"].keys())
+    missing_devices = [device_id for device_id in available_devices if device_id not in devices]
+    assert len(missing_devices) == 0, f"Missing sync info for devices {missing_devices}"
     for device in devices:
         deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
         if not np.isnan(deviceFreq):  # host sync entry
@@ -417,6 +488,9 @@ def test_profiler_host_device_sync():
 
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
+    available_devices = sorted(int(device_id) for device_id in deviceData["data"]["devices"].keys())
+    missing_devices = [device_id for device_id in available_devices if device_id not in devices]
+    assert len(missing_devices) == 0, f"Missing sync info for devices {missing_devices}"
     for device in devices:
         deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
         if not np.isnan(deviceFreq):  # host sync entry
@@ -663,10 +737,20 @@ def test_fabric_event_profiler_fabric_mux():
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
 
 
+def is_6u_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
+
+
 @skip_for_blackhole()
 def test_fabric_event_profiler_2d():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
+    is_6u_bool = is_6u_wrapper()
 
     # test that current device has a valid fabric API connection
     sanity_check_test_bin = "build/test/tt_metal/tt_fabric/fabric_unit_tests"
@@ -686,7 +770,7 @@ def test_fabric_event_profiler_2d():
         "Fabric2DFixture.Test2DMCastConnAPI_1N1E1W",
     ]
 
-    if is_6u():
+    if is_6u_bool:
         tests.extend(
             [
                 "Fabric2DFixture.TestUnicastRaw_3N",
@@ -711,7 +795,7 @@ def test_fabric_event_profiler_2d():
         },
     ]
 
-    if is_6u():
+    if is_6u_bool:
         all_tests_expected_event_counts.extend(
             [
                 {

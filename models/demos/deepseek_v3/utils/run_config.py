@@ -8,8 +8,6 @@ from enum import Enum
 from types import NoneType
 from typing import Any, overload
 
-from loguru import logger
-
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
 
@@ -68,7 +66,27 @@ def create_run_config(  # type: ignore
     ...
 
 
-def create_run_config(model_config, weight_config, *model_states):
+@overload
+def create_run_config(
+    model_config: ModelPrefillConfig,
+    weight_config: WeightConfig,
+    *model_states: ModelState,
+    cached_ttnn_weights: dict | None,
+) -> RunPrefillConfig:
+    ...
+
+
+@overload
+def create_run_config(  # type: ignore
+    model_config: ModelDecodeConfig,
+    weight_config: WeightConfig,
+    *model_states: ModelState,
+    cached_ttnn_weights: dict | None,
+) -> RunDecodeConfig:
+    ...
+
+
+def create_run_config(model_config, weight_config, *model_states, cached_ttnn_weights=None):
     # The states are merged to create a single unified model state.
     unified_model_state = functools.reduce(
         lambda cfg1, cfg2: _merge_config_containers(
@@ -90,15 +108,17 @@ def create_run_config(model_config, weight_config, *model_states):
         mb_mesh_device=None,
     )
 
+    # Use functools.partial to explicitly bind cached_ttnn_weights parameter
+    # This makes it clear that the third parameter to _merge_run_config is cached_ttnn_weights,
+    # not the mb_mesh_device parameter passed by _merge_config_containers
+    merge_run_config_fn = functools.partial(_merge_run_config, cached_ttnn_weights=cached_ttnn_weights)
     run_config = _merge_config_containers(
         model_state_config,
         weight_config,
-        merge_config_specific_items=_merge_run_config,
+        merge_config_specific_items=lambda a, b, _: merge_run_config_fn(a, b),
         search_for_mesh_device=False,
         mb_mesh_device=None,
     )
-
-    logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
 
     return run_config
 
@@ -127,14 +147,25 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
     raise ValueError(f"Unsupported model_weight and state config items to merge: {model_config_item} and {state_item}")
 
 
-def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
+def _merge_run_config(
+    model_state_config_item: Any, weight_config_item: Any, cached_ttnn_weights: dict | None = None
+) -> Any:
     if isinstance(
         model_state_config_item, FromWeightConfig
     ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
-        assert isinstance(
-            weight_config_item, SavedWeight
-        ), "Expected a SavedWeight in the weight config for a FromWeightConfig in the model state config"
-        return load_weight(weight_config_item, model_state_config_item.mesh_device)
+        if isinstance(weight_config_item, SavedWeight):
+            # Check if we have cached weights first
+            if cached_ttnn_weights is not None and weight_config_item.path in cached_ttnn_weights:
+                return cached_ttnn_weights[weight_config_item.path]
+
+            loaded_weight = load_weight(weight_config_item, model_state_config_item.mesh_device)
+
+            # Cache the loaded weight if we have a cache dict
+            if cached_ttnn_weights is not None:
+                cached_ttnn_weights[weight_config_item.path] = loaded_weight
+
+            return loaded_weight
+        return None
 
     if weight_config_item is None:
         assert not isinstance(
@@ -143,7 +174,7 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
         return model_state_config_item
 
     raise ValueError(
-        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}"
+        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}. Try recalculating cached weights."
     )
 
 
@@ -225,7 +256,7 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
             return "{}"
 
         lines = ["{"]
-        for k, v in run_config_item.items():
+        for k, v in sorted(run_config_item.items(), key=lambda item: item[0]):
             value_str = _convert_run_config_to_pretty_print(v, indent + 1)
             lines.append(f"{next_indent_str}{k!r}: {value_str},")
         lines.append(f"{indent_str}}}")

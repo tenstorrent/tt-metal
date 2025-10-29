@@ -41,8 +41,13 @@ extern uint32_t tt_l1_ptr* sem_l1_base[];
 #define EXCLUDE_START_Y_OFFSET 14
 #define EXCLUDE_START_X_OFFSET 8
 #define DYNAMIC_NOC_DIRECTION(noc, direction) (noc == 1 ? 1 - direction : direction)
+#define NOC_CLEAR_OUTSTANDING_REQ_MASK ((1ULL << (NOC_MAX_TRANSACTION_ID + 1)) - 1)
 
+#if defined(ARCH_QUASAR)
+static_assert(NUM_NOCS == 1);
+#else
 static_assert(NUM_NOCS == 2);
+#endif
 // "Scratch" in L1 has space allocated for 256 DRAM and L1 enteries, to store offsets and NOC XY data.
 // (MEM_BANK_TO_NOC_XY_SCRATCH and MEM_BANK_OFFSET_SCRATCH)
 static_assert((NUM_DRAM_BANKS + NUM_L1_BANKS) <= 256);

@@ -43,9 +43,10 @@ void kernel_main() {
     }
 
     // Test stateful read one packet API
-    noc_async_read_one_packet_set_state(addr_self_noc, page_size, noc_index);
+    constexpr uint32_t vc = 0;
+    noc_async_read_one_packet_set_state(addr_self_noc, page_size, vc, noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
-        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, noc_index);
+        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, vc, noc_index);
     }
 
     // Test stateful write one packet API
@@ -96,6 +97,33 @@ void kernel_main() {
 #ifndef ARCH_BLACKHOLE
         noc_inline_dw_write(noc_addr, 1, 0xF, noc);
 #endif
+    }
+
+    // barrier on all txns
+    noc_async_full_barrier(noc_index);
+
+    // Previous multicasts would have put trids into a non-zero state, so reset the barrier counter
+    reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
+    // DRAM sharded read API
+    uint64_t src_addr = get_noc_addr_from_bank_id<true>(0, DRAM_ALIGNMENT);
+    noc_async_read_one_packet_set_state<true>(src_addr, page_size, vc, noc_index);
+    for (uint32_t i = 0; i < iteration; i++) {
+        uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
+        noc_async_read_tile_dram_sharded_with_state_with_trid(src_addr, DRAM_ALIGNMENT, l1_read_addr, trid, noc_index);
+    }
+
+    for (uint32_t i = 0; i <= NOC_MAX_TRANSACTION_ID; i++) {
+        noc_async_read_barrier_with_trid(i, noc_index);
+    }
+
+    // L1 sharded write API
+    for (uint32_t i = 0; i < iteration; i++) {
+        uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
+        noc_async_write_one_packet_with_trid(l1_read_addr, addr_self_noc, page_size, trid, write_cmd_buf, noc_index);
+    }
+    for (uint32_t i = 0; i <= NOC_MAX_TRANSACTION_ID; i++) {
+        noc_async_write_barrier_with_trid(i, noc_index);
     }
 
     DPRINT << "END" << ENDL();

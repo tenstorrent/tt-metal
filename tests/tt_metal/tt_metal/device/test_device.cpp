@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -32,6 +33,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 namespace tt::tt_metal {
@@ -124,7 +126,7 @@ TEST_F(MeshDeviceFixture, PingAllLegalDramChannels) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
@@ -167,7 +169,7 @@ TEST_F(MeshDeviceFixture, TensixPingAllLegalL1Cores) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
@@ -236,7 +238,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
 
         std::vector<uint32_t> output;
@@ -256,11 +258,11 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 
 // For a given collection of MMIO device and remote devices, ensure that channels are unique
 TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
-    std::unordered_map<chip_id_t, std::set<chip_id_t>> mmio_device_to_device_group;
+    std::unordered_map<ChipId, std::set<ChipId>> mmio_device_to_device_group;
     for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
-        chip_id_t assoc_mmio_dev_id =
+        ChipId assoc_mmio_dev_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
-        std::set<chip_id_t>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
+        std::set<ChipId>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
         device_ids.insert(dev_id);
     }
 
@@ -269,7 +271,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
             tt::tt_metal::MetalContext::instance().get_cluster().get_num_host_channels(mmio_dev_id),
             device_group.size());
         std::unordered_set<uint16_t> channels;
-        for (const chip_id_t& device_id : device_group) {
+        for (const ChipId& device_id : device_group) {
             channels.insert(
                 tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id));
         }
@@ -286,7 +288,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     EXPECT_TRUE(device->is_mmio_capable());
@@ -318,7 +320,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> result(size_bytes / sizeof(uint32_t));
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -349,7 +351,7 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t sem0_id = tt_metal::CreateSemaphore(program_, core, 0);

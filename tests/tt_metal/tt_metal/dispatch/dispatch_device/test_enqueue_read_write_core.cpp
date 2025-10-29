@@ -383,8 +383,8 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
 
         std::unordered_set<CoreCoord> idle_ethernet_cores = device->get_inactive_ethernet_cores();
         dispatch_core_manager& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
-        const CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
-        if (dispatch_core_type == CoreType::ETH) {
+        const tt::CoreType dispatch_core_type = dispatch_core_manager.get_dispatch_core_type();
+        if (dispatch_core_type == tt::CoreType::ETH) {
             const std::vector<CoreCoord> eth_dispatch_cores =
                 dispatch_core_manager.get_all_logical_dispatch_cores(device->id());
             for (const CoreCoord& core : eth_dispatch_cores) {
@@ -436,7 +436,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TestInvalidReadWriteAddressDRAM) {
         const DeviceAddr dram_invalid_address = dram_end_address + dram_end_address_offset;
 
         const CoreCoord logical_core = {0, 0};
-        const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+        const CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, tt::CoreType::DRAM);
 
         const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
         const distributed::DeviceMemoryAddress device_memory_address = {
@@ -464,7 +464,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TestReadWriteMultipleCoresDRAM) {
         uint32_t dram_core_value = 1;
         for (uint32_t core_x = 0; core_x < device->dram_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->dram_grid_size().y; ++core_y) {
-                const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, CoreType::DRAM);
+                const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, tt::CoreType::DRAM);
                 const std::vector<uint32_t> src_data(num_elements, dram_core_value);
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
                 const distributed::DeviceMemoryAddress device_memory_address = {
@@ -480,7 +480,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TestReadWriteMultipleCoresDRAM) {
         uint32_t j = 0;
         for (uint32_t core_x = 0; core_x < device->dram_grid_size().x; ++core_x) {
             for (uint32_t core_y = 0; core_y < device->dram_grid_size().y; ++core_y) {
-                const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, CoreType::DRAM);
+                const CoreCoord core = device->virtual_core_from_logical_core({core_x, core_y}, tt::CoreType::DRAM);
                 const distributed::MeshCoordinate device_coord = mesh_device->get_view().find_device(device->id());
                 const distributed::DeviceMemoryAddress device_memory_address = {
                     device_coord, core, reinterpret_cast<DeviceAddr>(address)};

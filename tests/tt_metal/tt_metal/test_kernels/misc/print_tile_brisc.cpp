@@ -23,5 +23,4 @@ void kernel_main() {
     // Print the tile from each RISC, one after another
     DPRINT << "Print tile from Data0:" << ENDL();
     DPRINT << TSLICE(cb_id, 0, SliceRange::hw0_32_8(), TSLICE_INPUT_CB, TSLICE_RD_PTR, true, is_tilized) << ENDL();
-    DPRINT << RAISE{1};
 }

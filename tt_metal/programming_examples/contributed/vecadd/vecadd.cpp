@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
     // `Finish(cq)` to wait for all programs to finish.
     // But it shouldn't matter in this case since we block on reading the output
     // buffer.
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
     // distributed::Finish(cq);
     std::cout << "Kernel execution finished" << std::endl;

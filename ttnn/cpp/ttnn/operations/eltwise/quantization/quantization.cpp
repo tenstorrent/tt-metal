@@ -251,6 +251,7 @@ Tensor QuantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
@@ -267,6 +268,7 @@ Tensor QuantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
@@ -443,7 +445,7 @@ Tensor RequantOp::invoke(
                 // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
                 const float scale_recip = in_scale / out_scale;
                 // z is passed to and consumed by the LLK as f32 anyway, might as well preserve some accuracy here.
-                const float zero_point = out_zero_point - in_zero_point * scale_recip;
+                const float zero_point = out_zero_point - (in_zero_point * scale_recip);
 
                 const std::array post_activation{
                     unary::EltwiseUnaryWithParam{unary::UnaryOpType::ZERO_POINT, zero_point}};
@@ -454,6 +456,7 @@ Tensor RequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
@@ -545,6 +548,7 @@ Tensor DequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
@@ -560,6 +564,7 @@ Tensor DequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);

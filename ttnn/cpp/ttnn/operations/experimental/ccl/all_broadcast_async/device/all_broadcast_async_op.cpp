@@ -8,6 +8,7 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn {
 
@@ -74,45 +75,26 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
     std::vector<Tensor>& output_tensors,
     const GlobalSemaphore& init_barrier_semaphore,
     const GlobalSemaphore& final_barrier_semaphore) const {
-    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
-    std::vector<IDevice*> devices_to_use = {};
-    if (this->cluster_axis.has_value()) {
-        // User specified the cluster-axis. Derive devices based on the current coordinate
-        // and the cluster-axis.
-        const auto& mesh_view = input_tensors[0].device()->get_view();
-        devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
-                                                           : mesh_view.get_devices_on_row(coord[0]);
-    } else {
-        devices_to_use = devices;
-    }
-    uint32_t target_ring_size = devices_to_use.size();
+    log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", coord);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < target_ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(target_ring_size - 1);
-            }
-            if (i != target_ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    const auto& input_tensor = input_tensors[0];
+
+    uint32_t target_ring_size = ccl::get_topological_dimension(input_tensor, this->cluster_axis);
+
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensor, coord, this->cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, 1, this->topology, this->cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensor, coord, -1, this->topology, this->cluster_axis);
+    TT_FATAL(forward_coord.has_value() || backward_coord.has_value(), "DEBUG: forward_coord or backward_coord is null");
 
     return all_broadcast_async_multicore(
-        input_tensors[0],
-        target_device,
-        forward_device,
-        backward_device,
+        input_tensor,
+        coord,
+        forward_coord,
+        backward_coord,
         output_tensors,
         this->num_links,
         target_ring_size,
@@ -154,35 +136,33 @@ std::vector<Tensor> all_broadcast_async_impl(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    const std::vector<IDevice*>& devices) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "all_broadcast_async op is only supported for Fast Dispatch");
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    const auto& tensor_topology = input_tensor.tensor_topology();
+    const auto& tensor_topology_shape = tensor_topology.distribution_shape();
 
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
-        const auto& mesh_view = mesh_device->get_view();
-        // Use the mesh dimensions to determine the ring size
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = devices.size();
+    if (!cluster_axis.has_value()) {
+        TT_FATAL(
+            tensor_topology_shape.is_line_topology(),
+            "all_broadcast_async op is only supported for a linear tensor topology shape");
     }
 
-    TT_FATAL(num_devices > 1, "all_broadcast_async op will only work for num_devices > 1, but has {}", num_devices);
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+
+    TT_FATAL(
+        num_devices > 1,
+        "all_broadcast_async op will only work for num_devices > 1, but has {}, shape: {}",
+        num_devices,
+        tensor_topology_shape);
 
     ttnn::ccl::Topology ccl_topology = topology;
     if (num_devices == 2) {
         ccl_topology = ttnn::ccl::Topology::Linear;
     }
-    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
+    log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", num_devices, num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     return tt::tt_metal::operation::run(
         ttnn::AllBroadcastAsync(
-            devices,
             num_links,
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),
@@ -199,14 +179,7 @@ std::vector<Tensor> all_broadcast_async(
     const ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    return all_broadcast_async_impl(
-        input_tensor,
-        num_links,
-        memory_config,
-        topology,
-        cluster_axis,
-        sub_device_id,
-        ttnn::ccl::get_active_physical_devices(input_tensor));
+    return all_broadcast_async_impl(input_tensor, num_links, memory_config, topology, cluster_axis, sub_device_id);
 }
 
 }  // namespace operations::experimental::ccl

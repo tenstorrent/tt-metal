@@ -26,6 +26,7 @@ class TtResnetBlock2D(LightweightModule):
         conv_shortcut=False,
         split_in=1,
         split_out=1,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -34,6 +35,7 @@ class TtResnetBlock2D(LightweightModule):
         self.split_conv = split_in > 1 or split_out > 1
         self.split_in = split_in
         self.split_out = split_out
+        self.debug_mode = debug_mode
 
         # fixed for ResnetBlock
         self.stride = (1, 1)
@@ -180,7 +182,7 @@ class TtResnetBlock2D(LightweightModule):
                 hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             else:
                 hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-            hidden_states, [C, H, W], [self.tt_conv1_weights, self.tt_conv1_bias] = split_conv2d(
+            hidden_states, [C, H, W], [tt_conv1_weights, tt_conv1_bias] = split_conv2d(
                 device=self.device,
                 hidden_states=hidden_states,
                 input_shape=[B, C, H, W],
@@ -198,7 +200,7 @@ class TtResnetBlock2D(LightweightModule):
                 groups=self.groups,
             )
         else:
-            [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
+            [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
                 in_channels=self.conv1_params["input_channels"],
@@ -214,6 +216,7 @@ class TtResnetBlock2D(LightweightModule):
                 input_width=W,
                 conv_config=self.conv1_config,
                 compute_config=self.compute1_config,
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
                 groups=self.groups,
                 memory_config=None,
                 return_output_dim=True,
@@ -221,6 +224,9 @@ class TtResnetBlock2D(LightweightModule):
                 dtype=self.conv_output_dtype,
             )
             C = self.conv1_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv1_weights = tt_conv1_weights
+            self.tt_conv1_bias = tt_conv1_bias
 
         # ToDo: move to implace version or even better fuse iwth conv2d.
         # Currently both optinos have pcc issues.
@@ -264,7 +270,7 @@ class TtResnetBlock2D(LightweightModule):
 
         ttnn.silu(hidden_states, output_tensor=hidden_states)
 
-        [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -280,6 +286,7 @@ class TtResnetBlock2D(LightweightModule):
             input_width=W,
             conv_config=self.conv2_config,
             compute_config=self.compute2_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,
@@ -287,6 +294,9 @@ class TtResnetBlock2D(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv2_weights = tt_conv2_weights
+            self.tt_conv2_bias = tt_conv2_bias
 
         if self.tt_conv3_weights is not None:
             input_tensor_pre_conv = input_tensor

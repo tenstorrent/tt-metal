@@ -5,6 +5,8 @@
 #pragma once
 
 #include <string>
+#include <set>
+#include <cabling_generator/cabling_generator.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -15,7 +17,13 @@ namespace tt::scaleout_tools {
 //   - gsd_filename: Path to the GSD YAML file
 //   - strict_validation: If true, checks that all connections match bidirectionally
 //                        If false, only checks that GSD connections exist in FSD
-void validate_fsd_against_gsd(
-    const std::string& fsd_filename, const std::string& gsd_filename, bool strict_validation = true);
+//   - assert_on_connection_mismatch: If true, throws an error if there are connection mismatches
+//                                    If false, missing connections are logged without an error being thrown
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+    const std::string& fsd_filename,
+    const std::string& gsd_filename,
+    bool strict_validation = true,
+    bool assert_on_connection_mismatch = true,
+    bool log_output = true);
 
 }  // namespace tt::scaleout_tools

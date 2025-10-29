@@ -135,8 +135,8 @@ struct SfpuConfig {
     size_t tile_byte_size = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    CoreRangeSet cores = CoreRangeSet();
-    std::string sfpu_op = "";
+    CoreRangeSet cores;
+    std::string sfpu_op;
     bool approx_mode = true;
 };
 
@@ -153,7 +153,7 @@ bool run_sfpu_all_same_buffer(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 

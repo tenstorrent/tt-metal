@@ -4,13 +4,13 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull, torch_random
+from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_stable_diffusion_pipeline
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_conv import upblock_2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -21,7 +21,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("res_hidden_states_tuple", [([2, 1280, 8, 8], [2, 1280, 8, 8], [2, 1280, 8, 8])])
 @pytest.mark.parametrize(
@@ -37,12 +36,13 @@ def test_upblock_512x512(
     shard_end_core,
     shard_shape,
     temb,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
-    pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
+    unet = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     state_dict = unet.state_dict()
-    unet_upblock = pipe.unet.up_blocks[0]
+    unet_upblock = unet.up_blocks[0]
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device

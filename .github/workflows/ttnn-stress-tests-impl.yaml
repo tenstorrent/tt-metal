@@ -28,9 +28,9 @@ jobs:
     name: ttnn stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'config-tg' || inputs.runner-label == 'topology-6u') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        || (contains('BH-DeskBox, BH-LLMBox, BH-LoudBox', inputs.runner-label) && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label)))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
       image: ${{ inputs.docker-image }}
@@ -50,7 +50,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

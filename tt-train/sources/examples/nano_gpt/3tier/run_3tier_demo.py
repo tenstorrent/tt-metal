@@ -55,14 +55,19 @@ def run(cmd, dry=False, check=True, capture=False):
         return subprocess.run(cmd, check=check)
 
 
-def verify_local_files(metal_home: Path, config_name: str, mesh_desc_rel_path: str = None):
+def verify_local_files(
+    metal_home: Path,
+    config_name: str,
+    mesh_desc_rel_path: str = None,
+    required_binaries: tuple[str, ...] = BINARIES,
+):
     bin_dir = metal_home / "tt-train" / "build" / "sources" / "examples" / "nano_gpt"
     cfg_dir = metal_home / "tt-train" / "configs"
 
     print("Verifying local files...")
     missing = 0
 
-    for b in BINARIES:
+    for b in required_binaries:
         p = bin_dir / b
         if not p.exists():
             print(f"ERROR: Binary not found: {p}", file=sys.stderr)
@@ -113,7 +118,15 @@ def detect_fabric(cfg_path: Path) -> bool:
 
 
 def copy_to_remote_hosts(
-    hosts, ssh_user, bin_dir: Path, cfg_dir: Path, config_name: str, mesh_desc_path: Path, use_fabric: bool, dry: bool
+    hosts,
+    ssh_user,
+    bin_dir: Path,
+    cfg_dir: Path,
+    config_name: str,
+    mesh_desc_path: Path,
+    use_fabric: bool,
+    dry: bool,
+    binaries_to_copy: tuple[str, ...] = BINARIES,
 ):
     # de-duplicate
     unique_hosts = list(dict.fromkeys(hosts))
@@ -155,7 +168,7 @@ def copy_to_remote_hosts(
         )
 
         # copy binaries
-        for b in BINARIES:
+        for b in binaries_to_copy:
             src = bin_dir / b
             dest = f"{ssh_user}@{host}:{bin_dir}/"
             try:
@@ -254,8 +267,11 @@ def write_appfile(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Copy nano_gpt 3-tier binaries and config to remote hosts and launch via MPI, "
-        "precomputing per-rank TT_MESH_ID into an Open MPI appfile."
+        description=(
+            "Copy nano_gpt binaries and config to remote hosts and launch via MPI, "
+            "supporting both classic 3-tier (workers + aggregator + optimizer) and pipeline-parallel (workers only). "
+            "Per-rank TT_MESH_ID is precomputed into an Open MPI appfile."
+        )
     )
     parser.add_argument("-m", "--metal-home", default=DEFAULT_METAL_HOME, help="TT_METAL_HOME")
     parser.add_argument("-c", "--config", default=DEFAULT_CONFIG, help="Config filename")
@@ -264,9 +280,14 @@ def main():
     parser.add_argument("--mesh-ids", nargs="*", type=int, default=DEFAULT_MESH_IDS, help="MESH_IDs per global rank")
     parser.add_argument("--ssh-user", default=SSH_USER, help="SSH username for remote copy")
     parser.add_argument("--skip-copy", action="store_true", help="Skip remote copy step")
-    parser.add_argument("--workers", type=int, default=None, help="Number of worker ranks (default: len(hosts)-2)")
-    parser.add_argument("--aggregators", type=int, default=1, help="Number of aggregator ranks")
-    parser.add_argument("--optimizers", type=int, default=1, help="Number of optimizer ranks")
+    parser.add_argument("--workers", type=int, default=None, help="Number of worker ranks")
+    parser.add_argument("--aggregators", type=int, default=1, help="Number of aggregator ranks (3-tier mode)")
+    parser.add_argument("--optimizers", type=int, default=1, help="Number of optimizer ranks (3-tier mode)")
+    parser.add_argument(
+        "--pp-only",
+        action="store_true",
+        help="Pipeline-parallel mode: launch only worker ranks (no aggregator or optimizer)",
+    )
     parser.add_argument(
         "remainder", nargs=argparse.REMAINDER, help="Use '-- <args>' to forward extra args to all ranks"
     )
@@ -293,19 +314,29 @@ def main():
 
     # Verify files including mesh descriptor if using fabric
     mesh_desc_rel_path = MESH_GRAPH_DESC_REL if use_fabric else None
-    bin_dir, cfg_dir = verify_local_files(metal_home, args.config, mesh_desc_rel_path)
+    required_binaries = ("nano_gpt",) if args.pp_only else BINARIES
+    bin_dir, cfg_dir = verify_local_files(metal_home, args.config, mesh_desc_rel_path, required_binaries)
     cfg_path = cfg_dir / args.config
 
     num_hosts = len(args.hosts)
-    if num_hosts < 3:
-        die("need at least 3 hosts (2 workers + 1 aggregator + 1 optimizer)")
-
-    agg_count = args.aggregators
-    opt_count = args.optimizers
-    if args.workers is None:
-        worker_count = num_hosts - agg_count - opt_count
+    if args.pp_only:
+        if num_hosts < 1:
+            die("need at least 1 host for pipeline-parallel workers")
+        agg_count = 0
+        opt_count = 0
+        if args.workers is None:
+            worker_count = num_hosts
+        else:
+            worker_count = args.workers
     else:
-        worker_count = args.workers
+        if num_hosts < 3:
+            die("need at least 3 hosts (2 workers + 1 aggregator + 1 optimizer)")
+        agg_count = args.aggregators
+        opt_count = args.optimizers
+        if args.workers is None:
+            worker_count = num_hosts - agg_count - opt_count
+        else:
+            worker_count = args.workers
 
     total_ranks = worker_count + agg_count + opt_count
     if total_ranks <= 0:
@@ -330,7 +361,15 @@ def main():
     # Remote copy step
     if not args.skip_copy:
         copy_to_remote_hosts(
-            args.hosts, args.ssh_user, bin_dir, cfg_dir, args.config, mesh_graph_desc_path, use_fabric, args.dry_run
+            args.hosts,
+            args.ssh_user,
+            bin_dir,
+            cfg_dir,
+            args.config,
+            mesh_graph_desc_path,
+            use_fabric,
+            args.dry_run,
+            required_binaries,
         )
     else:
         print("Skipping remote copy step (--skip-copy)")
@@ -358,12 +397,15 @@ def main():
             print("Content of app file:")
             print(f.read())
 
-        mpi_cmd = ["mpirun", "--hostfile", str(hostfile), "--app", str(appfile)]
+        mpi_cmd = ["mpirun", "--hostfile", str(hostfile), "--app", str(appfile), "--tag-output"]
 
-        print(
-            "Launching MPI 3-tier demo with "
-            f"{worker_count} workers, {agg_count} aggregators, {opt_count} optimizers..."
-        )
+        if args.pp_only:
+            print("Launching MPI pipeline-parallel run with " f"{worker_count} workers (no aggregator/optimizer)...")
+        else:
+            print(
+                "Launching MPI 3-tier demo with "
+                f"{worker_count} workers, {agg_count} aggregators, {opt_count} optimizers..."
+            )
         print(f"Environment: USE_FABRIC={use_fabric}")
         print("=== MPI Command Being Executed ===")
         print(" ".join(shlex.quote(c) for c in mpi_cmd))

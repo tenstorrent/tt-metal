@@ -78,12 +78,11 @@ void kernel_main() {
 
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     uint64_t noc_dest_address = get_noc_addr_helper(receiver_noc_xy_encoding, target_address);
-    packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+    fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, num_hops);
     if constexpr (is_full_size_channel_sender) {
         packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_address}, packet_payload_size_bytes);
     } else {
-        packet_header->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{noc_dest_address, 1, std::numeric_limits<uint16_t>::max()});
+        packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_dest_address, 1});
     }
 
     tt::tt_fabric::wait_for_fabric_endpoint_ready(

@@ -5,6 +5,7 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 
@@ -89,8 +90,8 @@ void kernel_main() {
         payload_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
         sem_inc_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
     } else {
-        payload_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_to_receiver));
-        sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_to_receiver));
+        fabric_set_unicast_route<false>(payload_packet_header, num_hops_to_receiver);
+        fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_to_receiver);
     }
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
@@ -99,12 +100,11 @@ void kernel_main() {
     if constexpr (enable_fused_payload_with_sync) {
         payload_packet_header->to_noc_fused_unicast_write_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                dest_payload_noc_addr, dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max(), false},
+                dest_payload_noc_addr, dest_semaphore_noc_addr, 1, false},
             payload_size_bytes);
     } else {
         payload_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_payload_noc_addr}, payload_size_bytes);
-        sem_inc_packet_header->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+        sem_inc_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1});
     }
 
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
@@ -184,9 +184,8 @@ void kernel_main() {
                                      uint64_t teardown_noc_addr,
                                      size_t num_hops_on_fabric) {
         // Now that we are done, we need to notify all other congestion writers to teardown
-        packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_on_fabric));
-        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            teardown_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+        fabric_set_unicast_route<false>(packet_header, num_hops_on_fabric);
+        packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{teardown_noc_addr, 1});
 
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

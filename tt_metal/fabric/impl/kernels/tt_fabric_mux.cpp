@@ -49,7 +49,7 @@ using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
         invalidate_l1_cache();
     }
@@ -60,7 +60,7 @@ void wait_for_static_connection_to_ready(
 template <uint8_t NUM_BUFFERS>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
     uint8_t channel_id,
     size_t buffer_size_bytes,
@@ -78,7 +78,7 @@ void setup_channel(
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>(
+    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
@@ -93,7 +93,7 @@ void setup_channel(
 template <uint8_t NUM_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
@@ -133,6 +133,7 @@ void forward_data(
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
     size_t rt_args_idx = 0;
 
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
@@ -150,15 +151,18 @@ void kernel_main() {
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
-    std::array<tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
+    std::array<
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
+        NUM_FULL_SIZE_CHANNELS>
         full_size_channel_worker_interfaces;
     std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
         header_only_channels;
-    std::
-        array<tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
-            header_only_channel_worker_interfaces;
+    std::array<
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
+        NUM_HEADER_ONLY_CHANNELS>
+        header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
 
     // Stream IDs
@@ -269,4 +273,5 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    set_l1_data_cache<false>();
 }

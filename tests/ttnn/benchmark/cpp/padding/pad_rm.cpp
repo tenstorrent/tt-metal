@@ -82,7 +82,7 @@ void BM_pad_rm_4d_last_dim_left_right(benchmark::State& state) {
 
 void BM_pad_rm_2d_scaling(benchmark::State& state) {
     int N = state.range(0);
-    int N_padded = N + 2 * 100;
+    int N_padded = N + (2 * 100);
 
     auto input_tensor = GenInputTensor<bfloat16>({8192, N});
     ttnn::SmallVector<uint32_t> padded_shape = {8192, N_padded};

@@ -117,7 +117,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
         };
 
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
-        uint32_t q_out_tensor_tile_id = num_blocks_written / q_out_h_tiles * q_out_CHtWt + q_out_h_dim * q_out_w_tiles;
+        uint32_t q_out_tensor_tile_id =
+            (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);
 
         std::vector<uint32_t> writer_runtime_args = {
             (std::uint32_t)q_buffer->address(),            // q_tensor_addr

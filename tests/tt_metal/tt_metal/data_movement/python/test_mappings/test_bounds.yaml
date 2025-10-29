@@ -100,6 +100,98 @@
     riscv_0:
       bandwidth: 61
 
+"DRAM Sharded Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 30
+  blackhole:
+    riscv_0:
+      bandwidth: 60
+
+"Multi Interleaved Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 1
+    riscv_0:
+      bandwidth: 1
+  blackhole:
+    riscv_1:
+      bandwidth: 0.6
+    riscv_0:
+      bandwidth: 0.6
+
+"Multi Interleaved Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 1.9
+  blackhole:
+    riscv_0:
+      bandwidth: 1.5
+
+"Multi Interleaved Write Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 1.7
+  blackhole:
+    riscv_1:
+      bandwidth: 1.2
+
+"Multi Interleaved 2x2 Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 7.9
+    riscv_0:
+      bandwidth: 8.1
+  blackhole:
+    riscv_1:
+      bandwidth: 13
+    riscv_0:
+      bandwidth: 13
+
+"Multi Interleaved 2x2 Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 13.8
+  blackhole:
+    riscv_0:
+      bandwidth: 26
+
+"Multi Interleaved 2x2 Write Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 16
+  blackhole:
+    riscv_1:
+      bandwidth: 22
+
+"Multi Interleaved 6x6 Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 1.8
+    riscv_0:
+      bandwidth: 1.9
+  blackhole:
+    riscv_1:
+      bandwidth: 1.8
+    riscv_0:
+      bandwidth: 1.8
+
+"Multi Interleaved 6x6 Read Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      bandwidth: 3.2
+  blackhole:
+    riscv_0:
+      bandwidth: 4.6
+
+"Multi Interleaved 6x6 Write Directed Ideal":
+  wormhole_b0:
+    riscv_1:
+      bandwidth: 2.9
+  blackhole:
+    riscv_1:
+      bandwidth: 3.5
+
 # OTHER TESTS
 
 "Reshard Hardcoded Small":

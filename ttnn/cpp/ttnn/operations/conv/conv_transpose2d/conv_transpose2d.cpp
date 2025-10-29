@@ -19,7 +19,6 @@ namespace ttnn {
 namespace operations::conv {
 
 using namespace tt;
-using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
@@ -68,18 +67,18 @@ Result conv_transpose2d(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
-    uint32_t output_height =
-        (input_height - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1;
-    uint32_t output_width =
-        (input_width - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1;
+    uint32_t output_height = ((input_height - 1) * stride[0]) - (2 * padding[0]) +
+                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
+    uint32_t output_width = ((input_width - 1) * stride[1]) - (2 * padding[1]) + (dilation[1] * (kernel_size[1] - 1)) +
+                            output_padding[1] + 1;
 
     // Dimensions of Input to Conv u_op
-    uint32_t full_input_height = output_height + dilation[0] * (kernel_size[0] - 1);
-    uint32_t full_input_width = output_width + dilation[1] * (kernel_size[1] - 1);
+    uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
+    uint32_t full_input_width = output_width + (dilation[1] * (kernel_size[1] - 1));
 
     // Size of input after adding interleaved 0s.
-    uint32_t strided_input_height = (input_height - 1) * stride[0] + 1;
-    uint32_t strided_input_width = (input_width - 1) * stride[1] + 1;
+    uint32_t strided_input_height = ((input_height - 1) * stride[0]) + 1;
+    uint32_t strided_input_width = ((input_width - 1) * stride[1]) + 1;
 
     uint32_t input_pad_top = (full_input_height - strided_input_height) / 2;
     uint32_t input_pad_bottom = full_input_height - strided_input_height - input_pad_top;
@@ -129,6 +128,7 @@ Result conv_transpose2d(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
+            stride,
             dilation,
             sliding_window::get_pair_n4_padding(padding),
             groups,
@@ -192,7 +192,7 @@ Result conv_transpose2d(
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor.layout(),
-        input_tensor.memory_config().buffer_type(),
+        false,
         mm_conv,
         input_tensor_post_tm.memory_config());
     uint32_t in_channels_padded = tt::round_up(

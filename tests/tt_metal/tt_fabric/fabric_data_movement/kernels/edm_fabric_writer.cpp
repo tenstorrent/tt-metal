@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 #include <cstdint>
@@ -30,14 +31,14 @@ void line_sync(
     auto dest_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y), sync_bank_addr, 0);
     if (sync_forward) {
-        fwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1, 128});
+        fwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1});
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
     }
 
     if (sync_backward) {
-        bwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1, 128});
+        bwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)bwd_packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -67,7 +68,7 @@ static FORCE_INLINE void setup_packet_header(
     volatile PACKET_HEADER_TYPE* pkt_hdr, size_t num_hops, tt::tt_fabric::ChipSendType chip_send_type) {
     if (num_hops > 0) {
         if (chip_send_type == tt::tt_fabric::CHIP_UNICAST) {
-            pkt_hdr->to_chip_unicast(num_hops);
+            fabric_set_unicast_route<false>(pkt_hdr, num_hops);
         } else {
             pkt_hdr->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_hops)});
         }
@@ -185,14 +186,14 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC>(
         params.dest_bank_addr_fwd,
         0);
 
-    pkt_hdr_fwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_fwd, 1, 128, params.flush});
+    pkt_hdr_fwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_fwd, 1, params.flush});
     auto noc0_dest_addr_bwd = safe_get_noc_addr(
         static_cast<uint8_t>(params.dest_noc_x_bwd),
         static_cast<uint8_t>(params.dest_noc_y_bwd),
         params.dest_bank_addr_bwd,
         0);
 
-    pkt_hdr_bwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_bwd, 1, 128, params.flush});
+    pkt_hdr_bwd->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc0_dest_addr_bwd, 1, params.flush});
 
     if (params.num_fwd_hops > 0 && params.num_bwd_hops > 0) {
         for (size_t i = 0; i < params.send_count; i++) {
@@ -277,7 +278,7 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
         params.dest_bank_addr_fwd + 4,
         0);
     pkt_hdr_fwd->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_fwd, sem_noc0_dest_addr_fwd, 1, 128, params.flush},
+        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_fwd, sem_noc0_dest_addr_fwd, 1, params.flush},
         params.payload_size_bytes);
     auto noc0_dest_addr_bwd = safe_get_noc_addr(
         static_cast<uint8_t>(params.dest_noc_x_bwd),
@@ -292,7 +293,7 @@ void send_packets<tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC>(
         0);
 
     pkt_hdr_bwd->to_noc_fused_unicast_write_atomic_inc(
-        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_bwd, sem_noc0_dest_addr_bwd, 1, 128, params.flush},
+        NocUnicastAtomicIncFusedCommandHeader{noc0_dest_addr_bwd, sem_noc0_dest_addr_bwd, 1, params.flush},
         params.payload_size_bytes);
     for (size_t i = 0; i < params.send_count; i++) {
         // Forward direction

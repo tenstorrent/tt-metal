@@ -2,8 +2,8 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables_mgd2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_control_plane_logical_to_physical.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_mesh_graph_descriptor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_topology_mapper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_custom_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
@@ -17,7 +17,6 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 
@@ -47,7 +46,6 @@ target_link_libraries(
     test_physical_discovery
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 
@@ -80,7 +78,6 @@ target_link_libraries(
     fabric_elastic_channels_host_test
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 
@@ -154,6 +151,7 @@ target_link_libraries(
 
 add_executable(fabric_smoke_tests)
 target_link_libraries(fabric_smoke_tests PRIVATE TT::Metalium::Test::Fabric::Smoke)
+
 set_target_properties(
     fabric_smoke_tests
     PROPERTIES
@@ -182,11 +180,47 @@ target_link_libraries(
     unit_tests_1d_fabric_latency
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 target_sources(
     unit_tests_1d_fabric_latency
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_1d_fabric_loopback_latency.cpp
+)
+
+# ---- Bench: unicast ----
+add_executable(
+    bench_unicast
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/bench_unicast_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/run_unicast_once.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
+)
+
+target_link_libraries(
+    bench_unicast
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(bench_unicast tt_metal)
+
+target_include_directories(
+    bench_unicast
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    bench_unicast
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )

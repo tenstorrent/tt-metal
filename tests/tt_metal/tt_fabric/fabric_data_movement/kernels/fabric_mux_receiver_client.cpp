@@ -86,9 +86,9 @@ void kernel_main() {
     uint64_t noc_dest_addr = get_noc_addr_helper(sender_noc_xy_encoding, credit_handshake_address);
     auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
     if constexpr (is_2d_fabric) {
-        fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dst_device_id, dst_mesh_id);
+        fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dst_device_id, dst_mesh_id);
     } else {
-        packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, num_hops);
     }
 
     auto base_payload_start_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(base_l1_target_address);
@@ -108,8 +108,8 @@ void kernel_main() {
     for (uint32_t iter = 0; iter < num_open_close_iters; iter++) {
         tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
-        packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-            noc_dest_addr, static_cast<uint16_t>(return_credits_per_packet), std::numeric_limits<uint16_t>::max()});
+        packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{noc_dest_addr, return_credits_per_packet});
 
         tt_l1_ptr uint32_t* payload_start_ptr = base_payload_start_ptr;
         volatile tt_l1_ptr uint32_t* poll_ptr = base_poll_ptr;
@@ -150,8 +150,8 @@ void kernel_main() {
 
         // return any unsent credits before disconnecting
         if (num_accumulated_credits > 0) {
-            packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-                noc_dest_addr, static_cast<uint16_t>(num_accumulated_credits), std::numeric_limits<uint16_t>::max()});
+            packet_header->to_noc_unicast_atomic_inc(
+                NocUnicastAtomicIncCommandHeader{noc_dest_addr, num_accumulated_credits});
             tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, packet_header);
             num_accumulated_credits = 0;
         }

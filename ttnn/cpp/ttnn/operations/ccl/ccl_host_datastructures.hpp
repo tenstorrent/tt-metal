@@ -129,7 +129,7 @@ private:
     uint32_t num_senders;
     uint32_t num_receivers;
     std::size_t num_buffers_per_channel;
-    chip_id_t chip_id;
+    tt::ChipId chip_id;
 
     bool enable_sender;
     bool enable_receiver;
@@ -144,25 +144,25 @@ public:
     EriscDatamoverBuilder(
         uint32_t eth_buffer_size,
         uint32_t handshake_addr,
-        std::vector<uint32_t> const& local_semaphore_addresses,
-        std::vector<uint32_t> const& local_buffer_addresses,
+        const std::vector<uint32_t>& local_semaphore_addresses,
+        const std::vector<uint32_t>& local_buffer_addresses,
         ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
         ccl::EriscDataMoverTerminationMode termination_mode = ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED,
         std::size_t num_buffers_per_channel = 1,
-        chip_id_t chip_id = -1) :
+        tt::ChipId chip_id = -1) :
         local_semaphore_addresses(local_semaphore_addresses),
         local_buffer_addresses(local_buffer_addresses),
         eth_buffer_size_bytes(eth_buffer_size),
         handshake_addr(handshake_addr),
         num_channel_buffers(local_buffer_addresses.size()),
         buffer_sharing_mode(buffer_sharing_mode),
-        num_buffers_per_channel(num_buffers_per_channel),
         termination_mode(termination_mode),
-        enable_sender(false),
-        enable_receiver(false),
         num_senders(0),
         num_receivers(0),
-        chip_id(chip_id) {
+        num_buffers_per_channel(num_buffers_per_channel),
+        chip_id(chip_id),
+        enable_sender(false),
+        enable_receiver(false) {
         TT_ASSERT(num_buffers_per_channel > 0);
         TT_ASSERT(local_buffer_addresses.size() == local_semaphore_addresses.size());
         active_channels.reserve(num_channel_buffers);
@@ -268,7 +268,7 @@ public:
     [[nodiscard]]
     std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
-        uint32_t size = 3 + active_channels.size() * 6;
+        uint32_t size = 3 + (active_channels.size() * 6);
         for (auto const& channel : active_channels) {
             size += channel.worker_coords.size();
         }

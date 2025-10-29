@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer as refTransformer
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf
@@ -30,7 +30,6 @@ def convert2ref(state_dict):
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -140,7 +139,7 @@ def test_model_inference(
                 (32, True): "llama32_11b",
                 (80, False): "llama31_70b",
                 (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_vision())]
+            }[(model_args.n_layers, model_args.is_llama_vision())]
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {

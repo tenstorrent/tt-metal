@@ -25,7 +25,7 @@ struct InterleavedConfig {
     uint32_t num_pages = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    CoreRangeSet cores = CoreRangeSet();
+    CoreRangeSet cores;
     bool is_dram = true;  // else is L1
     bool read_kernel = true;
     bool write_kernel = true;
@@ -167,7 +167,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Interl
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);

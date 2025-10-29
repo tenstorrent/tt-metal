@@ -56,19 +56,9 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
-      version: ${{ inputs.version || '22.04' }}
-      skip-tt-train: false
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
       tracy: true
       version: ${{ inputs.version || '22.04' }}
-
+      skip-tt-train: false
   # Fabric Unit Tests
   fabric-unit-tests:
     needs: build-artifact
@@ -177,7 +167,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   run-profiler-regression:
-    needs: [build-artifact-profiler]
+    needs: [build-artifact]
     strategy:
       fail-fast: false
       matrix:
@@ -190,9 +180,9 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-apc-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
@@ -203,15 +193,14 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   galaxy-apc-fast-tests:
-    # Disabled due to MLPerf upgrade, will revert back later
-    if: false
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
+          { arch: wormhole_b0, runner-label: in-service-dedicated-apc, topology: topology-6u },
         ]
     uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
     with:

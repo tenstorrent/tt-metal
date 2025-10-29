@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "dataflow_api.h"
 
 #include <cstdint>
@@ -46,7 +47,7 @@ void kernel_main() {
     if constexpr (use_mcast_mode) {
         packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(message_num_hops)});
     } else {
-        packet_header->to_chip_unicast(static_cast<uint8_t>(message_num_hops));
+        fabric_set_unicast_route<false>(packet_header, message_num_hops);
     }
 
     auto noc0_dest_addr =
@@ -54,11 +55,10 @@ void kernel_main() {
     packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
 
     // Setup ready signal packet header
-    ready_packet_header->to_chip_unicast(static_cast<uint8_t>(hops_to_latency_writer));
+    fabric_set_unicast_route<false>(ready_packet_header, hops_to_latency_writer);
     auto ready_sem_noc_addr =
         safe_get_noc_addr(latency_writer_noc_x, latency_writer_noc_y, latency_writer_ready_sem, 0);
-    ready_packet_header->to_noc_unicast_atomic_inc(
-        NocUnicastAtomicIncCommandHeader{ready_sem_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
+    ready_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{ready_sem_noc_addr, 1});
 
     // Send initial traffic burst before signaling ready
     static constexpr size_t INITIAL_BURST_SIZE = 8;

@@ -12,10 +12,14 @@
 namespace tt {
 namespace tt_metal {
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type) {
-    return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() -
-           (tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST) *
-            2);  // * 2 to account for issue
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices) {
+    // CQ capacity would be reduced by the commands and alignment padding.
+    // prefetch_relay_inline, dispatch_wait (x #workers), and dispatch_write_linear would add alignment padding
+    const auto host_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    auto padded_commands_size = tt::align(sizeof(CQPrefetchCmd), host_alignment) +
+                                (num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment)) +
+                                tt::align(sizeof(CQDispatchCmdLarge), host_alignment);
+    return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() - padded_commands_size;
 }
 
 namespace device_dispatch {
@@ -108,7 +112,7 @@ void write_to_core(
         const CoreType dispatch_core_type =
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
         const uint32_t size_bytes_to_write =
-            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type));
+            std::min(size_bytes, calculate_max_prefetch_data_size_bytes(dispatch_core_type, sub_device_ids.size()));
 
         CoreWriteDispatchParams dispatch_params{
             {virtual_core,
@@ -174,7 +178,7 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
 
 void read_core_data_from_completion_queue(
     const ReadCoreDataDescriptor& read_descriptor,
-    chip_id_t mmio_device_id,
+    ChipId mmio_device_id,
     uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager,

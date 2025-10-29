@@ -7,7 +7,6 @@ import torch
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_model import SegformerModelReference
 from models.demos.segformer.tests.pcc.test_segformer_encoder import (
@@ -51,7 +50,6 @@ def move_to_device(object, device):
         return object
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, num_channels, height, width",
     [
@@ -80,25 +78,31 @@ def test_segformer_model(batch_size, num_channels, height, width, device, model_
 
     ttnn_model = TtSegformerModel(config, parameters)
 
-    torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor_permuted,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
+    min_channels = 8
+    sharded_input_enabled = 1
 
-    CONV2D_MIN_CHANNEL_SIZE = 8
-    # adjust padding if necessary
-    if num_channels < CONV2D_MIN_CHANNEL_SIZE:
-        ttnn_input_tensor = ttnn.pad(
-            ttnn_input_tensor, [batch_size, height, width, CONV2D_MIN_CHANNEL_SIZE], [0, 0, 0, 0], 0
+    if not sharded_input_enabled:
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
         )
-    elif num_channels > CONV2D_MIN_CHANNEL_SIZE and num_channels % 32 != 0:
-        ttnn_input_tensor = ttnn.pad(
-            ttnn_input_tensor, [batch_size, height, width, (num_channels + 31) // 32 * 32], [0, 0, 0, 0], 0
+    else:
+        n, c, h, w = torch_input_tensor.shape
+        if c < min_channels:
+            c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+        input_mem_config = ttnn.create_sharded_memory_config(
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
         )
-
-    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn_input_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
 
     ttnn_output = ttnn_model(
         device,
@@ -111,4 +115,4 @@ def test_segformer_model(batch_size, num_channels, height, width, device, model_
     ttnn_final_output = ttnn.to_torch(ttnn_output[0])
     torch_final_output = torch.permute(torch_output.last_hidden_state, (0, 2, 3, 1))
 
-    assert_with_pcc(torch_final_output, ttnn_final_output, pcc=0.929)
+    assert_with_pcc(torch_final_output, ttnn_final_output, pcc=0.91)

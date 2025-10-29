@@ -10,7 +10,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -234,7 +233,19 @@ enum class TensorPrintProfile {
     Full,
 };
 
-extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
+enum class SciMode {
+    Enable,
+    Disable,
+    Default,
+};
+
+struct PrintOptions {
+    TensorPrintProfile profile = TensorPrintProfile::Short;
+    SciMode sci_mode = SciMode::Default;
+    int precision = 4;
+};
+
+extern PrintOptions TTNN_PRINT_OPTIONS;
 
 template <typename T>
 std::string to_string(const Tensor& tensor);

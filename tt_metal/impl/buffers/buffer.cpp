@@ -37,7 +37,7 @@ namespace {
 std::unordered_map<int, std::string> global_mempool_names;
 std::mutex global_mempool_names_mutex;
 
-static const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
+const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
     std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
     int name_combo = (int)buffer_type * 1000 + device_id;
     if (global_mempool_names.find(name_combo) == global_mempool_names.end()) {
@@ -127,7 +127,7 @@ std::tuple<std::vector<std::vector<uint32_t>>, std::vector<std::array<uint32_t, 
                     break;
                 }
                 for (j = j_offset; j < (shard_in_pages[1] + j_offset) and (j < (tensor2d_size[1])); j++) {
-                    uint32_t host_page = i * tensor2d_size[1] + j;
+                    uint32_t host_page = (i * tensor2d_size[1]) + j;
                     ret_vec[shard_idx].push_back(host_page);
                 }
             }
@@ -233,7 +233,7 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
                 if (shard_page_x < shard_shape[core_index][0] && shard_page_y < shard_shape[core_index][1]) {
                     uint32_t host_page = core_host_page_indices[core_index][valid_shard_page];
-                    size_t core_page_idx = shard_page_x * shape_in_pages[1] + shard_page_y;
+                    size_t core_page_idx = (shard_page_x * shape_in_pages[1]) + shard_page_y;
                     buffer_page_mapping.core_host_page_indices[core_index][core_page_idx] = host_page;
                     valid_shard_page++;
                 }
@@ -256,12 +256,12 @@ Buffer::Buffer(
     Private) :
     device_(device),
     size_(size),
-    page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(sharding_args.buffer_layout()),
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
+    page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");

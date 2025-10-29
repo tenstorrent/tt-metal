@@ -33,7 +33,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
-    BufferType input_tensor_buffer_type,
+    bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
@@ -171,6 +171,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& dilation,
     const std::array<uint32_t, 4>& padding,
     uint32_t groups,
@@ -192,6 +193,27 @@ shard_or_reshard_tensor_if_required(
     bool is_mm_conv,
     bool auto_shard);
 
+bool auto_enable_kernel_folding(
+    std::optional<bool> enable_folding_,
+    bool is_dram,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4);
+
+Tensor fold_input_tensor_if_required(
+    const ttnn::Tensor& input_tensor,
+    MeshDevice* device,
+    uint32_t& input_height,
+    uint32_t& input_width,
+    uint32_t& in_channels,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4,
+    bool& mm_conv,
+    Conv2dConfig& conv_config);
+
 ttnn::Tensor fold_tensor(
     const ttnn::Tensor& tensor,
     MeshDevice* device,
@@ -205,6 +227,7 @@ struct KernelStrideFoldingResult {
     uint32_t in_channels;
     std::array<uint32_t, 2> stride;
     std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 4> padding_n4;
     bool mm_conv;
 };
 
@@ -233,28 +256,67 @@ struct ConvDRAMParamters {
     uint32_t groups;
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    Conv2dSliceConfig dram_slice_config;
     CoreCoord compute_grid;
-    ttnn::Shape weights_shape;
     DataType weights_datatype;
     DataType input_datatype;
     DataType output_datatype;
     Layout input_layout;
     bool enable_bias;
     bool mm_conv;
+
+    bool operator<(const ConvDRAMParamters& other) const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "in_channels",
+        "out_channels",
+        "batch_size",
+        "input_height",
+        "input_width",
+        "output_height",
+        "output_width",
+        "kernel_size",
+        "stride",
+        "padding_n4",
+        "dilation",
+        "groups",
+        "conv_config",
+        "compute_kernel_config",
+        "compute_grid",
+        "weights_datatype",
+        "input_datatype",
+        "output_datatype",
+        "input_layout",
+        "enable_bias",
+        "mm_conv");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->in_channels),
+            std::cref(this->out_channels),
+            std::cref(this->batch_size),
+            std::cref(this->input_height),
+            std::cref(this->input_width),
+            std::cref(this->output_height),
+            std::cref(this->output_width),
+            std::cref(this->kernel_size),
+            std::cref(this->stride),
+            std::cref(this->padding_n4),
+            std::cref(this->dilation),
+            std::cref(this->groups),
+            std::cref(this->conv_config),
+            std::cref(this->compute_kernel_config),
+            std::cref(this->compute_grid),
+            std::cref(this->weights_datatype),
+            std::cref(this->input_datatype),
+            std::cref(this->output_datatype),
+            std::cref(this->input_layout),
+            std::cref(this->enable_bias),
+            std::cref(this->mm_conv));
+    }
 };
 
-uint32_t estimate_halo_output_elems(
-    std::array<uint32_t, 2> halo_input_shard_shape,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> dilation,
-    std::array<uint32_t, 4> padding);
+std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
+    std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
 
-uint32_t calculate_conv_dram_slice_L1_usage(
-    const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
-
+void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 }  // namespace operations::conv
 }  // namespace ttnn

@@ -121,7 +121,6 @@ namespace tt::tt_metal::distributed::test {
 using MeshEndToEnd2x4Tests = MeshDevice2x4Fixture;
 using ::testing::Each;
 using ::testing::Eq;
-using ::testing::FloatEq;
 using ::testing::Pointwise;
 
 TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
@@ -153,7 +152,7 @@ TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
 
     auto target_devices = MeshCoordinateRange(mesh_device_->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(example_program));
 
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
@@ -234,13 +233,13 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
+    mesh_workload.add_program(device_range, std::move(*program));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
@@ -292,7 +291,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
+    mesh_workload.add_program(device_range, std::move(*program));
 
     auto& cq = mesh_device_->mesh_command_queue();
 
@@ -300,20 +299,20 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
+    mesh_device_->end_mesh_trace(cq.id(), trace_id);
 
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
-    ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
+    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
 
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToAdd](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + kValToAdd); };
 
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
@@ -356,7 +355,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device_->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(*program), device_range);
+    mesh_workload.add_program(device_range, std::move(*program));
 
     auto& cq = mesh_device_->mesh_command_queue();
 
@@ -364,20 +363,20 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
+    mesh_device_->end_mesh_trace(cq.id(), trace_id);
 
     EnqueueWriteMeshBuffer(cq, a_buffer, a_data, false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     EnqueueWriteMeshBuffer(cq, b_buffer, b_data, true /* blocking */);
 
-    ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
+    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
 
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     EnqueueReadMeshBuffer(cq, result_data, out_buffer, true /* blocking */);
 
-    auto transform_to_golden = [kValToMul](const bfloat16 a) { return bfloat16(a * bfloat16(kValToMul)); };
+    auto transform_to_golden = [](const bfloat16 a) { return bfloat16(a * bfloat16(kValToMul)); };
     std::vector<bfloat16> result_vec = unpack_uint32_vec_into_bfloat16_vec(result_data, bfloat16_identity_transform);
     std::vector<bfloat16> golden_vec = unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden);
 
@@ -469,16 +468,12 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
 
     auto add_mesh_workload = MeshWorkload();
     auto multiply_and_subtract_mesh_workload = MeshWorkload();
-    AddProgramToMeshWorkload(
-        add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*multiply_program),
-        top_row);  // Multiplication runs on the top row (sub_device 2)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*subtract_program),
-        bottom_row);  // Subtraction runs on the bottom row (sub device 2)
+    add_mesh_workload.add_program(
+        all_devices, std::move(*add_program));  // Addition runs on the full grid (sub_device 1)
+    multiply_and_subtract_mesh_workload.add_program(
+        top_row, std::move(*multiply_program));  // Multiplication runs on the top row (sub_device 2)
+    multiply_and_subtract_mesh_workload.add_program(
+        bottom_row, std::move(*subtract_program));  // Subtraction runs on the bottom row (sub device 2)
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
@@ -486,7 +481,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     auto trace_id = BeginTraceCapture(mesh_device_.get(), kWorkloadCqId);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    EndTraceCapture(mesh_device_.get(), kWorkloadCqId, trace_id);
+    mesh_device_->end_mesh_trace(kWorkloadCqId, trace_id);
 
     uint32_t workload_0_src0_val = 2;
     uint32_t workload_0_src1_val = 3;
@@ -509,14 +504,14 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
 
-    MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
-    EnqueueWaitForEvent(workload_cq, write_event);
+    MeshEvent write_event = data_movement_cq.enqueue_record_event();
+    workload_cq.enqueue_wait_for_event(write_event);
 
-    ReplayTrace(mesh_device_.get(), kWorkloadCqId, trace_id, false);
+    mesh_device_->replay_mesh_trace(kWorkloadCqId, trace_id, false);
 
     // Synchronize
-    MeshEvent trace_event = EnqueueRecordEvent(workload_cq);
-    EnqueueWaitForEvent(data_movement_cq, trace_event);
+    MeshEvent trace_event = workload_cq.enqueue_record_event();
+    data_movement_cq.enqueue_wait_for_event(trace_event);
 
     std::vector<bfloat16> add_dst_vec = {};
     std::vector<bfloat16> mul_sub_dst_vec = {};

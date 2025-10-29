@@ -13,7 +13,7 @@
 #include <tt-metalium/allocator.hpp>
 
 namespace distribution_spec_tests {
-using tt::tt_metal::BufferDistributionSpec;
+using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
 
 struct BufferDistributionSpecInputs {
@@ -246,7 +246,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     {
         uint16_t channel =
             tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(local_device->id());
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(local_device->id());
         uint32_t cq_size = local_device->sysmem_manager().get_cq_size();
         uint32_t cq_start = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(

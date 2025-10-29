@@ -2,13 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
+
 from ..parallel.config import vae_all_gather
-from ..utils.tensor import bf16_tensor_host
+from .module import Module, Parameter
 
 
 # TODO: Add support for coll and row parallel conv2d
-class Conv2d:
+class Conv2d(Module):
     """
     Conv2d with support for tensor parallelism. Data and Seqence Parallelism TBD.
 
@@ -21,7 +23,6 @@ class Conv2d:
         packer_l1_acc=False,
     )
 
-    # slice_params[mesh_shape][tuple(height, width, in_channels, out_channels)] = num_slices
     slice_params = {
         (1, 4): {
             (512, 512, 512, 64): 16,
@@ -62,6 +63,19 @@ class Conv2d:
             (1024, 1024, 128, 3): 8,
         },
     }
+    slice_default = {
+        (512, 512, 512, 64): 16,
+        (128, 128, 16, 512): 8,
+        (128, 128, 512, 512): 4,
+        (256, 256, 512, 512): 8,
+        (512, 512, 512, 512): 16,
+        (512, 512, 512, 256): 16,
+        (512, 512, 256, 256): 4,
+        (1024, 1024, 256, 256): 16,
+        (1024, 1024, 256, 128): 16,
+        (1024, 1024, 128, 128): 16,
+        (1024, 1024, 128, 3): 8,
+    }
 
     # TODO: Allow weight initilization?
     def __init__(
@@ -74,6 +88,7 @@ class Conv2d:
         dilation=None,
         mesh_device=None,
         mesh_axis=None,
+        sp_axis=None,
         ccl_manager=None,
         torch_ref=None,
     ):
@@ -89,11 +104,13 @@ class Conv2d:
             dilation: Dilation of the convolution.
             mesh_device: Mesh device to use.
             mesh_axis: Axis to use for mesh parallelism.
+            sp_axis: Axis to use for sequence parallelism. Currently only used for gather before computation
             ccl_manager: CCL manager to use.
             torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
         Returns:
             Conv2d layer.
         """
+        super().__init__()
 
         self.in_channels = in_channels or torch_ref.in_channels
         self.out_channels = out_channels or torch_ref.out_channels
@@ -101,46 +118,44 @@ class Conv2d:
         self.stride = stride or torch_ref.stride
         self.padding = padding or torch_ref.padding
         self.dilation = dilation or torch_ref.dilation
-        self.bias = None
-        self.weight = None
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
+        self.sp_axis = sp_axis
         self.ccl_manager = ccl_manager
 
+        self.weight = Parameter(
+            total_shape=[self.out_channels, self.in_channels, *self.kernel_size],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_axes=[mesh_axis, None, None, None],
+            on_host=True,
+        )
+
+        self.bias = Parameter(
+            total_shape=[1, 1, 1, self.out_channels],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_axes=[None, None, None, mesh_axis],
+            on_host=True,
+        )
+
         if torch_ref is not None:
-            self.load_state_dict(torch_ref.state_dict())
+            self.load_torch_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device, mesh_axis, ccl_manager):
+    def from_torch(cls, torch_ref, mesh_device, mesh_axis, sp_axis, ccl_manager):
         layer = cls(
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
+            sp_axis=sp_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref,
         )
         return layer
 
-    def load_state_dict(self, state_dict):
-        weight = state_dict["weight"]
-        bias = state_dict.get("bias", None)
-        self.weight = bf16_tensor_host(
-            weight,
-            device=self.mesh_device,
-            mesh_axis=self.mesh_axis,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            shard_dim=0 if self.mesh_axis is not None else None,
-        )
-        self.bias = (
-            bf16_tensor_host(
-                bias.reshape((1, 1, 1, -1)),
-                device=self.mesh_device,
-                mesh_axis=self.mesh_axis,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                shard_dim=-1 if self.mesh_axis is not None else None,
-            )
-            if bias is not None
-            else None
-        )
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "bias" in state:
+            state["bias"] = state["bias"].reshape([1, 1, 1, -1])
 
     def is_sharded_tensor(self, x):
         """
@@ -149,27 +164,29 @@ class Conv2d:
         """
         return x.shape[3] < self.in_channels
 
-    def __call__(self, x):
+    def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
         """
         Gather the tensor if it is sharded, since we only support TP. Will be extended to support DP and SP as needed.
         Data is left in the state of the final compute. The burden is on the next layer to prepare its input as needed.
         TODO: Add support for DP and SP
         """
         if self.is_sharded_tensor(x):
-            x = vae_all_gather(self.ccl_manager, x)
+            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.sp_axis)
 
         b, h, w, c = x.shape
         slice_config = ttnn.Conv2dSliceConfig(
-            num_slices=self.slice_params[tuple(self.mesh_device.shape)][(h, w, self.in_channels, self.out_channels)],
-            slice_type=ttnn.Conv2dSliceWidth,
+            num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
+                (h, w, self.in_channels, self.out_channels)
+            ],
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
         )
 
         output_tensor, [_out_height, _out_width] = ttnn.conv2d(
             input_tensor=x,
-            weight_tensor=self.weight,
-            bias_tensor=self.bias,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data if self.bias is not None else None,
             in_channels=c,
-            out_channels=self.weight.shape[0],
+            out_channels=self.weight.data.shape[0],
             device=self.mesh_device,
             kernel_size=self.kernel_size,
             stride=self.stride,

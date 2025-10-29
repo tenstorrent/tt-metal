@@ -91,6 +91,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+        # Store CCL object for runtime semaphore initialization
         return {
             "expert_mapping_tensors": expert_mapping_tensors,
             # CCL-specific parameters (semaphores and num_links)
@@ -100,15 +101,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "all_to_all_combine": {
                 "num_links": 1,
             },
-            "final_output_reduce_scatter": {
-                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
-            "revert_tp": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
+            "ccl": ccl,
         }
 
     @classmethod
@@ -117,6 +110,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         mode: str,
+        topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
 
@@ -136,13 +130,13 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # Construct the config
         return {
-            "device": MeshDeviceStub(mesh_device.shape),
+            "mesh_device": MeshDeviceStub(mesh_device.shape),
             "num_devices": mesh_device.get_num_devices(),
             "num_experts_per_device": num_experts_per_device,
             "hidden_size": hf_config.hidden_size,
             "num_experts_per_tok": hf_config.num_experts_per_tok,
             "num_dispatch_devices": mesh_device.shape[0],
-            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
+            "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "activations_repeat": RepeatConfig(repeat_dims=ttnn.Shape((1, num_experts_per_device, 1, 1))),
@@ -153,7 +147,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "input_memory_config": memory_config,
             "output_memory_config": memory_config,
             "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-            "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
+            "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
             "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,
                 dim=3,
@@ -170,16 +164,24 @@ class MoE(SharedStateAddOn, AbstractModule):
         }
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode")
+    def decode_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+    ) -> ModelDecodeConfig:
+        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback)
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill")
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+    ) -> ModelPrefillConfig:
+        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        x = ttnn.experimental.all_gather_async(x, **cfg["revert_tp"])
+        ttnn.synchronize_device(cfg["mesh_device"])
+        # CCL runtime initialization in execution order
+        ccl = cfg["ccl"]
+
+        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["revert_tp"]))
 
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
@@ -215,8 +217,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
         all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
             experts_output,
-            cfg["expert_mapping_tensors"],
             all_to_all_dispatch_metadata_tensors,
+            cfg["expert_mapping_tensors"],
             **cfg["all_to_all_combine"],
         )
         post_combine_output_tensor = ttnn.reshape(
@@ -234,7 +236,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
         post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
         post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-            post_combine_output_tensor, **cfg["final_output_reduce_scatter"]
+            post_combine_output_tensor, **ccl.populate_reduce_scatter_runtime_args(cfg["final_output_reduce_scatter"])
         )
 
         return post_combine_output_tensor

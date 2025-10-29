@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
@@ -126,8 +126,8 @@ struct SfpuConfig {
     size_t tile_byte_size = 0;
     tt::DataFormat l1_input_data_format = tt::DataFormat::Invalid;
     tt::DataFormat l1_output_data_format = tt::DataFormat::Invalid;
-    CoreRangeSet cores = CoreRangeSet();
-    std::string sfpu_op = "";
+    CoreRangeSet cores;
+    std::string sfpu_op;
     bool approx_mode = true;
 };
 
@@ -238,8 +238,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
         }
     }
 
-    distributed::AddProgramToMeshWorkload(
-        mesh_workload, std::move(program), distributed::MeshCoordinateRange(cq.device()->shape()));
+    mesh_workload.add_program(distributed::MeshCoordinateRange(cq.device()->shape()), std::move(program));
 
     std::vector<uint32_t> dest_buffer_data;
     distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, false);

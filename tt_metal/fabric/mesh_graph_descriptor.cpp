@@ -65,7 +65,7 @@ std::string get_validation_report(const std::vector<std::string>& error_messages
 LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
     // Check that mesh_coord is within mesh_shape
     TT_FATAL(mesh_coord[0] < mesh_shape[0] && mesh_coord[1] < mesh_shape[1], "Mesh coordinate {} is out of bounds for mesh shape {}", mesh_coord, mesh_shape);
-    return mesh_coord[0] * mesh_shape[1] + mesh_coord[1];
+    return (mesh_coord[0] * mesh_shape[1]) + mesh_coord[1];
 }
 
 std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connections(
@@ -121,7 +121,8 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
 
@@ -589,44 +590,12 @@ void MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDes
         }
     }
 
-    // Connections have to be specific down to the device level
-    for (const auto& graph : proto.graph_descriptors()) {
-        for (const auto& connection : graph.connections()) {
-            for (const auto& node : connection.nodes()) {
-                if (!node.mesh().has_device_id()) {
-                    error_messages.push_back(
-                        fmt::format( "MGD 1.0 Compatibility requirement: Connections have to be specific down to the device level (Graph: {})", graph.name())
-                    );
-                }
-            }
-        }
-    }
-
     // Disable graph layout topologies for now
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.has_graph_topology()) {
             error_messages.push_back(
                 fmt::format( "MGD 1.0 Compatibility requirement: Graph layout topologies are not supported (Graph: {})", graph.name())
             );
-        }
-    }
-
-    // Check that the directions are set properly
-    for (const auto& graph : proto.graph_descriptors()) {
-        for (const auto& connection : graph.connections()) {
-            if (connection.routing_direction_size() != connection.nodes_size()) {
-                error_messages.push_back(fmt::format(
-                    "MGD 1.0 Compatibility requirement: Routing direction must have the same number of nodes (Graph: "
-                    "{})",
-                    graph.name()));
-            }
-            for (const auto& direction : connection.routing_direction()) {
-                if (direction == proto::RoutingDirection::INVALID) {
-                    error_messages.push_back(fmt::format(
-                        "MGD 1.0 Compatibility requirement: Routing direction must be valid (Graph: {})",
-                        graph.name()));
-                }
-            }
         }
     }
 
@@ -785,7 +754,7 @@ GlobalNodeId MeshGraphDescriptor::populate_graph_instance(
         // Check that the child instance created has the same type as rest of the graph descriptor
         if (child_instance.kind == NodeKind::Graph) {
             if (child_graph_type.empty()) {
-                child_graph_type = child_instance.type.c_str();
+                child_graph_type = child_instance.type;
             } else {
                 TT_FATAL(child_graph_type == child_instance.type, "Graph instance type {} does not match graph descriptor child type {}", std::string(child_graph_type), std::string(child_instance.type));
             }

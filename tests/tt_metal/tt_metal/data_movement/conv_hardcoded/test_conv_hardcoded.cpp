@@ -24,7 +24,7 @@ struct ConvConfig {
     vector<uint32_t> dest_core_compile_args;
     vector<uint32_t> dest_core_runtime_args;
     NOC noc_id = NOC::NOC_0;
-    string kernel_name = "";
+    string kernel_name;
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
@@ -59,7 +59,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const C
 
     // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;

@@ -16,7 +16,6 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
     skip_for_blackhole,
-    skip_for_grayskull,
     run_for_wormhole_b0,
 )
 from loguru import logger
@@ -498,8 +497,7 @@ def test_sharded_matmul_1d_in1(
     assert passing
 
 
-@pytest.mark.parametrize("H, num_cores", [[64, 64]])
-@pytest.mark.parametrize("num_slices", [2])
+@pytest.mark.parametrize("H, num_cores, num_slices", [[64, 64, 2], [2816, 20, 11]])
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -573,7 +571,7 @@ def test_sharded_partial_op(
     assert passing
 
 
-@pytest.mark.parametrize("H, W, num_cores", [[32 * 32, 16 * 32, 64]])
+@pytest.mark.parametrize("H, W, num_cores, num_slices", [[32 * 32, 16 * 32, 64, 2], [2816, 16 * 32, 64, 11]])
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -584,7 +582,9 @@ def test_sharded_partial_op(
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["out_BFLOAT16", "out_BFLOAT8_B"],
 )
-def test_block_sharded_partial_op(device, H, W, num_cores, activations_dtype, output_dtype, function_level_defaults):
+def test_block_sharded_partial_op(
+    device, H, W, num_cores, num_slices, activations_dtype, output_dtype, function_level_defaults
+):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -610,7 +610,6 @@ def test_block_sharded_partial_op(device, H, W, num_cores, activations_dtype, ou
     )
 
     block_shard_spec = [2 * 32, 2 * 32]
-    num_slices = 2
 
     for slice_index in range(num_slices):
         in0_t_slice = ttnn.interleaved_to_sharded_partial(
@@ -716,7 +715,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     assert passing
 
 
-@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 64, 2]])
+@pytest.mark.parametrize("H, W, num_cores, num_slices", [[4 * 32, 32 * 32, 64, 2], [2816, 16 * 32, 64, 11]])
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -789,8 +788,7 @@ def test_width_sharded_partial_op(
 @pytest.mark.parametrize("in0_sharded", [True])
 @pytest.mark.parametrize("in1_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [True])
-@pytest.mark.parametrize("H, num_cores", [[128 * 32, 64]])
-@pytest.mark.parametrize("num_slices", [2])
+@pytest.mark.parametrize("H, num_cores, num_slices", [[128 * 32, 64, 2], [2816, 20, 11]])
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -2364,7 +2362,6 @@ def test_interleaved_2_sharded_DRAM(device, dtype, y):
     yt = ttnn.interleaved_to_sharded(xt, shard_grid, (y // 8, 18 * 32), shard_scheme, ttnn.ShardOrientation.ROW_MAJOR)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "seq_len",
     (32,),

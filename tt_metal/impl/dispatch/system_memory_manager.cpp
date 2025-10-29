@@ -73,8 +73,8 @@ void loop_and_wait_with_timeout(
 }
 }  // namespace
 
-SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs) :
-    device_id(device_id), num_hw_cqs(num_hw_cqs), bypass_enable(false), bypass_buffer_write_offset(0) {
+SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
+    device_id(device_id), bypass_enable(false), bypass_buffer_write_offset(0) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -83,8 +83,7 @@ SystemMemoryManager::SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs
     this->prefetch_q_dev_fences.resize(num_hw_cqs);
 
     // Split hugepage into however many pieces as there are CQs
-    chip_id_t mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
     char* hugepage_start =
         (char*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
@@ -272,7 +271,7 @@ uint32_t SystemMemoryManager::get_completion_queue_read_toggle(const uint8_t cq_
 
 uint32_t SystemMemoryManager::get_cq_size() const { return this->cq_size; }
 
-chip_id_t SystemMemoryManager::get_device_id() const { return this->device_id; }
+ChipId SystemMemoryManager::get_device_id() const { return this->device_id; }
 
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
@@ -354,7 +353,7 @@ void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint
     }
 
     // Also store this data in hugepages, so if a hang happens we can see what was written by host.
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
@@ -374,7 +373,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_id);
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_id);
@@ -403,21 +402,36 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             return;
         }
         ZoneScopedN("wait_for_fetch_q_space");
-        // Loop until space frees up
-        while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
+
+        // Body of the operation
+        auto fetch_operation_body = [&]() {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
-        }
+        };
+
+        // Condition to check if should continue waiting
+        auto fetch_wait_condition = [&]() -> bool {
+            return this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id];
+        };
+
+        // Handler for timeout
+        auto fetch_on_timeout = [&]() {
+            TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
+        };
+
+        auto timeout_duration =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+
+        loop_and_wait_with_timeout(fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration);
     };
 
     wait_for_fetch_q_space();
-
     // Wrap FetchQ if possible
     uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
-                                                      sizeof(DispatchSettings::prefetch_q_entry_type);
+    uint32_t prefetch_q_limit = prefetch_q_base + (MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
+                                                   sizeof(DispatchSettings::prefetch_q_entry_type));
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         wait_for_fetch_q_space();
@@ -433,7 +447,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Body of the operation to be timed out
     auto wait_operation_body =
-        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle, &cq_interface]() -> uint32_t {
+        [this, cq_id, &exit_condition, &write_ptr_and_toggle, &write_ptr, &write_toggle]() -> uint32_t {
         write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;

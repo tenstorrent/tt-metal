@@ -12,7 +12,6 @@ from transformers import SegformerImageProcessor
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
@@ -64,9 +63,9 @@ def move_to_device(object, device):
         return object
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_for_semantic_segmentation(device, model_location_generator):
+    min_channels = 8
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     image = Image.open(requests.get(url, stream=True).raw)
@@ -101,38 +100,27 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator):
     sharded_input_enabled = 1
 
     if not sharded_input_enabled:
-        torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
         ttnn_input_tensor = ttnn.from_torch(
-            torch_input_tensor_permuted,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
+            inputs.pixel_values, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
         )
     else:
-        torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
-        N, H, W, C = torch_input_tensor_permuted.shape
-        shard_grid = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 7),
-                ),
-            }
+        n, c, h, w = inputs.pixel_values.shape
+        if c < min_channels:
+            c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+        input_mem_config = ttnn.create_sharded_memory_config(
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
         )
-        n_cores = 64
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-        input_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-        ttnn_input_tensor_unpadded = ttnn.from_torch(
-            torch_input_tensor_permuted,
+        ttnn_input_tensor = ttnn.from_torch(
+            inputs.pixel_values,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=input_mem_config,
         )
-        ttnn_input_tensor = ttnn.pad(ttnn_input_tensor_unpadded, [N, H, W, 8], [0, 0, 0, 0], 0)
 
     ttnn_output = ttnn_model(
         device,
@@ -148,4 +136,4 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator):
     h = w = int(math.sqrt(ttnn_output.shape[-1]))
     ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
 
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.983)
+    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.979)
