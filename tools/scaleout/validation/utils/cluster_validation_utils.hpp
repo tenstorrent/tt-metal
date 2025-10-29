@@ -76,11 +76,9 @@ bool generate_link_metrics(
 void reset_ethernet_links(
     const PhysicalSystemDescriptor& physical_system_descriptor, const tt_metal::AsicTopology& asic_topology);
 
-void reset_ethernet_links_bh(
-    const PhysicalSystemDescriptor& physical_system_descriptor,
-    const tt_metal::AsicTopology& asic_topology,
-    uint32_t link_down_step_idx,
-    uint32_t port_down_step_idx);
+void reset_ethernet_links_bh(const tt_metal::AsicTopology& asic_topology, uint32_t reset_step);
+
+void issue_reset_step(const EthChannelIdentifier& link, const ResetAction& reset_action);
 
 tt_metal::AsicTopology generate_asic_topology_from_connections(
     const std::set<PhysicalChannelConnection>& physical_connections,

@@ -256,7 +256,7 @@ void PhysicalSystemDescriptor::clear() {
 
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
-    if (target_device_type_ != TargetDevice::Silicon) {
+    if (!(run_live_discovery && target_device_type_ == TargetDevice::Silicon)) {
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
     } else {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.

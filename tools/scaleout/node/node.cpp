@@ -222,7 +222,7 @@ public:
         // Add QSFP connections
         if (default_cabling) {
             auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD");
-            add_connection(qsfp_connections, 1, 1, 2, 1);
+            // add_connection(qsfp_connections, 1, 1, 2, 1);
             add_connection(qsfp_connections, 1, 2, 2, 2);
             add_connection(qsfp_connections, 1, 3, 4, 3);
             add_connection(qsfp_connections, 1, 4, 4, 4);
