@@ -335,6 +335,12 @@ async function run() {
     const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
     const cutoffDate = getCutoffDate(days);
 
+    // Log initial GitHub API rate limit
+    const initialRateLimit = await octokit.rest.rateLimit.get();
+    const initialRemaining = initialRateLimit.data.resources.core.remaining;
+    const limit = initialRateLimit.data.resources.core.limit;
+    core.info(`[RATE_LIMIT] Initial GitHub API rate limit: ${initialRemaining} / ${limit} (${((initialRemaining/limit)*100).toFixed(1)}%)`);
+
     // Load cached data from previous aggregate run
     let previousRuns = [];
     let cachedGrouped = new Map();
@@ -1343,11 +1349,13 @@ async function run() {
     core.info(`[OUTPUT] gtest-logs: ${Object.keys(gtestLogsIndex).length} entries`);
     core.info(`[OUTPUT] other-logs: ${Object.keys(otherLogsIndex).length} entries`);
 
-    // Log remaining GitHub API rate limit
-    const rateLimit = await octokit.rest.rateLimit.get();
-    const remaining = rateLimit.data.resources.core.remaining;
-    const limit = rateLimit.data.resources.core.limit;
-    core.info(`[RATE_LIMIT] GitHub API rate limit remaining: ${remaining} / ${limit} (${((remaining/limit)*100).toFixed(1)}%)`);
+    // Log final GitHub API rate limit and calculate usage
+    const finalRateLimit = await octokit.rest.rateLimit.get();
+    const finalRemaining = finalRateLimit.data.resources.core.remaining;
+    const finalLimit = finalRateLimit.data.resources.core.limit;
+    const apiCallsUsed = initialRemaining - finalRemaining;
+    core.info(`[RATE_LIMIT] Final GitHub API rate limit: ${finalRemaining} / ${finalLimit} (${((finalRemaining/finalLimit)*100).toFixed(1)}%)`);
+    core.info(`[RATE_LIMIT] API calls used during this run: ${apiCallsUsed} (${initialRemaining} → ${finalRemaining})`);
   } catch (error) {
     core.setFailed(error.message);
   }
