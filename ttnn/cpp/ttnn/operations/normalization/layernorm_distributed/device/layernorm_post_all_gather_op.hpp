@@ -26,6 +26,17 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     std::optional<bool> use_2d_core_grid = std::nullopt,
     LayerNormDistributedDefaultProgramConfig program_config = LayerNormDistributedDefaultProgramConfig{});
 
+tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_welford_multi_core(
+    const Tensor& a,
+    const Tensor& stats,
+    const std::optional<const Tensor>& gamma,
+    const std::optional<const Tensor>& beta,
+    Tensor& output,
+    LayerNormDistributedType norm_type,
+    float eps,
+    DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<bool> use_2d_core_grid = std::nullopt);
+
 struct LayerNormPostAllGather {
     LayerNormDistributedType norm_type;
     float eps;
