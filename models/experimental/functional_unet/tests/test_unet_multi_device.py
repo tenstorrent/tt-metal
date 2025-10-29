@@ -7,8 +7,8 @@ import ttnn
 
 from loguru import logger
 
+from models.tt_cnn.tt.testing import create_random_input_tensor
 from models.experimental.functional_unet.tt.model_preprocessing import (
-    create_unet_input_tensors,
     create_unet_model_parameters,
 )
 from models.experimental.functional_unet.tt import unet_shallow_torch
@@ -33,7 +33,7 @@ def test_unet_multi_device_model(batch, groups, mesh_device, reset_seeds):
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
+    torch_input, ttnn_input = create_random_input_tensor(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
@@ -42,7 +42,7 @@ def test_unet_multi_device_model(batch, groups, mesh_device, reset_seeds):
     num_devices = len(mesh_device.get_device_ids())
     total_batch = num_devices * batch
     logger.info(f"Using {num_devices} devices for this test")
-    torch_input, ttnn_input = create_unet_input_tensors(
+    torch_input, ttnn_input = create_random_input_tensor(
         total_batch,
         groups,
         channel_order="first",

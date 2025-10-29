@@ -20,7 +20,6 @@ from models.demos.vanilla_unet.tt.common import (
 )
 from models.demos.vanilla_unet.tt.config import create_unet_configs_from_parameters
 from models.demos.vanilla_unet.tt.model import create_unet_from_configs
-from models.experimental.functional_unet.tt.model_preprocessing import create_unet_input_tensors
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import (
@@ -28,6 +27,7 @@ from models.tt_cnn.tt.pipeline import (
     create_pipeline_from_config,
     get_memory_config_for_persistent_dram_tensor,
 )
+from models.tt_cnn.tt.testing import create_random_input_tensor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -111,7 +111,7 @@ def test_vanilla_unet_perf_e2e(
     model = create_unet_from_configs(configs, device)
     run_model = create_unet_pipeline_model(model)
 
-    torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(
+    torch_input_tensor, ttnn_input_tensor = create_random_input_tensor(
         batch=batch,
         input_channels=input_channels,
         input_height=input_height,
@@ -229,7 +229,7 @@ def test_vanilla_unet_perf_e2e_multi_device(
     model = create_unet_from_configs(configs, mesh_device)
     run_model = create_unet_pipeline_model(model)
 
-    torch_input_tensor, ttnn_input_tensor = create_unet_input_tensors(
+    torch_input_tensor, ttnn_input_tensor = create_random_input_tensor(
         batch=total_batch,
         input_channels=input_channels,
         input_height=input_height,

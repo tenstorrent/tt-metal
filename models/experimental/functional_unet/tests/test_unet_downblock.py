@@ -6,8 +6,8 @@ import pytest
 import ttnn
 from loguru import logger
 
+from models.tt_cnn.tt.testing import create_random_input_tensor
 from models.experimental.functional_unet.tt.model_preprocessing import (
-    create_unet_input_tensors,
     create_unet_model_parameters,
 )
 from models.experimental.functional_unet.tt import unet_shallow_torch
@@ -41,13 +41,13 @@ def test_unet_downblock(
     device: ttnn.Device,
     reset_seeds,
 ):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
+    torch_input, ttnn_input = create_random_input_tensor(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, device)
 
-    torch_input, ttnn_input = create_unet_input_tensors(
+    torch_input, ttnn_input = create_random_input_tensor(
         batch,
         groups,
         input_channels=input_channels,
@@ -85,14 +85,14 @@ def test_unet_downblock_multi_device(
     weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
 
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups)
+    torch_input, ttnn_input = create_random_input_tensor(batch, groups)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=mesh_device)
     ttnn_model = unet_shallow_ttnn.UNet(parameters, mesh_device, mesh_mapper=weights_mesh_mapper)
 
     num_devices = len(mesh_device.get_device_ids())
-    torch_input, ttnn_input = create_unet_input_tensors(
+    torch_input, ttnn_input = create_random_input_tensor(
         num_devices * batch,
         groups,
         input_channels=input_channels,

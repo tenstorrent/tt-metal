@@ -8,9 +8,7 @@ import ttnn
 
 from loguru import logger
 
-from models.experimental.functional_unet.tt.model_preprocessing import (
-    create_unet_input_tensors,
-)
+from models.tt_cnn.tt.testing import create_random_input_tensor
 
 from models.experimental.functional_unet.tt import unet_shallow_ttnn
 from models.experimental.functional_unet.tests.common import verify_with_pcc, UNET_L1_SMALL_REGION_SIZE
@@ -25,7 +23,7 @@ def nearest_16(x):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
 def test_unet_preprocessing(batch, groups, device, reset_seeds):
     input_memory_config = unet_shallow_ttnn.UNet.input_sharded_memory_config
-    torch_input, ttnn_input = create_unet_input_tensors(
+    torch_input, ttnn_input = create_random_input_tensor(
         batch, groups, channel_order="first", pad=False, fold=True, device=device, memory_config=input_memory_config
     )
     logger.info(f"Created input tensor with shape {list(ttnn_input.shape)}")
