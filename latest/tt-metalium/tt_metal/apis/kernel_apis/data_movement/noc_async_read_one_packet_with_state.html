@@ -114,8 +114,8 @@
 <h1>noc_async_read_one_packet_with_state<a class="headerlink" href="#noc-async-read-one-packet-with-state" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_bE36noc_async_read_one_packet_with_statev8uint32_t8uint32_t7uint8_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">inc_num_issued</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1a132c7efaac67837d985f78bbd2899228"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_read_one_packet_with_state</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_local_l1_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dst_local_l1_addr</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bE36noc_async_read_one_packet_with_statev8uint32_t8uint32_t7uint8_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_b_bE36noc_async_read_one_packet_with_statev8uint32_t8uint32_tK8uint32_t7uint8_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">inc_num_issued</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">use_vc</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1a0b3e0390f8465c9b9a9b63a08d0ac8a1"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_read_one_packet_with_state</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_local_l1_addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dst_local_l1_addr</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">vc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_bE36noc_async_read_one_packet_with_statev8uint32_t8uint32_tK8uint32_t7uint8_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Initiates an asynchronous read for a single packet with size &lt;= NOC_MAX_BURST_SIZE (i.e. maximum packet size). Refer to <em>noc_async_read_with_state</em> for more details.</p>
@@ -147,17 +147,31 @@
 <td><p>True    </p></td>
 </tr>
 <tr class="row-even">
+<td><p>vc   </p></td>
+<td><p>Which VC to use for the transaction   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0-3 (Unicast VCs)   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
 <td><p>noc   </p></td>
 <td><p>Which NOC to use for the transaction   </p></td>
 <td><p>uint8_t   </p></td>
 <td><p>0 or 1   </p></td>
 <td><p>False    </p></td>
 </tr>
-<tr class="row-odd">
+<tr class="row-even">
 <td><p>inc_num_issued (template argument)   </p></td>
 <td><p>Whether issued read counter should be increment   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>Any uint32_t number   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>use_vc (template argument)   </p></td>
+<td><p>Enable custom VC usage   </p></td>
+<td><p>bool   </p></td>
+<td><p>True or False   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>
