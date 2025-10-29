@@ -240,7 +240,15 @@ jobs:
           echo "=== Verifying files that would be included in the release ==="
           echo ""
           echo "Checking for required files:"
-          for file in VERSION CHANGELOG.txt README.md INSTALLING.md models/docs/MODEL_UPDATES.md tt-metalium.tar.gz; do
+          required_files=(
+            "VERSION"
+            "CHANGELOG.txt"
+            "README.md"
+            "INSTALLING.md"
+            "models/docs/MODEL_UPDATES.md"
+            "tt-metalium.tar.gz"
+          )
+          for file in "${required_files[@]}"; do
             if [ -f "$file" ]; then
               echo "✓ $file ($(du -h "$file" | cut -f1))"
             else
@@ -252,13 +260,13 @@ jobs:
           if [ -d "debian-packages" ]; then
             deb_count=$(find debian-packages -name "*.deb" | wc -l)
             echo "Found $deb_count Debian package(s):"
-            find debian-packages -name "*.deb" -exec echo "  ✓ {} ($(du -h {} | cut -f1))" \;
+            find debian-packages -name "*.deb" -exec bash -c 'for f in "$@"; do size=$(du -h "$f" | cut -f1); echo "  ✓ $f ($size)"; done' _ {} +
           else
             echo "✗ debian-packages directory not found"
           fi
           echo ""
           echo "=== All files that would be uploaded to release ==="
-          ls -lh VERSION CHANGELOG.txt README.md INSTALLING.md models/docs/MODEL_UPDATES.md tt-metalium.tar.gz debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
+          ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
       - name: Release (skipped for dry run)
         if: ${{ !inputs.dry-run }}
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
