@@ -98,6 +98,8 @@ void create_ethernet_metrics(
             uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(
                 tray_id, asic_location, chip_id, channel, cluster, hal));
         }
+        uint_metrics.push_back(
+            std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
     }
 
     log_info(tt::LogAlways, "Created Ethernet metrics");
@@ -381,6 +383,37 @@ void EthernetBandwidthMetric::update(
     // Mark as changed if value differs from previous reading
     changed_since_transmission_ = (value_ != old_value);
     
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+/**************************************************************************************************
+ FabricHeartbeatMetric
+
+ Fabric heartbeat count.
+**************************************************************************************************/
+
+FabricHeartbeatMetric::FabricHeartbeatMetric(
+    tt::tt_metal::TrayID tray_id,
+    tt::tt_metal::ASICLocation asic_location,
+    tt::ChipId chip_id,
+    uint32_t channel,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
+    UIntMetric(), tray_id_(tray_id), asic_location_(asic_location), chip_id_(chip_id), channel_(channel) {
+    value_ = 0;
+    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
+    heartbeat_addr_ = hal->get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_HEARTBEAT);
+}
+
+const std::vector<std::string> FabricHeartbeatMetric::telemetry_path() const {
+    return endpoint_telemetry_path(tray_id_, asic_location_, channel_, "fabricHeartbeat");
+}
+
+void FabricHeartbeatMetric::update(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    cluster->read_from_device(&value_, chip_id_, ethernet_core_, heartbeat_addr_, sizeof(uint64_t));
     timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }

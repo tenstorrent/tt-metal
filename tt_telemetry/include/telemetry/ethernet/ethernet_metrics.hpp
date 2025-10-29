@@ -171,6 +171,30 @@ private:
     uint32_t bw_telemetry_addr_;
 };
 
+class FabricHeartbeatMetric: public UIntMetric {
+    public:
+        FabricHeartbeatMetric(
+            tt::tt_metal::TrayID tray_id,
+            tt::tt_metal::ASICLocation asic_location,
+            tt::ChipId chip_id,
+            uint32_t channel,
+            const std::unique_ptr<tt::umd::Cluster>& cluster,
+            const std::unique_ptr<tt::tt_metal::Hal>& hal);
+    
+        const std::vector<std::string> telemetry_path() const override;
+        void update(
+            const std::unique_ptr<tt::umd::Cluster>& cluster,
+            std::chrono::steady_clock::time_point start_of_update_cycle) override;
+    
+    private:
+        tt::tt_metal::TrayID tray_id_;
+        tt::tt_metal::ASICLocation asic_location_;
+        tt::ChipId chip_id_;
+        uint32_t channel_;
+        tt::umd::CoreCoord ethernet_core_;
+        uint32_t heartbeat_addr_;
+    };
+
 void create_ethernet_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
