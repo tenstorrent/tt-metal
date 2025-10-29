@@ -7,7 +7,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::ax_plus_b {
-AX_plus_B_DeviceOperation::MultiCore::cached_program_t AX_plus_B_DeviceOperation::SingleCore::create(
+AX_plus_B_DeviceOperation::MultiCore::cached_program_t AX_plus_B_DeviceOperation::MultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
