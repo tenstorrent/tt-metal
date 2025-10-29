@@ -17,7 +17,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 THRESHOLD_PERCENT = 5
 
-SAVE_NEW_PERF_TARGETS = False
+SAVE_NEW_PERF_TARGETS = True
 TARGETS_JSON_FILENAME = (
     "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_transformer.json"
 )
@@ -69,7 +69,8 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
 
     upper_threshold = targets["model_forward_inference"] * (1 + THRESHOLD_PERCENT / 100)
     lower_threshold = targets["model_forward_inference"] * (1 - THRESHOLD_PERCENT / 100)
-    assert lower_threshold < inference_mean < upper_threshold
+    assert lower_threshold < inference_mean, "Failed because it's too fast"
+    assert inference_mean < upper_threshold, "Failed because it's too slow"
 
 
 def helper_write_to_json(device_type, measurements, output_filename, model_name):
