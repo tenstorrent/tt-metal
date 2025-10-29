@@ -23,7 +23,6 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 namespace ttnn::operations::conv::conv2d {
 
