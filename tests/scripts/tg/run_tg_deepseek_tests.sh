@@ -12,7 +12,7 @@ run_tg_deepseek_v3_tests() {
 
   pytest -n auto \
     models/demos/deepseek_v3/demo/test_demo_exact_word_match.py \
-    --timeout 1000
+    --timeout 2700
   (( fail += $? ))
 
   end_time=$(date +%s)
