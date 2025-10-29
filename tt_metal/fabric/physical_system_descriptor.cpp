@@ -160,10 +160,7 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     const Hal* hal,
     tt::TargetDevice target_device_type,
     bool run_discovery) :
-    distributed_context_(distributed_context),
-    hal_(hal),
-    cluster_(cluster),
-    target_device_type_(target_device_type) {
+    cluster_(cluster), distributed_context_(distributed_context), hal_(hal), target_device_type_(target_device_type) {
     if (run_discovery) {
         // When constructing the PhysicalSystemDescriptor, we run local and global discovery.
         // We do not run "live" discovery since the cluster descriptor is already populated

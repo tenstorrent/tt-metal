@@ -111,12 +111,12 @@ Kernel::Kernel(
     processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
+    compile_time_args_(compile_args),
+    named_compile_time_args_(named_compile_args),
     common_runtime_args_count_(0),
     max_runtime_args_per_core_(0),
     core_with_max_runtime_args_({0, 0}),
-    compile_time_args_(compile_args),
-    defines_(defines),
-    named_compile_time_args_(named_compile_args) {
+    defines_(defines) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;

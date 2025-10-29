@@ -86,6 +86,7 @@ FabricMuxConfig::FabricMuxConfig(
     size_t buffer_size_bytes_full_size_channel,
     size_t base_l1_address,
     CoreType core_type) :
+    core_type_(core_type),
     num_full_size_channels_(num_full_size_channels),
     num_header_only_channels_(num_header_only_channels),
     // set to default number of buffers only for compilation purposes, no functional impact
@@ -93,8 +94,7 @@ FabricMuxConfig::FabricMuxConfig(
         num_buffers_full_size_channel == 0 ? default_num_buffers : num_buffers_full_size_channel),
     num_buffers_header_only_channel_(
         num_buffers_header_only_channel == 0 ? default_num_buffers : num_buffers_header_only_channel),
-    buffer_size_bytes_full_size_channel_(buffer_size_bytes_full_size_channel),
-    core_type_(core_type) {
+    buffer_size_bytes_full_size_channel_(buffer_size_bytes_full_size_channel) {
     TT_FATAL(
         num_full_size_channels_ > 0 || num_header_only_channels_ > 0,
         "At least one type of channel must be configured");

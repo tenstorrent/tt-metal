@@ -175,11 +175,11 @@ size_t get_num_riscv_cores() {
 
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
+    iterations_between_ctx_switch_and_teardown_checks_(
+        FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks),
     enable_handshake_(true),
     enable_context_switch_(true),
-    enable_interrupts_(true),
-    iterations_between_ctx_switch_and_teardown_checks_(
-        FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks) {
+    enable_interrupts_(true) {
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
 
     configure_risc_settings(
@@ -699,12 +699,17 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     my_noc_x(my_noc_x),
     my_noc_y(my_noc_y),
     config(config),
-    direction(direction),
     local_fabric_node_id(local_fabric_node_id),
     peer_fabric_node_id(peer_fabric_node_id),
     handshake_address(tt::round_up(
         tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
+    local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
+    termination_signal_ptr(config.termination_signal_address),
+    edm_local_sync_ptr(config.edm_local_sync_address),
+    edm_local_tensix_sync_ptr(config.edm_local_tensix_sync_address),
+    edm_status_ptr(config.edm_status_address),
+    direction(direction),
 
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     receiver_channels_downstream_flow_control_semaphore_id(receiver_channels_downstream_flow_control_semaphore_id),
@@ -713,13 +718,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     sender_channels_connection_semaphore_id(sender_channels_connection_semaphore_id),
     sender_channels_buffer_index_semaphore_id(sender_channels_buffer_index_semaphore_id),
     downstream_vcs_sender_channel_buffer_index_semaphore_id(sender_channels_buffer_index_semaphore_id),
-
-    local_sender_channels_connection_info_addr(config.sender_channels_worker_conn_info_base_address),
-
-    termination_signal_ptr(config.termination_signal_address),
-    edm_local_sync_ptr(config.edm_local_sync_address),
-    edm_local_tensix_sync_ptr(config.edm_local_tensix_sync_address),
-    edm_status_ptr(config.edm_status_address),
     build_in_worker_connection_mode(build_in_worker_connection_mode),
     fabric_edm_type(fabric_edm_type),
     dateline_connection(fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline),

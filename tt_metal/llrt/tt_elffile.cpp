@@ -62,7 +62,7 @@ private:
     class Weakener;
 
 public:
-    Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(std::string(path)) {}
+    Impl(ElfFile& owner, std::string_view path) : path_(std::string(path)), owner_(owner) {}
     ~Impl() = default;
 
     void LoadImage();
