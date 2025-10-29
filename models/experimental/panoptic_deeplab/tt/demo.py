@@ -746,7 +746,7 @@ def run_panoptic_deeplab_batch_demo(
             logger.info("Processing TTNN results...")
 
             # Handle semantic output - convert from NHWC to NCHW and slice padding if needed
-            ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic_logits).permute(0, 3, 1, 2)
+            ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic_logits)
             semantic_original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
             if semantic_original_channels is not None:
                 logger.info(
@@ -755,7 +755,7 @@ def run_panoptic_deeplab_batch_demo(
                 ttnn_semantic_torch = ttnn_semantic_torch[:, :semantic_original_channels, :, :]
 
             # Handle center output - convert from NHWC to NCHW and slice padding if needed
-            ttnn_center_torch = ttnn.to_torch(ttnn_center_logits).permute(0, 3, 1, 2)
+            ttnn_center_torch = ttnn.to_torch(ttnn_center_logits)
             center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
             if center_original_channels is not None:
                 logger.info(
@@ -764,7 +764,7 @@ def run_panoptic_deeplab_batch_demo(
                 ttnn_center_torch = ttnn_center_torch[:, :center_original_channels, :, :]
 
             # Handle offset output - convert from NHWC to NCHW and slice padding if needed
-            ttnn_offset_torch = ttnn.to_torch(ttnn_offset_logits).permute(0, 3, 1, 2)
+            ttnn_offset_torch = ttnn.to_torch(ttnn_offset_logits)
             offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
             if offset_original_channels is not None:
                 logger.info(
