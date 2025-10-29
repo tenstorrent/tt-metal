@@ -8,9 +8,9 @@ import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+from models.tt_transformers.tt.rope import RotarySetup
 
 from ...tt.layer import DecoderLayer
-from ...tt.rope import RotarySetup
 from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
 
@@ -243,7 +243,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         layer_idx=0,
         ccl_manager=setup["ccl_manager"],
         dtype=setup["dtype"],
-        # tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
+        tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
         mesh_config=setup["mesh_config"],
         transformation_mats=transformation_mats,
     )

@@ -7,12 +7,12 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
-from models.tt_transformers.tt.common import copy_host_to_device, gather_cos_sin, precompute_freqs
+from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.rope import RotarySetup
 from ttnn import replicate_tensor_to_mesh_mapper
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
-from .rope import RotarySetup
 
 
 class Model:
@@ -80,17 +80,6 @@ class Model:
         self.cos_matrix = self.rope_setup.cos_matrix
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
-
-        # Keep host versions for prefill mode
-        cos_cached_host, sin_cached_host = precompute_freqs(
-            dim=hf_config.head_dim,
-            end=max_seq_len * 2,
-            theta=getattr(hf_config, "rope_theta", 10000.0),
-            scale_factor=None,
-            orig_context_len=131072,
-        )
-        self.cos_cached = cos_cached_host
-        self.sin_cached = sin_cached_host
 
         embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
         embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
@@ -200,33 +189,6 @@ class Model:
         hidden_states = ttnn.matmul(hidden_states, self.lm_head_weight)
         return hidden_states
 
-    def _create_rope_embeddings(self, seq_len_or_pos, device):
-        """
-        Create rope embeddings for sequence length or specific position using Meta format.
-        Returns [cos, sin] to match tt-transformers interface.
-
-        For decode mode (single position), cos/sin are HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode.
-        For prefill mode (sequence), cos/sin are interleaved.
-        """
-
-        position_ids = torch.arange(seq_len_or_pos)
-
-        # Use gather_cos_sin to get cos/sin in Meta format (pairwise duplicated)
-        cos, sin = gather_cos_sin(position_ids, self.cos_cached, self.sin_cached)
-        # gather_cos_sin returns [1, 1, len(position_ids), head_dim]
-
-        tt_cos = ttnn.from_torch(cos, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        return [tt_cos, tt_sin]
-
-    def get_rot_idxs(self, position_idxs, on_host=False):
-        """Delegate to RotarySetup.get_rot_idxs"""
-        return self.rope_setup.get_rot_idxs(position_idxs, on_host=on_host)
-
-    def get_rot_mats(self, position_idxs):
-        """Delegate to RotarySetup.get_rot_mats"""
-        return self.rope_setup.get_rot_mats(position_idxs)
-
     def ttnn_decode_forward(
         self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, argmax_on_device=False
     ):
@@ -244,7 +206,7 @@ class Model:
             hidden_states = input_embeds
 
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
-        rope_mats = self.get_rot_mats(rot_mat_idxs)
+        rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
@@ -283,12 +245,16 @@ class Model:
         else:
             hidden_states = x
 
-        # Use provided rotation matrices or create new ones
+        # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
         seq_len = hidden_states.shape[-2]
         if rot_mats_global is not None:
             rope_mats = rot_mats_global
         else:
-            rope_mats = self._create_rope_embeddings(seq_len, self.mesh_device)
+            # Slice cos/sin matrices for prefill sequence length (matches tt-transformers model.py lines 156-159)
+            rope_mats = [
+                self.rope_setup.cos_matrix[:, :, :seq_len, :],
+                self.rope_setup.sin_matrix[:, :, :seq_len, :],
+            ]
         # Create attention masks
         mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
         sliding_mask = mask + torch.tril(
@@ -380,7 +346,7 @@ class Model:
 
         # Ensure position indices are non-negative (matches tt-transformers)
         rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
-        rope_idxs = self.get_rot_idxs(rot_current_pos, on_host=True)
+        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
 
         # Prepare current position tensor
         current_pos_tt = ttnn.from_torch(
@@ -414,10 +380,12 @@ class Model:
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Prepare rotation matrices
+        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
         seq_len = tokens_embd.shape[-2] if len(tokens_embd.shape) == 4 else tokens_embd.shape[-2]
-        rope_mats = self._create_rope_embeddings(seq_len, self.mesh_device)
-        rot_mats_global = rope_mats
+        rot_mats_global = [
+            self.rope_setup.cos_matrix[:, :, :seq_len, :],
+            self.rope_setup.sin_matrix[:, :, :seq_len, :],
+        ]
         rot_mats_local = None
 
         # Prepare page tables if provided

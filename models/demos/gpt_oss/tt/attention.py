@@ -89,7 +89,7 @@ class Attention:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
             mesh_mapper=col_mesh_mapper,
-            # cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_fused_new"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -114,7 +114,7 @@ class Attention:
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,  # tt-transformers uses bfloat16 for bias
             mesh_mapper=col_mesh_mapper,
-            # cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_bias_fused_new"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv_bias"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
