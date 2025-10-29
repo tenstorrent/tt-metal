@@ -12,8 +12,6 @@
 #include "rmsnorm_pre_all_gather.hpp"
 #include "rmsnorm_post_all_gather.hpp"
 
-#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
-
 namespace ttnn::operations::normalization::detail {
 
 namespace py = pybind11;
@@ -57,7 +55,6 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
             py::arg("residual_input_tensor") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             py::arg("memory_config") = std::nullopt,
             py::arg("use_2d_core_grid") = std::nullopt});
 }
@@ -112,7 +109,6 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             py::arg("dtype") = std::nullopt,
             py::arg("use_2d_core_grid") = std::nullopt});
 }

@@ -19,15 +19,13 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core
     Tensor& output,
     LayerNormDistributedType norm_type,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<bool> use_2d_core_grid = std::nullopt,
-    LayerNormDistributedDefaultProgramConfig program_config = LayerNormDistributedDefaultProgramConfig{});
+    std::optional<bool> use_2d_core_grid = std::nullopt);
 
 struct LayerNormPreAllGather {
     LayerNormDistributedType norm_type;
     const DataType dtype;
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<bool> use_2d_core_grid;
-    LayerNormDistributedDefaultProgramConfig program_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

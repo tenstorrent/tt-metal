@@ -27,7 +27,6 @@ void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(2) == 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -69,12 +68,12 @@ void MAIN {
          */
         reconfig_data_format(cb_x2, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
+        reduce_init(cb_x2, cb_reduce, cb_out);
         cb_wait_front(cb_x2, Wt);
         cb_reserve_back(cb_out, onetile);
         ACQ();
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
+            reduce_tile(cb_x2, cb_reduce, wtr, 0, dst0);
         }
         pack_tile(dst0, cb_out, 0);
         REL();
@@ -83,22 +82,26 @@ void MAIN {
 
         reduce_uninit();
 
+#ifndef RMSNORM
+
         /*
          * sum(x)
          */
         reconfig_data_format(cb_inp, cb_reduce);
         pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inp, cb_reduce, cb_out);
+        reduce_init(cb_inp, cb_reduce, cb_out);
         cb_reserve_back(cb_out, onetile);
         ACQ();
         for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_inp, cb_reduce, wtr, 0, dst0);
+            reduce_tile(cb_inp, cb_reduce, wtr, 0, dst0);
         }
         pack_tile(dst0, cb_out, 1);
         REL();
         cb_push_back(cb_out, onetile);
 
         reduce_uninit();
+
+#endif
 
         cb_pop_front(cb_inp, Wt);
     }
