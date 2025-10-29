@@ -1889,6 +1889,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     uint64_t local_heartbeat_counter = 0;
     volatile uint64_t* heartbeat_addr =
         reinterpret_cast<volatile uint64_t*>(eth_l1_mem::address_map::AERISC_FABRIC_HEARTBEAT_ADDR);
+    *heartbeat_addr = 0;
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
