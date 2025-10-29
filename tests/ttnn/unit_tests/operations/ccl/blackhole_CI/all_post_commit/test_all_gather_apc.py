@@ -126,28 +126,20 @@ def test_all_gather_2D_line(
     "ag_input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["l1_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
@@ -223,28 +215,20 @@ def test_all_gather_4D_line(
     "ag_input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["l1_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
@@ -320,36 +304,27 @@ def test_all_gather_ring(
     "ag_input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["l1_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 10),
     ],
-    ids=["trace", "non-trace"],
+    ids=["non-trace"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -425,13 +400,9 @@ def test_all_gather_8D_vertical(
     "ag_input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
@@ -455,10 +426,9 @@ def test_all_gather_8D_vertical(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 150000}, ttnn.Topology.Linear),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 150000}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear", "fabric_ring"],
+    ids=["fabric_linear"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])

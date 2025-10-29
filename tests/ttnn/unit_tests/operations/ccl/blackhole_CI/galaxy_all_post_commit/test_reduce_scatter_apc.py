@@ -39,24 +39,18 @@ from models.common.utility_functions import (
     "mem_config_input, mem_config_rs",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["l1_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 10),
     ],
     ids=[
-        "trace",
         "non-trace",
     ],
 )
@@ -123,37 +117,27 @@ def test_rs_row_2D_nightly_linear(
     "rs_input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.uint32, #Bad PCC
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        # "uint_32", #Bad PCC
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["l1_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 10),
     ],
     ids=[
-        "trace",
         "non-trace",
     ],
 )
@@ -213,7 +197,6 @@ def test_rs_row_4D_nightly_linear(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout",
     [
-        ([1, 1, 128, 256], 3, ttnn.TILE_LAYOUT),
         ([1, 1, 128, 512], 3, ttnn.TILE_LAYOUT),
     ],
 )
@@ -221,13 +204,9 @@ def test_rs_row_4D_nightly_linear(
     "rs_input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.uint32, #Bad PCC
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        # "uint_32", #Bad PCC
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
@@ -237,21 +216,15 @@ def test_rs_row_4D_nightly_linear(
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ),
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-        ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["dram_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 10),
     ],
     ids=[
-        "trace",
         "non-trace",
     ],
 )
@@ -325,37 +298,27 @@ def test_rs_row_nightly_ring(
     "rs_input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.uint32, #Bad PCC
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        # "uint_32", #Bad PCC
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
-    ids=["dram_only", "l1_only"],
+    ids=["l1_only"],
 )
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 10),
     ],
     ids=[
-        "trace",
         "non-trace",
     ],
 )

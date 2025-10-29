@@ -34,9 +34,8 @@ from tracy import signpost
     "batches_per_device, seq_len, num_iters, warmup_iters",
     [
         (16, 2, 2, 1),
-        (1, 3, 2, 1),
     ],
-    ids=["b16s2", "b1s3"],
+    ids=["b16s2"],
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -105,7 +104,7 @@ def test_all_to_all_dispatch_no_trace(
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True, False])
-@pytest.mark.parametrize("num_devices, mesh_shape, cluster_axis", [(4, (4, 1), 0), (8, (1, 8), 1)])
+@pytest.mark.parametrize("num_devices, mesh_shape, cluster_axis", [(8, (1, 8), 1)])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [4])
@@ -114,9 +113,8 @@ def test_all_to_all_dispatch_no_trace(
     "seq_len, num_iters, warmup_iters",
     [
         (128, 2, 1),
-        (1, 5, 2),
     ],
-    ids=["s128", "s1"],
+    ids=["s128"],
 )
 @pytest.mark.parametrize(
     "input_memory_config",

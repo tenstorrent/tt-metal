@@ -40,14 +40,14 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("num_devices,cluster_axis, mesh_shape", [[8, 1, (1, 8)]])
+@pytest.mark.parametrize("num_devices,cluster_axis, mesh_shape", [[4, 0, (4, 1)], [8, 1, (1, 8)]])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
-    [(1, 40, 10)],
+    [(1, 40, 10), (128, 10, 5)],
 )
 @pytest.mark.parametrize("local_reduce", [True])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
@@ -115,6 +115,18 @@ def test_all_to_all_combine_trace(
             ttnn.Topology.Linear,
             id="fabric_1d_line_axis_0",
         ),
+        # FABRIC_1D_RING
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 500000,
+            },
+            1,
+            False,
+            ttnn.Topology.Ring,
+            id="fabric_1d_ring_axis_0",
+        ),
     ],
     indirect=["device_params"],
 )
@@ -127,8 +139,8 @@ def test_all_to_all_combine_trace(
 @pytest.mark.parametrize("local_reduce", [False, True])
 @pytest.mark.parametrize("scheme", ["random"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_no_trace(
     bh_2d_mesh_device,
