@@ -279,7 +279,7 @@ jobs:
             v2=$(echo "$2" | sed 's/^v//' | sed 's/-.*$//')
 
             # Use sort -V to compare semantic versions
-            [ "$v1" = "$v2" ] && return 2
+            [ "$v1" == "$v2" ] && return 2
             printf '%s\n%s\n' "$v1" "$v2" | sort -V -C 2>/dev/null && return 1 || return 0
           }
 
