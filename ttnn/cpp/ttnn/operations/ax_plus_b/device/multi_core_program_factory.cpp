@@ -6,7 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-namespace ttnn::operations::examples {
+namespace ttnn::operations::ax_plus_b {
 AX_plus_B_DeviceOperation::MultiCore::cached_program_t AX_plus_B_DeviceOperation::SingleCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -134,4 +134,4 @@ void AX_plus_B_DeviceOperation::MultiCore::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::operations::examples
+}  // namespace ttnn::operations::ax_plus_b

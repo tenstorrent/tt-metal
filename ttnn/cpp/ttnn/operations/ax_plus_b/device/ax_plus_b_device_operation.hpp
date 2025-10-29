@@ -13,7 +13,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::examples {
+namespace ttnn::operations::ax_plus_b {
 
 struct AX_plus_B_DeviceOperation {
     // Define the operation attributes. This is it to store all variables needed by operations that aren't tensors
@@ -113,10 +113,10 @@ struct AX_plus_B_DeviceOperation {
     */
 };
 
-}  // namespace ttnn::operations::examples
+}  // namespace ttnn::operations::ax_plus_b
 
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
 namespace ttnn::prim {
 constexpr auto example =
-    ttnn::register_operation<"ttnn::prim::ax_plus_b", ttnn::operations::examples::AX_plus_B_DeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::ax_plus_b", ttnn::operations::ax_plus_b::AX_plus_B_DeviceOperation>();
 }  // namespace ttnn::prim

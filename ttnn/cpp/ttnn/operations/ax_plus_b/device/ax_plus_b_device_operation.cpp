@@ -4,7 +4,7 @@
 
 #include "ax_plus_b_device_operation.hpp"
 
-namespace ttnn::operations::examples {
+namespace ttnn::operations::ax_plus_b {
 
 AX_plus_B_DeviceOperation::program_factory_t AX_plus_B_DeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -42,4 +42,4 @@ AX_plus_B_DeviceOperation::invoke(
     return {operation_attributes_t{true, 42}, tensor_args_t{tensor_a, tensor_x, tensor_b, tensor_y}};
 }
 
-}  // namespace ttnn::operations::examples
+}  // namespace ttnn::operations::ax_plus_b
