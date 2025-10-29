@@ -1169,7 +1169,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
  * | update_val (template parameter)            | Whether to set the value to be written                 | bool     | true or false                    | False    |
  * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool     | true or false                    | False    |
  * | update_counter (template parameter)        | Whether to update the write counters                   | bool     | true or false                    | False    |
- * | update_be_on_addr_lo (template parameter)  | Whether to update the BE when update_addr_lo is true   | bool     | true or false                    | False    |
+ * | dst_type (template parameter)              | Whether the write is targeting L1 or a Stream Register | InlineWriteDst     | DEFAULT, L1, REG       | False    |
  */
 // clang-format on
 template <
@@ -1196,7 +1196,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
-        if constexpr (update_be_on_addr_lo) {
+        if constexpr (dst_type != InlineWriteDst::REG) {
             uint32_t be32 = 0xF << (dest_addr & (NOC_WORD_BYTES - 1));
             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
         }
