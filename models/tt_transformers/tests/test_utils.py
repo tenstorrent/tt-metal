@@ -221,14 +221,65 @@ def aggregate_per_instance_dict(input_dict, agg_fn, default=0):
     return result
 
 
+def find_head_tail(ops, num_layers):
+    """
+    Finds the head and tail of a repeating region in a list of ops.
+    """
+    n = len(ops)
+    left = 0
+    right = n - 1
+
+    # We move 'left' forward until we find a candidate start of repeating region.
+    #    'right' will move backward to skip the tail.
+    while left < right:
+        # Try each possible length of repeating block (must divide middle section evenly)
+        for block_len in range(1, (right - left + 1) // num_layers + 1):
+            middle_len = block_len * num_layers
+            if left + middle_len > right + 1:
+                break
+            # Extract the middle region
+            mid = ops[left : left + middle_len]
+
+            # Split into num_layers segments
+            chunks = [mid[i * block_len : (i + 1) * block_len] for i in range(num_layers)]
+
+            # Check if all segments are equal
+            if all(chunks[i] == chunks[0] for i in range(1, num_layers)):
+                # Found a valid repeating middle region
+                head_ops = ops[:left]
+                repeated_block = chunks[0]
+                tail_ops = ops[left + middle_len :]
+                return {
+                    "num_head_ops": len(head_ops),
+                    "num_repeated_ops": len(repeated_block),
+                    "num_tail_ops": len(tail_ops),
+                    "num_layers_detected": num_layers,
+                    "head_ops": head_ops,
+                    "repeated_block": repeated_block,
+                    "tail_ops": tail_ops,
+                }
+
+        # If no match found, move the pointers inward
+        left += 1
+        right -= 1
+
+    # If we reach here, no repeating structure found
+    return {
+        "num_head_ops": len(ops),
+        "num_repeated_ops": 0,
+        "num_tail_ops": 0,
+        "num_layers_detected": 0,
+        "head_ops": ops,
+        "repeated_block": [],
+        "tail_ops": [],
+    }
+
+
 def split_compile_and_trace(
     df: pd.DataFrame,
-    num_head_ops: int = 0,
-    num_tail_ops: int = 0,
     mode: str = "prefill",
     num_runs: int = 1,
     num_layers: int = None,
-    tail_start_index: int = None,
 ):
     """
     Split a concatenated ops DataFrame into compile and runtime-trace segments,
@@ -241,12 +292,9 @@ def split_compile_and_trace(
 
     Parameters:
         df:                the input DataFrame (all ops)
-        num_tail_ops:      fixed rows from a sampling-only compile run (excluded from thirds logic)
+        mode:              the mode of the test (prefill or decode)
         num_runs:          number of runs in the CSV (typically 3: compile, capture, trace)
         num_layers:        number of core layers to partition (required for further splits)
-        op_start_index:    slice index for start of core layers region (inclusive)
-        op_end_index:      slice index for end of core layers region (exclusive)
-        tail_start_index:  slice index for start of model tail ops (e.g. lmhead+sampling)
 
     Returns:
         (
@@ -264,10 +312,12 @@ def split_compile_and_trace(
     df_model_compilation = df[:first_run_end]
     df_model_trace = df[last_run_start:]
 
-    # Excluding model embeddings and tail ops
+    # Find the head and tail of the repeating region in the model compilation
+    head_tail_ops = find_head_tail(df_model_compilation["OP CODE"].tolist(), num_layers)
+
     # [op_start_index:op_end_index] = all core layers region
-    op_start_index = num_head_ops
-    op_end_index = len(df_model_compilation) - num_tail_ops
+    op_start_index = head_tail_ops["num_head_ops"]
+    op_end_index = len(df_model_compilation) - head_tail_ops["num_tail_ops"]
     df_layers_compilation = df_model_compilation[op_start_index:op_end_index]
     df_layers_trace = df_model_trace[op_start_index:op_end_index]
 
@@ -285,7 +335,7 @@ def split_compile_and_trace(
         df_mid_layers_trace = None
 
     # Model tail ops (e.g. lmhead/sampling): [tail_start_index:]
-    if tail_start_index is not None:
+    if op_end_index is not None:
         df_model_tail_compilation = df_model_compilation[op_end_index:]
         df_model_tail_trace = df_model_trace[op_end_index:]
     else:

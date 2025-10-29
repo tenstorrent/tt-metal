@@ -28,29 +28,22 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
 @pytest.mark.parametrize("num_layers", [10])
 @pytest.mark.parametrize("max_seq_len", [1024])
 @pytest.mark.parametrize(
-    "num_head_ops, num_tail_ops, tail_start_index, max_generated_tokens, mode, num_runs, is_tp",
+    "max_generated_tokens, mode, num_runs",
     [
-        (4, 14, None, 0, "prefill", 2, True),
-        (4, 21, None, 0, "prefill", 2, False),
-        (15, 18, None, 2, "decode", 4, True),
-        (15, 24, None, 2, "decode", 4, False),
+        (0, "prefill", 2),
+        (2, "decode", 4),
     ],
-    ids=["llama3.1-8b-prefill-tp", "llama3.1-8b-prefill-dp", "llama3.1-8b-decode-tp", "llama3.1-8b-decode-dp"],
+    ids=["llama3.1-8b-prefill-dp", "llama3.1-8b-decode-dp"],
 )
 def test_device_perf_one_iter(
     num_layers,
-    num_head_ops,
-    num_tail_ops,
-    tail_start_index,
     batch_size,
     data_parallel,
     max_seq_len,
     max_generated_tokens,
     mode,
     num_runs,
-    is_tp,
 ):
-    assert is_tp == (data_parallel == 1), "is_tp must be True if data_parallel is 1"
     cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
@@ -100,12 +93,9 @@ def test_device_perf_one_iter(
         df_model_tail_trace,
     ) = split_compile_and_trace(
         df,
-        num_head_ops=num_head_ops,
-        num_tail_ops=num_tail_ops,
         mode=mode,
         num_runs=num_runs,
         num_layers=num_layers,
-        tail_start_index=tail_start_index,
     )
 
     (
@@ -134,7 +124,7 @@ def test_device_perf_one_iter(
             firstlast_agg_mid_layers_trace,
         ) = process_measurements(df_mid_layers_trace, num_layers - 1)
 
-    if tail_start_index is not None:
+    if df_model_tail_compilation is not None:
         (
             kernel_agg_model_tail_compile,
             dispatch_agg_model_tail_compile,
@@ -156,7 +146,7 @@ def test_device_perf_one_iter(
         print_dict(dispatch_agg_mid_layers_trace, "DISPATCH AVERAGE DURATION FOR MID LAYERS TRACE")
         print_dict(firstlast_agg_mid_layers_trace, "FIRST TO LAST AVERAGE START TIME FOR MID LAYERS TRACE")
 
-    if tail_start_index is not None:
+    if df_model_tail_compilation is not None:
         print_dict(kernel_agg_model_tail_compile, "KERNEL AVERAGE DURATION FOR MODEL TAIL COMPILE")
         print_dict(kernel_agg_model_tail_trace, "KERNEL AVERAGE DURATION FOR MODEL TAIL TRACE")
         print_dict(dispatch_agg_model_tail_trace, "DISPATCH AVERAGE DURATION FOR MODEL TAIL TRACE")
@@ -309,7 +299,7 @@ def test_device_perf_one_iter(
             dispatch_agg_trace=dispatch_agg_mid_layers_trace,
             firstlast_agg_trace=firstlast_agg_mid_layers_trace,
         )
-    if tail_start_index is not None:
+    if df_model_tail_compilation is not None:
         all_passing = all_passing and export_group(
             group_name="model_tail",
             kernel_agg_compile=kernel_agg_model_tail_compile,
@@ -330,7 +320,7 @@ def test_device_perf_one_iter(
     benchmark_data.save_partial_run_json(
         profiler,
         run_type="ttnn_decoder_unit",
-        ml_model_name="ttnn-decoder",
+        ml_model_name=f"{model_name}-{mode}-{data_parallel}dp-{num_layers}layers-{max_seq_len}seq",
     )
 
     # No strict assertions on perf; test succeeds if profiling and export ran
