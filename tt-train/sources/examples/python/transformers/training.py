@@ -55,7 +55,13 @@ def main(config: str):
 
     # Execute training
     train_losses, val_losses = train(
-        training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
+        training_cfg,
+        model,
+        optimizer,
+        train_ids,
+        val_ids,
+        device_config.enable_ddp,
+        device_config.enable_tp,
     )
 
     # Cleanup

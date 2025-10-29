@@ -51,7 +51,12 @@ def _atomic_write_text(path: str, writer_fn):
     p = pathlib.Path(path)
     _ensure_dir(str(p.parent))
     with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", delete=False, dir=str(p.parent), prefix=p.name + ".", suffix=".tmp"
+        mode="w",
+        encoding="utf-8",
+        delete=False,
+        dir=str(p.parent),
+        prefix=p.name + ".",
+        suffix=".tmp",
     ) as f:
         tmp_name = f.name
         writer_fn(f)
@@ -67,7 +72,9 @@ def _write_manifest(ckpt_dir: str, manifest: dict):
     _atomic_write_text(_manifest_path(ckpt_dir), _writer)
 
 
-def _save_model_npz(model, ckpt_dir: str, step: int, extra: Optional[dict] = None) -> str:
+def _save_model_npz(
+    model, ckpt_dir: str, step: int, extra: Optional[dict] = None
+) -> str:
     _ensure_dir(ckpt_dir)
     arrays = _collect_param_arrays(model)
     ckpt_name = _default_ckpt_name(step)
@@ -136,7 +143,9 @@ def _collect_param_arrays(model) -> Dict[str, np.ndarray]:
     for name, tensor in model.parameters().items():
         arr = tensor.to_numpy()  # Expect numpy array
         if not isinstance(arr, np.ndarray):
-            raise TypeError(f"Parameter '{name}' to_numpy() did not return a numpy array.")
+            raise TypeError(
+                f"Parameter '{name}' to_numpy() did not return a numpy array."
+            )
         arrs[name] = arr
     return arrs
 
@@ -164,7 +173,9 @@ def _set_param_array_autotensor(param, arr: np.ndarray):
     try:
         cur = param.to_numpy()
         if cur.shape != arr.shape:
-            print(f"[load] shape mismatch for param: {cur.shape} (model) vs {arr.shape} (ckpt). Assigning anyway.")
+            print(
+                f"[load] shape mismatch for param: {cur.shape} (model) vs {arr.shape} (ckpt). Assigning anyway."
+            )
     except Exception:
         pass
 
@@ -202,5 +213,7 @@ def _load_model_from_npz(model, ckpt_path: str, strict: bool = False):
             raise RuntimeError(f"Checkpoint has unexpected params: {extras}")
 
     if missing:
-        print(f"[load] Missing {len(missing)} params (kept existing): first 5: {missing[:5]}")
+        print(
+            f"[load] Missing {len(missing)} params (kept existing): first 5: {missing[:5]}"
+        )
     print(f"[load] Loaded {loaded_ok} parameters from {ckpt_path}")
