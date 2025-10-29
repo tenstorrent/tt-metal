@@ -96,6 +96,7 @@ void kernel_main() {
     uint32_t tiles_per_bh = input_tensor_Wt * input_tensor_Ht;
     uint32_t chunks_per_core = div_up(input_tiles_per_core, tiles_per_chunk);
     uint32_t tiles_read = 0;
+    uint32_t sem_target = 0;
 
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         global_tile_index = 0;
@@ -130,8 +131,8 @@ void kernel_main() {
                 uint32_t actual_sender_chip_id = get_sender_id(direction, my_chip_id, slices_received, ring_size);
 
                 // Receive the next chunk
-                noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                sem_target++;
 
                 if ((topology == Topology::Linear && writes_expected > 0) ||
                     (topology == Topology::Ring && ((slices_received + 1) < (writes_expected + 1)))) {
@@ -162,8 +163,8 @@ void kernel_main() {
             }
             global_tile_index = chunk_start_tile_index;
             tiles_read += local_tiles_read;
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
         }
         global_tile_id_start += tiles_per_bh;
     }
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
