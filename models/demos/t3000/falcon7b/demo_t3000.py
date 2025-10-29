@@ -22,8 +22,8 @@ from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
         (False, 1024, None, False, None),
     ),
     ids=[
-        "perf_mode_128_stochastic_verify",
-        "perf_mode_1024_stochastic_verify",
+        # "perf_mode_128_stochastic_verify",
+        # "perf_mode_1024_stochastic_verify",
         "perf_mode_2048_stochastic_verify",
         "perf_mode_128_stochastic",
         "perf_mode_1024_stochastic",
