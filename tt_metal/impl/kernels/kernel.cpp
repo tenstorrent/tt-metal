@@ -288,7 +288,7 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_key) const {
+const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint64_t build_key) const {
     auto iter = binaries_.find(build_key);
     TT_FATAL(iter != binaries_.end(), "binary not found");
     if (iter->second.size() != expected_num_binaries()) {
@@ -576,7 +576,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     jit_build_subset(build_states, this);
 }
 
-void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries) {
+void KernelImpl::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries) {
     // Try inserting an empty vector, as that is cheap to construct
     // and avoids an additional move.
     auto pair = binaries_.insert({build_key, {}});
