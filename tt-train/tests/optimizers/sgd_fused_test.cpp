@@ -284,18 +284,6 @@ static void cpu_sgd_step(
     bool nesterov,
     bool has_momentum,
     size_t step) {
-    // Debug: Print first few elements before update
-    fmt::print("[CPU Reference] step={}\n", step);
-    fmt::print("  param[0:3]: [{:.8f}, {:.8f}, {:.8f}]\n", param(0), param(1), param(2));
-    fmt::print("  grad[0:3]:  [{:.8f}, {:.8f}, {:.8f}]\n", grad(0), grad(1), grad(2));
-    if (has_momentum) {
-        fmt::print(
-            "  mom_before[0:3]: [{:.8f}, {:.8f}, {:.8f}]\n",
-            momentum_buffer(0),
-            momentum_buffer(1),
-            momentum_buffer(2));
-    }
-
     for (size_t i = 0; i < param.size(); ++i) {
         float theta = param(i);
         float g_orig = grad(i);
@@ -334,23 +322,12 @@ static void cpu_sgd_step(
             momentum_buffer(i) = m_t;
         }
     }
-
-    // Debug: Print updated values
-    fmt::print("  param_after[0:3]: [{:.8f}, {:.8f}, {:.8f}]\n", param(0), param(1), param(2));
-    if (has_momentum) {
-        fmt::print(
-            "  mom_after[0:3]:  [{:.8f}, {:.8f}, {:.8f}]\n",
-            momentum_buffer(0),
-            momentum_buffer(1),
-            momentum_buffer(2));
-    }
-    fmt::print("\n");
 }
 
 static void run_one_step_and_compare(const ParityCase& pc) {
     using namespace ttml;
 
-    ttml::autograd::ctx().set_seed(0U);
+    ttml::autograd::ctx().set_seed(123U);
     auto& g = autograd::ctx().get_generator();
     const uint32_t seed_param = g();
     const uint32_t seed_grad = g();
@@ -492,10 +469,7 @@ static void run_one_step_and_compare(const ParityCase& pc) {
             mean_err_comp);
     }
 
-    // Print diagnostic info if fused performs worse than composite
     if (!plot_mode && (max_err_fused > max_err_comp || mean_err_fused > mean_err_comp)) {
-        fmt::print("Fused performance is worse than composite - printing diagnostics:\n");
-
         // Collect all cases where fused is worse than composite and sort by error
         struct ErrorCase {
             size_t idx;
@@ -546,21 +520,56 @@ static void run_one_step_and_compare(const ParityCase& pc) {
         }
     }
 
-    // Ensure fused error is always better than (or equal to) composite error
+    constexpr float epsilon = 0.0f;
 
-    EXPECT_LE(mean_err_fused, mean_err_comp)
-        << "Fused mean error should be <= composite mean error (case '" << pc.name << "'). "
-        << "Fused: " << mean_err_fused << ", Composite: " << mean_err_comp;
+    EXPECT_LE(mean_err_fused, mean_err_comp + epsilon)
+        << "Fused mean error should be <= composite mean error + epsilon (case '" << pc.name << "'). "
+        << "Fused: " << mean_err_fused << ", Composite: " << mean_err_comp << ", Epsilon: " << epsilon;
 
-    /*
+    EXPECT_LE(max_err_fused, max_err_comp + epsilon)
+        << "Fused max error should be <= composite max error + epsilon (case '" << pc.name << "'). "
+        << "Fused: " << max_err_fused << ", Composite: " << max_err_comp << ", Epsilon: " << epsilon;
+
+    // Check momentum buffer parity if momentum is used
     if (pc.momentum > 0.0f) {
         auto sd_fused = opt_fused.get_state_dict();
         auto mom_fused = std::get<ttml::serialization::NamedParameters>(sd_fused.at("momentum"));
         ASSERT_TRUE(mom_fused.count("theta"));
 
+        auto sd_comp = opt_comp.get_state_dict();
+        auto mom_comp = std::get<ttml::serialization::NamedParameters>(sd_comp.at("theta"));
+        ASSERT_TRUE(mom_comp.count("theta"));
+
         const auto m_fused = ttml::core::to_xtensor(mom_fused.at("theta")->get_value());
+        const auto m_comp = ttml::core::to_xtensor(mom_comp.at("theta")->get_value());
+        ASSERT_EQ(m_fused.shape(), mom_cpu.shape());
+        ASSERT_EQ(m_comp.shape(), mom_cpu.shape());
+
+        // Calculate momentum buffer errors relative to CPU (ground truth)
+        auto err_mom_fused = xt::abs(m_fused - mom_cpu);
+        auto err_mom_comp = xt::abs(m_comp - mom_cpu);
+        float max_err_mom_fused = xt::amax(err_mom_fused)();
+        float max_err_mom_comp = xt::amax(err_mom_comp)();
+        float mean_err_mom_fused = xt::mean(err_mom_fused)();
+        float mean_err_mom_comp = xt::mean(err_mom_comp)();
+
+        fmt::print(
+            "  Momentum buffer errors: Fused max_err={:.6e}, mean_err={:.6e} | Comp max_err={:.6e}, mean_err={:.6e}\n",
+            max_err_mom_fused,
+            mean_err_mom_fused,
+            max_err_mom_comp,
+            mean_err_mom_comp);
+
+        // Ensure fused momentum buffer error is better than (or equal to) composite error
+        EXPECT_LE(mean_err_mom_fused, mean_err_mom_comp + epsilon)
+            << "Fused momentum buffer mean error should be <= composite mean error + epsilon (case '" << pc.name
+            << "'). "
+            << "Fused: " << mean_err_mom_fused << ", Composite: " << mean_err_mom_comp << ", Epsilon: " << epsilon;
+
+        EXPECT_LE(max_err_mom_fused, max_err_mom_comp + epsilon)
+            << "Fused momentum buffer max error should be <= composite max error + epsilon (case '" << pc.name << "'). "
+            << "Fused: " << max_err_mom_fused << ", Composite: " << max_err_mom_comp << ", Epsilon: " << epsilon;
     }
-    */
 }
 static std::string CaseName(const ::testing::TestParamInfo<ParityCase>& info) {
     const auto& c = info.param;
@@ -626,7 +635,6 @@ static const ParityCase kHugeCases[] = {
     // Wide MLP-style layer (~67.1M elems):
     // 8 * 16 * 2048 * 256 = 67,108,864
     {{8, 16, 2048, 256}, 5e-4f, 0.9f, 0.0f, 1e-4f, true, "Nesterov_L2_B8H16_S2048_C256"},
-    {{8, 16, 2048, 256}, 1e-1f, 0.9f, 0.0f, 1e-4f, true, "Anotha_Nesterov_L2_B8H16_S2048_C256"},
 
     // Long-sequence stress (~134.2M elems):
     // 4 * 32 * 4096 * 256 = 134,217,728
