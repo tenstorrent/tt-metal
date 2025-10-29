@@ -19,6 +19,7 @@ struct Embeddings {
     const bool tilized;
     const EmbeddingsType embeddings_type;
     const std::optional<uint32_t> pad_token;
+    const tt::tt_metal::DataType output_dtype;
 
     void validate(const std::vector<Tensor> &input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor> &input_tensors) const;
