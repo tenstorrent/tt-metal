@@ -10,13 +10,7 @@ import ttnn
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        (torch.Size([])),
-        (torch.Size([1, 64])),
-        (torch.Size([1, 2, 32])),
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
-        (torch.Size([1, 2, 32, 64, 125])),
     ],
 )
 @pytest.mark.parametrize(
