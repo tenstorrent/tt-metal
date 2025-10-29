@@ -10,10 +10,7 @@
 #include "sfpu/ckernel_sfpu_reduce.h"
 #include "ckernel_instr_params.h"
 
-using namespace sfpi;
-
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
 inline void calculate_reduce() {
@@ -27,5 +24,4 @@ inline void init_reduce() {
     _init_reduce_<format>();
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu

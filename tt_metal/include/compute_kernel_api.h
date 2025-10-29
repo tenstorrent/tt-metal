@@ -616,7 +616,7 @@ ALWI void sfpu_reduce_sum_avg(uint32_t idst) {
     static_assert(is_32x32_tile, "Only 32x32 tile dimensions are supported for reduce operations");
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
 
-    MATH((llk_math_eltwise_unary_sfpu_reduce_sum_avg<true, pool_type, reduce_dim, format>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst)));
 }
 
 /**
