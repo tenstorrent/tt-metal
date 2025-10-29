@@ -257,6 +257,7 @@ test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_qb_ge"]="
 test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
