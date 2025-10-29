@@ -333,7 +333,7 @@ class Plotter:
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Transaction ID Count vs Bandwidth")
         ax.grid()
-        
+
     # Direct Write: Performance test
     def plot_bandwidth_direct_write_performance(self, ax, data):
         x_key = "num_transactions"
