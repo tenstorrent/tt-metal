@@ -171,6 +171,23 @@ void cleanup_metadata(const InputArgs& input_args, const std::string& gsd_file, 
     }
 }
 
+std::string get_factory_system_descriptor_path(const InputArgs& input_args) {
+    std::string fsd_path;
+    if (input_args.cabling_descriptor_path.has_value()) {
+        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+        log_output_rank0("Creating Factory System Descriptor (Golden Representation)");
+        tt::scaleout_tools::CablingGenerator cabling_generator(
+            input_args.cabling_descriptor_path.value(), input_args.deployment_descriptor_path.value());
+        std::string filename =
+            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
+        fsd_path = input_args.output_path / filename;
+        cabling_generator.emit_factory_system_descriptor(fsd_path);
+    } else {
+        fsd_path = input_args.fsd_path.value();
+    }
+    return fsd_path;
+}
+
 AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     if (!input_args.validate_connectivity) {
         return {};
@@ -224,12 +241,12 @@ tt::tt_metal::AsicTopology build_reset_topology(
         tt::tt_metal::ASICLocation(input_args.reset_asic_location.value()));
     uint8_t src_channel = static_cast<uint8_t>(input_args.reset_channel.value());
 
-    log_output_rank0("  Resolved Source ASIC ID: " + std::to_string(src_asic_id));
+    log_output_rank0("  Resolved Source ASIC ID: " + std::to_string(*src_asic_id));
 
     auto [dst_asic_id, dst_channel] = physical_system_descriptor.get_connected_asic_and_channel(
         src_asic_id, src_channel);
 
-    log_output_rank0("  Discovered Destination ASIC ID: " + std::to_string(dst_asic_id));
+    log_output_rank0("  Discovered Destination ASIC ID: " + std::to_string(*dst_asic_id));
     log_output_rank0("  Discovered Destination Channel: " + std::to_string(dst_channel));
 
     std::string src_host = input_args.reset_host.value();
@@ -360,14 +377,7 @@ int main(int argc, char* argv[]) {
     }
 
 
-    AsicTopology missing_asic_topology = validate_connectivity(
-        input_args.validate_connectivity,
-        input_args.fail_on_warning,
-        input_args.output_path,
-        physical_system_descriptor,
-        input_args.cabling_descriptor_path,
-        input_args.deployment_descriptor_path,
-        input_args.fsd_path);
+    AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
@@ -382,14 +392,7 @@ int main(int argc, char* argv[]) {
         num_retrains++;
 
         physical_system_descriptor.run_discovery(true);
-        missing_asic_topology = validate_connectivity(
-            input_args.validate_connectivity,
-            input_args.fail_on_warning,
-            input_args.output_path,
-            physical_system_descriptor,
-            input_args.cabling_descriptor_path,
-            input_args.deployment_descriptor_path,
-            input_args.fsd_path);
+        missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
     if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {

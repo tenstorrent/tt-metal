@@ -1247,6 +1247,7 @@ void reset_cross_node_ethernet_links(
             cluster.read_core(reset, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1EFC);
         }
     }
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     distributed_context.barrier();
 }
 
@@ -1348,55 +1349,6 @@ AsicTopology generate_asic_topology_from_connections(
         }
     }
     return asic_topology;
-}
-
-std::string get_factory_system_descriptor_path(
-    const std::filesystem::path& output_path,
-    std::optional<std::string> cabling_descriptor_path,
-    std::optional<std::string> deployment_descriptor_path,
-    std::optional<std::string> fsd_path) {
-    if (cabling_descriptor_path.has_value()) {
-        const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-        TT_FATAL(
-            deployment_descriptor_path.has_value(),
-            "Deployment Descriptor Path is required when Cabling Descriptor Path is provided.");
-        tt::scaleout_tools::CablingGenerator cabling_generator(
-            cabling_descriptor_path.value(), deployment_descriptor_path.value());
-        std::string filename =
-            "generated_factory_system_descriptor_" + std::to_string(*distributed_context.rank()) + ".textproto";
-        std::string generated_fsd_path = output_path / filename;
-        cabling_generator.emit_factory_system_descriptor(generated_fsd_path);
-        return generated_fsd_path;
-    } else {
-        TT_FATAL(
-            fsd_path.has_value(),
-            "Factory System Descriptor Path is required when Cabling Descriptor Path is not provided.");
-        return fsd_path.value();
-    }
-}
-
-AsicTopology validate_connectivity(
-    bool validate_connectivity,
-    bool fail_on_warning,
-    const std::filesystem::path& output_path,
-    PhysicalSystemDescriptor& physical_system_descriptor,
-    std::optional<std::string> cabling_descriptor_path,
-    std::optional<std::string> deployment_descriptor_path,
-    std::optional<std::string> fsd_path) {
-    if (!validate_connectivity) {
-        return {};
-    }
-    auto generated_fsd_path =
-        get_factory_system_descriptor_path(output_path, cabling_descriptor_path, deployment_descriptor_path, fsd_path);
-    std::string gsd_yaml_path = output_path / "global_system_descriptor.yaml";
-    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
-    log_output_rank0("Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    bool log_output = *distributed_context.rank() == 0;
-    auto missing_physical_connections = tt::scaleout_tools::validate_fsd_against_gsd(
-        generated_fsd_path, gsd_yaml_path, true, fail_on_warning, log_output);
-    log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
-    return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
 
 }  // namespace tt::scaleout_tools

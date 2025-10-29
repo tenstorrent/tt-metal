@@ -14,7 +14,7 @@ constexpr uint32_t ETH_TRAINING_STATUS_REG = 0x1104;
 struct TestFixture {
     tt::tt_metal::MetalContext& context;
     const tt::Cluster& cluster;
-    std::shared_ptr<const tt::umd::cluster::ClusterDesc> driver;
+    const std::unique_ptr<tt::umd::Cluster>& driver;
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context;
     tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor;
     std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
@@ -28,7 +28,7 @@ struct TestFixture {
               driver,
               distributed_context,
               &context.hal(),
-              context.rtoptions().get_mock_enabled(),
+              context.rtoptions(),
               true) {
         for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
             asic_id_to_chip_id[asic_id] = chip_id;
@@ -59,8 +59,9 @@ void process_ethernet_connections(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     const tt::Cluster& cluster,
-    const tt::umd::ClusterDescriptor* cluster_desc,
+    const std::unique_ptr<tt::umd::Cluster>& driver,
     Operation operation) {
+    auto cluster_desc = driver->get_cluster_description();
     for (const auto& [asic_id, asic_connections] :
          physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name())) {
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
@@ -79,14 +80,13 @@ void process_ethernet_connections(
 
 TEST(DirectedRetraining, TestActiveEthRetraining) {
     TestFixture fixture;
-    auto cluster_desc = fixture.driver->get_cluster_description();
 
     // Take down MMIO-to-MMIO and non-MMIO-to-non-MMIO links
     process_ethernet_connections(
         fixture.physical_system_descriptor,
         fixture.asic_id_to_chip_id,
         fixture.cluster,
-        cluster_desc,
+        fixture.driver,
         [&](ChipId chip_id, const tt_xy_pair& coord) {
             set_link_training_status(fixture.cluster, chip_id, coord, 0);
         });
@@ -99,7 +99,7 @@ TEST(DirectedRetraining, TestActiveEthRetraining) {
         fixture.physical_system_descriptor,
         fixture.asic_id_to_chip_id,
         fixture.cluster,
-        cluster_desc,
+        fixture.driver,
         [&](ChipId chip_id, const tt_xy_pair& coord) {
             EXPECT_EQ(get_link_training_status(fixture.cluster, chip_id, coord), 1);
         });
