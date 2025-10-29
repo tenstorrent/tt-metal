@@ -169,7 +169,8 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
     void calculate_chip_to_all_routing_fields(uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim = 0);
 #else
     // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
-    inline bool decode_route_to_buffer(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const;
+    inline bool decode_route_to_buffer(
+        uint16_t dst_chip_id, volatile uint8_t* out_route_buffer, bool prepend_one_hop = false) const;
 #endif
 };
 // 16 chips * 4 bytes = 64
@@ -236,9 +237,8 @@ struct tensix_fabric_connections_l1_info_t {
 #if defined(COMPILE_FOR_ERISC)
 #define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
 #define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
-// DUMMY
-#define ROUTING_TABLE_BASE 0
-#define EXIT_NODE_TABLE_BASE 0
+#define ROUTING_TABLE_BASE MEM_AERISC_FABRIC_ROUTING_TABLE_BASE
+#define EXIT_NODE_TABLE_BASE MEM_AERISC_FABRIC_EXIT_NODE_TABLE_BASE
 #elif defined(COMPILE_FOR_IDLE_ERISC)
 #define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
 #define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D

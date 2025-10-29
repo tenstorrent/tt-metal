@@ -21,7 +21,7 @@ namespace tt::tt_fabric {
 
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
             routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
@@ -97,6 +97,12 @@ void fabric_set_route(
     packet_header->routing_fields.hop_index = 0;
 }
 
+// template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
+// bool fabric_set_unicast_route(
+//     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+//     uint16_t dst_dev_id,
+//     uint16_t dst_mesh_id = MAX_NUM_MESHES);
+
 void fabric_set_mcast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
@@ -111,16 +117,21 @@ void fabric_set_mcast_route(
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_mesh_id = routing_table->my_mesh_id;
+    if (my_mesh_id != dst_mesh_id) {
+        tt_l1_ptr exit_node_table_t* exit_node_table =
+            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+        // fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
+        // TODO: refactoring
+        packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+                                         ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
+        return;
+    }
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->routing_fields.value = 0;
     packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                      ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
     packet_header->is_mcast_active = 0;
-    if (my_mesh_id != dst_mesh_id) {
-        tt_l1_ptr exit_node_table_t* exit_node_table =
-            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
-    }
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
     // If api is called with east and/or west hops != 0, it may be a 2D mcast
@@ -159,29 +170,83 @@ uint8_t get_router_direction(uint32_t eth_channel) {
 }
 
 // Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
+template <bool called_from_router = false, eth_chan_directions my_direction = eth_chan_directions::COUNT>
 bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id = MAX_NUM_MESHES) {
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    packet_header->mcast_params_16 = 0;
-    packet_header->is_mcast_active = 0;
+    if constexpr (!called_from_router) {
+        packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+        packet_header->mcast_params_16 = 0;
+        packet_header->is_mcast_active = 0;
+    }
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
     auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
         tt_l1_ptr exit_node_table_t* exit_node_table =
             reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
         dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+        dst_mesh_id = routing_table->my_mesh_id;
     }
-    bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
-
+    bool ok = false;
+    if constexpr (called_from_router) {
+        // This is to prepend additional one step, which is not needed for worker sender.
+        auto set_forward = [&](eth_chan_directions dir) {
+            switch (dir) {
+                case eth_chan_directions::EAST:
+                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_EAST;
+                    break;
+                case eth_chan_directions::WEST:
+                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_WEST;
+                    break;
+                case eth_chan_directions::NORTH:
+                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_NORTH;
+                    break;
+                case eth_chan_directions::SOUTH:
+                    packet_header->route_buffer[0] = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
+                    break;
+                default: ASSERT(false); break;
+            }
+        };
+        eth_chan_directions next_direction = get_next_hop_router_direction(dst_mesh_id, dst_dev_id);
+        if (next_direction < eth_chan_directions::COUNT) {
+            // when arrive at another mesh, but dst chip is not itself. -> go to next chip -> prepend FORWARD_<DIR> ->
+            // add route
+            ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer, true);
+        } else {
+            if (routing_table->my_mesh_id == packet_header->dst_start_mesh_id) {
+                // when arrive at destination mesh, and dst chip is itself. -> DRAIN -> prepend FORWARD_<DIR> -> done
+                set_forward(my_direction);
+            } else {
+                // when arrive at non-destination mesh, but dst chip is itself (exit node). -> go to next mesh ->
+                // prepend FORWARD_<DIR> -> done
+                next_direction =
+                    get_next_hop_router_direction(packet_header->dst_start_mesh_id, packet_header->dst_start_chip_id);
+                set_forward(next_direction);
+            }
+            packet_header->route_buffer[1] = LowLatencyMeshRoutingFields::NOOP;
+            return true;  // early return, route_buffer[0] is enough
+        }
+    } else {
+        ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
+        // uint32_t packed_debug_value =
+        //     0x20000000 |
+        //     ((uint32_t)(routing_table->my_mesh_id & 0xF) << 24) |
+        //     ((uint32_t)(packet_header->dst_start_mesh_id & 0xF) << 20) |
+        //     ((uint32_t)(routing_table->my_device_id & 0xF) << 16) |
+        //     ((uint32_t)(packet_header->dst_start_chip_id & 0xF) << 12) |
+        //     ((uint32_t)(dst_dev_id & 0xF) << 8) |
+        //     ((uint32_t)(packet_header->route_buffer[0] & 0xF) << 4) |
+        //     ((uint32_t)(packet_header->noc_send_type & 0xF) << 0);
+        // WATCHER_RING_BUFFER_PUSH(packed_debug_value);
+    }
     packet_header->routing_fields.value = 0;
 
     const auto& compressed_route = routing_info->paths[dst_dev_id];
     uint8_t ns_hops = compressed_route.get_ns_hops();
     uint8_t ew_hops = compressed_route.get_ew_hops();
     uint8_t ew_direction = compressed_route.get_ew_direction();
-    uint8_t turn_point = compressed_route.get_turn_point();
+    uint8_t turn_point = compressed_route.get_turn_point() + called_from_router;
 
     if (ns_hops > 0 && ew_hops > 0) {
         // 2D routing: turn from NS to EW at turn_point

@@ -271,7 +271,6 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
-    void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
 
