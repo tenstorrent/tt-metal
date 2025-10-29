@@ -137,8 +137,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(
         ashape_with_channels_padded, sliding_window_config, parallelization_config.num_cores_nhw, out_block_h_ntiles);
-    TT_FATAL(act_matrix_shape.size() == 3, "Error");
-    TT_FATAL(act_matrix_shape[0] == 1, "Error");
+    TT_FATAL(
+        act_matrix_shape.size() == 3,
+        "Activation matrix shape must have 3 dimensions but got {}",
+        act_matrix_shape.size());
+    TT_FATAL(act_matrix_shape[0] == 1, "Activation matrix first dimension must be 1 but got {}", act_matrix_shape[0]);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
 
@@ -146,8 +149,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
 
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
-        TT_FATAL(bias.has_value(), "Error");
-        TT_FATAL(bias.value().buffer() != nullptr, "Error");
+        TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
+        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -447,7 +450,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         pack_relu,
         weight_block_w_ntiles <= 8,  // packer_untilize
         packer_l1_acc,
-        has_bias};
+        has_bias,
+        false,  // enable_split_reader (not used in width sharded)
+        false,  // enable_activation_reuse (not used in width sharded)
+        0,
+        0,
+        0,
+        0,                              // activation reuse related arguments
+        static_cast<uint32_t>(false)};  // split_reader_cb_shared (not used in width sharded)
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,

@@ -673,11 +673,6 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    HF_MODEL = os.getenv("HF_MODEL")
-    if HF_MODEL:
-        os.environ["HF_MODEL"] = str(
-            model_location_generator(os.getenv("HF_MODEL"), download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-        )
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
@@ -804,6 +799,10 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
     )
+
+    # Skip ci-eval tests on P100 devices
+    if ("ci-eval-1" in test_id or "ci-eval-32" in test_id) and model_args[0].device_name == "P100":
+        pytest.skip("ci-eval-1 and ci-eval-32 tests are not supported on P100 devices")
 
     if token_accuracy:
         token_acc = TokenAccuracy(model_name=model_args[0].model_name)
