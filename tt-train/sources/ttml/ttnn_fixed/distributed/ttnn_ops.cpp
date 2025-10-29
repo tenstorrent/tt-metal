@@ -21,7 +21,6 @@ tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
         *mesh_device, /* cluster_axis */ std::nullopt);
-    
     return ttnn::experimental::all_gather_async(
         tensor,
         dim,
