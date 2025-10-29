@@ -107,7 +107,6 @@ GENERALITY_PARAMETERS = {
     "num_iters": [1],
 }
 
-print(GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D})
 
 parameters = {
     "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},

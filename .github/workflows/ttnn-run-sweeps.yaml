@@ -590,7 +590,7 @@ on:
           - BH-LoudBox
         default: "N150"
       log-level:
-        description: "Long sweeps on INFO log level may overwhelm the runner"
+        description: "Log level for sweep execution. INFO level may overwhelm runners for long sweeps."
         required: true
         type: choice
         options:
