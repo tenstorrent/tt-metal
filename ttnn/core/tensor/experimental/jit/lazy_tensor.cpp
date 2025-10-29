@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <ttnn/tensor/tensor.hpp>
 #include "ttnn/experimental/jit/lazy_tensor.hpp"
 #include "ttnn/experimental/jit/graph_utils.hpp"
 #include "ttnn/experimental/jit/lazy_operation.hpp"
@@ -10,7 +11,7 @@
 namespace ttnn::experimental::jit {
 
 // Lazy Tensor
-LazyTensor::LazyTensor(const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, ttnn::TensorSpec tensor_spec) :
+LazyTensor::LazyTensor(const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, TensorSpec tensor_spec) :
     op_inputs_(op_inputs),
     op_(std::move(op)),
     tensor_spec_(std::move(tensor_spec)),
@@ -21,7 +22,9 @@ LazyTensor LazyTensor::make_lazy_tensor(
     return LazyTensor(op_inputs, std::move(op), std::move(tensor_spec));
 }
 
-LazyTensor LazyTensor::make_materialized_tensor(const Tensor& metal_tensor) { return LazyTensor(metal_tensor); }
+LazyTensor LazyTensor::make_materialized_tensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor) {
+    return LazyTensor(metal_tensor);
+}
 
 std::vector<LazyTensor> LazyTensor::make_lazy_tensors(
     const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, const std::vector<TensorSpec>& tensor_specs) {
@@ -39,7 +42,7 @@ std::vector<LazyTensor> LazyTensor::make_lazy_tensors(
     return lazy_tensors;
 }
 
-LazyTensor::LazyTensor(const tt::tt_metal::Tensor& metal_tensor) :
+LazyTensor::LazyTensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor) :
     op_inputs_({}),
     op_(nullptr),
     tensor_spec_(metal_tensor.tensor_spec()),
@@ -49,6 +52,25 @@ LazyTensor::LazyTensor(const tt::tt_metal::Tensor& metal_tensor) :
     state_(LazyTensorState::MATERIALIZED),
     id_(GraphUtils::get_available_lazy_tensor_id()) {}
 
+// Getters
+
+const std::vector<LazyTensor>& LazyTensor::op_inputs() const { return op_inputs_; };
+const std::vector<LazyTensor>& LazyTensor::siblings() const { return siblings_; }
+const std::vector<tt::tt_metal::metal_tensor::Tensor>& LazyTensor::materialized_tensors() const {
+    return materialized_outputs_;
+}
+const tt::tt_metal::metal_tensor::Tensor& LazyTensor::materialized_tensor() const {
+    return materialized_outputs_[materialized_output_idx_];
+}
+tt::tt_metal::metal_tensor::Tensor& LazyTensor::materialized_tensor() {
+    return materialized_outputs_[materialized_output_idx_];
+}
+const TensorSpec& LazyTensor::tensor_spec() const { return tensor_spec_.value(); }
+LazyTensorState LazyTensor::state() const { return state_; }
+LazyTensorId LazyTensor::id() const { return id_; }
+bool LazyTensor::is_materialized() const { return state_ == LazyTensorState::MATERIALIZED; }
+const LazyTensor::LazyOperationPtr& LazyTensor::op() const { return op_; }
+
 void LazyTensor::materialize() {
     if (state_ == LazyTensorState::MATERIALIZED || state_ == LazyTensorState::SCHEDULED) {
         return;
@@ -57,7 +79,7 @@ void LazyTensor::materialize() {
     state_ = LazyTensorState::SCHEDULED;
 
     // Verify that all inputs are materialized
-    std::vector<Tensor> input_tensors;
+    std::vector<MaterializedTensor> input_tensors;
     for (const auto& input : op_inputs_) {
         auto op_name = input.op() ? input.op()->name() : "Unknown";
         TT_FATAL(

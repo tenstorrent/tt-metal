@@ -9,6 +9,9 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/experimental/jit/lazy_mode.hpp"
+#include "ttnn/experimental/jit/lazy_device_operation.hpp"
+#include <boost/pfr/core.hpp>
 
 namespace ttnn {
 namespace decorators {
@@ -62,6 +65,62 @@ concept HasInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
+namespace detail {
+// Concept to check if return type is supported for lazy execution
+template <typename operation_t>
+concept HasSupportedLazyReturnType = std::same_as<typename operation_t::tensor_return_value_t, Tensor> ||
+                                     std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>;
+
+// Check if a single field type is supported for lazy execution
+template <typename FieldType>
+struct is_supported_lazy_field_type {
+    using BareType = std::remove_cv_t<std::remove_reference_t<FieldType>>;
+
+    static constexpr bool value =
+        // const Tensor&
+        // Tensor&
+        (std::is_reference_v<FieldType> && std::is_same_v<BareType, Tensor>) ||
+        // Tensor
+        (!std::is_reference_v<FieldType> && std::is_same_v<BareType, Tensor>) ||
+        // std::optional<Tensor>
+        std::is_same_v<BareType, std::optional<Tensor>> ||
+        // std::optional<std::reference_wrapper<Tensor>>
+        std::is_same_v<BareType, std::optional<std::reference_wrapper<Tensor>>> ||
+        // std::optional<std::reference_wrapper<const Tensor>>
+        std::is_same_v<BareType, std::optional<std::reference_wrapper<const Tensor>>> ||
+        // std::vector<Tensor>
+        std::is_same_v<BareType, std::vector<Tensor>> ||
+        // std::vector<std::optional<Tensor>>
+        std::is_same_v<BareType, std::vector<std::optional<Tensor>>> ||
+        // std::vector<std::optional<const Tensor>> <- needed for OldInfraDeviceOperation
+        std::is_same_v<BareType, std::vector<std::optional<const Tensor>>>;
+};
+
+// Helper to check all fields in a struct using index sequence
+template <typename S, std::size_t... Indices>
+constexpr bool all_fields_supported_impl(std::index_sequence<Indices...>) {
+    // For each field index, get its type and check if it's supported
+    return (... && is_supported_lazy_field_type<decltype(boost::pfr::get<Indices>(std::declval<S&>()))>::value);
+}
+
+// Check if all fields in tensor_args_t are supported types
+template <typename tensor_args_t>
+concept AllFieldsSupported = requires {
+    requires all_fields_supported_impl<tensor_args_t>(
+        std::make_index_sequence<boost::pfr::tuple_size_v<tensor_args_t>>{});
+};
+
+// Main concept: can this operation be made lazy?
+// Requirements:
+// 1. Must be a primitive operation
+// 2. Must have supported return type (Tensor or vector<Tensor>)
+// 3. All fields in tensor_args_t must be supported types
+template <typename operation_t>
+concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t> &&
+                        AllFieldsSupported<typename operation_t::tensor_args_t>;
+
+}  // namespace detail
+
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
@@ -103,6 +162,10 @@ private:
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
+        // if (ttnn::experimental::jit::is_lazy_enabled()) {
+        //     return invoke_lazy(operation_attributes, tensors_args);
+        // }
+        return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
     }
 
@@ -116,6 +179,60 @@ private:
     auto invoke_composite(args_t&&... args) const {
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
+
+    // template <typename operation_attributes_t, typename tensor_args_t>
+    // auto invoke_lazy(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
+    //     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
+
+    //     if constexpr (detail::CanBeMadeLazy<operation_t>) {
+    //         // Create lazy operation wrapper
+    //         auto lazy_op = ttnn::experimental::jit::make_lazy_device_operation<operation_t>(
+    //             operation_attributes,
+    //             tensor_args,
+    //             std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
+
+    //         // Get output specs to create placeholder tensors
+    //         auto output_specs = lazy_op->compute_output_specs();
+
+    //         // Create placeholder output tensors
+    //         auto first_input_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    //         auto device = first_input_tensor.device();
+
+    //         // TODO: Move this if constexprs to a separate function.
+    //         // TODO: Add support for all kinds of returns
+    //         // Extract input tensors from tensor_args
+    //         std::vector<Tensor> input_tensors =
+    //             ttnn::experimental::jit::object_to_vector<tensor_args_t, Tensor>(tensor_args);
+
+    //         if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
+    //             // Single tensor output
+    //             TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
+    //             return LazyTensor(input_tensors, lazy_op);
+    //             // auto output_tensor = tt::tt_metal::create_device_tensor(output_specs[0], device);
+    //             // output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
+    //             // output_tensor.set_producer_node(node_id);
+    //             // return output_tensor;
+    //         } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
+    //             // Multiple tensor outputs (vector)
+    //             std::vector<Tensor> output_tensors;
+    //             for (const auto& spec : output_specs) {
+    //                 auto output_tensor = tt::tt_metal::create_device_tensor(spec, device);
+    //                 output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
+    //                 output_tensor.set_producer_node(node_id);
+    //                 output_tensors.push_back(output_tensor);
+    //             }
+    //             return output_tensors;
+    //         }
+    //     } else {
+    //         // Fallback for other return types - execute eagerly
+    //         log_warning(
+    //             tt::LogOp,
+    //             "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
+    //             std::string{cpp_fully_qualified_name},
+    //             tt::stl::get_type_name<tensor_return_value_t>());
+    //         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensor_args);
+    //     }
+    // }
 };
 
 template <reflect::fixed_string cpp_fully_qualified_name>

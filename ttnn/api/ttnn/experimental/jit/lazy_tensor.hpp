@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <ttnn/tensor/tensor.hpp>
+#include <ttnn/tensor/metal_tensor.hpp>
+#include <ttnn/tensor/tensor_spec.hpp>
 
 namespace ttnn::experimental::jit {
 
@@ -18,8 +19,8 @@ enum class LazyTensorState {
 
 class LazyTensor {
     using LazyOperationPtr = std::shared_ptr<ttnn::experimental::jit::LazyOperation>;
-    using Tensor = tt::tt_metal::Tensor;
     using TensorSpec = tt::tt_metal::TensorSpec;
+    using MaterializedTensor = tt::tt_metal::metal_tensor::Tensor;
 
 public:
     LazyTensor() = default;
@@ -31,27 +32,27 @@ public:
     static std::vector<LazyTensor> make_lazy_tensors(
         const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, const std::vector<TensorSpec>& tensor_specs);
 
-    static LazyTensor make_materialized_tensor(const Tensor& metal_tensor);
+    static LazyTensor make_materialized_tensor(const MaterializedTensor& metal_tensor);
 
     // Note: no public setters, LazyTensor is immutable after construction
 
     // Getters
-    const std::vector<LazyTensor>& op_inputs() const { return op_inputs_; };
-    const std::vector<LazyTensor>& siblings() const { return siblings_; }
-    const std::vector<Tensor>& materialized_tensors() const { return materialized_outputs_; }
-    const Tensor& materialized_tensor() const { return materialized_outputs_[materialized_output_idx_]; }
-    Tensor& materialized_tensor() { return materialized_outputs_[materialized_output_idx_]; }
-    const TensorSpec& tensor_spec() const { return tensor_spec_.value(); }
-    LazyTensorState state() const { return state_; }
-    LazyTensorId id() const { return id_; }
-    bool is_materialized() const { return state_ == LazyTensorState::MATERIALIZED; }
-    const LazyOperationPtr& op() const { return op_; }
+    const std::vector<LazyTensor>& op_inputs() const;
+    const std::vector<LazyTensor>& siblings() const;
+    const std::vector<MaterializedTensor>& materialized_tensors() const;
+    const MaterializedTensor& materialized_tensor() const;
+    MaterializedTensor& materialized_tensor();
+    const TensorSpec& tensor_spec() const;
+    LazyTensorState state() const;
+    LazyTensorId id() const;
+    bool is_materialized() const;
+    const LazyOperationPtr& op() const;
 
     void materialize();
 
 private:
     LazyTensor(const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, TensorSpec tensor_spec);
-    LazyTensor(const tt::tt_metal::Tensor& metal_tensor);
+    LazyTensor(const MaterializedTensor& metal_tensor);
 
     void set_siblings(const std::vector<LazyTensor>& siblings) { siblings_ = siblings; }
     void set_materialized_output_idx(size_t idx) { materialized_output_idx_ = idx; }
@@ -61,7 +62,7 @@ private:
     LazyOperationPtr op_;
     std::optional<TensorSpec> tensor_spec_;  // <- Note really optional, but I need to quickly get default ctor working
     std::vector<LazyTensor> siblings_;
-    std::vector<Tensor> materialized_outputs_;
+    std::vector<MaterializedTensor> materialized_outputs_;
     size_t materialized_output_idx_ = 0;  // In case op produces multiple tensors, we want to know which one is this
     LazyTensorState state_ = LazyTensorState::LAZY;
     LazyTensorId id_ = 0;

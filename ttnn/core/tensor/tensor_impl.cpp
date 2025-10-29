@@ -569,7 +569,6 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<ttnn::QueueId>
 
     HostStorage host_storage(std::move(distributed_host_buffer));
     auto output = Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
-    output.set_producer_node(tensor.producer_node());
     return output;
 }
 
@@ -699,7 +698,7 @@ Tensor to_device(
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
     auto [mesh_storage, topology] = to_device_mesh_buffer<T>(
-        tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, tensor.tensor_topology(), cq_id);
+        tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes(), tensor.tensor_topology(), cq_id);
     return Tensor(std::move(mesh_storage), *tensor_spec, topology);
 }
 
@@ -777,7 +776,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         host_tensor.storage(),
         mesh_buffer,
         device_tensor.tensor_spec(),
-        *host_tensor.tensor_attributes,
+        *host_tensor.tensor_attributes(),
         host_tensor.tensor_topology(),
         cq_id);
     device_tensor = Tensor(

@@ -18,7 +18,6 @@
 #include "ttnn/experimental/jit/lazy_mode.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include "ttnn/tensor/ttnn_tensor.hpp"
 #include "ttnn/operations/rand/rand.hpp"
 
 namespace ttnn {
@@ -54,40 +53,38 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
     // 1. From materialized tensor
     auto random =
         ttnn::rand(ttnn::Shape({32, 32}), *device_, DataType::BFLOAT16, Layout::TILE, ttnn::types::DRAM_MEMORY_CONFIG);
-    auto lazy_random = TTNNTensor(random);
 
-    ASSERT_EQ(lazy_random.lazy().materialized_tensor().logical_shape(), ttnn::Shape({32, 32}))
+    ASSERT_EQ(random.lazy().materialized_tensor().logical_shape(), ttnn::Shape({32, 32}))
         << "Lazy tensor should have the same shape as the materialized tensor";
-    ASSERT_EQ(lazy_random.lazy().materialized_tensor().dtype(), DataType::BFLOAT16)
+    ASSERT_EQ(random.lazy().materialized_tensor().dtype(), DataType::BFLOAT16)
         << "Lazy tensor should have the same dtype as the materialized tensor";
-    ASSERT_EQ(lazy_random.lazy().materialized_tensor().layout(), Layout::TILE)
+    ASSERT_EQ(random.lazy().materialized_tensor().layout(), Layout::TILE)
         << "Lazy tensor should have the same layout as the materialized tensor";
-    ASSERT_EQ(lazy_random.lazy().materialized_tensor().memory_config(), ttnn::types::DRAM_MEMORY_CONFIG)
+    ASSERT_EQ(random.lazy().materialized_tensor().memory_config(), ttnn::types::DRAM_MEMORY_CONFIG)
         << "Lazy tensor should have the same memory config as the materialized tensor";
-    ASSERT_EQ(lazy_random.lazy().materialized_tensor().device(), device_)
+    ASSERT_EQ(random.lazy().materialized_tensor().device(), device_)
         << "Lazy tensor should have the same device as the materialized tensor";
-    ASSERT_EQ(lazy_random.lazy().materialized_tensor().mesh_buffer(), random.mesh_buffer())
+    ASSERT_EQ(random.lazy().materialized_tensor().mesh_buffer(), random.mesh_buffer())
         << "Lazy tensor should have the same mesh buffer as the materialized tensor";
-    ASSERT_EQ(lazy_random.lazy().materialized_tensor().mesh_buffer()->device(), device_)
+    ASSERT_EQ(random.lazy().materialized_tensor().mesh_buffer()->device(), device_)
         << "Lazy tensor should have the same mesh buffer device as the materialized tensor";
 
-    ASSERT_EQ(lazy_random.lazy().state(), experimental::jit::LazyTensorState::MATERIALIZED)
+    ASSERT_EQ(random.lazy().state(), experimental::jit::LazyTensorState::MATERIALIZED)
         << "Lazy tensor should be in materialized state";
-    ASSERT_EQ(lazy_random.lazy().tensor_spec(), random.tensor_spec())
+    ASSERT_EQ(random.lazy().tensor_spec(), random.tensor_spec())
         << "Lazy tensor should have the same tensor spec as the materialized tensor";
-    ASSERT_EQ(lazy_random.lazy().op().get(), nullptr)
+    ASSERT_EQ(random.lazy().op().get(), nullptr)
         << "Lazy tensor created from materialized tensor should have no operation";
-    ASSERT_TRUE(lazy_random.lazy().is_materialized()) << "Lazy tensor should be materialized";
-    ASSERT_EQ(lazy_random.lazy().op_inputs().size(), 0) << "Lazy tensor should have no op inputs";
-    ASSERT_EQ(lazy_random.lazy().siblings().size(), 0) << "Lazy tensor should have no siblings";
-    ASSERT_EQ(lazy_random.lazy().materialized_tensors().size(), 1) << "Lazy tensor should have one materialized tensor";
+    ASSERT_TRUE(random.lazy().is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_EQ(random.lazy().op_inputs().size(), 0) << "Lazy tensor should have no op inputs";
+    ASSERT_EQ(random.lazy().siblings().size(), 0) << "Lazy tensor should have no siblings";
+    ASSERT_EQ(random.lazy().materialized_tensors().size(), 1) << "Lazy tensor should have one materialized tensor";
 
     // Note: you can't create a lazy operation without op and it's inputs because it won't be possible to materialize it
     // later.
 
     // 2. Wrap materialized in lazy and call op
-    auto relu_output = ttnn::relu(lazy_random.get_materialized_tensor());
-    auto lazy_relu_output = ttnn::relu(lazy_random);
+    auto relu_output = ttnn::relu(random);
 }
 
 // // Test: Simple unary operations in lazy mode with verification

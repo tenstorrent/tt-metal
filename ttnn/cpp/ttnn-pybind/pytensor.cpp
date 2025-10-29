@@ -1393,13 +1393,6 @@ void pytensor_module(py::module& m_tensor) {
 
         )doc")
         .def(
-            "producer_node", [](const Tensor& self) { return self.producer_node(); }, R"doc(
-            Get the producer node of the tensor.
-            .. code-block:: python
-
-                producer_node = tt_tensor.producer_node()
-        )doc")
-        .def(
             "storage_type", [](const Tensor& self) { return self.storage_type(); }, R"doc(
             Check if the tensor is on host
 
