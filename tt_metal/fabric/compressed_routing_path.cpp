@@ -13,10 +13,10 @@ namespace tt::tt_fabric {
 // 1D routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    FabricNodeId src_fabric_node_id, tt_metal::distributed::MeshShape& mesh_shape) {
+    FabricNodeId src_fabric_node_id, uint16_t num_chips) {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
-    for (uint16_t hops = 1; hops < MAX_CHIPS_LOWLAT_1D; ++hops) {
+    for (uint16_t hops = 1; hops < num_chips; ++hops) {
         route_ptr[hops] =
             (FWD_ONLY_FIELD & ((1 << (hops - 1) * FIELD_WIDTH) - 1)) | (WRITE_ONLY << (hops - 1) * FIELD_WIDTH);
     }
@@ -25,15 +25,14 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    FabricNodeId src_fabric_node_id, tt_metal::distributed::MeshShape& mesh_shape) {
+    FabricNodeId src_fabric_node_id, uint16_t num_chips) {
     // No-op
 }
 
 // 2D compressed routing specialization: ControlPlane singleton-based implementation
 template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
-    FabricNodeId src_fabric_node_id, tt_metal::distributed::MeshShape& mesh_shape) {
-    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
+    FabricNodeId src_fabric_node_id, uint16_t num_chips) {
     auto& src_chip_id = src_fabric_node_id.chip_id;
     auto& mesh_id = src_fabric_node_id.mesh_id;
 
@@ -79,10 +78,12 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             }
         }
 
-        if (best_chip_sequence.empty()) {
-            paths[dst_chip_id].set(0, 0, 0, 0, 0);
-            continue;
-        }
+        TT_ASSERT(
+            !best_chip_sequence.empty(),
+            "Failed to find intra-mesh route from chip {} to chip {} in mesh {}",
+            src_chip_id,
+            dst_chip_id,
+            *mesh_id);
 
         uint8_t ns_hops = 0;
         uint8_t ew_hops = 0;
@@ -106,8 +107,11 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             }
             uint16_t curr_chip = *it;
             auto dir_opt = next_dir(prev_chip, curr_chip);
-            if (!dir_opt.has_value() || !is_axis(*dir_opt)) {
-                return;
+            if (!dir_opt.has_value() || dir_opt.value() == RoutingDirection::NONE) {
+                TT_ASSERT(false, "Invalid direction between chips {} and {}", prev_chip, curr_chip);
+            }
+            if (!is_axis(*dir_opt)) {
+                return;  // start of other axis
             }
 
             dir_bit = dir_to_bit(*dir_opt);

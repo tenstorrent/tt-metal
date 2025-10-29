@@ -1651,7 +1651,7 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
             : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
     auto mesh_shape = this->get_physical_mesh_shape(mesh_id);
     intra_mesh_routing_path_t<1, false> routing_path;
-    routing_path.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), mesh_shape);
+    routing_path.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), MAX_CHIPS_LOWLAT_1D);
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
@@ -1726,7 +1726,7 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
-        routing_path.calculate_chip_to_all_routing_fields(src_fabric_node_id, mesh_shape);
+        routing_path.calculate_chip_to_all_routing_fields(src_fabric_node_id, mesh_shape[0] * mesh_shape[1]);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         write_to_all_tensix_cores(
             &routing_path,
