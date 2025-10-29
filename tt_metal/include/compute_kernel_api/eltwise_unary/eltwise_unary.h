@@ -15,16 +15,6 @@
 
 namespace ckernel {
 
-template <bool fast_and_approx = false>
-ALWI void sfpu_reduce_max_sdpa_init() {
-    MATH((llk_math_sfpu_reduce_max_sdpa_init<fast_and_approx>()));
-}
-
-template <bool fast_and_approx = false>
-ALWI void sfpu_reduce_max_sdpa(uint32_t idst) {
-    MATH((llk_math_sfpu_reduce_max_sdpa<fast_and_approx>(idst)));
-}
-
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
