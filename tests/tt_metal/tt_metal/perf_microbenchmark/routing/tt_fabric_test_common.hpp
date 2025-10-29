@@ -691,6 +691,38 @@ public:
         return hops;
     }
 
+    /*
+     * Perimeter devices send their data to all adjacent devices along a row or column, depending on their position.
+     * For example, a chip on the top row will send packets to all devices in the same column below it.
+     * Corner devices will send packets to all adjacent devices in the same row or column.
+     */
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> get_perimeter_linear_mcast_hops(
+        const FabricNodeId& src_node_id, uint32_t dim) const override {
+        const auto src_coord = get_device_coord(src_node_id);
+        const uint32_t src_row = src_coord[NS_DIM];
+        const uint32_t src_col = src_coord[EW_DIM];
+
+        // Case 1: If not on perimeter, return nullopt to indicate this device will have no packets to send
+        const bool is_perimeter = (src_row == 0 || src_row == mesh_shape_[NS_DIM] - 1) ||
+                                  (src_col == 0 || src_col == mesh_shape_[EW_DIM] - 1);
+        if (!is_perimeter) {
+            return std::nullopt;
+        }
+
+        // Case 2: If this device will not send packets in the requested dimension, return nullopt
+        // Eg. only corner chips in the bottom row will send E/W packets
+        const bool will_send_in_dim = (dim == NS_DIM && (src_row == 0 || src_row == mesh_shape_[NS_DIM] - 1)) ||
+                                      (dim == EW_DIM && (src_col == 0 || src_col == mesh_shape_[EW_DIM] - 1));
+        if (!will_send_in_dim) {
+            return std::nullopt;
+        }
+
+        // After verifying the device is on the perimeter and will send packets in the requested dimension,
+        // each perimeter device performs a unidirectional_linear pattern in the requested dimension
+        // Eg. a chip in the top row will send packets to all devices in the same column below it
+        return this->get_unidirectional_linear_mcast_hops(src_node_id, dim);
+    }
+
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
         // Get mesh dimensions

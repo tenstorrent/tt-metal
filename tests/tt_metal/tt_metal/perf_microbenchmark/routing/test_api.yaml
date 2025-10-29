@@ -78,9 +78,8 @@ Tests:
             (optional) mcast_start_hops: 0
     # 2. High-level pattern
     (optional) patterns:
-      - type: all_to_all/one_to_all/full_device_random_pairing/unidirectional_linear/full_ring/half_ring/all_devices_uniform_pattern
-        (optional) iterations: 2 # How many times to run the pattern.
       - type: all_to_all
+        (optional) iterations: 2 # How many times to run the pattern.
       - type: one_to_all
         (optional) iterations: 3
         # NOTE: all_to_one is a special pattern. If no iterations are specified, the test is expanded into n iterations, where n refers to the number of chips in the test.
@@ -88,6 +87,25 @@ Tests:
         # However, if iterations are specified, the test is only expanded into 'iterations' number of tests, which may reduce test coverage.
       - type: all_to_one
         (optional) iterations: 5
+      # A list of all high-level patterns
+      - type: all_to_all
+      - type: one_to_all
+      - type: all_to_one
+      - type: all_to_one_random
+      - type: full_device_random_pairing
+      # Each device sends messages to devices in the same row and column, in 1 X and 1 Y direction only
+      # Eg. Device (1, 1) will send messages East to (1,2), (1,3), ..., (1,N) and South to (2,1), (3,1), ..., (N,1).
+      # Direction is determined based on the device's position in the mesh.
+      - type: unidirectional_linear
+      # Each device on the mesh's perimeter sends messages to all devices in the direction of the opposite edge.
+      # Eg. Device (1, 0) will send messages East to (1,1), (1,2), ..., (1,N).
+      # Corner devices will send messages horizontally and vertically.
+      - type: perimeter_linear
+      # Devices (0,0) and (0,1) exchange messages with each other.
+      - type: neighbor_exchange
+      - type: full_ring
+      - type: half_ring
+      - type: all_devices_uniform_pattern
 
     # How iterations works:
     # expand_high_level_patterns in tt_fabric_test_config.hpp:
@@ -98,9 +116,7 @@ Tests:
     # NOTE: Only the maximum number of iterations is used to determine the number of tests to run.
     # In the case above, 5 iterations of the tests will be created, even though the first pattern only requests 2.
 
-
-
-    # Allows us to sweep multiple test configurations.
+    # parametrization_params allows us to sweep multiple test configurations.
     # The Framework generates new tests based on these parameters and inserts them into the test list.
     (optional) parametrization_params:
       (optional) ftype: [unicast, mcast]
