@@ -6,6 +6,11 @@
 
 #include <cstdint>
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-volatile"
+#endif
+
 namespace tt::tt_fabric {
 
 struct EdmFabricReceiverChannelCounters {
@@ -77,3 +82,7 @@ struct EdmFabricSenderChannelCounters {
 static constexpr uint32_t sender_channel_counters_l1_size = sizeof(EdmFabricSenderChannelCounters);
 
 }  // namespace tt::tt_fabric
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
