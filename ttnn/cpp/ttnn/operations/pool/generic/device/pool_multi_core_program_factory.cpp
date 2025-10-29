@@ -491,14 +491,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
     }
 
-    const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
-        next_cb_index++,
-        program,
-        all_cores,
-        out_cb_pagesize,
-        out_cb_npages,
-        params.output_data_format,
-        outputs[0].buffer());
+    // Create output CB with custom tile dimensions
+    tt::tt_metal::Tile out_tile({1, 32});
+    uint32_t out_cb_id = next_cb_index++;
+    tt::tt_metal::CircularBufferConfig out_cb_config =
+        tt::tt_metal::CircularBufferConfig(
+            out_cb_pagesize * out_cb_npages, {{out_cb_id, params.output_data_format}}, *outputs[0].buffer())
+            .set_page_size(out_cb_id, out_cb_pagesize)
+            .set_tile_dims(out_cb_id, out_tile);
+    auto out_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, out_cb_config);
 
     uint32_t out_idx_cb_id = 32;
     tt::tt_metal::CBHandle out_idx_cb = 0;
@@ -511,14 +512,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         uint32_t out_idx_cb_pagesize =
             std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), outputs[0].shard_spec().value().shape[1]) *
             params.index_nbytes;
-        std::tie(out_idx_cb_id, out_idx_cb) = tt::tt_metal::create_cb(
-            next_cb_index++,
-            program,
-            all_cores,
-            out_idx_cb_pagesize,
-            out_idx_cb_npages,
-            params.index_format,
-            outputs[1].buffer());
+        // Create output index CB with custom tile dimensions
+        tt::tt_metal::Tile out_idx_tile({1, 32});
+        out_idx_cb_id = next_cb_index++;
+        tt::tt_metal::CircularBufferConfig out_idx_cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                out_idx_cb_pagesize * out_idx_cb_npages, {{out_idx_cb_id, params.index_format}}, *outputs[1].buffer())
+                .set_page_size(out_idx_cb_id, out_idx_cb_pagesize)
+                .set_tile_dims(out_idx_cb_id, out_idx_tile);
+        out_idx_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, out_idx_cb_config);
     }
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 

@@ -10,6 +10,7 @@
 #include "cpack_common.h"
 #include "ckernel_globals.h"
 #include "circular_buffer.h"
+#include "debug/dprint.h"
 
 #include "llk_io.h"
 #include "llk_defs.h"
@@ -153,6 +154,9 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16) {
     const std::uint32_t num_faces = get_output_num_faces(output_id);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    DPRINT << "face_r_dim: " << face_r_dim << ", num_faces: " << num_faces << ENDL();
+    DPRINT << "partial_face: " << (uint32_t)partial_face << ", narrow_tile: " << (uint32_t)narrow_tile << ENDL();
 
     _llk_pack_init_<untilize, zero_output, DstTileFaceLayout::RowMajor, false>(
         pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);

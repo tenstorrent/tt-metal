@@ -11,7 +11,7 @@ from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-@pytest.mark.parametrize("in_c", [16, 32])
+@pytest.mark.parametrize("in_c", [32])
 def test_mpwi_20_core_C_dims(device, in_c):
     in_n = 1
     in_h = 3

@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/add_int_sfpu.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -112,8 +112,9 @@ void MAIN {
             in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
     } else {
-        unary_op_init_common(in_cb_id_0, in_cb_id_0);
+        unary_op_init_common(in_cb_id_0, out_cb_id);
         copy_tile_to_dst_init_short(in_cb_id_0);
+        // PACK(llk_pack_init(out_cb_id));
     }
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -303,19 +304,20 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
-                cb_reserve_back(out_cb_id, 1);
-                pack_reconfig_data_format(out_cb_id);
-                // notice here we now want to pack to the out CB - this call needs to be updated to output just 1 row or
-                // face
-                pack_tile<true>(data_dst_idx, out_cb_id, mpwi_cb_tile_idx);
-                cb_push_back(out_cb_id, 1);
+                cb_reserve_back(out_cb_id, output_faces);
+                cb_reserve_back(out_idx_cb_id, output_faces);
 
-                cb_reserve_back(out_idx_cb_id, 1);
+                pack_reconfig_data_format(out_cb_id);
+                pack_tile<true>(data_dst_idx, out_cb_id, mpwi_cb_tile_idx);
+
                 pack_reconfig_data_format(out_idx_cb_id);
-                // notice here we now want to pack to the out CB - this call needs to be updated to output just 1 row or
-                // face
                 pack_tile<true>(index_dst_idx, out_idx_cb_id, mpwi_cb_tile_idx);
-                cb_push_back(out_idx_cb_id, 1);
+
+                // PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
+                // PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
+
+                cb_push_back(out_cb_id, output_faces);
+                cb_push_back(out_idx_cb_id, output_faces);
 
                 if (last_c_block) {
                     cb_reserve_back(in_idx_cb_id, 1);

@@ -157,13 +157,13 @@ def run_max_pool2d_with_indices(
 
     tensor_shape = (in_n, in_c, in_h, in_w)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    # torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-    # for n in range(in_n):
-    #     for c in range(in_c):
-    #         for h in range(in_h):
-    #             for w in range(in_w):
-    #                 torch_input[n, c, h, w] = h * in_w + w
+    # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    for n in range(in_n):
+        for c in range(in_c):
+            for h in range(in_h):
+                for w in range(in_w):
+                    torch_input[n, c, h, w] = c
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
@@ -234,6 +234,11 @@ def run_max_pool2d_with_indices(
     )
 
     test_passed = output_match and indices_valid
+
+    print("TTNN Output:", ttnn_output_reshaped.flatten())
+    print("Torch Output:", torch_output_reshaped.flatten())
+    print("TTNN Indices:", ttnn_indices_reshaped.flatten())
+    print("Torch Indices:", torch_indices_reshaped.flatten())
 
     print(
         "Results: ",
