@@ -17,11 +17,16 @@ function(useCcache)
     endif()
 
     if(CMAKE_GENERATOR MATCHES "Ninja")
-        set(CMAKE_CXX_COMPILER_LAUNCHER
-            ${CCACHE_ENV}
-            ${CCACHE_EXECUTABLE}
-            PARENT_SCOPE
-        )
+        foreach(lang IN ITEMS C CXX)
+            set(CMAKE_${lang}_COMPILER_LAUNCHER
+                ${CMAKE_COMMAND}
+                -E
+                env
+                ${CCACHE_ENV}
+                ${CCACHE_EXECUTABLE}
+                PARENT_SCOPE
+            )
+        endforeach()
         message(STATUS "ccache enabled")
     endif()
 endfunction()

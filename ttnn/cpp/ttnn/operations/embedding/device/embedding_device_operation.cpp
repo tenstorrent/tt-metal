@@ -20,7 +20,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have between 2 input tensors");
     auto &a = input_tensors.at(0);
     const auto &weights = input_tensors.at(1);
-    TT_FATAL(weights.layout() == Layout::ROW_MAJOR, "Error");
+    TT_FATAL(weights.layout() == Layout::ROW_MAJOR, "Weights tensor layout must be ROW_MAJOR but got {}", weights.layout());
     TT_FATAL(a.dtype() == DataType::UINT32 or a.dtype() == DataType::BFLOAT16, "Input must be UINT32 or BFLOAT16");
     TT_FATAL(weights.dtype() == DataType::BFLOAT16, "Weights tensor must have BFLOAT16 dtype");
     TT_FATAL(a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Embedding does not currently support sharded inputs");
@@ -42,6 +42,7 @@ void Embeddings::validate(const std::vector<Tensor> &input_tensors) const {
         if (is_sharded(this->output_mem_config.memory_layout())) {
             TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Embedding only supports height sharded Row Major outputs");
         }
+        TT_FATAL(!is_block_float(this->output_dtype), "Output cannot be a block float dtype when not tilized");
     }
     if(a.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
@@ -62,7 +63,7 @@ std::vector<TensorSpec> Embeddings::compute_output_specs(const std::vector<Tenso
 
     ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
     auto output_layout = (tilized && input_tensors.at(0).layout() != Layout::TILE)? Layout::TILE : Layout::ROW_MAJOR;
-    return {TensorSpec(output_shape, TensorLayout(weight_tensor.dtype(), PageConfig(output_layout), output_mem_config))};
+    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(output_layout), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks Embeddings::create_program(

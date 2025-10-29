@@ -171,11 +171,7 @@ add_compile_options(
     # where the preprocessor has stripped away the assert.
     -Wno-unused-but-set-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
@@ -186,7 +182,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-parentheses>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-pragmas>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-aliasing>"

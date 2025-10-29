@@ -191,7 +191,6 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-       uint32_t page_size{};
        tt::tt_metal::ShardSpec const shard_spec;
 };
 
@@ -521,8 +520,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
    public:
     ~InterleavedRingAllGatherTensorSlicer() override = default;
     InterleavedRingAllGatherTensorSlicer(
-         const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
-        LegacyCclTensorSlicer() {
+        const Tensor& input_tensor, const Tensor& output_tensor, int slice_dim, uint32_t slice_idx) {
         this->row_major = input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR;
         this->slice_dim_is_width = input_tensor.padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
