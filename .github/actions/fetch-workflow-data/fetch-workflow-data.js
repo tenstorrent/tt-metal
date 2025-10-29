@@ -186,11 +186,31 @@ async function findPreviousAggregateRun(octokit, context) {
  */
 function pruneOldRuns(grouped, cutoffDate) {
   const pruned = new Map();
+  let totalRemoved = 0;
   for (const [name, runs] of grouped.entries()) {
-    const filtered = runs.filter(run => new Date(run.created_at) >= cutoffDate);
+    const beforeCount = runs.length;
+    const filtered = runs.filter(run => {
+      const runDate = new Date(run.created_at);
+      return runDate >= cutoffDate;
+    });
+    const removed = beforeCount - filtered.length;
+    if (removed > 0) {
+      totalRemoved += removed;
+      const oldestRemoved = runs.find(r => new Date(r.created_at) < cutoffDate);
+      if (oldestRemoved) {
+        core.info(`[PRUNE] Workflow '${name}': removed ${removed} runs (oldest removed: ${oldestRemoved.created_at})`);
+      }
+    }
     if (filtered.length > 0) {
       pruned.set(name, filtered);
+    } else {
+      core.info(`[PRUNE] Workflow '${name}': removed all ${beforeCount} runs (workflow has no runs >= ${cutoffDate.toISOString()})`);
     }
+  }
+  if (totalRemoved > 0) {
+    core.info(`[PRUNE] Total runs removed across all workflows: ${totalRemoved}`);
+  } else {
+    core.info(`[PRUNE] No runs removed (all runs are >= ${cutoffDate.toISOString()})`);
   }
   return pruned;
 }
@@ -366,11 +386,22 @@ async function run() {
               const beforePrune = Array.isArray(groupedArray) ? groupedArray.length : 0;
               cachedGrouped = new Map(Array.isArray(groupedArray) ? groupedArray : []);
               core.info(`[CACHE] Loaded ${cachedGrouped.size} workflows from cache (before pruning)`);
+              core.info(`[CACHE] Cutoff date for pruning: ${cutoffDate.toISOString()} (${days} days ago)`);
 
               // Count runs before pruning
               let totalRunsBeforePrune = 0;
+              let oldestRunDate = null;
               for (const runs of cachedGrouped.values()) {
                 totalRunsBeforePrune += runs.length;
+                for (const run of runs) {
+                  const runDate = new Date(run.created_at);
+                  if (!oldestRunDate || runDate < oldestRunDate) {
+                    oldestRunDate = runDate;
+                  }
+                }
+              }
+              if (oldestRunDate) {
+                core.info(`[CACHE] Oldest run in cache: ${oldestRunDate.toISOString()}`);
               }
 
               // Prune old runs
@@ -382,7 +413,7 @@ async function run() {
                 totalRunsAfterPrune += runs.length;
               }
 
-              core.info(`[CACHE] Pruned ${totalRunsBeforePrune - totalRunsAfterPrune} runs older than ${cutoffDate.toISOString()}`);
+              core.info(`[CACHE] Summary: ${totalRunsBeforePrune} runs before pruning, ${totalRunsAfterPrune} runs after pruning (removed ${totalRunsBeforePrune - totalRunsAfterPrune})`);
               core.info(`[CACHE] Retained ${totalRunsAfterPrune} runs across ${cachedGrouped.size} workflows`);
 
               // Extract all run dates to find latest
