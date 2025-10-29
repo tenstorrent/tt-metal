@@ -185,6 +185,8 @@ class Ttstages:
         stride,
         model_config,
         stage_name,
+        torch_model=None,
+        use_fallback=False,
     ) -> None:
         self.inplanes = 32
         stage_config = {
@@ -213,6 +215,8 @@ class Ttstages:
         groups: int = 1,
         model_config=None,
         stage_name=None,
+        torch_model=None,
+        use_fallback=False,
     ) -> List[TTRegNetBottleneck]:
         """
         parameters:
@@ -268,6 +272,10 @@ class Ttstages:
                 stride=stride,
                 downsample=downsample,
                 groups=groups,
+                torch_model=torch_model,
+                use_fallback=use_fallback,
+                block_name="b1",
+                stage_name=stage_name,
                 # shard_layout=shard_layout,
             )
         )
@@ -288,6 +296,10 @@ class Ttstages:
                     stride=1,
                     downsample=False,
                     groups=groups,
+                    torch_model=torch_model,
+                    use_fallback=use_fallback,
+                    block_name=bname,
+                    stage_name=stage_name,
                     # shard_layout=shard_layout,
                 )
             )

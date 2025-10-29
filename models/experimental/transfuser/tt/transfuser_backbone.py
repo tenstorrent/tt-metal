@@ -17,6 +17,8 @@ class TtTransfuserBackbone:
         stride,
         model_config,
         config,
+        torch_model=None,
+        use_fallback=False,
     ) -> None:
         self.device = device
         self.config = config
@@ -66,6 +68,8 @@ class TtTransfuserBackbone:
             groups=3,  # conv2
             model_config=model_config,
             stage_name="layer1",
+            torch_model=torch_model,
+            use_fallback=use_fallback,
         )
 
         self.lidar_layer1 = Ttstages._make_layer(
@@ -87,6 +91,8 @@ class TtTransfuserBackbone:
             groups=9,  # conv2
             model_config=model_config,
             stage_name="layer2",
+            torch_model=torch_model,
+            use_fallback=use_fallback,
         )
 
         self.lidar_layer2 = Ttstages._make_layer(
@@ -108,6 +114,8 @@ class TtTransfuserBackbone:
             groups=24,  # conv2
             model_config=model_config,
             stage_name="layer3",
+            torch_model=torch_model,
+            use_fallback=use_fallback,
         )
 
         self.lidar_layer3 = Ttstages._make_layer(
@@ -136,6 +144,8 @@ class TtTransfuserBackbone:
             groups=63,  # conv2
             model_config=model_config,
             stage_name="layer4",
+            torch_model=torch_model,
+            use_fallback=use_fallback,
         )
 
         self.lidar_layer4 = Ttstages._make_layer(

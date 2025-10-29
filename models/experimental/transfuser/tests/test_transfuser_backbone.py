@@ -99,6 +99,7 @@ class TransfuserBackboneInfra:
         img_input_shape,
         lidar_input_shape,
         model_config,
+        use_fallback,
     ):
         super().__init__()
         # self._init_seeds()
@@ -128,8 +129,7 @@ class TransfuserBackboneInfra:
             use_velocity=self.use_velocity,
         )
         torch_model.eval()
-        checkpoint_path = "model_seed1_39.pth"
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint_path = "model_ckpt/models_2022/transfuser/model_seed1_39.pth"
         modified_state_dict = fix_and_filter_checkpoint_keys(
             checkpoint_path=checkpoint_path,
             target_prefix="module._model.",  # This is the prefix to keep and remove
@@ -169,16 +169,9 @@ class TransfuserBackboneInfra:
         )
         parameters["transformer4"] = gpt4_parameters
 
-        # Prepare golden inputs/outputs
-        # self.torch_image_input = torch.randn(self.img_input_shape)
-        # self.torch_lidar_input = torch.randn(self.lidar_input_shape)
-        # self.torch_velocity_input = torch.randn(1, 1)
-        # Extract each component
         inputs = torch.load("transfuser_inputs_final.pt")
         self.torch_image_input = inputs["image"]  # RGB camera image tensor
-        # save_tensor_as_image(self.rgb, "rgb.png")
         self.torch_lidar_input = inputs["lidar"]  # LiDAR BEV tensor
-        # save_tensor_as_image(self.lidar_bev, "lidar_bev.png")
         self.torch_velocity_input = inputs["velocity"]  # Ego velocity tensor
         with torch.no_grad():
             self.torch_features, self.torch_image_grid, self.torch_fused = torch_model(
@@ -218,6 +211,8 @@ class TransfuserBackboneInfra:
             stride=2,
             model_config=model_config,
             config=self.config,
+            torch_model=torch_model,
+            use_fallback=use_fallback,
         )
 
         # Run + validate
@@ -324,6 +319,7 @@ model_config = {
     "image_architecture, lidar_architecture, n_layer, use_velocity, use_target_point_image, img_input_shape, lidar_input_shape",
     [("regnety_032", "regnety_032", 4, False, True, (1, 3, 160, 704), (1, 3, 256, 256))],
 )
+@pytest.mark.parametrize("use_fallback", [True])
 def test_stem(
     device,
     image_architecture,
@@ -333,6 +329,7 @@ def test_stem(
     use_target_point_image,
     img_input_shape,
     lidar_input_shape,
+    use_fallback,
 ):
     TransfuserBackboneInfra(
         device,
@@ -344,4 +341,5 @@ def test_stem(
         img_input_shape,
         lidar_input_shape,
         model_config,
+        use_fallback,
     )
