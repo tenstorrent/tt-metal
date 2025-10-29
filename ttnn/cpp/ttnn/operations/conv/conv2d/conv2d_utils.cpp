@@ -1116,18 +1116,8 @@ static Conv2dSliceConfig::SliceType determine_conv_slice_type(
     }
 }
 
-using ConvDRAML1CacheKey = std::pair<ConvDRAMParamters, Conv2dSliceConfig>;
-std::map<ConvDRAML1CacheKey, std::pair<uint32_t, Conv2dConfig>> conv_dram_slice_L1_usage_cache;
-std::shared_mutex conv_dram_slice_L1_usage_cache_mutex;
 static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, const Conv2dSliceConfig& dram_slice_config) {
-    {
-        std::shared_lock<std::shared_mutex> cache_lock(conv_dram_slice_L1_usage_cache_mutex);
-        if (conv_dram_slice_L1_usage_cache.contains({params, dram_slice_config})) {
-            log_info(tt::LogOp, "Cache hit DRAM Slice L1 usage {}", dram_slice_config);
-            return conv_dram_slice_L1_usage_cache.at({params, dram_slice_config});
-        }
-    }
     Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
@@ -1431,8 +1421,6 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
         max_memory_index,
         max_memory_consumed,
         params);
-    std::unique_lock<std::shared_mutex> cache_lock(conv_dram_slice_L1_usage_cache_mutex);
-    conv_dram_slice_L1_usage_cache[{params, dram_slice_config}] = {max_memory_consumed, conv_config};
     return {max_memory_consumed, conv_config};
 }
 
@@ -1704,14 +1692,6 @@ void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deal
         }
         input_tensor_on_device = std::move(input_tensor_tilized);
     }
-}
-
-bool ConvDRAMParamters::operator<(const ConvDRAMParamters& other) const {
-    return fmt::format("{}", *this) < fmt::format("{}", other);
-}
-
-bool operator<(const ConvDRAML1CacheKey& a, const ConvDRAML1CacheKey& b) {
-    return fmt::format("{}-{}", a.first, a.second) < fmt::format("{}-{}", b.first, b.second);
 }
 
 }  // namespace operations::conv

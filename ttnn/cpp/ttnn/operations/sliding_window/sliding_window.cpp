@@ -14,9 +14,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::sliding_window {
 
-bool SlidingWindowConfig::operator<(const SlidingWindowConfig& rhs) const {
-    return this->to_string() < rhs.to_string();
-}
 std::size_t SlidingWindowConfig::get_hash() const { return std::hash<std::string>{}(to_string()); }
 
 std::array<uint32_t, 4> get_pair_n4_padding(
@@ -268,19 +265,7 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
         return pad_metadata;
     }
 }
-std::map<SlidingWindowConfig, std::vector<uint32_t>> sliding_window_op_trace_metadata_cache;
-std::shared_mutex sliding_window_op_trace_metadata_cache_mutex;
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
-    {
-        std::shared_lock<std::shared_mutex> cache_lock(sliding_window_op_trace_metadata_cache_mutex);
-        if (sliding_window_op_trace_metadata_cache.contains(config)) {
-            log_trace(tt::LogOp, "Op Trace Metadata Cache hit for config {}", config);
-            return sliding_window_op_trace_metadata_cache[config];
-        }
-    }
-
-    log_trace(tt::LogOp, "Op Trace Metadata Cache MISS!!! for config {}", config);
-
     ttnn::Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
@@ -317,24 +302,10 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
             }
         }
     }
-    std::unique_lock<std::shared_mutex> cache_lock(sliding_window_op_trace_metadata_cache_mutex);
-    sliding_window_op_trace_metadata_cache[config] = op_trace_metadata;
     return op_trace_metadata;
 }
 
-std::map<SlidingWindowConfig, std::vector<ShardBoundary>> sliding_window_shard_boundary_cache;
-std::shared_mutex sliding_window_shard_boundary_cache_mutex;
 std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config) {
-    {
-        std::shared_lock<std::shared_mutex> cache_lock(sliding_window_shard_boundary_cache_mutex);
-        if (sliding_window_shard_boundary_cache.contains(config)) {
-            log_trace(tt::LogOp, "Shard Boundary Cache hit for config {}", config);
-            return sliding_window_shard_boundary_cache[config];
-        }
-    }
-
-    log_trace(tt::LogOp, "Shard Boundary Cache MISS!!! for config {}", config);
-
     auto op_trace_metadata = generate_op_trace_metadata(config);
     std::vector<ShardBoundary> shard_boundaries;
 
@@ -386,8 +357,6 @@ std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& 
             boundary,
             boundary.input_range.end - boundary.input_range.start);
     };
-    std::unique_lock<std::shared_mutex> cache_lock(sliding_window_shard_boundary_cache_mutex);
-    sliding_window_shard_boundary_cache[config] = shard_boundaries;
     return shard_boundaries;
 }
 

@@ -58,7 +58,6 @@ struct SlidingWindowConfig {
     bool ceil_mode = false;
     bool is_avg_pool = false;
 
-    bool operator<(const SlidingWindowConfig& other) const;
     std::string to_string() const;
     bool has_parallel_config() const;
     /**
