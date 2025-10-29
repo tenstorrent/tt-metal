@@ -241,10 +241,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "AllGatherMatmulAsync is only supported for Fast Dispatch");
-
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
