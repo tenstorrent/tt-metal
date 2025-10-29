@@ -298,9 +298,7 @@ class MochiTransformerBlock:
         silu_temb_11BD = ttnn.silu(temb_11BD)
 
         # Returns 4*dim fractured on TP
-        mod_spatial_11BZ = self.norm1_linear(
-            silu_temb_11BD, core_grid=self.core_grid, compute_kernel_config=self.temb_compute_kernel_config
-        )
+        mod_spatial_11BZ = self.norm1_linear(silu_temb_11BD, compute_kernel_config=self.temb_compute_kernel_config)
         if self.parallel_config.tensor_parallel.factor > 1:
             mod_spatial_11BZ = ttnn.experimental.all_gather_async(
                 mod_spatial_11BZ,
@@ -328,7 +326,7 @@ class MochiTransformerBlock:
 
         # Returns 4*dim if not context_pre_only, dim if context_pre_only, fractured TP
         mod_prompt_11BZ = self.norm1_context_linear(
-            silu_temb_11BD, core_grid=self.core_grid, compute_kernel_config=self.temb_compute_kernel_config
+            silu_temb_11BD, compute_kernel_config=self.temb_compute_kernel_config
         )
         if self.parallel_config.tensor_parallel.factor > 1:
             mod_prompt_11BZ = ttnn.experimental.all_gather_async(
@@ -380,9 +378,7 @@ class MochiTransformerBlock:
             1.0 + scale_mlp_11BD
         )
 
-        spatial_ff_1BND = self.ff(
-            spatial_normed_1BND, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
-        )
+        spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
 
         # Gather spatial FF output
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -422,9 +418,7 @@ class MochiTransformerBlock:
             ) * (1.0 + prompt_scale_mlp_11BD)
 
             # TODO: Pass core_grid, compute_kernel_config for correctness check
-            prompt_ff_1BLP = self.ff_context(
-                prompt_normed_1BLP, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
-            )
+            prompt_ff_1BLP = self.ff_context(prompt_normed_1BLP, compute_kernel_config=self.ff_compute_kernel_config)
 
             # Gather prompt FF output
             if self.parallel_config.tensor_parallel.factor > 1:
@@ -795,9 +789,7 @@ class MochiTransformer3DModel:
             )
 
         # Modulate the spatial output
-        mod = self.norm_out_linear(
-            ttnn.silu(temb_11BD), core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
-        )
+        mod = self.norm_out_linear(ttnn.silu(temb_11BD), compute_kernel_config=self.hifi4_compute_kernel_config)
         scale, shift = ttnn.chunk(mod, 2, -1)
 
         ## SUPER HACKY WORKAROUND
@@ -805,7 +797,7 @@ class MochiTransformer3DModel:
         # The workaround is to use distributed layernorm by fracturing the input on the TP axis
 
         spatial_fractured_1BND = self.fracture_spatial_input(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
+            spatial_1BND, compute_kernel_config=self.hifi4_compute_kernel_config
         )
         spatial_norm_fractured_1BND = self.norm_out_norm(spatial_fractured_1BND)
 
@@ -825,9 +817,7 @@ class MochiTransformer3DModel:
 
         spatial_norm_1BND = spatial_norm_1BND * (1 + scale) + shift
 
-        proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
-        )
+        proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
 
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
 

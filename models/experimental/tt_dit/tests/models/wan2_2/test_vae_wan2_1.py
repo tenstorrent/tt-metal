@@ -1211,7 +1211,10 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
         ((2, 4), 1, 0, 1),
         ((1, 8), 0, 1, 1),
         ((1, 4), 1, 0, 1),
+        # WH (ring) on 4x8 uses more links; keep existing
         ((4, 8), 0, 1, 4),
+        # BH (linear) on 4x8 uses fewer links
+        ((4, 8), 0, 1, 2),
     ],
     ids=[
         "1x1_h0_w1",
@@ -1219,7 +1222,8 @@ def test_wan_decoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, ch
         "2x4_h1_w0",
         "1x8_h0_w1",
         "1x4_h1_w0",
-        "4x8_h0_w1",
+        "wh_4x8_h0_w1",
+        "bh_4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
