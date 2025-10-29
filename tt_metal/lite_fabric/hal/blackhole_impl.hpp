@@ -10,7 +10,7 @@ namespace lite_fabric {
 
 class BlackholeLiteFabricHal : public LiteFabricHal {
 public:
-    BlackholeLiteFabricHal() : LiteFabricHal() {};
+    BlackholeLiteFabricHal() = default;
 
     void set_reset_state(tt_cxy_pair virtual_core, bool assert_reset) override;
 
