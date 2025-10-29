@@ -383,7 +383,6 @@ async function run() {
             if (foundPath) {
               core.info(`[CACHE] Found workflow-data.json at ${foundPath}`);
               const groupedArray = JSON.parse(fs.readFileSync(foundPath, 'utf8'));
-              const beforePrune = Array.isArray(groupedArray) ? groupedArray.length : 0;
               cachedGrouped = new Map(Array.isArray(groupedArray) ? groupedArray : []);
               core.info(`[CACHE] Loaded ${cachedGrouped.size} workflows from cache (before pruning)`);
               core.info(`[CACHE] Cutoff date for pruning: ${cutoffDate.toISOString()} (${days} days ago)`);
@@ -920,6 +919,15 @@ async function run() {
     const annotationsIndex = { ...cachedAnnotationsIndex };
     const gtestLogsIndex = { ...cachedGtestLogsIndex };
     const otherLogsIndex = { ...cachedOtherLogsIndex };
+
+    // Build a map of run ID -> workflow name for quick lookup
+    const runIdToWorkflowName = new Map();
+    for (const [name, runs] of grouped.entries()) {
+      for (const run of runs) {
+        runIdToWorkflowName.set(String(run.id), name);
+      }
+    }
+
     for (const [name, runs] of grouped.entries()) {
       try {
         // Consider only the target branch and sort newest first
@@ -944,7 +952,78 @@ async function run() {
           targetRun = run;
           break;
         }
-        if (!targetRun) continue;
+
+        // Remove old annotations/logs for this workflow (only keep the latest failing run)
+        const runsToKeep = targetRun ? new Set([String(targetRun.id)]) : new Set();
+        let removedAnnotations = 0;
+        let removedGtestLogs = 0;
+        let removedOtherLogs = 0;
+
+        // Remove old annotations for this workflow
+        for (const [runId, dir] of Object.entries(annotationsIndex)) {
+          if (runIdToWorkflowName.get(runId) === name && !runsToKeep.has(runId)) {
+            delete annotationsIndex[runId];
+            removedAnnotations++;
+            // Remove directory from disk (dir is relative to workspace)
+            const fullPath = path.join(workspace, dir);
+            try {
+              if (fs.existsSync(fullPath)) {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+                core.info(`[LOGS] Removed old annotations directory for run ${runId} (workflow: ${name})`);
+              }
+            } catch (e) {
+              core.warning(`[LOGS] Failed to remove old annotations directory ${fullPath}: ${e.message}`);
+            }
+          }
+        }
+
+        // Remove old gtest logs for this workflow
+        for (const [runId, dir] of Object.entries(gtestLogsIndex)) {
+          if (runIdToWorkflowName.get(runId) === name && !runsToKeep.has(runId)) {
+            delete gtestLogsIndex[runId];
+            removedGtestLogs++;
+            // Remove directory from disk (dir is relative to workspace)
+            const fullPath = path.join(workspace, dir);
+            try {
+              if (fs.existsSync(fullPath)) {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+                core.info(`[LOGS] Removed old gtest logs directory for run ${runId} (workflow: ${name})`);
+              }
+            } catch (e) {
+              core.warning(`[LOGS] Failed to remove old gtest logs directory ${fullPath}: ${e.message}`);
+            }
+          }
+        }
+
+        // Remove old other logs for this workflow
+        for (const [runId, dir] of Object.entries(otherLogsIndex)) {
+          if (runIdToWorkflowName.get(runId) === name && !runsToKeep.has(runId)) {
+            delete otherLogsIndex[runId];
+            removedOtherLogs++;
+            // Remove directory from disk (dir is relative to workspace)
+            const fullPath = path.join(workspace, dir);
+            try {
+              if (fs.existsSync(fullPath)) {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+                core.info(`[LOGS] Removed old other logs directory for run ${runId} (workflow: ${name})`);
+              }
+            } catch (e) {
+              core.warning(`[LOGS] Failed to remove old other logs directory ${fullPath}: ${e.message}`);
+            }
+          }
+        }
+
+        if (removedAnnotations > 0 || removedGtestLogs > 0 || removedOtherLogs > 0) {
+          core.info(`[LOGS] Workflow '${name}': removed ${removedAnnotations} old annotation entries, ${removedGtestLogs} old gtest log entries, ${removedOtherLogs} old other log entries`);
+        }
+
+        // If workflow is passing (no targetRun), we're done (already cleaned up old logs)
+        if (!targetRun) {
+          if (removedAnnotations > 0 || removedGtestLogs > 0 || removedOtherLogs > 0) {
+            core.info(`[LOGS] Workflow '${name}' is now passing, cleaned up old logs`);
+          }
+          continue;
+        }
 
         // Skip if this run is already cached
         if (cachedRunIds.has(String(targetRun.id))) {
@@ -1152,6 +1231,9 @@ async function run() {
     const cachedCommitsSet = new Map((cachedCommits || []).map(c => [c.sha, c]));
     const commits = [...cachedCommits];
     let newCommitsCount = 0;
+    let skippedCachedCommits = 0;
+    let consecutiveCachedCommits = 0;
+    const MAX_CONSECUTIVE_CACHED = 10; // If we see 10 consecutive cached commits, assume we've caught up
     try {
       const sinceIso = getCutoffDate(days).toISOString();
       core.info(`[COMMITS] Fetching commits since ${sinceIso}`);
@@ -1172,13 +1254,33 @@ async function run() {
           break;
         }
         core.info(`[COMMITS] Fetched page ${page}: ${arr.length} commits`);
+        let shouldBreak = false;
         for (const c of arr) {
           const sha = c.sha;
           // Skip if already in cache
           if (cachedCommitsSet.has(sha)) {
-            core.info(`[COMMITS] Skipping cached commit ${sha.substring(0, 7)}`);
+            consecutiveCachedCommits++;
+            skippedCachedCommits++;
+            if (skippedCachedCommits <= 5) {
+              core.info(`[COMMITS] Skipping cached commit ${sha.substring(0, 7)}`);
+            }
+            // If we've seen many consecutive cached commits, we've likely reached the boundary
+            // Commits are returned newest-first, so all subsequent commits will also be cached
+            if (consecutiveCachedCommits >= MAX_CONSECUTIVE_CACHED) {
+              core.info(`[COMMITS] Early exit: found ${consecutiveCachedCommits} consecutive cached commits, stopping fetch`);
+              core.info(`[COMMITS] Summary: added ${newCommitsCount} new commits, skipped ${skippedCachedCommits} cached`);
+              shouldBreak = true;
+              break;
+            }
             continue;
           }
+
+          // Reset consecutive cached counter when we find a new commit
+          if (consecutiveCachedCommits > 0) {
+            core.info(`[COMMITS] Found new commit after ${consecutiveCachedCommits} cached commits, resetting counter`);
+          }
+          consecutiveCachedCommits = 0;
+
           newCommitsCount++;
           const short = sha ? sha.substring(0, 7) : '';
           const url = `https://github.com/${owner}/${repo}/commit/${sha}`;
@@ -1191,9 +1293,22 @@ async function run() {
           const commitObj = { sha, short, url, author_login, author_name, author_url, date, message, description };
           commits.push(commitObj);
           cachedCommitsSet.set(sha, commitObj);
+          if (newCommitsCount <= 10) {
+            core.info(`[COMMITS] Added new commit ${sha.substring(0, 7)} (${date || 'no date'})`);
+          }
         }
+
+        // Break if we hit the early exit condition
+        if (shouldBreak) {
+          break;
+        }
+
         if (arr.length < perPage) break;
         page++;
+      }
+
+      if (skippedCachedCommits > 5) {
+        core.info(`[COMMITS] Skipped ${skippedCachedCommits} cached commits (showing first 5)`);
       }
       // Sort oldest -> newest by date for deterministic slicing
       commits.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
