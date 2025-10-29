@@ -147,7 +147,7 @@ struct CorePool {
         return available;
     }
 
-    void initialize_with_cores(std::vector<CoreCoord> cores, uint32_t num_partitions = 1);
+    void initialize_with_cores(const std::vector<CoreCoord>& cores, uint32_t num_partitions = 1);
     void add_cores(const std::vector<CoreCoord>& new_cores);
 
     const CoreAllocationConfig& policy;
@@ -164,7 +164,7 @@ struct CorePool {
 };
 
 // CorePool method implementations
-inline void CorePool::initialize_with_cores(std::vector<CoreCoord> cores, uint32_t num_partitions) {
+inline void CorePool::initialize_with_cores(const std::vector<CoreCoord>& cores, uint32_t num_partitions) {
     TT_FATAL(!initialized, "Cannot re-initialize CorePool");
 
     // Sanity check - need at least 1 core per partition
