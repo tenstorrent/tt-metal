@@ -493,6 +493,29 @@ Tensor Rad2Deg::invoke(
         std::nullopt);
 }
 
+template <typename T>
+Tensor Where::invoke(
+    const Tensor& condition,
+    const T& value_true,
+    const T& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    Tensor input = condition;
+    if ((condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) && (std::is_same_v<T, float>)) {
+        input = ttnn::typecast(condition, DataType::FLOAT32);
+    }
+    UnaryOpType op_type = UnaryOpType::WHERE_TSS;
+    return detail::unary_impl(
+        input, {EltwiseUnaryWithParam{op_type, {value_true, value_false}}}, memory_config, optional_output_tensor);
+}
+
+template Tensor Where::invoke<float>(
+    const Tensor&, const float&, const float&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor Where::invoke<int32_t>(
+    const Tensor&, const int32_t&, const int32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor Where::invoke<uint32_t>(
+    const Tensor&, const uint32_t&, const uint32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
 template <UnaryOpType unary_op_type, typename T>
 Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
     const Tensor& input_tensor,
