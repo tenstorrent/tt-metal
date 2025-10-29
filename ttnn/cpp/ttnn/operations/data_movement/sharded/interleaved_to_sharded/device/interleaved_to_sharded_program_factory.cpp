@@ -116,14 +116,10 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
         //scratchpad going to be used to align DRAM (64B) to L1 (16B)
-        if (is_blackhole) {
-            scratch_cb_page_size = tt::align(input_unit_size, hal::get_l1_alignment());
-        }
-        else {
-            scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
-        }
+        scratch_cb_page_size = tt::align(input_unit_size, dram_alignment);
+
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
-            tt::tt_metal::CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
+            tt::tt_metal::CircularBufferConfig(8 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }
