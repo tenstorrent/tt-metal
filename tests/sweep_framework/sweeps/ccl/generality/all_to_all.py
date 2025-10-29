@@ -20,16 +20,21 @@ TIMEOUT = 60
 # Get the number of available devices to dynamically generate mesh shapes
 NUM_DEVICES = ttnn.get_num_devices()
 
-FABRIC_CONFIGS = [
+FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
+]
+
+FABRIC_CONFIGS_2D = [
+    ttnn.FabricConfig.FABRIC_2D,
     ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
-# Define the parameter space for the sweep test
-parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
+
+GENERALITY_PARAMETERS = (
+    {
+        "mesh_shape": list(mesh_shape_iterator(NUM_DEVICES)),
         "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
         "input_shape": [
@@ -49,6 +54,13 @@ parameters = {
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
+)
+
+# Define the parameter space for the sweep test
+parameters = {
+    "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
+    "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
+    "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
 }
 
 

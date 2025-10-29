@@ -18,12 +18,17 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 TIMEOUT = 45
 NUM_DEVICES = ttnn.get_num_devices()
 
-FABRIC_CONFIGS = [
+FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
+]
+
+FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
     ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
+
+FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
 
 
 # heuristic to cut down on combinatorial explosion. Send/receive to/from the (up to) 4 corners of the mesh.
@@ -38,25 +43,30 @@ def _mesh_and_coords_iterator(num_devices, mesh_limit=None):
             yield mesh_shape, coords
 
 
+GENERALITY_PARAMETERS = {
+    "mesh_shape_and_coords": list(_mesh_and_coords_iterator(NUM_DEVICES)),
+    "fabric_config": FABRIC_CONFIGS,
+    "num_links": [1],
+    "input_shape": [
+        [1, 1, 32, 32],
+        [1, 1, 32, 1280],
+        [1, 1, 32, 31],
+        [1, 1, 1, 32, 32],
+        [2, 32, 32],
+        [1, 1, 32, 16384],
+        [1, 1, 1, 2048],
+    ],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "input_dtype": [ttnn.bfloat16],
+    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+    "num_iters": [1],
+}
+
+
 parameters = {
-    "generality_suite": {
-        "mesh_shape_and_coords": _mesh_and_coords_iterator(NUM_DEVICES),
-        "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
-        "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 1280],
-            [1, 1, 32, 31],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
-            [1, 1, 32, 16384],
-            [1, 1, 1, 2048],
-        ],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
+    "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
+    "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
+    "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
 }
 
 
