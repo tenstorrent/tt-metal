@@ -15,7 +15,7 @@ namespace ttnn::experimental::xtensor {
 // Returns the shape of the xtensor as `ttnn::Shape`.
 template <typename E>
 ttnn::Shape get_shape_from_xarray(const E& xarr) {
-    ttnn::SmallVector<uint32_t> shape_dims;
+    ttsl::SmallVector<uint32_t> shape_dims;
     for (size_t i = 0; i < xarr.shape().size(); ++i) {
         shape_dims.push_back(xarr.shape()[i]);
     }
