@@ -242,6 +242,22 @@ void kernel_main() {
 #endif
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
+                    // MCAST RECEIVE WEIGHTS
+                    // read weight blocks inner dim
+                    // read weight slice - 1 block of weights in width dim and full weight matrix height
+                    // read slice only once for all activation blocks
+                    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
+                    // Set weights semaphore value to INVALID
+                    noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
+
+                    // Atomic increment source core counter
+                    noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
+
+                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts
+                    // data)
+                    noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
+                    cb_push_back(cb_id_weight, weight_block_num_tiles);
+
                     if constexpr (split_reader_enabled && !skip_mcast) {
                         if (weight_tile_h_outer_i == act_mcast_sender_id) {
                             uint64_t act_address = base_act_address + act_write_offset_current;
@@ -251,7 +267,8 @@ void kernel_main() {
 
                             if (is_receiver_core) {
                                 if constexpr (act_mcast_num_cores) {
-                                    // num_dests will source, since we are copying to a different local CB as well
+                                    // num_dests will source, since we are copying to a different local CB as
+                                    // well
                                     noc_async_write_multicast_loopback_src(
                                         tilized_act_start_address,
                                         act_multicast_data_addr,
@@ -268,8 +285,8 @@ void kernel_main() {
                                     noc_async_write_barrier();
                                 }
                             } else {
-                                // If sender core is not the reciever core as well we can't use the loopback mcast.
-                                // (hang)
+                                // If sender core is not the reciever core as well we can't use the loopback
+                                // mcast. (hang)
                                 noc_async_write_multicast(
                                     tilized_act_start_address,
                                     act_multicast_data_addr,
@@ -278,12 +295,12 @@ void kernel_main() {
                                     true);
                             }
 
-                            // Note: no need for write barrier, since these two multicasts are done on the same noc id
-                            // and same vc even though cmd bufs are different Also, this only works because we are
-                            // setting VCs statically (using NOC_CMD_STATIC_VC).
+                            // Note: no need for write barrier, since these two multicasts are done on the same
+                            // noc id and same vc even though cmd bufs are different Also, this only works
+                            // because we are setting VCs statically (using NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                            // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs
-                            // and may not be sent in order they are issued
+                            // On Blackhole the flush is needed because the commands go into separate cmd buffer
+                            // FIFOs and may not be sent in order they are issued
                             noc_async_writes_flushed();
 #endif
 
@@ -305,21 +322,7 @@ void kernel_main() {
                         }
                         act_write_offset_current = act_mcast_write_offset_sum - act_write_offset_current;
                     }
-                    // MCAST RECEIVE WEIGHTS
-                    // read weight blocks inner dim
-                    // read weight slice - 1 block of weights in width dim and full weight matrix height
-                    // read slice only once for all activation blocks
-                    cb_reserve_back(cb_id_weight, weight_block_num_tiles);
-                    // Set weights semaphore value to INVALID
-                    noc_semaphore_set(weights_mcast_receiver_semaphore_addr_ptr, INVALID);
 
-                    // Atomic increment source core counter
-                    noc_semaphore_inc(weights_mcast_sender_semaphore_noc_addr, 1);
-
-                    // wait on weights semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
-
-                    cb_push_back(cb_id_weight, weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }
 #ifdef SPLIT_READER

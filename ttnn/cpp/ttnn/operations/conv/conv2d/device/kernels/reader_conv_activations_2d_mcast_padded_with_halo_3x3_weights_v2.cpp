@@ -174,6 +174,7 @@ void kernel_main() {
                     reader_idx,
                     act_l1_read_addr,
                     stride_h_bytes);
+
                 if constexpr (split_reader_cb_shared) {
                     wait_write_done(act_split_reader_write_done_semaphore_addr_ptr);
                 }
@@ -208,10 +209,6 @@ void kernel_main() {
 
                     uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
 
-                    DPRINT << "tilized_act_start_address: " << tilized_act_start_address
-                           << ", base_act_address: " << get_write_ptr(cb_id_act)
-                           << ", act_multicast_data_addr: " << act_multicast_data_addr
-                           << ", act_multicast_noc_addr: " << act_multicast_noc_addr << ENDL();
                     if (is_receiver_core) {
                         if constexpr (act_mcast_num_cores) {
                             // num_dests will source, since we are copying to a different local CB as well
@@ -285,7 +282,6 @@ void kernel_main() {
                             act_mcast_sender_semaphore_addr);
                     }
                     noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
-
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
 #ifdef SPLIT_READER

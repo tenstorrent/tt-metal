@@ -990,7 +990,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 act_block_num_tiles_split_last * tilized_act_tile_size);  // act_mcast_sender_size_bytes
             split_reader_args.push_back(static_cast<uint32_t>(skip_activation_mcast));
         }
-        log_info(tt::LogOp, "split_reader_args_size: {}", split_reader_args.size());
 
         if (enable_activation_reuse && height_sharded) {
             std::vector<uint32_t> activation_reuse_args = {
@@ -1008,7 +1007,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
-    log_info(tt::LogOp, "writer_compile_time_args.size: {}", writer_compile_time_args.size());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
