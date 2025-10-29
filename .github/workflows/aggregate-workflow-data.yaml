@@ -230,6 +230,6 @@ jobs:
       - name: Post regressions to Slack
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
           regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
           alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
