@@ -27,14 +27,4 @@ void kernel_main() {
 
         cb_pop_front(cb_id_out0, onetile);
     }
-
-        cb_wait_front(cb_id_out0, onetile);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-
-        noc_async_write(l1_read_addr, dst_noc_addr, tile_bytes);
-
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_id_out0, onetile);
-    }
 }
