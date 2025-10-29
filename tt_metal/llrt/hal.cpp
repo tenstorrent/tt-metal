@@ -94,6 +94,23 @@ std::pair<HalProcessorClassType, uint32_t> HalCoreInfoType::get_processor_class_
     return {static_cast<HalProcessorClassType>(processor_class_idx), processor_index};
 }
 
+const std::string HalCoreInfoType::get_processor_classes_names(uint32_t processor_index, bool is_abbreviated) const {
+    uint32_t processor_class_idx = 0;
+    for (; processor_class_idx < this->processor_classes_.size(); processor_class_idx++) {
+        auto processor_count = get_processor_types_count(processor_class_idx);
+        if (processor_index < processor_count) {
+            break;
+        }
+        processor_index -= processor_count;
+    }
+    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
+    if (is_abbreviated) {
+        return this->processor_classes_names_[processor_class_idx][processor_index].first;
+    } else {
+        return this->processor_classes_names_[processor_class_idx][processor_index].second;
+    }
+}
+
 uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     // Options for handling brisc fw not starting at mem[0]:
     // 1) Program the register for the start address out of reset - no reset PC register on GS/WH/BH
