@@ -1190,7 +1190,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 continue;
             }
             // Calculate weight slice indices
-            uint32_t weight_slice_i = (block_sharded && transpose_mcast || !block_sharded) ? core.y : core.x;
+            uint32_t weight_slice_i = ((block_sharded && transpose_mcast) || !block_sharded) ? core.y : core.x;
 
             uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
             uint32_t bias_tile_offset = out_start_tile_id_w;
