@@ -1567,9 +1567,6 @@ bool auto_enable_kernel_folding(
         if (dilation[0] != 1 || dilation[1] != 1) {
             return false;
         }
-        if (stride[0] > kernel_size[0] || stride[1] > kernel_size[1]) {
-            return false;
-        }
         auto input_padded_height = input_height + padding_n4[0] + padding_n4[1];
         auto input_padded_width = input_width + padding_n4[2] + padding_n4[3];
 
