@@ -49,6 +49,26 @@ FORCE_INLINE void copy_segment(
     }
 }
 
+template <
+    uint32_t DramReadStrideBytes,
+    uint32_t DramWriteStrideBytes,
+    uint32_t InputBlockSizeSticksPerCore,
+    bool IsInputInDram,
+    uint32_t CbIn>
+FORCE_INLINE void partial_reshard_from_input_cb(
+    tt_l1_ptr uint32_t* args, uint32_t num_segments, uint32_t block_id, uint32_t dram_base_read_addr) {
+    uint32_t args_idx = 0;
+    for (uint32_t i = 0; i < num_segments; ++i) {
+        uint32_t copy_size = args[args_idx++];
+        uint32_t write_offset = args[args_idx++];
+        uint32_t bank_id = args[args_idx++];  // only used if source is in DRAM
+        uint32_t read_offset = args[args_idx++] + (block_id * copy_size * (2 * InputBlockSizeSticksPerCore));
+        copy_segment<DramReadStrideBytes, DramWriteStrideBytes, 2 * InputBlockSizeSticksPerCore, IsInputInDram>(
+            copy_size, get_write_ptr(CbIn), write_offset, bank_id, dram_base_read_addr, read_offset);
+    }
+    noc_async_read_barrier();
+}
+
 void kernel_main() {
     constexpr uint32_t cb_full_input = get_compile_time_arg_val(0);
     constexpr uint32_t cb_in = get_compile_time_arg_val(1);
@@ -100,39 +120,18 @@ void kernel_main() {
 
     uint32_t l1_output_write_addr = base_l1_write_addr;
 
+    tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
     for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {
         if constexpr (should_wait) {
-            noc_semaphore_wait(semaphore_noc_addr_ptr, block_id + 1);
-        } else {
             cb_reserve_back(cb_in, 2 * input_block_size_sticks_per_core);
-            noc_semaphore_set(semaphore_noc_addr_ptr, block_id + 1);
-        }
-        noc_async_read_barrier();
-
-        tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
-        uint32_t args_idx = 0;
-        for (uint32_t i = 0; i < num_segments; ++i) {
-            uint32_t copy_size = args[args_idx++];
-            uint32_t write_offset = args[args_idx++];
-            uint32_t bank_id = args[args_idx++];  // only used if source is in DRAM
-            uint32_t read_offset = args[args_idx++] + (block_id * copy_size * (2 * input_block_size_sticks_per_core));
-            copy_segment<
+            partial_reshard_from_input_cb<
                 dram_read_stride_bytes,
                 dram_write_stride_bytes,
                 input_block_size_sticks_per_core,
-                is_input_in_dram>(
-                copy_size, get_write_ptr(cb_in), write_offset, bank_id, dram_base_read_addr, read_offset);
-        }
-        noc_async_read_barrier();
-
-        // One writer must wait until the other has pushed to avoid a race that will trigger a hang
-        if constexpr (should_wait) {
-            noc_semaphore_wait(semaphore_noc_addr_ptr2, block_id + 1);
-        } else {
+                is_input_in_dram,
+                cb_in>(args, num_segments, block_id, dram_base_read_addr);
             cb_push_back(cb_in, 2 * input_block_size_sticks_per_core);
-            noc_semaphore_set(semaphore_noc_addr_ptr2, block_id + 1);
         }
-        noc_async_read_barrier();
 
         DPRINT << "pushed block " << block_id << ENDL();
         DPRINT << "   num tiles?=" << num_full_tiles << ENDL();

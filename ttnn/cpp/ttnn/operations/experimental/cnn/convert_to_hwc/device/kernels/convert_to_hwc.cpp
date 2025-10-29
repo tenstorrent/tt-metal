@@ -37,7 +37,7 @@ FORCE_INLINE void tilize(
     cb_wait_front(cb_in, total_sticks_per_block);
     cb_reserve_back(cb_out, total_tiles_per_block);
 
-    UNPACK(tt::compute::common::print_tile_rows(cb_in, 32, 0, false));
+    // UNPACK(tt::compute::common::print_tile_rows(cb_in, 32, 0, false));
 
     tilize_block(cb_in, total_tiles_per_block, cb_out);
 
