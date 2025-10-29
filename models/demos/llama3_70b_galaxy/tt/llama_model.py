@@ -48,7 +48,7 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
         self.decode_mode_only = decode_mode_only
-
+        self.bitmask = None
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
             args=args,
@@ -550,13 +550,21 @@ class TtTransformer(LightweightModule):
 
             return tt_logits
 
+        tt_logits = tt_logits[0]
+
+        # apply bit mask for stuctured outputs
+        if self.bitmask is not None:
+            bitmask_unpacked = unpack_bitmask(self.bitmask)
+            tt_logits = ttnn.add(tt_logits, bitmask_unpacked, output_tensor=tt_logits)
+            bitmask_unpacked.deallocate(True)
+
         # sampling
-        tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)
+        tt_toks = self.tt_sampling(tt_logits, tt_out_tok=x)
 
         # Save otuput logits to global python object
         if tt_out_logits_saved is not None:
             tt_out_logits = ttnn.to_torch(
-                tt_logits[0],
+                tt_logits,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
                     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
                 ),
