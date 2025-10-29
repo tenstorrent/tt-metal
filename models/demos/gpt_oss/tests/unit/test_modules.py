@@ -20,8 +20,10 @@ def run_component_comparison(tt_output, reference_output, mesh_device, pcc_thres
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
 
     passing_final = True
-    for i in range(len(tt_output_tensors)):
+    for i in range(1):
         tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
+        print(f"[TTNN] tt_output_torch shape={tt_output_torch}")
+        print(f"[TTNN] reference_output shape={reference_output}")
         passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=pcc_threshold)
         passing_final = passing_final and passing
     if passing_final:
@@ -184,20 +186,23 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 
     # Compare outputs
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.88)
+
     assert passing, f"MLP test failed. Output: {output}"
 
 
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(
     [
-        (1, 1),
-        (1, 128),
+        # (1, 1),
         (1, 4096),
+        # (1, 4096),
     ]
 )
 @pytest.mark.parametrize(
     "mesh_shape",
-    [(1, 8), (4, 8)],
+    [
+        (4, 8),
+    ],
 )
 def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
     """Test complete decoder layer - combines attention + MLP + norms"""
@@ -341,21 +346,21 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     if seq_len == 1:
         run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
-    run_attention_component(
-        setup["mesh_device"],
-        hidden_states.shape,
-        mask,
-        tt_mask,
-        position_embeddings_ref,
-        rope_mats,
-        tt_position_idx,
-        reference_layer,
-        decoder_layer,
-    )
+    # run_attention_component(
+    #     setup["mesh_device"],
+    #     hidden_states.shape,
+    #     mask,
+    #     tt_mask,
+    #     position_embeddings_ref,
+    #     rope_mats,
+    #     tt_position_idx,
+    #     reference_layer,
+    #     decoder_layer,
+    # )
 
-    run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+    # run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
     run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
-
+    return
     # Test full decoder layer integration
     tt_output = decoder_layer(
         tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx

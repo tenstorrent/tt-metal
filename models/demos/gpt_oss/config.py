@@ -12,7 +12,7 @@ import ttnn
 class MeshConfig:
     """General mesh parallelization for any configuration"""
 
-    def __init__(self, mesh_shape, tp, ep=4, tp_axis=1):
+    def __init__(self, mesh_shape, tp, ep=4, sp=1, tp_axis=1):
         """
         Args:
             mesh_shape: (rows, cols) - any mesh size
@@ -24,8 +24,10 @@ class MeshConfig:
         self.mesh_shape = tuple(mesh_shape)
         self.tp = tp
         self.ep = ep
+        self.sp = sp
         self.tp_axis = tp_axis
         self.ep_axis = 0 if tp_axis == 1 else 1
+        self.sp_axis = self.ep_axis
 
         total_devices = mesh_shape[0] * mesh_shape[1]
         self.dp = total_devices // (tp * ep)

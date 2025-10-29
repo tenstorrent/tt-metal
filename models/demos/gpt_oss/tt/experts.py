@@ -30,9 +30,10 @@ class Experts:
         self.num_experts_per_tok = hf_config.num_experts_per_tok
 
         # Use MeshConfig for clean parallelization
-        self.mesh_config = mesh_config or MeshConfig(
-            mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0]
-        )
+        self.mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1], ep=1, sp=4)  # mesh_device.shape[0]
+        # mesh_config or MeshConfig(
+        #     mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0]
+        # )
         self.intermediate_size_per_device = self.mesh_config.shard_size(self.intermediate_size)
 
         gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(1, self.num_experts, self.hidden_size, self.expert_dim)
@@ -119,7 +120,9 @@ class Experts:
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
+                dims=(-2, None) if self.mesh_config.ep > 1 else (None, None),
+                mesh_shape=self.mesh_device.shape,
+                mesh_device=self.mesh_device,
             ),
         )
 
@@ -155,6 +158,28 @@ class Experts:
         )
 
     def __call__(self, hidden_states, routing_weights):
+        if self.mesh_config.sp > 1:
+            seq_len_global = hidden_states.shape[1]
+            seq_len_local = seq_len_global // self.mesh_config.sp
+            hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
+            routing_weights_torch = ttnn.to_torch(ttnn.get_device_tensors(routing_weights)[0])
+
+            routing_weights = ttnn.from_torch(
+                routing_weights_torch,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
+                ),
+            )
+            hidden_states = ttnn.from_torch(
+                hidden_states_torch,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    dims=(-2, None), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
+                ),
+            )
         batch_size = hidden_states.shape[0]
         assert batch_size == 1, "batch_size must be 1, we only support batch size 1 for now"
         seq_len = hidden_states.shape[1]
@@ -296,6 +321,13 @@ class Experts:
             )
             next_states.deallocate(True)
             next_states = next_states_allreduced
+
+            # SP communication
+        if self.mesh_config.sp > 1:
+            next_states = self.mesh_config.allgather(
+                next_states, self.ccl_manager, axis=self.mesh_config.sp_axis, dim=-2
+            )
+        print(f"[TTNN] next_states shape={next_states.shape}")
         # TP communication
         if next_states.dtype != ttnn.bfloat16:
             next_states_16 = ttnn.typecast(next_states, ttnn.bfloat16)
@@ -312,6 +344,7 @@ class Experts:
         next_states_16.deallocate(True)
 
         next_states = ttnn.reshape(
-            next_states, (batch_size, seq_len, self.hidden_size), (batch_size, max(32, seq_len), self.hidden_size)
+            next_states, (batch_size, *4, self.hidden_size), (batch_size, max(32, seq_len * 4), self.hidden_size)
         )
+
         return next_states
