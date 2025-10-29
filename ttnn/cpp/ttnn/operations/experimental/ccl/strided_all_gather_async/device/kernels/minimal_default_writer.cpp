@@ -36,27 +36,28 @@ constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7))
 constexpr bool direction = get_compile_time_arg_val(8);  // 1 is forward, 0 is backward
 constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(9);
 constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(10);
-constexpr bool is_termination_master = get_compile_time_arg_val(11);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(12);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(13);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(14);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(15);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(16);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(17);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(18);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(21);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(23);
+constexpr uint32_t ag_worker_id = get_compile_time_arg_val(11);
+constexpr bool is_termination_master = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(13);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(14);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(15);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(16);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(18);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(22);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<24>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<25>();
 constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<24 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<25 + ccl_routing_utils::num_line_unicast_args>();
 
 inline constexpr uint32_t sharded_args_start_idx =
-    24 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+    25 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -180,9 +181,9 @@ void kernel_main() {
 
     uint32_t global_tile_id_start = input_tile_id_start;
     uint32_t global_tile_index = 0;
+    uint32_t tiles_per_bh = input_tensor_Wt * input_tensor_Ht;
     uint32_t output_tiles_per_bh = output_tensor_Wt * output_tensor_Ht;
-    uint32_t tile_end_id = output_tensor_Wt * (output_tensor_Ht - 1) + input_tensor_Wt * (my_chip_id + 1);
-    uint32_t chunks_per_core = div_up(input_tiles_per_core, tiles_per_chunk);
+    uint32_t chunks_per_core = div_up(tiles_per_bh, tiles_per_chunk);
     uint32_t tiles_written = 0;
 
     // Write out the local slice to both DRAM and forward and backward
@@ -202,6 +203,7 @@ void kernel_main() {
                 mm_block_h,
                 input_tensor_Ht / mm_cores_y,
                 max_tiles_per_packet,
+                ag_worker_id,
                 ag_worker_cores,
                 output_addrgen,
                 output_page_size,
@@ -234,6 +236,7 @@ void kernel_main() {
                     mm_block_h,
                     input_tensor_Ht / mm_cores_y,
                     max_tiles_per_packet,
+                    ag_worker_id,
                     ag_worker_cores,
                     output_addrgen,
                     output_page_size,
