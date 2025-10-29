@@ -122,14 +122,13 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         try {
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
             output = detail::extract_output_tensor(std::apply(op, transformed_args));
-            op_trace = capture_inner.end_graph_capture();
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
-                ExecutionStatus::Error, {0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
+                ExecutionStatus::Error, {0, 0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
         }
-
+        op_trace = capture_outer.end_graph_capture();
     }  // end of outer graph capture
 
     // extract memory footprint from the trace
