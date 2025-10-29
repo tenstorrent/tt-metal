@@ -8,11 +8,13 @@
 
 3. **PR3**: Decouple `TensorID` from `CoreID`
 
-4. **PR4**: Replace `tensor` methods which represent the ops with ops usage.
+4. **PR4**: Implement tensor host-only `to_dtype` operation
 
-5. **PR5**: Move `tensor/` dir to `tt-metal` \+ distributed deps
+5. **PR5**: Implement tensor host-only `reshape` operation
 
-6. **PR6**: Introduce `host-only` ops in tt-metal, wire `ttnn` ops to them
+6. **PR6**: Replace the `ttnn` op with the `tensor_ops` equivalent for the `to_string` tensor operation
+
+5. **PR7**: Move `tensor/` dir to `tt-metal` \+ distributed deps
 
 
 ---
@@ -52,8 +54,6 @@
 
 * Keep existing ttnn header file to forward-includes the new location.
 
-
-
 ---
 
 ## **PR3 — Decouple TensorID from CoreID**
@@ -83,57 +83,36 @@
 
 * Verify there’s no performance regression from this change
 
-
 ---
 
-# **Phase 2 — Breaking Tensor API - Method → Op redirection (keep behavior intact)**
+# **Phase 2 —  Introduce tensor host-only ops**
 
-## **PR4 — Replace tensor methods which represent the ops with ops usage.**
-
-**Reason:**
-
-* Don't use `Tensor` methods for **ops**. Once `Tensor` moves to `tt-metal`, its methods will be host-only. If we migrate it now, callers that rely on device dispatch via `tensor methods` would lose that behavior. To preserve device semantics, we should use ops (not tensor methods) when working with tensors; each op will decide whether to run on host or device. This lets us migrate `Tensor` safely while keeping device behavior in `ttnn`, with no user-visible change
+## **PR4 — Implement tensor host-only to_dtype operation**
 
 **Scope**
 
-One method/op `pull request` per operation.
-
-Use `ttnn/tt-metal` operations instead of Tensor methods. Internally `ttnn` ops call `tt-metal` host ops or device ops based on dispatch policy.
-
-Move the following tensor ops implementation from Tensor API to free functions, replace call-sites that use `Tensor` **methods** with `ttnn/tt_metal` **ops**.
-Host-only ops implementation can be created in tt-metal to simplify the migration(optional)
-
-* `Tensor::reshape(Tensor, new_shape)`
-
-* `Tensor::print`
-
-* `Tensor::write_to_string(const Tensor&)`
-
-* `Tensor::to_layout(Tensor, Layout)`
-
-* `Tensor::pad/Tensor::unpad(Tensor, spec)`
-
-* `Tensor::pad_to_tile/Tensor::unpad_from_tile(Tensor)`
-
-* `Tensor::cpu(Tensor)`
-
-**Python binding changes**
-
-* In pybind for Tensor `__repr__`, call `write_tensor_to_string(tensor)`, not `tensor.write_to_string()`.
-
-**Tests**
-
-* Update unit tests.
-
-* Confirm the tests cover the new behavior.
+* Move ttnn::to_dtype implementation into tensor_ops::to_dtype, ttnn::to_dtype should reuse the implementation.
 
 
+## **PR5 — Implement tensor host-only reshape operation**
+
+**Scope**
+
+* Replace all tensor_reshape calls with ttnn::reshape (since tensor_reshape is just a wrapper). Introduce host-only tensor_ops::reshape, which will be used by tensor.tensor_reshape(). Tensor.reshape() method can be safely deleted.
+
+
+## **PR6 — Replace the ttnn op with the tensor_ops equivalent for the to_string tensor operation**
+
+**Scope**
+
+* Use the internal tensor_impl::to_layout and tensor_impl::to_dtype within tensor_impl::to_string (replacing ttnn ops) to allow clean migration to tt-metal.
+Verify that the change does not affect the current expected behavior.
 
 ---
 
 # **Phase 3 — Move Tensor code to tt-metal (minimal behavior change)**
 
-## **PR5 — Move `tensor/` directory to tt-metal (plus dependencies)**
+## **PR7 — Move `tensor/` directory to tt-metal (plus dependencies)**
 
 **Scope**
 
@@ -163,26 +142,6 @@ Host-only ops implementation can be created in tt-metal to simplify the migratio
 
 ---
 
-## **PR6 — Introduce host-only ops in tt-metal, wire `ttnn` ops to them**
-
-**Scope**
-
-* Implement the following host only ops for tt-metal
-  (if not introduced during `Phase 2:PR4`):
-
-  * `to_dtype(tensor,dtype)`
-  * `reshape(tensor,shape)`
-  * `to_string(tensor)`
-  * `tensor_print(tensor)`
-  * `to_layout(Tensor, Layout)`
-  * `pad(Tensor, spec)`
-  * `unpad(Tensor, spec)`
-  * `pad_to_tile(Tensor)`
-  * `unpad_from_tile(Tensor)`
-  * `cpu(Tensor)`
-
-
----
 
 # **Open questions**
 
