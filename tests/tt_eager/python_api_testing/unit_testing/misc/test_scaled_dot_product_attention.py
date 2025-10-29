@@ -13,6 +13,7 @@ import ttnn
 from loguru import logger
 import pytest
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
+from conftest import is_galaxy
 
 
 def fa_rand(*shape):
@@ -279,6 +280,7 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     run_test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold)
 
 
+@pytest.mark.skipif(not is_galaxy(), reason="Test requires galaxy machine")
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfp4", "bfp8", "bf16"])
 @pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
