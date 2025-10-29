@@ -404,7 +404,7 @@ public:
 
     // Process results after barrier_reads() has been called
     std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
-        ReadBufferOperation& op) const {
+        const ReadBufferOperation& op) const {
 
         // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;

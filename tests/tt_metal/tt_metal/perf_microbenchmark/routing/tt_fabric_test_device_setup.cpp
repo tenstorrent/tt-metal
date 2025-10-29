@@ -1158,7 +1158,7 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
 
     // Validate senders
     if (ops.has_senders) {
-        auto data = fixture->complete_read_buffer_from_cores(const_cast<TestFixture::ReadBufferOperation&>(ops.sender_op));
+        auto data = fixture->complete_read_buffer_from_cores(ops.sender_op);
         for (const auto& [core, sender] : this->senders_) {
             bool pass = sender.validate_results(data.at(core));
             TT_FATAL(pass, "Sender on device: {} core: {} failed", this->fabric_node_id_, core);
@@ -1167,7 +1167,7 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
 
     // Validate receivers
     if (ops.has_receivers) {
-        auto data = fixture->complete_read_buffer_from_cores(const_cast<TestFixture::ReadBufferOperation&>(ops.receiver_op));
+        auto data = fixture->complete_read_buffer_from_cores(ops.receiver_op);
         for (const auto& [core, receiver] : this->receivers_) {
             bool pass = receiver.validate_results(data.at(core));
             TT_FATAL(pass, "Receiver on device: {} core: {} failed", this->fabric_node_id_, core);
