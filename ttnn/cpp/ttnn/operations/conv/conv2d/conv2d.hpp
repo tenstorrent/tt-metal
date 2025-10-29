@@ -129,9 +129,9 @@ class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     using RefTensor = std::reference_wrapper<ttnn::Tensor>;
 
     uint32_t batch_size;
+    IOShape input_shape;
     uint32_t input_channels;
     uint32_t output_channels;
-    IOShape input_shape;
     std::array<uint32_t, 2> kernel_size;
     std::array<uint32_t, 2> stride;
     std::array<uint32_t, 4> padding_n4;
