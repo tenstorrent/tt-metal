@@ -261,16 +261,10 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [16, 32])
+@pytest.mark.parametrize("pad_value", [8, 16, 32])
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
-
-    if pad_value == 16 and is_blackhole():
-        pytest.skip("Blackhole has DRAM Alignment of 64 bytes, or 32 elements for bfloat16.")
-
-    if pad_value == 16 and layout == ttnn.TILE_LAYOUT:
-        pytest.skip("Tile layout has alignment of 32.")
 
     orientation = ttnn.ShardOrientation.ROW_MAJOR
     core_grid = device.compute_with_storage_grid_size()
@@ -315,7 +309,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
 
 
 @pytest.mark.parametrize(
-    "dims, slice_size, core_x, core_y",
+    "dims, slice_size, core_y, core_x",
     [
         [[2, 64, 64, 256], 32, 4, 4],
         [[2, 64, 64, 512], 16, 4, 4],
@@ -323,16 +317,24 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         [[2, 128, 128, 256], 32, 8, 4],
         [[2, 128, 128, 63], 32, 8, 2],
         [[2, 128, 128, 528], 96, 8, 6],
+        [[2, 128, 128, 96], 96, 8, 3],
+        [[2, 1024, 1024, 256], 33, 10, 11],
+        [[1, 64, 128, 256], 65, 4, 5],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, core_x, core_y, layout, input_dtype):
+@pytest.mark.parametrize("pad_value", [8, 32])
+def test_slice_block_sharded_for_conv2d(
+    device, dims, slice_dim, slice_size, core_x, core_y, layout, input_dtype, pad_value
+):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
+    if round_up(dims[-1], pad_value) / pad_value < core_x:
+        pytest.skip("Skipping test with dim %s where all cores %d are not used in block sharding" % (dims, core_x))
 
-    orientation = ttnn.ShardOrientation.COL_MAJOR
+    orientation = ttnn.ShardOrientation.ROW_MAJOR
     core_grid = device.core_grid
     if core_grid.x < core_x or core_grid.y < core_y:
         pytest.skip(
@@ -344,12 +346,13 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
     torch.manual_seed(2005)
     torch_dtype = torch.float32 if input_dtype == ttnn.float32 else torch.bfloat16
     torch_input = torch.randint(-10, 10, dims).to(dtype=torch_dtype)
+    torch_input = torch.tensor(range(dims[-1]), dtype=torch_dtype).reshape(1, 1, 1, dims[-1]).broadcast_to(dims)
     num_slices = dims[slice_dim] // slice_size
     ttnn_input = ttnn.from_torch(
         torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    padded_channels = round_up(dims[-1], core_y * 32)
+    padded_channels = round_up(dims[-1], core_x * pad_value)
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
     core_range_start = ttnn.CoreCoord(0, 0)
     core_range_end = ttnn.CoreCoord(core_x - 1, core_y - 1)
@@ -364,12 +367,18 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         ends[slice_dim] = (i + 1) * slice_size
         this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
         output_shape = this_torch_output.shape
-        output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
+        output_shape = [
+            1,
+            1,
+            output_shape[0] * output_shape[1] * output_shape[2],
+            round_up(output_shape[3], core_x * pad_value),
+        ]
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1
         )
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = this_ttnn_output.cpu().to_torch_with_padded_shape()
+        this_torch_output = this_torch_output[:, :, :, : output.shape[-1]]
         output = torch.reshape(output, this_torch_output.shape)
         assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
 
@@ -386,7 +395,8 @@ def test_slice_block_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
 @pytest.mark.parametrize("slice_dim", [1, 2])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype):
+@pytest.mark.parametrize("pad_value", [8, 32])
+def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
 
@@ -411,7 +421,7 @@ def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED, shard_orientation=orientation
     )
-    padded_channels = round_up(dims[-1], 32)
+    padded_channels = round_up(dims[-1], pad_value * cores)
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
     torch.set_printoptions(sci_mode=False, precision=2)
     for i in range(num_slices):
@@ -421,7 +431,12 @@ def test_slice_width_sharded_for_conv2d(device, dims, slice_dim, slice_size, cor
         ends[slice_dim] = (i + 1) * slice_size
         this_torch_output = padded_torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2]]
         output_shape = this_torch_output.shape
-        output_shape = [1, 1, output_shape[0] * output_shape[1] * output_shape[2], round_up(output_shape[3], 32)]
+        output_shape = [
+            1,
+            1,
+            output_shape[0] * output_shape[1] * output_shape[2],
+            round_up(output_shape[3], pad_value * cores),
+        ]
 
         memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
             output_shape, parallel_config, 1

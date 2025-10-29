@@ -61,12 +61,13 @@ IDevice* GlobalSemaphore::device() const { return device_; }
 DeviceAddr GlobalSemaphore::address() const { return buffer_.get_buffer()->address(); }
 
 void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
-    // Write the initial value to the semaphore to the device
-    // Only block for the slow dispatch case
-
+    // Blocking write here to ensure that Global Semaphore reset value lands on
+    // each physical device before the next program runs.
+    // This is to ensure that cross-chip writes to the Global Semaphore are not
+    // lost due to device skew.
     std::vector<uint32_t> host_buffer(cores_.num_cores(), reset_value);
     auto mesh_buffer = buffer_.get_mesh_buffer();
-    distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer);
+    distributed::EnqueueWriteMeshBuffer(mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
 }
 
 }  // namespace tt::tt_metal

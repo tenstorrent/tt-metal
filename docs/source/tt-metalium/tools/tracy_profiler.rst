@@ -49,9 +49,9 @@ Mac users can install Tracy using Homebrew. Open a terminal and run:
 ..  code-block:: bash
 
     brew uninstall tracy # Remove any old version of Tracy
-    wget -P ~/ --no-check-certificate --no-cache --no-cookies https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
-    brew install ~/tracy.rb
-    rm ~/tracy.rb
+    brew tap-new $USER/tracy # Create a tap
+    wget -P $(brew --repository)/Library/Taps/$USER/homebrew-tracy/Formula/ --no-check-certificate --no-cache --no-cookies https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
+    brew install $USER/tracy/tracy # Install from the tap
 
 After installation, start the Tracy GUI with:
 
@@ -135,7 +135,7 @@ For example, the ``Device`` constructor shown above is instrumented as follows:
 
 ..  code-block:: C++
 
-    Device::Device(chip_id_t device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
+    Device::Device(ChipId device_id, const std::vector<uint32_t>& l1_bank_remap) : id_(device_id)
     {
         ZoneScoped;
         this->initialize(l1_bank_remap);

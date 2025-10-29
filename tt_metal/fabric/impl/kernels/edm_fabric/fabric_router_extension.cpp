@@ -51,7 +51,7 @@ using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
     while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
         invalidate_l1_cache();
     }
@@ -62,7 +62,7 @@ void wait_for_static_connection_to_ready(
 template <uint8_t NUM_BUFFERS>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
     uint8_t channel_id,
     size_t buffer_size_bytes,
@@ -81,7 +81,7 @@ void setup_channel(
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>(
+    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
@@ -96,7 +96,7 @@ void setup_channel(
 template <uint8_t NUM_BUFFERS>
 void forward_data(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
-    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
@@ -129,7 +129,7 @@ void forward_data(
         noc_async_writes_flushed();
         if (is_persistent_channel) {
             constexpr bool enable_deadlock_avoidance = true;  // not used
-            worker_interface.template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(1);
+            worker_interface.template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(1);
         } else if (channel_connection_established) {
             worker_interface.notify_worker_of_read_counter_update();
         }
@@ -170,15 +170,18 @@ void kernel_main() {
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
         full_size_channels;
-    std::array<tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
+    std::array<
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
+        NUM_FULL_SIZE_CHANNELS>
         full_size_channel_worker_interfaces;
     std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
 
     std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
         header_only_channels;
-    std::
-        array<tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
-            header_only_channel_worker_interfaces;
+    std::array<
+        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
+        NUM_HEADER_ONLY_CHANNELS>
+        header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
 
     // Stream IDs

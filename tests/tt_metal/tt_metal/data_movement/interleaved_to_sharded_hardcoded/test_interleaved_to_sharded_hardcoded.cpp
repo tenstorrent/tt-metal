@@ -6,6 +6,8 @@
 #include "tt_metal.hpp"
 #include "dm_common.hpp"
 
+#include <tt-metalium/tt_align.hpp>
+
 namespace tt::tt_metal {
 
 using namespace std;

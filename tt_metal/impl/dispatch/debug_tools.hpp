@@ -7,8 +7,6 @@
 #include <fstream>
 #include <string>
 
-#include "command_queue_interface.hpp"
-
 namespace tt {
 namespace tt_metal {
 class IDevice;

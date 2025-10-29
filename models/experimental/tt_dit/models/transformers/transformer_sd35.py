@@ -196,7 +196,7 @@ class SD35TransformerBlock:
             self.norm2_context.from_cached_state_dict(substate(cache_dict, "norm2_context"))
             self.ff_context.from_cached_state_dict(substate(cache_dict, "ff_context"))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         def _shuffle_ada_norm_linear(linear_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _shuffle(x, in_dim):
@@ -229,18 +229,18 @@ class SD35TransformerBlock:
             }
             return out_state
 
-        self.norm1_linear.load_state_dict(_shuffle_ada_norm_linear(substate(state_dict, "norm1.linear")))
-        self.norm1_norm.load_state_dict(substate(state_dict, "norm1.norm"))
-        self.norm1_context_linear.load_state_dict(
+        self.norm1_linear.load_torch_state_dict(_shuffle_ada_norm_linear(substate(state_dict, "norm1.linear")))
+        self.norm1_norm.load_torch_state_dict(substate(state_dict, "norm1.norm"))
+        self.norm1_context_linear.load_torch_state_dict(
             _shuffle_ada_norm_linear(substate(state_dict, "norm1_context.linear"))
         )
-        self.norm1_context_norm.load_state_dict(substate(state_dict, "norm1_context.norm"))
+        self.norm1_context_norm.load_torch_state_dict(substate(state_dict, "norm1_context.norm"))
         self.attn.load_state_dict(substate(state_dict, "attn"))
-        self.norm2.load_state_dict(substate(state_dict, "norm2"))
-        self.ff.load_state_dict(rename_ff_state(substate(state_dict, "ff")))
+        self.norm2.load_torch_state_dict(substate(state_dict, "norm2"))
+        self.ff.load_torch_state_dict(rename_ff_state(substate(state_dict, "ff")))
         if not self.context_pre_only:
-            self.norm2_context.load_state_dict(substate(state_dict, "norm2_context"))
-            self.ff_context.load_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
+            self.norm2_context.load_torch_state_dict(substate(state_dict, "norm2_context"))
+            self.ff_context.load_torch_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
 
     def __call__(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N, L):
         """
@@ -531,16 +531,16 @@ class SD35Transformer2DModel:
         self.proj_out.from_cached_state_dict(substate(cache_dict, "proj_out"))
 
     def load_state_dict(self, state_dict):
-        self.pos_embed.load_state_dict(substate(state_dict, "pos_embed"))
-        self.time_text_embed.load_state_dict(substate(state_dict, "time_text_embed"))
-        self.context_embedder.load_state_dict(substate(state_dict, "context_embedder"))
+        self.pos_embed.load_torch_state_dict(substate(state_dict, "pos_embed"))
+        self.time_text_embed.load_torch_state_dict(substate(state_dict, "time_text_embed"))
+        self.context_embedder.load_torch_state_dict(substate(state_dict, "context_embedder"))
 
         for i, block in enumerate(self.transformer_blocks):
-            block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
+            block.load_torch_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
 
-        self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
-        self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+        self.norm_out_linear.load_torch_state_dict(substate(state_dict, "norm_out.linear"))
+        self.norm_out_norm.load_torch_state_dict(substate(state_dict, "norm_out.norm"))
+        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
 
     def __call__(self, spatial, prompt_embed, pooled_projections, timestep, N, L):
         """

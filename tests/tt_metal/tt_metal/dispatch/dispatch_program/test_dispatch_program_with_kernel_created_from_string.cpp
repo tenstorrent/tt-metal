@@ -99,7 +99,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
         auto device = mesh_device->get_devices()[0];
         const std::unordered_set<CoreCoord>& active_ethernet_cores = device->get_active_ethernet_cores(true);
         if (active_ethernet_cores.empty()) {
-            const chip_id_t device_id = device->id();
+            const ChipId device_id = device->id();
             log_info(LogTest, "Skipping this test on device {} because it has no active ethernet cores.", device_id);
             continue;
         }

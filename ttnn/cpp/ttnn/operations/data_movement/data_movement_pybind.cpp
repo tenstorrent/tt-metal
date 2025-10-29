@@ -22,6 +22,7 @@
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
 #include "ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_pybind.hpp"
+#include "ttnn/operations/data_movement/moe_routing_remap/moe_routing_remap_pybind.hpp"
 #include "ttnn/operations/data_movement/move/move_pybind.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_pybind.hpp"
 #include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
@@ -77,12 +78,14 @@ void py_module(py::module& module) {
     detail::py_bind_bcast(module);
     detail::py_bind_copy(module);
     detail::py_bind_moe_expert_token_remap(module);
+    detail::py_bind_moe_routing_remap(module);
     detail::py_bind_move(module);
     py_bind_chunk(module);
     py_bind_expand(module);
     py_bind_interleaved_to_sharded(module);
     py_bind_interleaved_to_sharded_partial(module);
     py_bind_repeat(module);
+    py_bind_reshape_enum(module);
     py_bind_reshape(module);
     py_bind_reshape_view(module);
     py_bind_view(module);

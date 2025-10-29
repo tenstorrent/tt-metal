@@ -16,7 +16,7 @@ template <typename T>
 struct get_num_buffers;
 
 template <uint8_t NumBuffers>
-struct get_num_buffers<tt::tt_fabric::EthChannelBuffer<lite_fabric::FabricLiteHeader, NumBuffers>> {
+struct get_num_buffers<tt::tt_fabric::StaticSizedEthChannelBuffer<lite_fabric::FabricLiteHeader, NumBuffers>> {
     static constexpr uint8_t value = NumBuffers;
 };
 
@@ -35,9 +35,10 @@ template <size_t I = 0, typename... Tp>
 }
 
 // Dirty header addresses to ensure read events are not from previous runs
-template <auto& ChannelBuffers>
+// Updated to accept ChannelTuple type directly
+template <typename HEADER_TYPE, size_t... BufferSizes>
 inline void init_receiver_headers(
-    tt::tt_fabric::EthChannelBufferTuple<lite_fabric::FabricLiteHeader, ChannelBuffers>& channels) {
+    tt::tt_fabric::ChannelTuple<tt::tt_fabric::StaticSizedEthChannelBuffer, HEADER_TYPE, BufferSizes...>& channels) {
     init_receiver_headers_impl(channels.channel_buffers);
 }
 

@@ -10,7 +10,7 @@
 #include <string_view>
 
 // Helper function to open a file as an fstream, and check that it was opened properly.
-inline bool OpenFile(std::string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
+inline bool OpenFile(const std::string &file_name, std::fstream &file_stream, std::ios_base::openmode mode) {
     file_stream.open(file_name, mode);
     if (file_stream.is_open()) {
         return true;
@@ -20,7 +20,7 @@ inline bool OpenFile(std::string &file_name, std::fstream &file_stream, std::ios
 }
 
 // Helper function to dump a file
-inline void DumpFile(std::string file_name) {
+inline void DumpFile(const std::string& file_name) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in)) {
         log_info(tt::LogTest, "File \'{}\' does not exist!", file_name);
@@ -60,7 +60,7 @@ inline std::string_view::size_type AnchoredGlobEndsAt(const std::string_view str
             return str.npos;
         }
     }
-    return pattern.size();;
+    return pattern.size();
 }
 
 // Look for needle in haystack. We look backwards through haystack, so
@@ -120,7 +120,7 @@ inline bool StringContainsGlob(const std::string_view haystack, const std::strin
 
 // Check whether the given file contains a list of strings in any order. Doesn't check for
 // strings between lines in the file.
-inline bool FileContainsAllStrings(std::string file_name, const std::vector<std::string> &must_contain) {
+inline bool FileContainsAllStrings(const std::string& file_name, const std::vector<std::string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
@@ -156,7 +156,7 @@ inline bool FileContainsAllStrings(std::string file_name, const std::vector<std:
     }
 
     // Reached EOF with strings yet to find.
-    std::string missing_strings = "";
+    std::string missing_strings;
     for (const auto &s : must_contain_set) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
@@ -171,7 +171,7 @@ inline bool FileContainsAllStrings(std::string file_name, const std::vector<std:
 
 // Check whether the given file contains a list of strings (in order). Doesn't check for strings
 // between lines in a file.
-inline bool FileContainsAllStringsInOrder(std::string file_name, const std::vector<std::string> &must_contain) {
+inline bool FileContainsAllStringsInOrder(const std::string& file_name, const std::vector<std::string> &must_contain) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in))
         return false;
@@ -202,7 +202,7 @@ inline bool FileContainsAllStringsInOrder(std::string file_name, const std::vect
     }
 
     // Reached EOF with strings yet to find.
-    std::string missing_strings = "";
+    std::string missing_strings;
     for (const auto &s : must_contain_queue) {
         missing_strings.append(&", \""[missing_strings.empty() ? 2 : 0]).append(s).push_back('"');
     }
@@ -215,8 +215,33 @@ inline bool FileContainsAllStringsInOrder(std::string file_name, const std::vect
     return false;
 }
 
+// Delete all lines from file that start with a given prefix
+inline bool DeleteLinesStartingWith(const std::string& file_name, const std::string &prefix) {
+    std::fstream log_file;
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
+        log_info(tt::LogTest, "File '{}' does not exist!", file_name);
+        return false;
+    }
+    std::string content;
+    std::string line;
+    while (getline(log_file, line)) {
+        if (line.rfind(prefix, 0) == 0) {
+            // Skip lines that begin with prefix
+            continue;
+        }
+        content += line + "\n";
+    }
+    log_file.close();
+    if (!OpenFile(file_name, log_file, std::fstream::out | std::fstream::trunc)) {
+        std::cout << "Could not open file " << file_name << " for writing!" << std::endl;
+        return false;
+    }
+    log_file << content;
+    log_file.close();
+    return true;
+}
 // Checkes whether a given file matches a golden string.
-inline bool FilesMatchesString(std::string file_name, const std::string& expected) {
+inline bool FilesMatchesString(const std::string& file_name, const std::string& expected) {
     // Open the input file.
     std::fstream file;
     if (!OpenFile(file_name, file, std::fstream::in)) {

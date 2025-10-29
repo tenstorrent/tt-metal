@@ -59,6 +59,7 @@ SINGLE_CARD_MODELS = [
 ]
 
 T3K_MODELS = [
+    "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
     "google/gemma-3-27b-it",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.1-70B-Instruct",
@@ -67,11 +68,15 @@ T3K_MODELS = [
     "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "meta-llama/Llama-3.2-90B-Vision-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
+    "mistralai/Mixtral-8x7B-v0.1",
+    "stabilityai/stable-diffusion-3.5-large",
     "tiiuae/falcon-7b-instruct",
     "tiiuae/falcon-40b-instruct",
     "Qwen/Qwen2.5-7B-Instruct",
     "Qwen/Qwen2.5-72B-Instruct",
     "Qwen/Qwen2.5-Coder-32B",
+    "Qwen/Qwen2.5-VL-32B-Instruct",
+    "Qwen/Qwen2.5-VL-72B-Instruct",
     "Qwen/Qwen3-32B",
 ]
 

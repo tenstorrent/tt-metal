@@ -413,7 +413,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::umd::BoardType::P150) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::BoardType::P150) {
         GTEST_SKIP();
     }
     log_info(tt::LogTest, "Running ttnn matmul");

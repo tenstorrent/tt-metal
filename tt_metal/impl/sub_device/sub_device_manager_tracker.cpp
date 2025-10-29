@@ -4,7 +4,7 @@
 
 #include <allocator.hpp>
 #include <buffer_types.hpp>
-#include <command_queue.hpp>
+#include "dispatch/command_queue.hpp"
 #include <device.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>

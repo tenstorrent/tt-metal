@@ -6,7 +6,6 @@ Wormhole (n150, n300)
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## Introduction:
 
@@ -23,7 +22,7 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
 
 #### Single Device (BS=1):
 
-- For `640x640`, end-2-end perf is `14` FPS :
+- For `640x640`, end-2-end perf is `33` FPS :
 
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant
@@ -31,7 +30,7 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
 
 #### Multi Device (DP=2, N300):
 
-- For `640x640`, end-2-end perf is `28` FPS :
+- For `640x640`, end-2-end perf is `54` FPS : #need to update
 
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp

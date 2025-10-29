@@ -187,17 +187,17 @@ Tensor ExecuteUnaryWithTwoFloatParameter<unary_op_type>::invoke(
 }
 
 template <UnaryOpType unary_op_type>
-template <typename T>
-Tensor ExecuteUnaryWithVariantFloatIntParameter<unary_op_type>::invoke(
+Tensor ExecuteUnaryTSVariant<unary_op_type>::invoke(
     const Tensor& input_tensor,
-    const T parameter,
+    ScalarVariant parameter,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, static_cast<T>(parameter)}},
-        memory_config,
-        optional_output_tensor);
+    return std::visit(
+        [&](auto param) {
+            return detail::unary_impl(
+                input_tensor, {EltwiseUnaryWithParam{unary_op_type, (param)}}, memory_config, optional_output_tensor);
+        },
+        parameter);
 }
 
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::ELU>;
@@ -208,44 +208,32 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MAX>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RELU_MIN>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::REMAINDER>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FMOD>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
-template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RPOW>;
 
 // threshold(a,t,v) = (a <= t ? v : a)
 template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;
 
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::FILL>;
 
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MAXIMUM>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<float>(
-    const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
-
-template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::FILL>::invoke<int32_t>(
-    const Tensor&, const int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_EQ>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GE>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_LE>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_LT>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_NE>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::UNARY_GT>;
 
 Tensor Sigmoid_accurate::invoke(
     const Tensor& input,
+    bool fast_and_approximate_mode,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         input,
         {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP, 1.0f),
+         UnaryWithParam(UnaryOpType::EXP, fast_and_approximate_mode ? 1.0f : 0.0f),
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
@@ -366,6 +354,15 @@ Tensor Mish::invoke(
     return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
+Tensor Hardmish::invoke(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::HARDMISH;
+
+    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
 Tensor Tanhshrink::invoke(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -435,6 +432,21 @@ Tensor Clamp::invoke(
         memory_config,
         optional_output_tensor);
 }
+
+template <typename T>
+Tensor Rsub::invoke(
+    const Tensor& input_tensor,
+    T param,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::RSUB;
+    return detail::unary_impl(
+        input_tensor, {EltwiseUnaryWithParam{op_type, {param}}}, memory_config, optional_output_tensor);
+}
+template Tensor Rsub::invoke<float>(
+    const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor Rsub::invoke<int32_t>(
+    const Tensor&, int32_t, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor Softshrink::invoke(
     const Tensor& input_tensor,
@@ -559,7 +571,6 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
     return detail::unary_impl(
         input_tensor, {EltwiseUnaryWithParam{unary_op_rev_type, (param)}}, memory_config, optional_output_tensor);
 }
-
 template struct AsymmetricBinop<UnaryOpType::SUB_UNARY_SFPU, UnaryOpType::RSUB>;
 template struct AsymmetricBinop<UnaryOpType::DIV_UNARY_SFPU, UnaryOpType::RDIV>;
 

@@ -177,3 +177,80 @@ def test_reduce_scatter_async_big_mesh(
         cluster_axis=cluster_axis,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_blackhole("This test is for wormhole")
+@pytest.mark.parametrize("num_links", [1], ids=["1links"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        (16, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+    ],
+    ids=[
+        "deepseek_4host",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 1),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 16)], indirect=True)
+def test_reduce_scatter_async_quad_host_mesh(
+    mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    cluster_axis = None
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)

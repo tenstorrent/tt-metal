@@ -40,3 +40,4 @@ jobs:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}
       tag-latest: ${{ inputs.tag-latest }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      os: ubuntu-22.04

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <initializer_list>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -38,7 +39,6 @@ namespace tt {
 
 namespace tt_metal {
 
-class CommandQueue;
 struct TraceDescriptor;
 
 class Program;
@@ -52,6 +52,19 @@ class GlobalSemaphore;
 // ==================================================
 //                  HOST API: Device management
 // ==================================================
+
+// clang-format off
+/**
+ * Sets the root directory for TT Metal meta data files like kernel sources.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                 | Type                | Valid range | Required |
+ * |-----------|---------------------------------------------|---------------------|-------------|----------|
+ * | root_dir  | Path to the root directory                  | const std::string & |             | No       |
+ */
+// clang-format on
+void SetRootDir(const std::string& root_dir);
 
 /**
  * Returns number of Tenstorrent devices that can be targeted
@@ -74,7 +87,7 @@ bool IsGalaxyCluster();
  */
 size_t GetNumPCIeDevices();
 
-chip_id_t GetPCIeDeviceID(chip_id_t device_id);
+ChipId GetPCIeDeviceID(ChipId device_id);
 
 // clang-format off
 /**
@@ -84,11 +97,11 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id);
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
 IDevice* CreateDevice(
-    chip_id_t device_id,
+    ChipId device_id,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
@@ -104,11 +117,11 @@ IDevice* CreateDevice(
  *
  * | Argument   | Description                | Type            | Valid Range                       | Required |
  * |------------|----------------------------|-----------------|-----------------------------------|----------|
- * | device_id  | ID of the device to target| chip_id_t (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
+ * | device_id  | ID of the device to target| ChipId (int) | 0 to (GetNumAvailableDevices - 1) | Yes      |
  * */
 // clang-format on
 IDevice* CreateDeviceMinimal(
-    chip_id_t device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
+    ChipId device_id, uint8_t num_hw_cqs = 1, const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{});
 
 // clang-format off
 /**

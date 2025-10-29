@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
@@ -341,11 +341,6 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
         auto device = mesh_device->get_devices()[0];
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
-                if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
-                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                    log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                    continue;
-                }
                 const auto ethernet_config = tt_metal::EthernetConfig{
                     .noc = static_cast<NOC>(erisc_idx), .processor = static_cast<DataMovementProcessor>(erisc_idx)};
                 ASSERT_TRUE(unit_tests::erisc::kernels::reader_kernel_no_send(
@@ -388,11 +383,6 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
         auto device = mesh_device->get_devices()[0];
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
-                if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
-                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                    log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                    continue;
-                }
                 const auto ethernet_config = tt_metal::EthernetConfig{
                     .noc = static_cast<tt_metal::NOC>(erisc_idx),
                     .processor = static_cast<DataMovementProcessor>(erisc_idx)};

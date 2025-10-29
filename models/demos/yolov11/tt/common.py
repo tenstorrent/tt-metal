@@ -5,6 +5,7 @@
 import math
 
 import ttnn
+from models.common.utility_functions import roundup32
 
 
 class Yolov11Conv2D:
@@ -23,6 +24,7 @@ class Yolov11Conv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        split_weights=False,
     ):
         self.is_detect = is_detect
         self.activation = activation
@@ -31,6 +33,8 @@ class Yolov11Conv2D:
         self.device = device
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
+        if split_weights:
+            self.out_channels = self.out_channels // 2
         self.kernel_size = conv.kernel_size
         self.padding = conv.padding
         self.stride = conv.stride
@@ -41,7 +45,7 @@ class Yolov11Conv2D:
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
             math_approx_mode=True,
         )
         self.activation_dtype = activation_dtype
@@ -49,13 +53,14 @@ class Yolov11Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
+            enable_act_double_buffer=True,
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
+            enable_weights_double_buffer=True,
+            output_layout=ttnn.TILE_LAYOUT,
         )
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
-
         if "bias" in conv_pth:
             bias = ttnn.from_device(conv_pth.bias)
             self.bias = bias
@@ -65,7 +70,7 @@ class Yolov11Conv2D:
         weight = ttnn.from_device(conv_pth.weight)
         self.weight = weight
 
-    def __call__(self, x):
+    def __call__(self, x, output_rm_needed=False, to_interleaved=False):
         if self.is_detect:
             input_height = int(math.sqrt(x.shape[2]))
             input_width = int(math.sqrt(x.shape[2]))
@@ -104,10 +109,32 @@ class Yolov11Conv2D:
             slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         hw = output_height * output_width
-        if x.shape[2] != hw:
+        if to_interleaved:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = x[:, :, :hw, :]
+        else:
+            if x.shape[2] != hw and output_rm_needed:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                x = x[:, :, :hw, :]
         return x
+
+
+def reshard_if_possible(x, core_grid=None):  # reshards if shard_spec is not multiples of 32
+    if x.is_sharded() and (
+        x.memory_config().shard_spec.shape[0] % 32 != 0 or x.memory_config().shard_spec.shape[1] % 32 != 0
+    ):
+        aligned_h, aligned_w = roundup32(x.memory_config().shard_spec.shape[0]), roundup32(
+            x.memory_config().shard_spec.shape[1]
+        )
+        resharded_memory_config = ttnn.create_sharded_memory_config(
+            shape=(aligned_h, aligned_w),
+            core_grid=x.memory_config().shard_spec.grid if core_grid is None else core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=x.memory_config().shard_spec.orientation,
+            use_height_and_width_as_shard_shape=True,
+        )
+        x = ttnn.to_memory_config(x, resharded_memory_config)
+    return x
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
@@ -137,7 +164,7 @@ def sharded_concat(input_tensors, num_cores=64, dim=3, to_interleaved=True):
     return output
 
 
-# for input tensor's whose shape is different from each other
+# for input tensor's whose shard_w is different from each other
 def sharded_concat_2(
     input_tensor_1, input_tensor_2, num_cores=64, shard_grid_coord_min=0, shard_grid_coord_max=7, dim=-1
 ):
@@ -205,6 +232,7 @@ class TtnnConv:
         reshard=False,
         activation=None,
         deallocate_activation=False,
+        split_weights=False,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -217,10 +245,11 @@ class TtnnConv:
             reshard=reshard,
             activation=activation,
             deallocate_activation=deallocate_activation,
+            split_weights=split_weights,
         )
 
-    def __call__(self, device, x):
-        x = self.conv(x)
+    def __call__(self, device, x, output_rm_needed=False, to_interleaved=False):
+        x = self.conv(x, output_rm_needed, to_interleaved)
         return x
 
 

@@ -791,7 +791,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     CoreRangeSet const& worker_core_range,
     tt::tt_metal::DataMovementConfig datamovement_kernel_config,
     const size_t num_command_streams,
-    std::optional<chip_id_t> my_chip_id) {
+    std::optional<tt::ChipId> my_chip_id) {
     TT_FATAL(
         num_command_streams > 0 && num_command_streams <= 2,
         "Invalid number of command streams: {}. Must be 1 or 2",
@@ -945,7 +945,7 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
                             a.worker_slice_offset.x);
                     },
                     [&ss](CclCommandAtomicInc const& a) {
-                        ss << fmt::format("(val:{}, wrap: {})", a.value, a.wrap_value);
+                        ss << fmt::format("(val:{})", a.value);
                     },
                     [&ss](CclCommandWaitValue const& a) { ss << fmt::format("(wait_value: {})", a.target_value); },
                     [&ss](CclCommandInlineReadWrite const& a) { ss << fmt::format("(value: {})", a.value); },

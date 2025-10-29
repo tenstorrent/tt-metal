@@ -24,36 +24,42 @@ Place the downloaded `model_final_bd324a.pkl` file in `models/experimental/panop
 ### Run the Full Model Test
 ```bash
 # From tt-metal root directory
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py
 ```
 
 ### Run Component Tests
 ```bash
 # Test ASPP component
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_aspp.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_aspp.py
 
 # Test ResNet backbone
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_resnet.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_resnet.py
 
 # Test semantic segmentation head
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_semseg.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_semseg.py
 
 # Test instance embedding head
-pytest models/experimental/panoptic_deeplab/tests/pcc/test_insemb.py
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/pcc/test_insemb.py
+```
+
+### Run Device Performance Tests
+```bash
+# Test full model performance
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" pytest models/experimental/panoptic_deeplab/tests/test_device_perf_pdl.py
 ```
 
 ### Run the Demo
 ```bash
 # Single image with custom output directory
-python models/experimental/panoptic_deeplab/tt/demo.py <image_path> <weights_path> <output_dir>
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/panoptic_deeplab/tt/demo.py <image_path> <weights_path> <output_dir>
 
 # Batch processing of directory
-python models/experimental/panoptic_deeplab/tt/demo.py <input_dir> <weights_path> <output_dir> --batch
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/panoptic_deeplab/tt/demo.py <input_dir> <weights_path> <output_dir> --batch
 ```
 
 For help with demo options:
 ```bash
-python models/experimental/panoptic_deeplab/tt/demo.py --help
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/panoptic_deeplab/tt/demo.py --help
 ```
 
 ### Demo Output Files

@@ -27,6 +27,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     bool mla = false,
-    uint32_t head_dim_v = 0);
+    uint32_t head_dim_v = 0,
+    std::optional<uint32_t> sliding_window_size = std::nullopt);
 
 }  // namespace ttnn::operations::transformer::detail

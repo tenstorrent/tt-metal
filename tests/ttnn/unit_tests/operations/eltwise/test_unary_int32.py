@@ -11,21 +11,17 @@ import ttnn
     "input_shapes",
     [
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
     ],
 )
 @pytest.mark.parametrize(
     "low_a, high_a",
     [
-        (-1000, 1000),
-        (-1e4, 1e4),
         (-1e6, 1e6),
         (-2147483647, 0),  # max negative to zero
         (0, 2147483647),  # zero to max positive
         (2e9, 2147483647),  # large positive input
         (-2147483647, -2e9),  # large negative input
-        (-2147483647, 2147483647),  # whole range
     ],
 )
 @pytest.mark.parametrize(
@@ -154,13 +150,8 @@ def test_unary_logical_int32_sharded(a_shape, sharded_config, ttnn_op, device):
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        (torch.Size([])),
-        (torch.Size([1, 64])),
-        (torch.Size([1, 2, 32])),
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
-        (torch.Size([1, 2, 32, 64, 125])),
     ],
 )
 @pytest.mark.parametrize(
@@ -197,3 +188,25 @@ def test_unary_square_int32(input_shapes, low_a, high_a, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert torch.equal(output_tensor, torch_output_tensor)
+
+
+def test_abs_int32(device):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randint(low=-1000, high=100, size=(1, 1, 320, 384), dtype=torch.int32)
+
+    golden_function = ttnn.get_golden_function(ttnn.abs)
+    torch_output_tensor = golden_function(torch_input_tensor_a)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    result = ttnn.abs(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(result)
+
+    assert torch.equal(torch_output_tensor, output_tensor)

@@ -57,7 +57,7 @@ inline bool pick_forwarding_link_or_fail(
 
 // Device lookup and basic existence check.
 inline bool lookup_devices_or_fail(
-    chip_id_t src_phys, chip_id_t dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
+    ChipId src_phys, ChipId dst_phys, tt::tt_metal::IDevice*& src_dev, tt::tt_metal::IDevice*& dst_dev) {
     src_dev = find_device_by_id(src_phys);
     dst_dev = find_device_by_id(dst_phys);
     if (!src_dev || !dst_dev) {
@@ -102,8 +102,8 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
     tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
 
-    chip_id_t src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
-    chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
+    ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
+    ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
     tt::tt_metal::IDevice* src_dev = nullptr;
     tt::tt_metal::IDevice* dst_dev = nullptr;
@@ -120,7 +120,7 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     // --- Mesh device + coords for per-shard IO ---
     auto mesh = fixture->get_mesh_device();
     auto view = mesh->get_view();
-    auto coord_of_phys = [&](chip_id_t phys) -> Dist::MeshCoordinate {
+    auto coord_of_phys = [&](ChipId phys) -> Dist::MeshCoordinate {
         for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
             if (view.get_device(c)->id() == phys) {
                 return c;
@@ -292,13 +292,13 @@ Notes:
         Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
         Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
     }
-    Dist::EndTraceCapture(mesh.get(), mcq.id(), trace_id);
+    mesh->end_mesh_trace(mcq.id(), trace_id);
     // 3) Replay measured section
     auto t0 = std::chrono::steady_clock::now();
-    Dist::ReplayTrace(mesh.get(), mcq.id(), trace_id, /*blocking=*/false);
+    mesh->replay_mesh_trace(mcq.id(), trace_id, /*blocking=*/false);
     Dist::Finish(mcq);
     auto t1 = std::chrono::steady_clock::now();
-    Dist::ReleaseTrace(mesh.get(), trace_id);
+    mesh->release_mesh_trace(trace_id);
 
     // Read back (single shard) and verify
     std::vector<uint32_t> rx(n_words, 0u);

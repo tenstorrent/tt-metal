@@ -10,8 +10,8 @@ namespace tt::llrt {
 
 // TODO: Stop using these functions here and in PhysicalSystemDescriptor once UMD provides support for ASIC index/offset
 // in WH systems
-const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t mmio_device_id) {
+const std::unordered_set<ChipId>& get_devices_controlled_by_mmio_device(
+    const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId mmio_device_id) {
     const auto& cluster_descriptor = cluster->get_cluster_description();
     TT_ASSERT(
         cluster_descriptor->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
@@ -21,12 +21,12 @@ const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(
 }
 
 #define MAX_TUNNEL_DEPTH 4
-std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_mmio_device(
+std::map<ChipId, std::vector<std::vector<ChipId>>> discover_tunnels_from_mmio_device(
     const std::unique_ptr<tt::umd::Cluster>& cluster) {
-    std::map<chip_id_t, std::vector<std::vector<tt::umd::chip_id_t>>> tunnels_from_mmio_device = {};
+    std::map<ChipId, std::vector<std::vector<tt::ChipId>>> tunnels_from_mmio_device = {};
 
     for (const auto& mmio_chip_id : cluster->get_target_mmio_device_ids()) {
-        std::vector<std::vector<chip_id_t>> tunnels_from_mmio = {};
+        std::vector<std::vector<ChipId>> tunnels_from_mmio = {};
         const auto& all_eth_connections = cluster->get_cluster_description()->get_ethernet_connections();
         TT_ASSERT(cluster->get_cluster_description()->is_chip_mmio_capable(mmio_chip_id));
 
@@ -50,7 +50,7 @@ std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_m
                 // erase from the pool so multiple ethernet connections to same remote device do not
                 // pollute the counts.
                 device_ids.erase(other_chip_id);
-                std::vector<chip_id_t> first_stop = {other_chip_id};
+                std::vector<ChipId> first_stop = {other_chip_id};
                 auto it = std::find(tunnels_from_mmio.begin(), tunnels_from_mmio.end(), first_stop);
                 TT_ASSERT(
                     it == tunnels_from_mmio.end(),

@@ -1,9 +1,9 @@
-name: "Galaxy model perf tests"
+name: "(Galaxy) model perf tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
+    - cron: "0 10 * * *"  # Every day at 10:00 UTC
 
 jobs:
   build-artifact-profiler:

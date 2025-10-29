@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -153,7 +154,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_w = 0;
 
 
-    for (const auto& core : cores) {
+    for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
+        const auto& core = cores[core_idx];
         uint32_t shard_height = num_units_per_shard_height;
         uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
         if (input.layout() == Layout::TILE) {
@@ -251,7 +253,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         }
     }
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices](
+        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices, num_cores_unpadded](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -277,7 +279,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             }
             // TODO: Make these common args instead
             auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
-            for (const auto& core : cores) {
+            for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
+                const auto& core = cores[core_idx];
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
                 if (partial_op) {

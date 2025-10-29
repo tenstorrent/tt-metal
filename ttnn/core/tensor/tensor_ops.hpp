@@ -9,7 +9,6 @@
 namespace tt::tt_metal {
 class Tensor;
 class MemoryConfig;
-class CommandQueue;
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed

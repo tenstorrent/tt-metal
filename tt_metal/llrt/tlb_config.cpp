@@ -45,12 +45,12 @@ int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
 }
 
 int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
-    if (target.coord_system != CoordSystem::LOGICAL) {
+    if (target.coord_system != tt::CoordSystem::LOGICAL) {
         TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
     switch (target.core_type) {
-        case CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
-        case CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
+        case tt::CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
+        case tt::CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
         default: TT_THROW("Invalid core type for generating static TLB index");
     }
 }
@@ -92,13 +92,13 @@ int32_t get_static_tlb_index_logical_dram(CoreCoord target) {
 }
 
 int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
-    if (target.coord_system != CoordSystem::LOGICAL) {
+    if (target.coord_system != tt::CoordSystem::LOGICAL) {
         TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
     switch (target.core_type) {
-        case CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
-        case CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
-        case CoreType::DRAM: return get_static_tlb_index_logical_dram({target.x, target.y});
+        case tt::CoreType::ETH: return get_static_tlb_index_logical_eth({target.x, target.y});
+        case tt::CoreType::TENSIX: return get_static_tlb_index_logical_tensix({target.x, target.y});
+        case tt::CoreType::DRAM: return get_static_tlb_index_logical_dram({target.x, target.y});
         default: TT_THROW("Invalid core type for generating static TLB index");
     }
 }
@@ -112,7 +112,7 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 }  // namespace blackhole
 
 void configure_static_tlbs(
-    tt::ARCH arch, chip_id_t mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
+    tt::ARCH arch, tt::ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
     using get_static_tlb_index_ptr = std::int32_t (*)(tt::umd::CoreCoord);
     get_static_tlb_index_ptr get_static_tlb_index;
 
@@ -143,7 +143,7 @@ void configure_static_tlbs(
 
     std::int32_t address = 0;
     // Setup static TLBs for all worker cores
-    for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, tt::umd::CoordSystem::LOGICAL)) {
+    for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::TENSIX, tt::CoordSystem::LOGICAL)) {
         auto tlb_index = get_static_tlb_index(core);
         // TODO
         // Note: see issue #10107
@@ -151,12 +151,12 @@ void configure_static_tlbs(
         // use this on a perf path and the launch_msg "kernel config" needs to
         // arrive prior to the "go" message during device init and slow dispatch
         // Revisit this when we have a more flexible UMD api
-        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
+        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, tt::umd::tlb_data::Strict);
     }
     // Setup static TLBs for all eth cores
-    for (const tt::umd::CoreCoord& core : sdesc.get_cores(CoreType::ETH, tt::umd::CoordSystem::LOGICAL)) {
+    for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::LOGICAL)) {
         auto tlb_index = get_static_tlb_index(core);
-        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
+        device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, tt::umd::tlb_data::Strict);
     }
 
     // TODO (#9932): Remove workaround for BH
@@ -165,7 +165,10 @@ void configure_static_tlbs(
         uint64_t peer_dram_offset = dram_channel_0_peer2peer_region_start;
         for (uint32_t tlb_id = dynamic_tlb_base_index; tlb_id < dynamic_tlb_base_index + dynamic_tlb_count; tlb_id++) {
             device_driver.configure_tlb(
-                mmio_device_id, CoreCoord(dram_channel_0_x, dram_channel_0_y), tlb_id, peer_dram_offset);
+                mmio_device_id,
+                tt::umd::CoreCoord(dram_channel_0_x, dram_channel_0_y, tt::CoreType::DRAM, tt::CoordSystem::NOC0),
+                tlb_id,
+                peer_dram_offset);
             // Align address space of 16MB TLB to 16MB boundary
             peer_dram_offset += dynamic_tlb_16m_size;
         }
@@ -173,9 +176,10 @@ void configure_static_tlbs(
         // Setup static 4GB tlbs for DRAM cores
         uint32_t dram_addr = 0;
         for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
-            tt_xy_pair dram_core = blackhole::ddr_to_noc0(dram_channel);
+            tt::umd::CoreCoord dram_core =
+                tt::umd::CoreCoord(blackhole::ddr_to_noc0(dram_channel), tt::CoreType::DRAM, tt::CoordSystem::NOC0);
             auto tlb_index = tt::umd::blackhole::TLB_COUNT_2M + dram_channel;
-            device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Posted);
+            device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, tt::umd::tlb_data::Posted);
         }
     }
 }

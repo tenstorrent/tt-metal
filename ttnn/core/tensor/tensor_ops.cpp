@@ -35,7 +35,6 @@ Tensor tensor_to_device(
     distributed::MeshDevice* mesh_device,
     ttsl::optional_reference<const MemoryConfig> mem_config,
     std::optional<QueueId> cq_id) {
-    ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         TT_ASSERT(input_tensor.device() == mesh_device, "Currently do not support moving between devices");
@@ -52,7 +51,6 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<Queue
         return input_tensor;
     }
 
-    ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
     auto output = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
@@ -62,7 +60,6 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<Queue
 }
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {
-    ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout);
     TT_FATAL(
         input_tensor.storage_type() != StorageType::DEVICE, "Bring tensor to host before converting to target layout");
@@ -83,7 +80,6 @@ Tensor tensor_pad(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
-    ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
     TT_ASSERT(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
@@ -104,7 +100,6 @@ Tensor tensor_pad(
 
 Tensor tensor_unpad(
     const Tensor& input_tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR && "Tensor layout must be ROW_MAJOR for unpadding");
@@ -115,7 +110,6 @@ Tensor tensor_unpad(
 }
 
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
-    ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
     uint32_t height = input_tensor.padded_shape()[-2];
     uint32_t width = input_tensor.padded_shape()[-1];
@@ -143,7 +137,6 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
 }
 
 Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& output_tensor_shape) {
-    ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
     for (auto index = -3; index >= -static_cast<int>(input_tensor.padded_shape().rank()); index--) {

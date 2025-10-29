@@ -16,7 +16,7 @@ namespace ttnn::operations::normalization {
 // Softmax program configuration structs
 struct SoftmaxDefaultProgramConfig {};
 struct SoftmaxShardedMultiCoreProgramConfig {
-    CoreCoord compute_with_storage_grid_size{};
+    CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w{};
     std::size_t block_h{};
     std::size_t block_w{};

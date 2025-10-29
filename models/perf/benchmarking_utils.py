@@ -138,7 +138,7 @@ class BenchmarkData:
         profiler_name: str = None,
         input_sequence_length: int = None,
         output_sequence_length: int = None,
-        image_dimension: int = None,
+        image_dimension: str = None,
         perf_analysis: bool = None,
         training: bool = None,
     ):

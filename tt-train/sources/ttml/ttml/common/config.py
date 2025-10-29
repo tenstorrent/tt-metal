@@ -100,3 +100,31 @@ class TransformerConfig:
             self.high_freq_factor = self.rope.get("high_freq_factor", None)
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
             self.original_context_length = self.rope.get("original_context_length", None)
+
+
+class PipelineParallelHostConfig:
+    """Host-side representation of pipeline-parallel configuration.
+
+    Parsed from YAML under multihost_config.pipeline_parallel_config.
+    """
+
+    def __init__(self, cfg: dict):
+        self.num_blocks = int(cfg.get("num_blocks", 0))
+        self.blocks_per_rank = {int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()}
+
+
+class MultiHostConfig:
+    """Configuration for multihost (multi-process) execution.
+
+    Captures transport and optional pipeline-parallel settings.
+    """
+
+    def __init__(self, yaml_config: dict):
+        mh = yaml_config.get("multihost_config", {})
+        self.enabled = bool(mh.get("enabled", False))
+        self.num_workers = int(mh.get("num_workers", 1))
+        # Keep as lowercase string to avoid importing native enums here
+        self.socket_type = str(mh.get("socket_type", "mpi")).strip().lower()
+
+        pp_cfg = mh.get("pipeline_parallel_config")
+        self.pipeline_parallel_config = PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None

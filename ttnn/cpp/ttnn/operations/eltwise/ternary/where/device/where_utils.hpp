@@ -31,14 +31,10 @@ enum class KernelName {
     ReaderRowBcastTST,
     ReaderRowBcastTTS,
     WriterColBcastTTT,
-    ComputeNoBcastTTT,  // TTT: no bcast, outer dim and row bcast cases
-    ComputeNoBcastTST,
-    ComputeNoBcastTTS,
-    ComputeBcastTTT,  // TTT : column and scalar bcast cases
-    ComputeColBcastTTS,
-    ComputeColBcastTST,
-    ComputeScalarBcastTST,
-    ComputeScalarBcastTTS,
+    ComputeNoBcastTTT,      // TTT: no bcast, outer dim and row bcast cases
+    ComputeBcastTTT,        // TTT : column and scalar bcast cases
+    ComputeBcastTTS_TST,    // TTS, TST: column and scalar bcast cases
+    ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
 };
 
 struct WhereKernelConfig {

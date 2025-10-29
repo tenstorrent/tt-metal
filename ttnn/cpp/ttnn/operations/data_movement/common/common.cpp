@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+
+#include <algorithm>
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -116,9 +118,7 @@ uint32_t get_effective_l1_cores(
     auto aggregate_bw = max_bw * num_nocs;
     float achieved_l1_bw = get_transaction_noc_bw(transaction_size, is_write ? l1_write_bw : l1_read_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_l1_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
@@ -131,9 +131,7 @@ uint32_t get_effective_dram_cores(
     auto aggregate_bw = single_noc == 1 ? 190 : 265;
     float achieved_dram_bw = get_transaction_noc_bw(transaction_size, dram_bw, index);
     uint32_t effective_cores = std::ceil((float)aggregate_bw / (float)achieved_dram_bw);
-    if (effective_cores > num_cores) {
-        effective_cores = num_cores;  // Limit to available cores
-    }
+    effective_cores = std::min(effective_cores, num_cores);  // Limit to available cores
     return effective_cores;
 }
 
@@ -454,9 +452,7 @@ int common_tm_bw_model(
             output_only ? total_write_cycles_not_local
                         : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
         ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
-        if (ideal_dev_clock_cycles_not_local < ideal_dev_clock_cycles) {
-            ideal_dev_clock_cycles = ideal_dev_clock_cycles_not_local;
-        }
+        ideal_dev_clock_cycles = std::min<unsigned int>(ideal_dev_clock_cycles_not_local, ideal_dev_clock_cycles);
     }
     // latency for llk compute kernels
     int total_compute_cycles = 0;
@@ -524,6 +520,40 @@ ttnn::Tensor pad_to_tile_vol(
     return tensor;
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
+
+// not unit tested, use with caution
+uint16_t float_to_uint16(float f) {
+    // For positive infinity, return the maximum uint16_t value
+    // For negative infinity, return the minimum uint16_t value
+    if (std::isinf(f)) {
+        return (f > 0) ? std::numeric_limits<uint16_t>::max() : std::numeric_limits<uint16_t>::min();
+    }
+
+    // For Not-a-Number (NaN), return 0
+    if (std::isnan(f)) {
+        return 0;
+    }
+
+    // Handle overflow and underflow
+    const float max_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::max());
+    const float min_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::min());
+    if (f >= max_uint16) {
+        return std::numeric_limits<uint16_t>::max();
+    }
+    if (f <= min_uint16) {
+        return std::numeric_limits<uint16_t>::min();
+    }
+
+    // For all other finite values, safely cast after rounding
+    return static_cast<uint16_t>(std::round(f));
+}
+
+// based off pack_two_bfloat16_into_uint32
+uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
+    // first -> lower 16
+    // second -> upper 16
+    return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
+}
 
 ttnn::Shape compute_padded_shape(
     const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {

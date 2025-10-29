@@ -77,44 +77,44 @@ void MAIN {
     //   Start LABEL or End Label
     //   Ex: Start Local Reduce or End Local Reduce
     // clang-format on
-    constexpr uint32_t is_mcast_sender = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_cores_per_mcast_group = get_compile_time_arg_val(3);
+    constexpr uint32_t is_mcast_sender = get_named_compile_time_arg_val("is_mcast_sender");
+    constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
+    constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
+    constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
 
-    constexpr uint32_t batch = get_compile_time_arg_val(4);
-    constexpr uint32_t group = get_compile_time_arg_val(5);
+    constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
+    constexpr uint32_t group = get_named_compile_time_arg_val("group");
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(6);
-    constexpr uint32_t block_w = get_compile_time_arg_val(7);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(8);
+    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
+    constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
+    constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(9);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(10);
+    constexpr uint32_t subblock_w = get_named_compile_time_arg_val("subblock_w");
+    constexpr uint32_t num_subblocks_w = get_named_compile_time_arg_val("num_subblocks_w");
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(11);
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(12);
-    constexpr uint32_t per_core_MN = get_compile_time_arg_val(13);
+    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
+    constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
+    constexpr uint32_t per_core_MN = get_named_compile_time_arg_val("per_core_MN");
 
-    constexpr uint32_t per_core_N_tile_bytes = get_compile_time_arg_val(14);
-    constexpr uint32_t num_groups_per_reset = get_compile_time_arg_val(15);
+    constexpr uint32_t per_core_N_tile_bytes = get_named_compile_time_arg_val("per_core_N_tile_bytes");
+    constexpr uint32_t num_groups_per_reset = get_named_compile_time_arg_val("num_groups_per_reset");
 
-    constexpr uint32_t single_tile_size_bytes = get_compile_time_arg_val(16);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(17);
+    constexpr uint32_t single_tile_size_bytes = get_named_compile_time_arg_val("single_tile_size_bytes");
+    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t num_tiles_input_mask = get_compile_time_arg_val(18);
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(19);
+    constexpr uint32_t num_tiles_input_mask = get_named_compile_time_arg_val("num_tiles_input_mask");
+    constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(20);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(21);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
-    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(24);
+    constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
+    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     // These are numbers in absolute terms, on a per group, per batch without tiling
-    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(25);
-    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(26);
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
-    constexpr uint32_t reciprocal_size = get_compile_time_arg_val(27);
+    constexpr uint32_t reciprocal_size = get_named_compile_time_arg_val("reciprocal_size");
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;

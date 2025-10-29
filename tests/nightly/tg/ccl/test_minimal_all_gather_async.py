@@ -298,13 +298,9 @@ def test_all_gather_async_blackhole(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        # (True, 10),
         (False, 1),
     ],
-    ids=[
-        # "perf",
-        "check"
-    ],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -360,5 +356,81 @@ def test_all_gather_async_big_mesh(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@pytest.mark.parametrize("num_links", [1], ids=["1links"])
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        ([16, 1, 1, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "gather_dim_3",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 1),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "trace_region_size": 190112,
+            },
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 16)], indirect=True)
+def test_all_gather_async_quad_host_mesh(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+):
+    cluster_axis = 1
+    shape = (1, mesh_device.shape[cluster_axis]) if cluster_axis == 1 else (mesh_device.shape[cluster_axis], 1)
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(shape))
+    run_all_gather_impl(
+        submesh_device,
+        submesh_device.shape[cluster_axis],
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

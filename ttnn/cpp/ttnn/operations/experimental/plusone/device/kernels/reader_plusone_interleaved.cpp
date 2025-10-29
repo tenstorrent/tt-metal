@@ -33,7 +33,7 @@ void kernel_main() {
             if constexpr (skip_negative_entries) {
                 // NOTE: If you increment beyond INT32_MAX you will wrap around and get a negative result
                 //  values greater than INT32_MAX will overflow and become negative
-                if (val < INT32_MAX) {
+                if (val < INT32_MAX && val >= 0) {
                     stick[i] = val + 1;
                 }
             } else {

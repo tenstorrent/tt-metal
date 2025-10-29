@@ -11,6 +11,8 @@ from os.path import isfile, join
 import git
 from loguru import logger
 
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+
 today = time.strftime("%Y_%m_%d")
 
 
@@ -195,3 +197,39 @@ def prep_perf_report(
     model_name = model_name.replace("/", "_")
     csv_file = f"perf_{model_name}_{comments}_{today}.csv"
     write_dict_to_file(csv_file, dict_res)
+
+    # Dummy profiler to satisfy BenchmarkData's requirements
+    profiler = BenchmarkProfiler()
+    profiler.start("run")
+    profiler.end("run")
+    step_name = "end_to_end_perf"
+    profiler.start(step_name)
+    profiler.end(step_name)
+
+    benchmark_data = BenchmarkData()
+
+    # Add measurements for the key performance metrics
+    # Convert string values back to float for measurements
+    benchmark_data.add_measurement(profiler, 0, step_name, "inference_time_s", inference_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "compile_time_s", compile_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "throughput_iter_per_s", float(device_throughput))
+    benchmark_data.add_measurement(profiler, 0, step_name, "first_run_s", inference_and_compile_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "expected_inference_time_s", expected_inference_time)
+    benchmark_data.add_measurement(profiler, 0, step_name, "expected_compile_time_s", expected_compile_time)
+
+    if inference_time_cpu is not None:
+        benchmark_data.add_measurement(profiler, 0, step_name, "inference_time_cpu_s", inference_time_cpu)
+        benchmark_data.add_measurement(
+            profiler,
+            0,
+            step_name,
+            "throughput_cpu_iter_per_s",
+            float(cpu_throughput) if cpu_throughput != "unknown" else 0.0,
+        )
+
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type="end_to_end_perf",
+        ml_model_name=model_name,
+        batch_size=batch_size,
+    )

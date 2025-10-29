@@ -58,16 +58,7 @@ jobs:
       version: 22.04
       build-type: ${{ inputs.build-type }}
       build-wheel: true
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-type: ${{ inputs.build-type }}
       tracy: true
-      build-wheel: true
   t3000-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -109,26 +100,26 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-nightly }}
   t3000-model-perf-tests:
-    needs: [build-artifact, build-artifact-profiler]
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-profiler-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
     if: ${{ inputs.t3000-model-perf }}
   t3000-profiler-tests:
-    needs: build-artifact-profiler
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      topology: config-t3000
+      test-script: ./tests/scripts/t3000/run_t3000_profiler_tests.sh
     if: ${{ inputs.t3000-profiler }}
   t3000-perplexity-tests:
     needs: build-artifact

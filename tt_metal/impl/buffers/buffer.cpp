@@ -37,7 +37,7 @@ namespace {
 std::unordered_map<int, std::string> global_mempool_names;
 std::mutex global_mempool_names_mutex;
 
-static const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
+const char* get_buffer_location_name(BufferType buffer_type, int device_id) {
     std::scoped_lock<std::mutex> lock(global_mempool_names_mutex);
     int name_combo = (int)buffer_type * 1000 + device_id;
     if (global_mempool_names.find(name_combo) == global_mempool_names.end()) {

@@ -16,7 +16,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 )
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
@@ -53,9 +53,10 @@ def test_panoptic_deeplab(device, model_location_generator):
 
     pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
 
-    ttnn_input_torch = pytorch_input.permute(0, 2, 3, 1)
+    # Use proper input preprocessing to avoid OOM (creates HEIGHT SHARDED memory config)
+    from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
 
-    ttnn_input = ttnn.from_torch(ttnn_input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ttnn_input = preprocess_nchw_input_tensor(device, pytorch_input)
 
     try:
         pytorch_model = PytorchPanopticDeepLab(
@@ -65,7 +66,6 @@ def test_panoptic_deeplab(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -73,14 +73,33 @@ def test_panoptic_deeplab(device, model_location_generator):
         pytorch_model.eval()
 
         # Create TTNN parameters from the PyTorch model with loaded weights
-        ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
+        # Use explicit input dimensions to match preprocessing
+        ttnn_parameters = create_panoptic_deeplab_parameters(
+            pytorch_model, device, input_height=input_height, input_width=input_width, batch_size=batch_size
+        )
 
         # Apply Conv+BatchNorm fusion to the parameters
         logger.info("Applying Conv+BatchNorm fusion to parameters...")
         fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
         logger.info("Conv+BatchNorm fusion completed successfully")
 
-        # Create TTNN model with fused parameters
+        # Create centralized configuration
+        model_configs = ModelOptimisations(
+            conv_act_dtype=ttnn.bfloat8_b,
+            conv_w_dtype=ttnn.bfloat8_b,
+        )
+
+        # Apply layer-specific configurations
+        logger.info("Applying ResNet backbone configurations...")
+        model_configs.setup_resnet_backbone()
+        logger.info("Applying ASPP layer overrides...")
+        model_configs.setup_aspp()
+        logger.info("Applying decoder layer overrides...")
+        model_configs.setup_decoder()
+        logger.info("Applying head layer overrides...")
+        model_configs.setup_heads()
+
+        # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
             device=device,
             parameters=fused_parameters,
@@ -90,8 +109,8 @@ def test_panoptic_deeplab(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
             train_size=train_size,
+            model_configs=model_configs,
         )
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
@@ -103,20 +122,50 @@ def test_panoptic_deeplab(device, model_location_generator):
     logger.info("Running TTNN model with fused Conv+BatchNorm parameters...")
     ttnn_semantic, ttnn_center, ttnn_offset, _ = ttnn_model.forward(ttnn_input)
 
+    # Handle semantic output - slice back to original channels if padding was applied
     ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic).permute(0, 3, 1, 2)
+    semantic_original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
+    if semantic_original_channels is not None:
+        logger.info(
+            f"Slicing semantic output from {ttnn_semantic_torch.shape[1]} to {semantic_original_channels} channels"
+        )
+        ttnn_semantic_torch = ttnn_semantic_torch[:, :semantic_original_channels, :, :]
+
+    # Handle center output - slice back to original channels if padding was applied
     ttnn_center_torch = ttnn.to_torch(ttnn_center).permute(0, 3, 1, 2)
+    center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
+    if center_original_channels is not None:
+        logger.info(f"Slicing center output from {ttnn_center_torch.shape[1]} to {center_original_channels} channels")
+        ttnn_center_torch = ttnn_center_torch[:, :center_original_channels, :, :]
+
+    # Handle offset output - slice back to original channels if padding was applied
     ttnn_offset_torch = ttnn.to_torch(ttnn_offset).permute(0, 3, 1, 2)
+    offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
+    if offset_original_channels is not None:
+        logger.info(f"Slicing offset output from {ttnn_offset_torch.shape[1]} to {offset_original_channels} channels")
+        ttnn_offset_torch = ttnn_offset_torch[:, :offset_original_channels, :, :]
 
-    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.96)
+    from tests.ttnn.utils_for_testing import check_with_pcc
+
+    sem_passed, sem_msg = check_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.99)
     logger.info(f"Semantic PCC: {sem_msg}")
-    assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
 
-    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.94)
+    center_passed, center_msg = check_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.99)
     logger.info(f"Center PCC: {center_msg}")
-    assert center_passed, f"Center heatmap PCC failed: {center_msg}"
 
-    offset_passed, offset_msg = assert_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.99)
+    offset_passed, offset_msg = check_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.99)
     logger.info(f"Offset PCC: {offset_msg}")
-    assert offset_passed, f"Offset map PCC failed: {offset_msg}"
+
+    # Report all results
+    failed_tests = []
+    if not sem_passed:
+        failed_tests.append(f"Semantic: {sem_msg}")
+    if not center_passed:
+        failed_tests.append(f"Center: {center_msg}")
+    if not offset_passed:
+        failed_tests.append(f"Offset: {offset_msg}")
+
+    if failed_tests:
+        assert False, f"PCC tests failed:\n" + "\n".join(failed_tests)
 
     logger.info("All PCC tests passed!")

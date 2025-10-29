@@ -15,7 +15,6 @@
 #include <utility>
 #include <vector>
 
-#include "command_queue_interface.hpp"
 #include "core_coord.hpp"
 #include "device_command.hpp"
 #include "env_lib.hpp"
@@ -74,7 +73,6 @@ class EnqueueProgramCommand : public Command {
 private:
     uint32_t command_queue_id;
     IDevice* device;
-    NOC noc_index;
     Program& program;
     SystemMemoryManager& manager;
     WorkerConfigBufferMgr& config_buffer_mgr;
@@ -113,7 +111,6 @@ public:
 class EnqueueTerminateCommand : public Command {
 private:
     uint32_t command_queue_id;
-    IDevice* device;
     SystemMemoryManager& manager;
 
 public:

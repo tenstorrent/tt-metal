@@ -82,8 +82,7 @@ void kernel_main() {
     if constexpr (is_full_size_channel_sender) {
         packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_address}, packet_payload_size_bytes);
     } else {
-        packet_header->to_noc_unicast_atomic_inc(
-            NocUnicastAtomicIncCommandHeader{noc_dest_address, 1, std::numeric_limits<uint16_t>::max()});
+        packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_dest_address, 1});
     }
 
     tt::tt_fabric::wait_for_fabric_endpoint_ready(

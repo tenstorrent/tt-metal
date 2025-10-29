@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
 
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 
 
 def test_sub_fp32(device):
@@ -95,14 +95,11 @@ def test_div_fp32(device):
     z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=None)
     tt_out = ttnn.to_torch(z_tt_div)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert_allclose(z_torch, tt_out, atol=1e-10, rtol=1e-6)
 
 
-# Torch: num/ 0 = inf and 0/0  nan;
-# TT: num/ 0 = inf but 0/0= 0 not nan and 1/0 is 170141183460469231731687303715884105728.000000000000000 not inf;
-# input_b must be non-zero
-def test_div_bf16(device):
+# Test division when input_b is non-zero
+def test_div_bf16_nonzero(device):
     x_torch = torch.tensor(
         [
             [
@@ -110,9 +107,6 @@ def test_div_bf16(device):
                 -3,
                 16,
                 -5,
-                14,
-                -12,
-                0,
                 0,
                 15,
             ]
@@ -126,18 +120,15 @@ def test_div_bf16(device):
                 3,
                 -4,
                 -5,
-                0,
-                0,
-                0,
                 1,
                 10,
             ]
         ],
         dtype=torch.bfloat16,
     )
-    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,  1.500000000000000]],
+    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
     #         dtype=torch.bfloat16)
-    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,  0.000000000000000,  0.000000000000000,  1.500000000000000]],
+    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
     #         dtype=torch.bfloat16)
     golden_fn = ttnn.get_golden_function(ttnn.divide)
     z_torch = golden_fn(x_torch, y_torch)
@@ -146,8 +137,7 @@ def test_div_bf16(device):
     z_tt_div = ttnn.divide(x_tt, y_tt, use_legacy=None)  # bf16 runs FPU
     tt_out = ttnn.to_torch(z_tt_div)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    assert_with_ulp(z_torch, tt_out, ulp_threshold=1, allow_nonfinite=True)
 
 
 def test_pow_fp32(device):
@@ -162,6 +152,23 @@ def test_pow_fp32(device):
 
     status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.99
     assert status
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_hypot_multi_dtype(device, dtype):
+    # Map ttnn dtypes to torch dtypes
+    torch_dtype_map = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
+    torch_dtype = torch_dtype_map[dtype]
+
+    x_torch = torch.tensor([[3.0, 5.0, 3.14159, 0.5773, 1.41421, 2.71828, 0.001, 100.25]], dtype=torch_dtype)
+    y_torch = torch.tensor([[4.0, 12.0, 2.71828, 1.73205, 1.73205, 3.14159, 999.999, 0.333]], dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.hypot)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_hypot = ttnn.hypot(x_tt, y_tt)
+
+    assert_with_ulp(z_tt_hypot, z_torch, ulp_threshold=1)
 
 
 def test_add_fp32_activ(device):

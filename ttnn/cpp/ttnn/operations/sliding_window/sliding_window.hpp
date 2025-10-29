@@ -14,7 +14,7 @@
 namespace ttnn::operations::sliding_window {
 
 struct ParallelConfig {
-    CoreRangeSet grid = {};
+    CoreRangeSet grid;
     tt::tt_metal::TensorMemoryLayout shard_scheme{0};
     tt::tt_metal::ShardOrientation shard_orientation{0};
 

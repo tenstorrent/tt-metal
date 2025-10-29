@@ -57,37 +57,37 @@ void kernel_main() {
     //          Third Read of data:
     //
     //      // clang-format on
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
+    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_named_compile_time_arg_val("reduce_receiver_semaphore_id"));
+    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_named_compile_time_arg_val("reduce_sender_semaphore_id"));
 
-    constexpr uint32_t num_batch_group = get_compile_time_arg_val(2);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(3);
+    constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
+    constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
 
     constexpr uint32_t num_groups = num_batch_group / num_batches;
 
-    constexpr uint32_t per_core_N = get_compile_time_arg_val(4);
-    const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
-    const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(7);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(8);
+    constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
+    const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
+    const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
+    constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
+    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("TILE_HEIGHT");
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(9);
-    constexpr uint32_t block_w = get_compile_time_arg_val(10);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(11);
+    constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
+    constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
+    constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr uint32_t num_cols_per_group = get_compile_time_arg_val(12);
-    constexpr uint32_t num_tiles_per_batch = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
+    constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t block_w_last = get_compile_time_arg_val(14);
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(15);
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(16);
-    constexpr uint32_t group_row_offset = get_compile_time_arg_val(17);
-    constexpr uint32_t num_out_blocks = get_compile_time_arg_val(18);
+    constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
+    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
+    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
+    constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
+    constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     // These are numbers in absolute terms, on a per group, per batch without tiling
-    constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(19);
-    constexpr uint32_t num_rows_per_group = get_compile_time_arg_val(20);
+    constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
+    constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
-    constexpr auto src0_args = TensorAccessorArgs<21>();
+    constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;

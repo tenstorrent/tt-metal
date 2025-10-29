@@ -19,7 +19,7 @@ namespace tt::tt_fabric {
 using RoutingTable =
     std::vector<std::vector<std::vector<RoutingDirection>>>;  // [mesh_id][chip_id][target_chip_or_mesh_id]
 
-// TODO: first pass at switching over MeshId/chip_id_t to proper struct
+// TODO: first pass at switching over MeshId/ChipId to proper struct
 // Need to update the usage in routing table generator
 class FabricNodeId {
 public:
@@ -52,7 +52,7 @@ public:
     // MeshID.
     const std::vector<FabricNodeId>& get_exit_nodes_routing_to_mesh(MeshId mesh_id) const;
     // Return the single exit node (chip in src_mesh_id) for a given src chip and dst mesh
-    FabricNodeId get_exit_node_from_mesh_to_mesh(MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const;
+    FabricNodeId get_exit_node_from_mesh_to_mesh(MeshId src_mesh_id, ChipId src_chip_id, MeshId dst_mesh_id) const;
 
     // Load Inter-Mesh Connectivity into the Routing Table Generator
     void load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections);
@@ -68,9 +68,9 @@ private:
     RoutingTable inter_mesh_table_;
     std::unordered_map<MeshId, std::vector<FabricNodeId>> mesh_to_exit_nodes_;
     // Direct lookup table: [src_mesh][src_chip][dst_mesh] -> exit chip_id in src_mesh
-    std::vector<std::vector<std::vector<chip_id_t>>> exit_node_lut_;
+    std::vector<std::vector<std::vector<ChipId>>> exit_node_lut_;
 
-    std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> get_paths_to_all_meshes(
+    std::vector<std::vector<std::vector<std::pair<ChipId, MeshId>>>> get_paths_to_all_meshes(
         MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const;
     void generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity);
     // when generating intermesh routing table, we use the intramesh connectivity table to find the shortest path to

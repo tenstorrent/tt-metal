@@ -24,7 +24,11 @@ while IFS= read -r FILE; do
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake)
             CMAKE_CHANGED=true
             ;;
-	tt_metal/sfpi-version.sh)
+	tt_metal/sfpi-info.sh)
+	    # Read in by a cmake file
+            CMAKE_CHANGED=true
+            ;;
+	tt_metal/sfpi-version)
 	    # Read in by a cmake file
             CMAKE_CHANGED=true
             ;;
@@ -84,6 +88,8 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
     # Something to make more efficient in future.
     TOOLS_CHANGED=true
     ANY_CODE_CHANGED=true
+    # Issue: https://github.com/tenstorrent/tt-metal/issues/31344
+    CMAKE_CHANGED=true
 fi
 
 declare -A changes=(

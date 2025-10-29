@@ -16,7 +16,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
 
-    TT_FATAL(input_tensors.size() == 2, "Error");
+    TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors but got {}", input_tensors.size());
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
     TT_FATAL(
@@ -48,7 +48,10 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     // Any sharded memory configs must be HEIGHT_SHARDED and have the same orientation
     ShardOrientation shard_orientation = this->row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
     if (input_tensor_a.is_sharded()) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Input tensor A memory layout must be HEIGHT_SHARDED but got {}",
+            input_tensor_a.memory_config().memory_layout());
         TT_FATAL(
             input_tensor_a.shard_spec().value().orientation == shard_orientation,
             "Any sharded memory configs must have the same shard orientation as one another!");
@@ -56,21 +59,44 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
             input_tensor_a.shard_spec().value().num_cores() == ashape[1],
             "Q heads must be sharded on number of q heads!");
         auto shard_shape = input_tensor_a.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] == ashape[2], "Error");
-        TT_FATAL(shard_shape[1] == ashape[3], "Error");
+        TT_FATAL(
+            shard_shape[0] == ashape[2],
+            "Input tensor A shard height ({}) must equal batch size ({})",
+            shard_shape[0],
+            ashape[2]);
+        TT_FATAL(
+            shard_shape[1] == ashape[3],
+            "Input tensor A shard width ({}) must equal head dimension ({})",
+            shard_shape[1],
+            ashape[3]);
     }
     if (input_tensor_b.is_sharded()) {
-        TT_FATAL(input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(
+            input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Input tensor B memory layout must be HEIGHT_SHARDED but got {}",
+            input_tensor_b.memory_config().memory_layout());
         TT_FATAL(
             input_tensor_b.shard_spec().value().orientation == shard_orientation,
             "Any sharded memory configs must have the same shard orientation as one another!");
         TT_FATAL(input_tensor_b.shard_spec().value().num_cores() == bshape[0], "KV heads must be sharded on batch!");
         auto shard_shape = input_tensor_b.shard_spec().value().shape;
-        TT_FATAL(shard_shape[0] == bshape[1] * bshape[2], "Error");
-        TT_FATAL(shard_shape[1] == bshape[3], "Error");
+        TT_FATAL(
+            shard_shape[0] == bshape[1] * bshape[2],
+            "Input tensor B shard height ({}) must equal KV heads * head dimension ({} * {})",
+            shard_shape[0],
+            bshape[1],
+            bshape[2]);
+        TT_FATAL(
+            shard_shape[1] == bshape[3],
+            "Input tensor B shard width ({}) must equal KV length ({})",
+            shard_shape[1],
+            bshape[3]);
     }
     if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Output memory config layout must be HEIGHT_SHARDED but got {}",
+            this->output_mem_config.memory_layout());
 
         // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in
         // GroupAttnMatmulDeviceOperation::create_output_tensors
@@ -88,8 +114,16 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
             TT_FATAL(
                 this->output_mem_config.shard_spec().value().orientation == shard_orientation,
                 "Any sharded memory configs must have the same shard orientation as one another!");
-            TT_FATAL(shard_shape[0] == output_shape[2], "Error");
-            TT_FATAL(shard_shape[1] == output_shape[3], "Error");
+            TT_FATAL(
+                shard_shape[0] == output_shape[2],
+                "Output shard height ({}) must equal batch size ({})",
+                shard_shape[0],
+                output_shape[2]);
+            TT_FATAL(
+                shard_shape[1] == output_shape[3],
+                "Output shard width ({}) must equal KV length ({})",
+                shard_shape[1],
+                output_shape[3]);
         }
     }
 

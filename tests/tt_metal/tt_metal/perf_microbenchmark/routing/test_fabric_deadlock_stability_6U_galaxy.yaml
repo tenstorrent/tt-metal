@@ -1,91 +1,90 @@
 allocation_policies:
     receiver:
-      max_configs_per_core: 1
+      max_configs_per_core: 2
 
 Tests:
-#
-# 1D ring tests are disabled for now due to lack of resources (running them adds ~10s to the quick pipeline)
-# For now 1D ring coverage should be taken care of by this legacy test
-# ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="EdmFabric.RingDeadlockStabilityTest"
-#
 # ================================================
 # 1D Ring (low latency)
 # ================================================
-  # - name: "LinearMcastEast"
-  #   sync: true
+  - name: "LinearMcastEast"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Ring
+    fabric_setup:
+      topology: Ring
+      num_links: 4
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         E: 3
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 256
+      num_packets: 2000
+      destination:
+        hops:
+          E: 3
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 3
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
 
-  # - name: "LinearMcastWest"
-  #   sync: true
+  - name: "LinearMcastWest"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Ring
+    fabric_setup:
+      topology: Ring
+      num_links: 4
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         W: 3
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 256
+      num_packets: 2000
+      destination:
+        hops:
+          W: 3
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 3
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
 
-  # - name: "LinearMcastNorth"
-  #   sync: true
+  - name: "LinearMcastNorth"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Ring
+    fabric_setup:
+      topology: Ring
+      num_links: 4
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         N: 7
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 256
+      num_packets: 2000
+      destination:
+        hops:
+          N: 7
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 3
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
 
-  # - name: "LinearMcastSouth"
-  #   sync: true
+  - name: "LinearMcastSouth"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Ring
+    fabric_setup:
+      topology: Ring
+      num_links: 4
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         S: 7
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 256
+      num_packets: 2000
+      destination:
+        hops:
+          S: 7
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 3
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 3
 
 # ================================================
 # 2D Torus (XY) (low latency)
@@ -97,12 +96,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           E: 3
@@ -118,12 +118,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           W: 3
@@ -139,12 +140,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -160,12 +162,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7
@@ -181,12 +184,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -203,12 +207,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -225,12 +230,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7
@@ -247,12 +253,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7
@@ -269,12 +276,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -296,12 +304,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           E: 3
@@ -317,12 +326,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           W: 3
@@ -338,12 +348,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -359,12 +370,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7
@@ -380,12 +392,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -402,12 +415,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -424,12 +438,13 @@ Tests:
       topology: Torus
       torus_config: "XY"
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7
@@ -446,12 +461,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7
@@ -468,12 +484,13 @@ Tests:
       topology: Torus
       torus_config: XY
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 3
@@ -495,12 +512,13 @@ Tests:
       topology: Torus
       torus_config: X
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           E: 3
@@ -516,12 +534,13 @@ Tests:
       topology: Torus
       torus_config: X
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           W: 3
@@ -540,12 +559,13 @@ Tests:
       topology: Torus
       torus_config: Y
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -561,12 +581,13 @@ Tests:
       topology: Torus
       torus_config: Y
       routing_type: LowLatency
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7
@@ -585,12 +606,13 @@ Tests:
       topology: Torus
       torus_config: X
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           E: 3
@@ -606,12 +628,13 @@ Tests:
       topology: Torus
       torus_config: X
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           W: 3
@@ -630,12 +653,13 @@ Tests:
       topology: Torus
       torus_config: Y
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           N: 7
@@ -651,12 +675,13 @@ Tests:
       topology: Torus
       torus_config: Y
       routing_type: Dynamic
+      num_links: 4
 
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 512
-      num_packets: 5000
+      size: 256
+      num_packets: 2000
       destination:
         hops:
           S: 7

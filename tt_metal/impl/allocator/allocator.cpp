@@ -300,7 +300,7 @@ MemoryBlockTable Allocator::get_memory_block_table(const BufferType& buffer_type
     }
 }
 
-void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const {
+void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const {
     std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->dump_blocks(out); break;
@@ -384,6 +384,63 @@ Allocator::~Allocator() {
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
     allocated_buffers_.clear();
+}
+
+AllocatorState Allocator::extract_state() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::unordered_map<BufferType, AllocatorState::BufferTypeState> states_per_buffer_type;
+
+    // Extract state for each supported buffer type
+    constexpr std::array<BufferType, 4> BUFFER_TYPES = {
+        BufferType::DRAM, BufferType::L1, BufferType::L1_SMALL, BufferType::TRACE};
+
+    for (const auto& buffer_type : BUFFER_TYPES) {
+        const BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            default: continue;
+        }
+
+        if (manager) {
+            auto buffer_type_state = manager->extract_state(BankManager::AllocatorDependencies::AllocatorID{0});
+            states_per_buffer_type[buffer_type] = std::move(buffer_type_state);
+        }
+    }
+
+    // Copy allocated buffer pointers
+    std::vector<Buffer*> all_allocated_buffers(allocated_buffers_.begin(), allocated_buffers_.end());
+    return AllocatorState(std::move(states_per_buffer_type), std::move(all_allocated_buffers));
+}
+
+void Allocator::override_state(const AllocatorState& state) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Clear all buffer types
+    dram_manager_->deallocate_all();
+    l1_manager_->deallocate_all();
+    l1_small_manager_->deallocate_all();
+    trace_buffer_manager_->deallocate_all();
+    allocated_buffers_.clear();
+
+    // Apply state for each buffer type
+    for (const auto& [buffer_type, type_state] : state.get_states_per_buffer_type()) {
+        BankManager* manager = nullptr;
+        switch (buffer_type) {
+            case BufferType::DRAM: manager = dram_manager_.get(); break;
+            case BufferType::L1: manager = l1_manager_.get(); break;
+            case BufferType::L1_SMALL: manager = l1_small_manager_.get(); break;
+            case BufferType::TRACE: manager = trace_buffer_manager_.get(); break;
+            case BufferType::SYSTEM_MEMORY: TT_THROW("Unsupported buffer type: {}", enchantum::to_string(buffer_type));
+        }
+
+        if (manager) {
+            manager->override_state(type_state, BankManager::AllocatorDependencies::AllocatorID{0});
+        }
+    }
 }
 
 }  // namespace tt_metal

@@ -89,8 +89,8 @@ class PrefetchKernel : public FDKernel {
 public:
     PrefetchKernel(
         int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,

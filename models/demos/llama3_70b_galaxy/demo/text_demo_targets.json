@@ -8,8 +8,8 @@
             "token_pos": 127
         },
         "6U": {
-            "prefill_pcc": 0.9130302621110833,
-            "decode_pcc": 0.9526383708858326,
+            "prefill_pcc": 0.9178234022286997,
+            "decode_pcc": 0.9478196002988887,
             "throughput": 72,
             "absolute_margin": 2.0,
             "token_pos": 127

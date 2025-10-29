@@ -6,25 +6,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-namespace detail {
-
-template <uint32_t Size, class Enable = void>
-struct DataTypeHolder {
-    typedef void type;
-};
-
-template <uint32_t Size>
-struct DataTypeHolder<Size, typename std::enable_if<Size == 2>::type> {
-    typedef uint16_t type;
-};
-
-template <uint32_t Size>
-struct DataTypeHolder<Size, typename std::enable_if<Size == 4>::type> {
-    typedef uint32_t type;
-};
-
-}  // namespace detail
-
 void kernel_main() {
     constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(1);
@@ -42,7 +23,7 @@ void kernel_main() {
     constexpr auto output_reduced_args =
         TensorAccessorArgs<decltype(output_mapping_args)::next_compile_time_args_offset()>();
 
-    using data_addr_t = detail::DataTypeHolder<datum_size_bytes>::type;
+    using data_addr_t = tt::data_movement::common::ByteSizeAddressType<datum_size_bytes>::type;
 
     const auto output_mapping_base_addr = get_arg_val<uint32_t>(0);
     const auto start_idx = get_arg_val<uint32_t>(1);

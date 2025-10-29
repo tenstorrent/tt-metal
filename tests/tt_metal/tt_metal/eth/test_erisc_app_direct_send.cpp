@@ -956,11 +956,6 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests)
             const auto num_eriscs =
                 MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
-                if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
-                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                    log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                    continue;
-                }
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                     static_cast<MeshDispatchFixture*>(this),
                     send_chip,
@@ -1001,11 +996,6 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                     continue;
                 }
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
-                    if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
-                        tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                        log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                        continue;
-                    }
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
                     ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                         static_cast<MeshDispatchFixture*>(this),

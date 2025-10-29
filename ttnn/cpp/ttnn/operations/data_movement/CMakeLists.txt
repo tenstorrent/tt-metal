@@ -16,16 +16,29 @@ file(
     bcast/device/kernels/*
     concat/device/kernels/*
     common/kernels/*
+    fill_pad/device/kernels/*
+    fill_rm/device/kernels/*
+    fold/device/kernels/*
+    gather/device/kernels/*
     copy/device/kernels/*
+    moe_expert_token_remap/device/kernels/*
+    non_zero_indices/device/kernels/*
     move/device/kernels/*
+    pad/device/kernels/*
     permute/device/kernels/*
+    reshape_on_device/device/kernels/*
     repeat/device/device/*
     reshape_view/device/device/*
+    scatter/device/kernels/*
+    sort/device/kernels/*
+    split/device/kernels/*
+    tilize/device/kernels/*
     sharded/device/kernels/*
     slice/device/kernels/*
     tilize_with_val_padding/device/kernels/*
     transpose/device/kernels/*
     untilize/device/kernels/*
+    untilize_with_unpadding/device/kernels/*
 )
 target_sources(
     ttnn_op_data_movement
@@ -53,6 +66,7 @@ target_sources(
             tilize_with_val_padding/device/tilize_with_val_padding_op.hpp
             transpose/transpose.hpp
             untilize/untilize.hpp
+            untilize_with_unpadding/untilize_with_unpadding.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -111,6 +125,9 @@ target_sources(
         moe_expert_token_remap/moe_expert_token_remap.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
+        moe_routing_remap/moe_routing_remap.cpp
+        moe_routing_remap/device/moe_routing_remap_device_operation.cpp
+        moe_routing_remap/device/moe_routing_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp

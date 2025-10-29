@@ -533,7 +533,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
 
     std::vector<std::thread> threads;
     for (int thread_idx = 0; thread_idx < 2; thread_idx += 1) {
-        threads.push_back(std::thread([&, thread_idx]() {
+        threads.push_back(std::thread([&]() {
             std::uniform_int_distribution<int> gen_num_datums(32, 128);
             std::mt19937 rng(seed);
 

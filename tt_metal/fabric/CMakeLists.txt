@@ -37,6 +37,13 @@ target_sources(
         mesh_graph.cpp
         erisc_datamover_builder.cpp
         builder/fabric_core_placement.cpp
+        builder/fabric_channel_allocator.cpp
+        builder/fabric_static_sized_channels_allocator.cpp
+        builder/fabric_remote_channels_allocator.cpp
+        builder/static_sized_channel_connection_writer_adapter.cpp
+        builder/fabric_router_recipe.cpp
+        builder/channel_to_pool_mapping.cpp
+        builder/multi_pool_channel_allocator.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
@@ -52,6 +59,7 @@ target_sources(
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
+        topology_mapper.cpp
 )
 
 # Include helper functions and generate headers from protobuf schemas

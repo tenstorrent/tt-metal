@@ -436,7 +436,6 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
-    ZoneScoped;
     if (inp.size() == 0) {
         return std::vector<T>();
     }
@@ -488,7 +487,6 @@ std::vector<T> convert_layout(
     std::optional<PhysicalSize> face_shape,
     const bool transpose_within_face,
     const bool transpose_of_faces) {
-    ZoneScoped;
     TT_ASSERT(shape.size() >= 2, "Shape size {} must be at least rank 2!", shape.size());
     size_t H = shape[shape.size() - 2];
     size_t W = shape[shape.size() - 1];

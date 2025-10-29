@@ -75,6 +75,11 @@ class TimingCollector:
             total_time=self.timings.get("total", 0.0),
         )
 
+    def reset(self):
+        self.timings = {}
+        self.step_timings = {}
+        return self
+
 
 @dataclass
 class PipelineTrace:
@@ -84,81 +89,6 @@ class PipelineTrace:
     timestep_input: ttnn.Tensor
     latents_output: ttnn.Tensor
     tid: int
-
-
-def create_pipeline(
-    mesh_device,
-    batch_size=1,
-    image_w=1024,
-    image_h=1024,
-    guidance_scale=3.5,
-    num_images_per_prompt=1,
-    max_t5_sequence_length=256,
-    prompt_sequence_length=333,
-    spatial_sequence_length=4096,
-    cfg_config=None,
-    sp_config=None,
-    tp_config=None,
-    num_links=None,
-    model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
-    use_cache=False,
-):
-    # defatult config per mesh shape
-    default_config = {
-        (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
-        (4, 8): {"cfg_config": (2, 1), "sp_config": (4, 0), "tp_config": (4, 1), "num_links": 4},
-    }
-
-    # get config from user or default if not provided
-    cfg_factor, cfg_axis = cfg_config or default_config[tuple(mesh_device.shape)]["cfg_config"]
-    sp_factor, sp_axis = sp_config or default_config[tuple(mesh_device.shape)]["sp_config"]
-    tp_factor, tp_axis = tp_config or default_config[tuple(mesh_device.shape)]["tp_config"]
-    num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
-
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-
-    guidance_cond = 2 if (guidance_scale > 1 and cfg_factor == 1) else 1
-
-    # Enable T5 based on device configuration
-    # T5 is disabled if mesh needs reshaping for CLIP encoder
-    submesh_shape = list(mesh_device.shape)
-    submesh_shape[cfg_axis] //= cfg_factor
-    enable_t5_text_encoder = submesh_shape[1] == 4  # T5 only works if submesh doesn't need reshaping
-
-    logger.info(f"Mesh device shape: {mesh_device.shape}")
-    logger.info(f"Submesh shape: {submesh_shape}")
-    logger.info(f"Parallel config: {parallel_config}")
-    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
-
-    # Create pipeline
-    pipeline = StableDiffusion3Pipeline(
-        mesh_device=mesh_device,
-        enable_t5_text_encoder=enable_t5_text_encoder,
-        guidance_cond=guidance_cond,
-        parallel_config=parallel_config,
-        num_links=num_links,
-        height=image_h,
-        width=image_w,
-        model_checkpoint_path=model_checkpoint_path,
-        use_cache=use_cache,
-    )
-
-    pipeline.prepare(
-        batch_size=batch_size,
-        num_images_per_prompt=num_images_per_prompt,
-        width=image_w,
-        height=image_h,
-        guidance_scale=guidance_scale,
-        max_t5_sequence_length=max_t5_sequence_length,
-        prompt_sequence_length=prompt_sequence_length,
-        spatial_sequence_length=spatial_sequence_length,
-    )
-
-    return pipeline
 
 
 class StableDiffusion3Pipeline:
@@ -298,6 +228,7 @@ class StableDiffusion3Pipeline:
                     model_name="stable-diffusion-3.5-large",
                     subfolder="transformer",
                     parallel_config=self.dit_parallel_config,
+                    mesh_shape=tuple(submesh_device.shape),
                     dtype="bf16",
                 )
                 # create cache if it doesn't exist
@@ -382,8 +313,8 @@ class StableDiffusion3Pipeline:
         )
 
         # Load state dicts into new encoders
-        self._text_encoder_1.load_state_dict(text_encoder_1_state_dict)
-        self._text_encoder_2.load_state_dict(text_encoder_2_state_dict)
+        self._text_encoder_1.load_torch_state_dict(text_encoder_1_state_dict)
+        self._text_encoder_2.load_torch_state_dict(text_encoder_2_state_dict)
 
         if enable_t5_text_encoder:
             logger.info("creating TT-NN T5 text encoder...")
@@ -414,7 +345,7 @@ class StableDiffusion3Pipeline:
             )
 
             # Load state dict into new encoder
-            self._text_encoder_3.load_state_dict(torch_text_encoder_3_state_dict)
+            self._text_encoder_3.load_torch_state_dict(torch_text_encoder_3_state_dict)
         else:
             self._text_encoder_3 = None
 
@@ -456,103 +387,89 @@ class StableDiffusion3Pipeline:
         self._prepared_max_t5_sequence_length = max_t5_sequence_length
         self._prepared_prompt_sequence_length = prompt_sequence_length
 
-        """
-        do_classifier_free_guidance = guidance_scale > 1
+    @staticmethod
+    def create_pipeline(
+        mesh_device,
+        batch_size=1,
+        image_w=1024,
+        image_h=1024,
+        guidance_scale=3.5,
+        num_images_per_prompt=1,
+        max_t5_sequence_length=256,
+        prompt_sequence_length=333,
+        spatial_sequence_length=4096,
+        cfg_config=None,
+        sp_config=None,
+        tp_config=None,
+        num_links=None,
+        model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
+        use_cache=False,
+    ):
+        # defatult config per mesh shape
+        default_config = {
+            (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
+            (4, 8): {"cfg_config": (2, 1), "sp_config": (4, 0), "tp_config": (4, 1), "num_links": 4},
+        }
 
-        prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
-            prompt_1=[""],
-            prompt_2=[""],
-            prompt_3=[""],
-            negative_prompt_1=[""],
-            negative_prompt_2=[""],
-            negative_prompt_3=[""],
+        # get config from user or default if not provided
+        cfg_factor, cfg_axis = cfg_config or default_config[tuple(mesh_device.shape)]["cfg_config"]
+        sp_factor, sp_axis = sp_config or default_config[tuple(mesh_device.shape)]["sp_config"]
+        tp_factor, tp_axis = tp_config or default_config[tuple(mesh_device.shape)]["tp_config"]
+        num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
+
+        parallel_config = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+        )
+
+        guidance_cond = 2 if (guidance_scale > 1 and cfg_factor == 1) else 1
+
+        # Enable T5 based on device configuration
+        # T5 is disabled if mesh needs reshaping for CLIP encoder
+        submesh_shape = list(mesh_device.shape)
+        submesh_shape[cfg_axis] //= cfg_factor
+        enable_t5_text_encoder = submesh_shape[1] == 4  # T5 only works if submesh doesn't need reshaping
+
+        logger.info(f"Mesh device shape: {mesh_device.shape}")
+        logger.info(f"Submesh shape: {submesh_shape}")
+        logger.info(f"Parallel config: {parallel_config}")
+        logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+
+        # Create pipeline
+        pipeline = StableDiffusion3Pipeline(
+            mesh_device=mesh_device,
+            enable_t5_text_encoder=enable_t5_text_encoder,
+            guidance_cond=guidance_cond,
+            parallel_config=parallel_config,
+            num_links=num_links,
+            height=image_h,
+            width=image_w,
+            model_checkpoint_path=model_checkpoint_path,
+            use_cache=use_cache,
+        )
+
+        pipeline.prepare(
+            batch_size=batch_size,
             num_images_per_prompt=num_images_per_prompt,
+            width=image_w,
+            height=image_h,
+            guidance_scale=guidance_scale,
             max_t5_sequence_length=max_t5_sequence_length,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-        )
-
-        # TODO: pass the patch_size value
-        patch_size = 2
-        latents_shape = (
-            batch_size * num_images_per_prompt,
-            height // self._torch_vae_scale_factor,
-            (width // self._torch_vae_scale_factor) // patch_size,
-            self._num_channels_latents * patch_size,
-        )
-
-        tt_prompt_embeds = ttnn.from_torch(
-            prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
-        )
-        tt_pooled_prompt_embeds = ttnn.from_torch(
-            pooled_prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
-
-        )
-
-        tt_timestep = ttnn.allocate_tensor_on_device([batch_size * num_images_per_prompt * (1+do_classifier_free_guidance), 1], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, self._device)
-        tt_sigma_difference = ttnn.allocate_tensor_on_device([1, 1], ttnn.bfloat16, ttnn.TILE_LAYOUT, self._device)
-        tt_latents = ttnn.allocate_tensor_on_device(latents_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self._device)
-
-        self._device.disable_and_clear_program_cache()
-
-        # cache
-        self._step(
-            timestep=tt_timestep,
-            latents=tt_latents,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            prompt_embeds=tt_prompt_embeds,
-            pooled_prompt_embeds=tt_pooled_prompt_embeds,
-            guidance_scale=guidance_scale,
-            sigma_difference=tt_sigma_difference,
-            prompt_sequence_length=prompt_sequence_length,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        self._step(
-            timestep=tt_timestep,
-            latents=tt_latents,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            prompt_embeds=tt_prompt_embeds,
-            pooled_prompt_embeds=tt_pooled_prompt_embeds,
-            guidance_scale=guidance_scale,
-            sigma_difference=tt_sigma_difference,
             prompt_sequence_length=prompt_sequence_length,
             spatial_sequence_length=spatial_sequence_length,
         )
 
-        # trace
-        tid = ttnn.begin_trace_capture(self._device)
-        self._step(
-            timestep=tt_timestep,
-            latents=tt_latents,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            prompt_embeds=tt_prompt_embeds,
-            pooled_prompt_embeds=tt_pooled_prompt_embeds,
-            guidance_scale=guidance_scale,
-            sigma_difference=tt_sigma_difference,
-            prompt_sequence_length=prompt_sequence_length,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        ttnn.end_trace_capture(self._device, tid)
+        return pipeline
 
-        self._trace = PipelineTrace(
-            tid=tid,
-            spatial_input_output=tt_latents,
-            prompt_input=tt_prompt_embeds,
-            pooled_projection_input=tt_pooled_prompt_embeds,
-            prompt_sequence_length=prompt_sequence_length,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        """
-
-    def run_single_prompt(self, prompt, negative_prompt, num_inference_steps, seed):
+    def run_single_prompt(self, prompt, negative_prompt="", num_inference_steps=40, seed=None):
         return self.__call__(
             prompt_1=[prompt],
             prompt_2=[prompt],
             prompt_3=[prompt],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
+            negative_prompt_1=[negative_prompt or ""],
+            negative_prompt_2=[negative_prompt or ""],
+            negative_prompt_3=[negative_prompt or ""],
             num_inference_steps=num_inference_steps,
             seed=seed,
             traced=True,
@@ -572,7 +489,7 @@ class StableDiffusion3Pipeline:
         traced: bool = False,
         clip_skip: int | None = None,
     ) -> List[Image.Image]:
-        timer = self.timing_collector
+        timer = self.timing_collector.reset() if self.timing_collector else None
 
         with timer.time_section("total") if timer else nullcontext():
             start_time = time.time()

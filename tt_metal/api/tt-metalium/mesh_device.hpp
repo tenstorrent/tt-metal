@@ -72,7 +72,7 @@ private:
     class ScopedDevices {
     private:
         std::vector<MaybeRemote<IDevice*>> devices_;
-        std::map<chip_id_t, IDevice*> opened_local_devices_;
+        std::map<ChipId, IDevice*> opened_local_devices_;
 
     public:
         // Constructor acquires physical resources
@@ -150,7 +150,7 @@ public:
     // IDevice interface implementation
     tt::ARCH arch() const override;
     int id() const override;
-    chip_id_t build_id() const override;
+    ChipId build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
 
@@ -175,8 +175,8 @@ public:
     std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
     bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
-    std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
-    std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
+    std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
+    std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) override;
     CoreCoord compute_with_storage_grid_size() const override;
@@ -255,7 +255,7 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
-    IDevice* get_device(chip_id_t physical_device_id) const;
+    IDevice* get_device(ChipId physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
@@ -296,6 +296,7 @@ public:
     std::string to_string() const;
     bool is_parent_mesh() const;
 
+    const std::shared_ptr<MeshDevice>& get_parent_mesh() const;
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(

@@ -50,17 +50,6 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
-  # setup:
-  #   name: Setup runner labels for deploy
-  #   runs-on: ubuntu-latest
-  #   outputs:
-  #     deployrunner: ${{ steps.step1.outputs.deployrunner }}
-  #   steps:
-  #     - name: Set runs-on for deploy
-  #       id: step1
-  #       run: |
-  #         # local_var="\'[\"${{ inputs.hw-config }}\", \"${{ inputs.runner-label }}\"]\'"
-  #         echo "deployrunner=${{ inputs.runner-label }}" >> $GITHUB_OUTPUT
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -73,43 +62,68 @@ jobs:
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
   test-dispatch:
-    # needs: setup
     needs: build-artifact
     timeout-minutes: 120
     runs-on: ${{ fromJSON(inputs.runner-label) }}
+    container:
+      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && 'harbor.ci.tenstorrent.net/' || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        TT_METAL_HOME: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
+        - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
+        timeout-minutes: 10
         with:
+          fetch-depth: 1
           submodules: recursive
+          path: docker-job
           ref: ${{ inputs.commit || github.sha }}
-      - uses: ./.github/actions/ensure-active-weka-mount
-        timeout-minutes: 3
-        if: ${{ inputs.arch != 'blackhole' }}
-      - name: ⬇️ Download Build
+      - name: 📦 Download Build Artifact
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
+          path: docker-job
+      - name: 📂 Extract Build Files
+        timeout-minutes: 10
+        working-directory: docker-job
+        run: tar --zstd -xf ttm_any.tar.zst
+        shell: bash
+      - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Run regression in loop in docker
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          install_wheel: true
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ inputs.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-          run_args: |
-            pip3 install pytest-repeat
-            ${{ inputs.command }}
+          path: docker-job
+      - name: 💿 Install Wheel
+        timeout-minutes: 10
+        working-directory: docker-job
+        run: |
+          echo "📂 In directory: $(pwd)"
+          echo "📄 Files:"
+          ls -la
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          echo "📦 Installing $WHEEL_FILENAME"
+          pip3 install "$WHEEL_FILENAME"
+        shell: bash
+      - name: Run regression in loop
+        run: |
+          pip3 install pytest-repeat
+          ${{ inputs.command }}
+        shell: bash
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

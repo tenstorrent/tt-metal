@@ -9,7 +9,7 @@ import ttnn
 
 from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import run_all_to_all_dispatch_test
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import run_all_to_all_dispatch_test
 
 
 # Override the default timeout in seconds for hang detection.
@@ -47,6 +47,22 @@ parameters = {
         "num_links": [1],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "num_iters": [1],
+    },
+    "lead_model_suite": {
+        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+        "fabric_config": FABRIC_CONFIGS,
+        "input_shape": [[_pd(1), 1, 32, 2880], [_pd(4), 1, 1, 7168]],  # GPT-OSS  # deepseek cluster_axis=0
+        "experts": [_pd(i) for i in [2, 4, 8]],
+        "select_experts_k": [2, 4, 8],
+        "cluster_axis": [0, 1],
+        "num_links": [1],
+        "input_dtype": [ttnn.bfloat16],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },

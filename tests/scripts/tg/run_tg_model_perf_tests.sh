@@ -2,8 +2,8 @@
 
 run_tg_cnn_tests() {
 
-  echo "LOG_METAL: Running run_tg_resnet50_tests"
-  env pytest -n auto models/demos/tg/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_tg" ; fail+=$?
+  echo "LOG_METAL: Running run_tg_cnn_tests"
+  env pytest -n auto models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m "model_perf_tg" ; fail+=$?
 
   # Merge all the generated reports
   env python3 models/perf/merge_perf_results.py; fail+=$?

@@ -1635,7 +1635,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
         input.memory_config());  // TODO: Remove after ternary forward ops migration is completed
 
     auto shape_wh = input.padded_shape();
-    TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1", "Error");
+    TT_FATAL(shape_wh[0] == 1, "Input shape[0] must be 1 but got {}", shape_wh[0]);
     auto ttnn_device = input.device();
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input

@@ -44,6 +44,7 @@ class Buffer;
 // These are supplied from impl
 enum class BufferType;
 struct AllocatorConfig;
+class AllocatorState;
 
 // THREAD SAFETY: Allocator is thread safe.
 class Allocator {
@@ -97,7 +98,7 @@ public:
 
     Statistics get_statistics(const BufferType& buffer_type) const;
     MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;
-    void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const;
+    void dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const;
 
     std::optional<DeviceAddr> get_lowest_occupied_l1_address(uint32_t bank_id) const;
 
@@ -108,6 +109,13 @@ public:
     void mark_allocations_safe();
 
     void clear();
+
+    // AllocatorState Methods
+    // Extracts the current state of the allocator.
+    AllocatorState extract_state() const;
+
+    // Overrides the current state with the given state, deallocating all of existing buffers.
+    void override_state(const AllocatorState& state);
 
 protected:
     // Initializers for mapping banks to DRAM channels / L1 banks

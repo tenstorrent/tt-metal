@@ -13,10 +13,19 @@ class TtnnSPPF:
         self.cv2 = TtnnConv(device, parameter.cv2, conv_pt.cv2, reshard=True)
 
     def __call__(self, device, x, use_sharded_concat=True):
-        x = self.cv1(device, x)
+        x = self.cv1(device, x, output_rm_needed=True)
         if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x1 = x
+        core_grid_64 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+        sharded_memory_config_64cores = ttnn.create_sharded_memory_config(
+            shape=x.shape,
+            core_grid=core_grid_64,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        x = ttnn.to_memory_config(x, sharded_memory_config_64cores)
         m1 = ttnn.max_pool2d(
             x,
             batch_size=self.parameter.cv2.conv.batch_size,
@@ -54,6 +63,6 @@ class TtnnSPPF:
             y = sharded_concat([x1, m1, m2, m3], to_interleaved=False)
         else:
             y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = self.cv2(device, y)
+        x = self.cv2(device, y, output_rm_needed=True)
         deallocate_tensors(x1, m1, m2, m3)
         return x

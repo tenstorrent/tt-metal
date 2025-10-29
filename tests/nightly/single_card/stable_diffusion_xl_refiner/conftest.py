@@ -1,0 +1,1 @@
+../../../../models/experimental/stable_diffusion_xl_refiner/conftest.py

@@ -101,23 +101,21 @@ struct NocUnicastInlineWriteCommandHeader {
     uint32_t value;
 };
 struct NocUnicastAtomicIncCommandHeader {
-    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), wrap(wrap), val(val), flush(flush) {}
+    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
-    uint16_t wrap;
-    uint8_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
     NocUnicastAtomicIncFusedCommandHeader(
-        uint64_t noc_address, uint64_t semaphore_noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), wrap(wrap), val(val), flush(flush) {}
+        uint64_t noc_address, uint64_t semaphore_noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
     uint64_t semaphore_noc_address;
-    uint16_t wrap;
-    uint8_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocMulticastCommandHeader {
@@ -129,8 +127,7 @@ struct NocMulticastCommandHeader {
 };
 struct NocMulticastAtomicIncCommandHeader {
     uint32_t address;
-    uint16_t val;
-    uint16_t wrap;
+    uint32_t val;
     uint8_t noc_x_start;
     uint8_t noc_y_start;
     uint8_t size_x;
@@ -138,11 +135,13 @@ struct NocMulticastAtomicIncCommandHeader {
 };
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
-static_assert(sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocMulticastCommandHeader size is not 16 bytes");
-static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastCommandHeader size is not 16 bytes");
+static_assert(
+    sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocUnicastInlineWriteCommandHeader size is not 16 bytes");
+static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastAtomicIncCommandHeader size is not 16 bytes");
 static_assert(
     sizeof(NocUnicastAtomicIncFusedCommandHeader) == 24, "NocUnicastAtomicIncFusedCommandHeader size is not 24 bytes");
-static_assert(sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocAtomicIncCommandHeader size is not 12 bytes");
+static_assert(
+    sizeof(NocMulticastAtomicIncCommandHeader) == 12, "NocMulticastAtomicIncCommandHeader size is not 12 bytes");
 union NocCommandFields {
     NocUnicastCommandHeader unicast_write;
     NocUnicastInlineWriteCommandHeader unicast_inline_write;
@@ -379,7 +378,6 @@ struct PacketHeaderBase {
         this->command_fields.unicast_seminc_fused.noc_address = noc_addr;
         this->command_fields.unicast_seminc_fused.semaphore_noc_address = semaphore_noc_addr;
         this->command_fields.unicast_seminc_fused.val = noc_fused_unicast_write_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc_fused.wrap = noc_fused_unicast_write_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc_fused.flush = noc_fused_unicast_write_atomic_inc_command_header.flush;
 
         this->payload_size_bytes = payload_size_bytes;
@@ -402,7 +400,6 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc.flush = noc_unicast_atomic_inc_command_header.flush;
         this->payload_size_bytes = 0;
 #else
@@ -421,7 +418,6 @@ struct PacketHeaderBase {
         this->command_fields.mcast_seminc.size_x = noc_multicast_atomic_inc_command_header.size_x;
         this->command_fields.mcast_seminc.size_y = noc_multicast_atomic_inc_command_header.size_y;
         this->command_fields.mcast_seminc.val = noc_multicast_atomic_inc_command_header.val;
-        this->command_fields.mcast_seminc.wrap = noc_multicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = payload_size_bytes;
         return static_cast<volatile Derived*>(this);
     }
@@ -555,6 +551,42 @@ public:
     }
 };
 
+struct LowLatencyMeshRoutingFieldsV2 {
+    static constexpr uint32_t FIELD_WIDTH = 8;
+    static constexpr uint32_t FIELD_MASK = 0b1111;
+    static constexpr uint32_t NOOP = 0b0000;
+    static constexpr uint32_t FORWARD_EAST = 0b0001;
+    static constexpr uint32_t FORWARD_WEST = 0b0010;
+    static constexpr uint32_t WRITE_AND_FORWARD_EW = 0b0011;
+    static constexpr uint32_t FORWARD_NORTH = 0b0100;
+    static constexpr uint32_t WRITE_AND_FORWARD_NE = 0b0101;
+    static constexpr uint32_t WRITE_AND_FORWARD_NW = 0b0110;
+    static constexpr uint32_t WRITE_AND_FORWARD_NEW = 0b0111;
+    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
+    static constexpr uint32_t WRITE_AND_FORWARD_SE = 0b1001;
+    static constexpr uint32_t WRITE_AND_FORWARD_SW = 0b1010;
+    static constexpr uint32_t WRITE_AND_FORWARD_SEW = 0b1011;
+    static constexpr uint32_t WRITE_AND_FORWARD_NS = 0b1100;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSE = 0b1101;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSW = 0b1110;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSEW = 0b1111;
+
+    union {
+        uint16_t value;  // Referenced for fast increment when updating hop count in packet header.
+                         // Also used when doing noc inline dword write to update packet header in next hop
+                         // router.
+        struct {
+            uint16_t hop_index : 5;
+            uint16_t branch_east_offset : 5;  // Referenced when updating hop index for mcast east branch
+            uint16_t branch_west_offset : 5;  // Referenced when updating hop index for mcast east branch
+            uint16_t reserved : 1;            // TODO: will be is_mcast_active?
+        };
+    };
+    uint8_t padding0[2];  // 2B, this is needed for now
+};
+static_assert(
+    sizeof(LowLatencyMeshRoutingFieldsV2) == sizeof(uint32_t), "LowLatencyMeshRoutingFields size is not 2 bytes");
+
 struct LowLatencyMeshRoutingFields {
     static constexpr uint32_t FIELD_WIDTH = 8;
     static constexpr uint32_t FIELD_MASK = 0b1111;
@@ -587,16 +619,6 @@ struct LowLatencyMeshRoutingFields {
     };
 };
 
-struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacketHeader> {
-    LowLatencyMeshRoutingFields routing_fields;
-    uint8_t route_buffer[32];
-    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
-
-    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
-};
-
 struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
     union {
         struct {
@@ -618,12 +640,49 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 };
 
+// WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
+#define HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE 26
+
+struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
+    LowLatencyMeshRoutingFieldsV2 routing_fields;  // 2B
+    uint8_t route_buffer[HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE];
+    union {
+        union {
+            struct {
+                uint8_t mcast_params_south : 4;
+                uint8_t mcast_params_north : 4;
+            };
+            uint8_t mcast_params_ns;
+        };
+        union {
+            struct {
+                uint8_t mcast_params_west : 4;
+                uint8_t mcast_params_east : 4;
+            };
+            uint8_t mcast_params_ew;
+        };
+        uint16_t mcast_params_16;
+    };
+    union {
+        struct {
+            uint16_t dst_start_chip_id;  // TODO: uint8_t as the max is 256 chips
+            uint16_t dst_start_mesh_id;
+        };
+        uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
+    };  // 4B
+    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+
+    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
+} __attribute__((packed));
+static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
+
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
 static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
-static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyMeshPacketHeader) is not equal to 64B");
 static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
 
 #define STRINGIFY(x) #x
@@ -654,8 +713,8 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
+#define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
+#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFieldsV2
 #elif ((ROUTING_MODE & ROUTING_MODE_DYNAMIC)) == ROUTING_MODE_DYNAMIC
 #define DYNAMIC_ROUTING_ENABLED 1
 #define PACKET_HEADER_TYPE tt::tt_fabric::MeshPacketHeader

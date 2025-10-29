@@ -13,10 +13,9 @@ A Mesh Graph Descriptor is the input to the Fabric Control Plane to specify a pa
 
 ## Usage
 
-To enable MGD 2.0 in your TT_METAL program, use the `TT_METAL_USE_MGD_2_0` environment variable to enable usage of MGD 2.0.
-
+MGD 2.0 is enabled by default in your TT_METAL program, use the `TT_METAL_USE_MGD_1_0` environment variable to use MGD 1.0 instead.
 ```
-  TT_METAL_USE_MGD_2_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
+  TT_METAL_USE_MGD_1_0=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1DFixture.*"
 ```
 
 Or if you're using a custom mesh graph descriptor, it will automatically use MGD 2.0 if the file name ends with `.textproto`

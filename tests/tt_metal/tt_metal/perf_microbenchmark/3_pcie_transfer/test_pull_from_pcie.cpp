@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 
-        chip_id_t mmio_device_id =
+        ChipId mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
         TT_ASSERT(device_id == mmio_device_id, "This test can only be run on MMIO device!");
         uint16_t channel =

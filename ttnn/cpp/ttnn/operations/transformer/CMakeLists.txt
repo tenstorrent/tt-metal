@@ -7,14 +7,23 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_transformer)
 set_target_properties(
     ttnn_op_transformer
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels sdpa_decode/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    sdpa/device/kernels/*
+    sdpa_decode/device/kernels/*
+    sdpa_windowed/device/kernels/*
+)
 target_sources(
     ttnn_op_transformer
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

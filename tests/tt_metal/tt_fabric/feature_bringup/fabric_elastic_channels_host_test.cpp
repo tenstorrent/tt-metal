@@ -37,6 +37,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include <array>
 #include <bit>
@@ -69,7 +70,7 @@ public:
 
         if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() >= 2 and
             tt::tt_metal::GetNumPCIeDevices() >= 1) {
-            std::vector<chip_id_t> ids(num_devices_, 0);
+            std::vector<ChipId> ids(num_devices_, 0);
             std::iota(ids.begin(), ids.end(), 0);
             devices_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(ids);
         } else {
@@ -93,7 +94,7 @@ public:
         devices_.clear();
     }
 
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices_;
     tt::ARCH arch_;
     size_t num_devices_;
 
@@ -213,10 +214,10 @@ TestConfig parse_cli_config(int argc, char** argv) {
 
 struct DeviceTestResources {
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device = nullptr;
-    CoreRangeSet worker_cores = {};
+    CoreRangeSet worker_cores;
     std::vector<CoreCoord> worker_cores_vec;
-    CoreCoord eth_core = {};
-    tt_metal::Program program = {};
+    CoreCoord eth_core;
+    tt_metal::Program program;
     uint32_t worker_ack_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_new_chunk_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_src_buffer_address = std::numeric_limits<uint32_t>::max();

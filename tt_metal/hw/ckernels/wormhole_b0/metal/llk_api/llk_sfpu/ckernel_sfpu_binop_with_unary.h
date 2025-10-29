@@ -1,3 +1,4 @@
+
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -83,6 +84,23 @@ void calculate_add_int32(uint32_t scalar) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);
         TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);  // Using mov to preserve the scalar value after each iteration
         TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 4);
+        TTI_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, 0);
+        sfpi::dst_reg++;
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+void calculate_sub_int32(uint32_t scalar) {
+    int int_scalar = scalar;
+    // Load value scalar to lreg2
+    _sfpu_load_imm32_(p_sfpu::LREG2, int_scalar);
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, 0);
+        // Move scalar to lreg1 because lreg1 is the destination register in each loop iteration, so lreg2 keeps the
+        // original scalar value.
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+        // Used 6 as imod to convert operand B to 2's complement for sub operation
+        TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
         TTI_SFPSTORE(p_sfpu::LREG1, INT32, ADDR_MOD_3, 0);
         sfpi::dst_reg++;
     }

@@ -22,25 +22,25 @@ ALWI void process_tile(
     using namespace ckernel;
 
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
-#if BCAST_PRED
+#if BCAST_A
     cb_wait_front(predicate_cb, num_tiles_per_cycle);  // predicate_cb is broadcast
 #endif
-#if BCAST_TRUE
+#if BCAST_B
     cb_wait_front(true_cb, num_tiles_per_cycle);  // true_cb is broadcast
 #endif
-#if BCAST_FALSE
+#if BCAST_C
     cb_wait_front(false_cb, num_tiles_per_cycle);  // false_cb is broadcast
 #endif
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         // Wait for non-broadcast CBs inside loop
-#if !BCAST_PRED
+#if !BCAST_A
         cb_wait_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if !BCAST_TRUE
+#if !BCAST_B
         cb_wait_front(true_cb, num_tiles_per_cycle);
 #endif
-#if !BCAST_FALSE
+#if !BCAST_C
         cb_wait_front(false_cb, num_tiles_per_cycle);
 #endif
 
@@ -72,25 +72,25 @@ ALWI void process_tile(
         cb_push_back(cb_out, num_tiles_per_cycle);
 
         // Pop non-broadcast CBs inside loop
-#if !BCAST_PRED
+#if !BCAST_A
         cb_pop_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if !BCAST_TRUE
+#if !BCAST_B
         cb_pop_front(true_cb, num_tiles_per_cycle);
 #endif
-#if !BCAST_FALSE
+#if !BCAST_C
         cb_pop_front(false_cb, num_tiles_per_cycle);
 #endif
     }
 
     // Pop broadcast CBs outside loop
-#if BCAST_PRED
+#if BCAST_A
     cb_pop_front(predicate_cb, num_tiles_per_cycle);
 #endif
-#if BCAST_TRUE
+#if BCAST_B
     cb_pop_front(true_cb, num_tiles_per_cycle);
 #endif
-#if BCAST_FALSE
+#if BCAST_C
     cb_pop_front(false_cb, num_tiles_per_cycle);
 #endif
 }

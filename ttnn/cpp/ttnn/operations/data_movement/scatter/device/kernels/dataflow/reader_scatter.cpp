@@ -107,7 +107,8 @@ FORCE_INLINE void scatter_along_chunk(
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
     const uint32_t& input_chunk_size,
-    const uint32_t& index_chunk_size) {
+    const uint32_t& index_chunk_size,
+    const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
     const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
     const uint32_t index_l1_read_addr = get_read_ptr(index_cb);
     const uint32_t source_l1_read_addr = get_read_ptr(source_cb);
@@ -138,7 +139,38 @@ FORCE_INLINE void scatter_along_chunk(
             continue;
         }
         volatile number_type& source_value = source_l1_read_ptr[index_in_index_chunk];
-        output_l1_write_ptr[index_value - input_offset] = source_value;
+        const uint32_t& output_index = index_value - input_offset;
+        switch (scatter_reduction_type) {
+            case ScatterReductionType::INVALID: {
+                output_l1_write_ptr[output_index] = source_value;
+                break;
+            }
+
+            case ScatterReductionType::ADD: {
+                output_l1_write_ptr[output_index] += source_value;
+                break;
+            }
+
+            case ScatterReductionType::MULTIPLY: {
+                output_l1_write_ptr[output_index] *= source_value;
+                break;
+            }
+
+            case ScatterReductionType::AMIN: {
+                output_l1_write_ptr[output_index] = std::min(output_l1_write_ptr[output_index], source_value);
+                break;
+            }
+
+            case ScatterReductionType::AMAX: {
+                output_l1_write_ptr[output_index] = std::max(output_l1_write_ptr[output_index], source_value);
+                break;
+            }
+
+            default: {
+                output_l1_write_ptr[output_index] = source_value;
+                break;
+            }
+        }
     }
 }
 

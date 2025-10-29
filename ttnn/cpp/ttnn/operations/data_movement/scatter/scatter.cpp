@@ -11,6 +11,7 @@
 
 #include "slice/slice.hpp"
 #include "tt_stl/small_vector.hpp"
+#include "scatter/scatter_enums.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
@@ -278,7 +279,7 @@ Tensor ScatterOperation::invoke(
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
-        std::nullopt);
+        opt_reduction);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
         after_transpose_shape,

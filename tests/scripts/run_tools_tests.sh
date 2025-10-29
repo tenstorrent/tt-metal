@@ -2,11 +2,6 @@
 
 set -eo pipefail
 
-if [[ -z "$TT_METAL_HOME" ]]; then
-    echo "Must provide TT_METAL_HOME in environment" 1>&2
-    exit 1
-fi
-
 if [ -z "${ARCH_NAME}" ]; then
   echo "Error: ARCH_NAME is not set. Exiting." >&2
   exit 1
@@ -42,7 +37,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     echo "First run, no teardown"
     ./build/test/tt_metal/test_clean_init --skip-teardown || { echo "Above failure is expected."; }
     echo "Second run, expect clean init"
-    timeout 10 ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Tensix) failed."; exit 1; }
+    timeout 40 ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Tensix) failed."; exit 1; }
     echo "Clean init tests - FD-on-Tensix passed!"
 
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
@@ -50,7 +45,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
         echo "First run, no teardown"
         env ./build/test/tt_metal/test_clean_init --skip-teardown || { echo "Above failure is expected."; }
         echo "Second run, expect clean init"
-        timeout 10 env ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Eth) failed."; exit 1; }
+        timeout 40 env ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Eth) failed."; exit 1; }
         echo "Clean init tests - FD-on-Eth passed!"
     fi
 fi

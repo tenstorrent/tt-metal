@@ -122,7 +122,7 @@ int main() {
     auto c = MeshBuffer::create(distributed_buffer_config, local_buffer_config, mesh_device.get());
 
     // Create and initialize source data
-    constexpr float val_to_add = 0.5f;
+    constexpr auto val_to_add = 0.5f;
     std::vector<uint32_t> a_data =
         create_random_vector_of_bfloat16(distributed_buffer_size_bytes, 1 /* rand_max_float */, 0 /* seed */);
     std::vector<uint32_t> b_data = create_constant_vector_of_bfloat16(distributed_buffer_size_bytes, val_to_add);
@@ -147,7 +147,7 @@ int main() {
     EnqueueReadMeshBuffer(cq, result_data, c, true /* blocking */);
 
     // Verify results
-    auto transform_to_golden = [val_to_add](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };
+    auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };
     std::vector<uint32_t> golden_data =
         pack_bfloat16_vec_into_uint32_vec(unpack_uint32_vec_into_bfloat16_vec(a_data, transform_to_golden));
 

@@ -8,39 +8,50 @@ from models.experimental.yolo_common.yolo_utils import concat
 
 
 class TtnnC3k:
-    def __init__(self, device, parameter, conv_pt):
+    def __init__(self, device, parameter, conv_pt, block_sharded=False):
+        self.block_sharded = block_sharded
         self.cv1 = TtYOLOv12xConv2D(
             conv=parameter.cv1.conv,
             conv_pth=conv_pt.cv1.conv,
             device=device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            if block_sharded
+            else ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         self.cv2 = TtYOLOv12xConv2D(
             conv=parameter.cv2.conv,
             conv_pth=conv_pt.cv2.conv,
             device=device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            if block_sharded
+            else ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         )
         self.cv3 = TtYOLOv12xConv2D(
             conv=parameter.cv3.conv,
             conv_pth=conv_pt.cv3.conv,
             device=device,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            if block_sharded
+            else ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             deallocate_activation=True,
         )
-        self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0])
-        self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1])
+        self.k1 = TtnnBottleneck(device, parameter.m[0], conv_pt.m[0], block_sharded=block_sharded)
+        self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1], block_sharded=block_sharded)
 
     def __call__(self, x, i=0, j=0):
         x1 = self.cv1(x)
         x2 = self.cv2(x)
         k1 = self.k1(x1)
         ttnn.deallocate(x1)
-
         k2 = self.k2(k1)
         ttnn.deallocate(k1)
-
-        x = concat(-1, True, k2, x2)
+        if self.block_sharded:
+            x = concat(-1, False, k2, x2)
+        else:
+            x = concat(-1, True, x2, k2)
         ttnn.deallocate(x2)
         ttnn.deallocate(k2)
 
@@ -57,6 +68,7 @@ class TtnnC3k2:
         is_bk_enabled=False,
         use_1d_systolic_array=True,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        block_sharded=False,
     ):
         self.parameter = parameter
         self.is_bk_enabled = is_bk_enabled
@@ -87,13 +99,13 @@ class TtnnC3k2:
         if is_bk_enabled:
             self.m = Bottleneck(device, parameter[0], conv_pt.m[0])
         else:
-            self.m_0 = TtnnC3k(device, parameter[0], conv_pt.m[0])
-            self.m_1 = TtnnC3k(device, parameter[1], conv_pt.m[1])
+            self.m_0 = TtnnC3k(device, parameter[0], conv_pt.m[0], block_sharded=block_sharded)
+            self.m_1 = TtnnC3k(device, parameter[1], conv_pt.m[1], block_sharded=block_sharded)
 
     def __call__(self, x, i=0):
         x = self.cv1(x)
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
 
         y1 = x[:, :, :, : x.shape[-1] // 2]
         y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
@@ -109,6 +121,5 @@ class TtnnC3k2:
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
         ttnn.deallocate(y3)
-
         x = self.cv2(x)
         return x

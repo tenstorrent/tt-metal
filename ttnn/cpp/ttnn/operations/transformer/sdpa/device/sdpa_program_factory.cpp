@@ -38,7 +38,8 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
     bool use_mla,
-    uint32_t head_dim_v) {
+    uint32_t head_dim_v,
+    std::optional<uint32_t> sliding_window_size) {
     /*
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
@@ -111,6 +112,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     log_debug(tt::LogOp, "q_num_chunks: {}", q_num_chunks);
     log_debug(tt::LogOp, "k_num_chunks: {}", k_num_chunks);
     log_debug(tt::LogOp, "NKH: {}", NKH);
+    log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     // In chunked prefill mode, the offset of Q in terms of Q chunks
     uint32_t chunked_q_chunk_offset = 0;
@@ -372,6 +374,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (std::uint32_t)use_provided_mask,
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
+        sliding_window_size.value_or(0),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -406,6 +409,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         (std::uint32_t)use_padded_mask,
         (uint32_t)is_chunked,
         scale_union.u,
+        sliding_window_size.value_or(0),
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);

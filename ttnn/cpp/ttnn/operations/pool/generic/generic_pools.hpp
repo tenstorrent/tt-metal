@@ -3,14 +3,18 @@
 
 #pragma once
 
+#include <array>
+#include <cstdint>
+#include <optional>
+#include <variant>
+#include <vector>
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
-
-#include "device/pool_op.hpp"
-#include <vector>
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 namespace operations::pool {
@@ -56,6 +60,7 @@ struct AvgPool2DOp {
         std::optional<int32_t> divisor_override = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
         bool in_place_halo = false,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,

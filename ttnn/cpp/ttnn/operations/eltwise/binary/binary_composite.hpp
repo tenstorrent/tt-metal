@@ -280,7 +280,7 @@ struct ExecuteMaximum {
 
     static Tensor invoke(
         const Tensor& input_a,
-        std::variant<int32_t, float> value,
+        unary::ScalarVariant value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -304,7 +304,7 @@ struct ExecuteMinimum {
 
     static Tensor invoke(
         const Tensor& input_a,
-        std::variant<int32_t, float> value,
+        unary::ScalarVariant value,
         const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -471,9 +471,6 @@ struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
 }  // namespace binary
 }  // namespace operations
 
-constexpr auto hypot = ttnn::register_operation<
-    "ttnn::hypot",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::HYPOT>>();
 constexpr auto minimum = ttnn::register_operation<"ttnn::minimum", operations::binary::ExecuteMinimum>();
 constexpr auto maximum = ttnn::register_operation<"ttnn::maximum", operations::binary::ExecuteMaximum>();
 constexpr auto atan2 = ttnn::register_operation<

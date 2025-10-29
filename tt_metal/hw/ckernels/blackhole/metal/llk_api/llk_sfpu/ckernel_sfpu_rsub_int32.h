@@ -29,4 +29,18 @@ inline void calculate_rsub_int32(const uint dst_index_in0, const uint dst_index_
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+void calculate_rsub_scalar_int32(uint32_t scalar) {
+    int int_scalar = scalar;
+    // Load scalar value param to lreg2
+    _sfpu_load_imm32_(p_sfpu::LREG1, int_scalar);
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
+        // Used 6 as imod to convert operand B to 2's complement for sub operation
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 6);
+        TTI_SFPSTORE(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace ckernel::sfpu

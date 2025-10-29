@@ -33,7 +33,7 @@ lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemD
 
 namespace lite_fabric {
 
-uint32_t GetEthChannelMask(chip_id_t device_id) {
+uint32_t GetEthChannelMask(tt::ChipId device_id) {
     auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     uint32_t mask = 0;
@@ -44,7 +44,7 @@ uint32_t GetEthChannelMask(chip_id_t device_id) {
     return mask;
 }
 
-SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, chip_id_t mmio_device_id) {
+SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, tt::ChipId mmio_device_id) {
     SystemDescriptor desc;
 
     // Get the eth mask for each device
@@ -59,12 +59,12 @@ SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, chip_id_t mmi
             const auto& [other_device, other_core] = cluster.get_connected_ethernet_core({mmio_device_id, mmio_eth_core});
             desc.tunnels_from_mmio.push_back(TunnelDescriptor{
                 .mmio_id = mmio_device_id,
-                .mmio_core_virtual =
-                    cluster.get_virtual_coordinate_from_logical_coordinates(mmio_device_id, mmio_eth_core, CoreType::ETH),
+                .mmio_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    mmio_device_id, mmio_eth_core, tt::CoreType::ETH),
                 .mmio_core_logical = mmio_eth_core,
                 .connected_id = other_device,
-                .connected_core_virtual =
-                    cluster.get_virtual_coordinate_from_logical_coordinates(other_device, other_core, CoreType::ETH),
+                .connected_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    other_device, other_core, tt::CoreType::ETH),
                 .connected_core_logical = other_core,
                 .num_hops = hop_count,
             });
@@ -78,16 +78,14 @@ SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, chip_id_t mmi
 }
 
 void SetResetState(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_reset) {
-    // We run on DM1. Don't touch DM0. It is running base firmware
-    TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
+    // We run on ERISC1. Don't touch ERISC0. It is running base firmware
     if (assert_reset) {
-        reset_val = reset_val & static_cast<TensixSoftResetOptions>(
-                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
+        // Assert all cores except ERISC0.
+        tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
         cluster.assert_risc_reset_at_core(virtual_core, reset_val);
     } else {
-        reset_val = TENSIX_DEASSERT_SOFT_RESET &
-                    static_cast<TensixSoftResetOptions>(
-                        ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        // Deassert only ERISC1.
+        tt::umd::RiscType reset_val = tt::umd::RiscType::ERISC1;
         cluster.deassert_risc_reset_at_core(virtual_core, reset_val);
     }
 }
