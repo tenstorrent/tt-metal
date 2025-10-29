@@ -134,10 +134,6 @@ def run_conv(
     force_split_reader=None,
     tp_factor=1,
     concat_with_ag=False,
-    worker_sub_device_id=None,
-    sub_device_stall_group=None,
-    ccl_semaphore_handles=None,
-    barrier_semaphore_handles=None,
 ):
     if tp_factor != 1:
         assert has_bias == False, "Bias is not supported for multi-chip tests with tp_factor != 1"
@@ -343,15 +339,7 @@ def run_conv(
 
     if tp_factor > 1 and concat_with_ag:
         tt_output_tensor_on_device = ttnn.to_memory_config(tt_output_tensor_on_device, ttnn.DRAM_MEMORY_CONFIG)
-        tt_output_tensor_on_device = ttnn.experimental.all_gather_async(
-            tt_output_tensor_on_device,
-            dim=3,
-            multi_device_global_semaphore=ccl_semaphore_handles,
-            barrier_semaphore=barrier_semaphore_handles,
-            persistent_output_buffer=None,
-            subdevice_id=worker_sub_device_id,
-        )
-        ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
+        tt_output_tensor_on_device = ttnn.all_gather(tt_output_tensor_on_device, dim=3)
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
@@ -5288,33 +5276,6 @@ def test_conv2d_multichip(
         weight_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
         output_mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
 
-    ccl_sub_device_crs = None
-    worker_sub_device_id = None
-    sub_device_stall_group = None
-    sub_device_manager = None
-    ccl_semaphore_handles = None
-    barrier_semaphore_handles = None
-
-    # ag setup
-    if concat_with_ag:
-        compute_grid_size = mesh_device.compute_with_storage_grid_size()
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-        )
-        worker_sub_device = ttnn.SubDevice(
-            [
-                ccl_sub_device_crs,
-            ]
-        )
-        worker_sub_device_id = ttnn.SubDeviceId(0)
-        sub_device_stall_group = [worker_sub_device_id]
-
-        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-        mesh_device.load_sub_device_manager(sub_device_manager)
-        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
-        ccl_semaphore_handles = create_global_semaphores(mesh_device, 2, ccl_sub_device_crs, 0)
-        barrier_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-
     run_conv(
         device=mesh_device,
         torch_tensor_map=torch_tensor_map,
@@ -5351,8 +5312,4 @@ def test_conv2d_multichip(
         enable_weights_double_buffer=w_db,
         tp_factor=tp_factor,
         concat_with_ag=concat_with_ag,
-        worker_sub_device_id=worker_sub_device_id,
-        sub_device_stall_group=sub_device_stall_group,
-        ccl_semaphore_handles=ccl_semaphore_handles,
-        barrier_semaphore_handles=barrier_semaphore_handles,
     )
