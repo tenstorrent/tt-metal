@@ -913,6 +913,7 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
             output_dtype,
             std::nullopt,
             kernel_size,
+            stride,
             dilation,
             padding_n4,
             groups,
