@@ -859,6 +859,25 @@ public:
                 const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
                 callback(&operation, workload, input_tensors, optional_input_tensors, output_tensors);
             }},
+        uses_custom_program_hash_impl_{[]() -> bool {
+            return detail::implements_compute_program_hash<T>() ||
+                   detail::implements_compute_program_hash_with_optional_input_tensors<T>();
+        }},
+        has_create_workload_method_impl_{[]() -> bool {
+            // Operation must implement exactly one of the following creator methods:
+            // - Mesh workload creators: create_mesh_workload(_with_optional_input_tensors) OR
+            // create_program_at(_with_optional_input_tensors)
+            // - Program creators: create_program(_with_optional_input_tensors)
+            constexpr bool has_mesh_creator =
+                detail::implements_create_mesh_workload<T>() ||
+                detail::implements_create_mesh_workload_with_optional_input_tensors<T>() ||
+                detail::implements_create_program_at<T>() ||
+                detail::implements_create_program_at_with_optional_input_tensors<T>();
+            constexpr bool has_program_creator = detail::implements_create_program<T>() ||
+                                                 detail::implements_create_program_with_optional_input_tensors<T>();
+            static_assert(has_mesh_creator != has_program_creator);
+            return has_mesh_creator;
+        }},
         compute_program_hash_impl_{
             [](const storage_t& storage,
                const Tensors& input_tensors,
@@ -907,25 +926,6 @@ public:
                         "Operation doesn't implement create_program, create_program_at, or create_mesh_workload");
                 }
             }},
-        uses_custom_program_hash_impl_{[]() -> bool {
-            return detail::implements_compute_program_hash<T>() ||
-                   detail::implements_compute_program_hash_with_optional_input_tensors<T>();
-        }},
-        has_create_workload_method_impl_{[]() -> bool {
-            // Operation must implement exactly one of the following creator methods:
-            // - Mesh workload creators: create_mesh_workload(_with_optional_input_tensors) OR
-            // create_program_at(_with_optional_input_tensors)
-            // - Program creators: create_program(_with_optional_input_tensors)
-            constexpr bool has_mesh_creator =
-                detail::implements_create_mesh_workload<T>() ||
-                detail::implements_create_mesh_workload_with_optional_input_tensors<T>() ||
-                detail::implements_create_program_at<T>() ||
-                detail::implements_create_program_at_with_optional_input_tensors<T>();
-            constexpr bool has_program_creator = detail::implements_create_program<T>() ||
-                                                 detail::implements_create_program_with_optional_input_tensors<T>();
-            static_assert(has_mesh_creator != has_program_creator);
-            return has_mesh_creator;
-        }},
         create_profiler_info_impl_{[](const storage_t& storage, const Tensors& input_tensors) -> ProfilerInfo {
             const auto& operation = *reinterpret_cast<const std::decay_t<T>*>(&storage);
             std::optional<std::string> preferred_name = std::string(tt::stl::get_type_name<T>());

@@ -138,10 +138,10 @@ public:
         InterleavedBufferWriteDispatchParams(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed),
         buffer(buffer),
+        curr_full_pages_start_address(buffer.address()),
         size_of_partial_page(partial_page_spec.partial_page_size),
-        full_pages_to_write(num_full_pages),
         num_partial_pages_in_single_full_page(partial_page_spec.num_partial_pages_per_full_page),
-        curr_full_pages_start_address(buffer.address()) {
+        full_pages_to_write(num_full_pages) {
         this->page_size_to_write = partial_page_spec.partial_page_size;
         this->data_size_to_copy = partial_page_spec.partial_page_size;
 

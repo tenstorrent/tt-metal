@@ -213,12 +213,12 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
+    finalized_(false),
+    cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
     id(program_counter++),
     runtime_id(0),
-    local_circular_buffer_allocation_needed_(false),
-    finalized_(false),
-    cached_device_hash_(std::nullopt) {
+    local_circular_buffer_allocation_needed_(false) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});

@@ -49,8 +49,8 @@ SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))),
-    device_(device) {
+    device_(device),
+    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
@@ -62,8 +62,8 @@ SubDeviceManager::SubDeviceManager(
 SubDeviceManager::SubDeviceManager(
     IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
-    device_(device),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
+    device_(device),
     local_l1_size_(0) {
     TT_ASSERT(device != nullptr, "Device must not be null");
 
