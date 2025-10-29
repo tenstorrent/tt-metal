@@ -177,7 +177,7 @@ def canonicalize_tensor_mesh_axes(
             raise ValueError(msg)
 
         ellipsis_index = mesh_axes.index(Ellipsis)
-        mesh_axes[ellipsis_index : ellipsis_index + 1] = [None] * (tensor_rank - mesh_rank + 1)
+        mesh_axes[ellipsis_index : ellipsis_index + 1] = [None] * (tensor_rank - len(mesh_axes) + 1)
 
     verify_tensor_mesh_axes(mesh_axes, tensor_rank=tensor_rank, mesh_rank=mesh_rank)
 
