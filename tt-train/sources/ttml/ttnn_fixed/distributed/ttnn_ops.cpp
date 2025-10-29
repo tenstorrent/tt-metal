@@ -67,8 +67,9 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor) {
 
 tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
+    auto& mesh_device = ttml::autograd::ctx().get_device();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(
-        *mesh_device, /* cluster_axis */ std::nullopt);
+        mesh_device, /* cluster_axis */ std::nullopt);
     return ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
         /* persistent_output_buffers */ std::nullopt,
