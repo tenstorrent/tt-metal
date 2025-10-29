@@ -1430,4 +1430,14 @@ void MetalContext::erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_co
     }
 };
 
+bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
+    ChipId id = *cluster_->all_chip_ids().begin();
+    if (core_type == CoreType::ACTIVE_ETH || core_type == CoreType::IDLE_ETH) {
+        core_type = CoreType::ETH;
+    }
+
+    CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
+    return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
+}
+
 }  // namespace tt::tt_metal
