@@ -204,21 +204,21 @@ class SD35JointAttention:
             weight = weight.T
             return {"weight": weight, "bias": bias}
 
-        self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
+        self.norm_q.load_torch_state_dict(substate(state_dict, "norm_q"))
+        self.norm_k.load_torch_state_dict(substate(state_dict, "norm_k"))
         qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
         )
-        self.to_qkv.load_state_dict(qkv_state)
+        self.to_qkv.load_torch_state_dict(qkv_state)
         add_qkv_state = reshape_and_merge_qkv(
             substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
         )
-        self.add_qkv_proj.load_state_dict(add_qkv_state)
-        self.to_out.load_state_dict(pad_dense_out(substate(state_dict, "to_out.0")))
+        self.add_qkv_proj.load_torch_state_dict(add_qkv_state)
+        self.to_out.load_torch_state_dict(pad_dense_out(substate(state_dict, "to_out.0")))
         if self.context_pre_only is not None and not self.context_pre_only:
-            self.to_add_out.load_state_dict(pad_dense_out(substate(state_dict, "to_add_out")))
-        self.norm_added_q.load_state_dict(substate(state_dict, "norm_added_q"))
-        self.norm_added_k.load_state_dict(substate(state_dict, "norm_added_k"))
+            self.to_add_out.load_torch_state_dict(pad_dense_out(substate(state_dict, "to_add_out")))
+        self.norm_added_q.load_torch_state_dict(substate(state_dict, "norm_added_q"))
+        self.norm_added_k.load_torch_state_dict(substate(state_dict, "norm_added_k"))
 
     def __call__(self, spatial_1BND, prompt_1BLD, N):
         """
