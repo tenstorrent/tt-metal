@@ -73,6 +73,7 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t subchunk_height,
     uint32_t subchunk_height_stride,
     uint32_t max_tiles_per_packet,
+    uint32_t ag_worker_core_id,
     uint32_t ag_worker_cores,
     AddrGenType input_tensor_addrgen,
     uint32_t input_tensor_page_size,
@@ -83,7 +84,9 @@ FORCE_INLINE uint32_t read_chunk(
     bool read_output,
     bool fuse_op) {
     uint32_t tiles_left = tiles_per_core - tiles_read;
-    uint32_t tiles_in_curr_chunk = std::min(tiles_left, tiles_per_chunk);
+    uint32_t worker_tiles_in_curr_chunk =
+        (tiles_per_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_per_chunk % ag_worker_cores)) ? 1 : 0);
+    uint32_t tiles_in_curr_chunk = std::min(tiles_left, worker_tiles_in_curr_chunk);
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, tiles_in_curr_chunk);
     uint32_t packets_in_curr_chunk = div_up(tiles_in_curr_chunk, num_tiles_per_packet);
     uint32_t chunk_tile_idx = 0;
@@ -141,6 +144,7 @@ FORCE_INLINE uint32_t write_chunk(
     uint32_t subchunk_height,
     uint32_t subchunk_height_stride,
     uint32_t max_tiles_per_packet,
+    uint32_t ag_worker_core_id,
     uint32_t ag_worker_cores,
     AddrGenType output_addrgen,
     uint32_t output_page_size,
@@ -156,7 +160,9 @@ FORCE_INLINE uint32_t write_chunk(
     bool write_local,
     bool fuse_op) {
     uint32_t tiles_left = tiles_per_core - tiles_written;
-    uint32_t tiles_in_curr_chunk = std::min(tiles_left, tiles_per_chunk);
+    uint32_t worker_tiles_in_curr_chunk =
+        (tiles_per_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_per_chunk % ag_worker_cores)) ? 1 : 0);
+    uint32_t tiles_in_curr_chunk = std::min(tiles_left, worker_tiles_in_curr_chunk);
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, tiles_in_curr_chunk);
     uint32_t packets_in_curr_chunk = div_up(tiles_in_curr_chunk, num_tiles_per_packet);
     uint32_t chunk_tile_idx = 0;
