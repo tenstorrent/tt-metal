@@ -39,7 +39,10 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
                const std::optional<GlobalSemaphore>& barrier_semaphore,
                std::optional<uint32_t> tiles_per_chunk,
                std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel) -> ttnn::Tensor {
+               std::optional<uint32_t> num_buffers_per_channel,
+               std::optional<uint32_t> mm_cores_y,
+               std::optional<uint32_t> mm_block_h,
+               std::optional<uint32_t> mm_block_w) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     persistent_output_buffer,
@@ -53,7 +56,10 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
                     barrier_semaphore,
                     tiles_per_chunk,
                     num_workers_per_link,
-                    num_buffers_per_channel);
+                    num_buffers_per_channel,
+                    mm_cores_y,
+                    mm_block_h,
+                    mm_block_w);
             },
             py::arg("input_tensor"),
             py::arg("persistent_output_buffer"),
@@ -68,7 +74,10 @@ void bind_strided_all_gather_async(pybind11::module& module, const ccl_operation
             py::arg("barrier_semaphore") = std::nullopt,
             py::arg("tiles_per_chunk") = std::nullopt,
             py::arg("num_workers_per_link") = std::nullopt,
-            py::arg("num_buffers_per_channel") = std::nullopt});
+            py::arg("num_buffers_per_channel") = std::nullopt,
+            py::arg("mm_cores_y") = std::nullopt,
+            py::arg("mm_block_h") = std::nullopt,
+            py::arg("mm_block_w") = std::nullopt});
 }
 
 }  // namespace

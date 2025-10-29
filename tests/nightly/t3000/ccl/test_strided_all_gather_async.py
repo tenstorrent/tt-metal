@@ -32,6 +32,9 @@ def run_strided_all_gather_impl(
     mem_config_input,
     mem_config_ag,
     all_gather_topology,
+    mm_cores_y,
+    mm_block_h,
+    mm_block_w,
     num_iters=1,
     enable_trace=True,
     cluster_axis=None,
@@ -148,6 +151,9 @@ def run_strided_all_gather_impl(
             tiles_per_chunk=tiles_per_chunk,
             num_workers_per_link=num_workers_per_link,
             num_buffers_per_channel=num_buffers_per_channel,
+            mm_cores_y=mm_cores_y,
+            mm_block_h=mm_block_h,
+            mm_block_w=mm_block_w,
         )
 
         return tt_all_gather_out_tensor
@@ -207,15 +213,15 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype",
+    "ag_output_shape, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_h, mm_block_w",
     [
-        ([1, 1, 32, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([1, 1, 32, 512], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([1, 1, 32, 512], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([1, 1, 32, 768], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        ([1, 1, 4096, 4096], 3, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 32, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        ([1, 1, 32, 512], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 32, 512], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 96),
+        ([1, 1, 32, 768], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 96),
+        ([1, 1, 4096, 2560], 3, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
     ],
     ids=[
         "1tile1chunk1worker",
@@ -267,6 +273,9 @@ def test_strided_all_gather_async(
     num_iters,
     num_workers_per_link,
     tiles_per_chunk,
+    mm_cores_y,
+    mm_block_h,
+    mm_block_w,
 ):
     run_strided_all_gather_impl(
         mesh_device,
@@ -283,4 +292,7 @@ def test_strided_all_gather_async(
         num_iters=num_iters,
         num_workers_per_link=num_workers_per_link,
         tiles_per_chunk=tiles_per_chunk,
+        mm_cores_y=mm_cores_y,
+        mm_block_h=mm_block_h,
+        mm_block_w=mm_block_w,
     )

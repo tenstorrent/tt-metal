@@ -25,7 +25,10 @@ struct ExecuteStridedAllGatherAsync {
         const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         std::optional<uint32_t> tiles_per_chunk = std::nullopt,
         std::optional<uint32_t> num_workers_per_link = std::nullopt,
-        std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+        std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+        std::optional<uint32_t> mm_cores_y = std::nullopt,
+        std::optional<uint32_t> mm_block_h = std::nullopt,
+        std::optional<uint32_t> mm_block_w = std::nullopt);
 };
 }  // namespace operations::experimental::ccl
 

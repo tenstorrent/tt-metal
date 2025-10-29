@@ -39,6 +39,9 @@ struct StridedAllGatherAsync {
     std::optional<uint32_t> tiles_per_chunk;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
+    std::optional<uint32_t> mm_cores_y;
+    std::optional<uint32_t> mm_block_h;
+    std::optional<uint32_t> mm_block_w;
 
     StridedAllGatherAsync(
         std::vector<IDevice*> devices,
@@ -54,7 +57,10 @@ struct StridedAllGatherAsync {
         bool using_persistent_buffers,
         std::optional<uint32_t> tiles_per_chunk,
         std::optional<uint32_t> num_workers_per_link,
-        std::optional<uint32_t> num_buffers_per_channel) :
+        std::optional<uint32_t> num_buffers_per_channel,
+        std::optional<uint32_t> mm_cores_y,
+        std::optional<uint32_t> mm_block_h,
+        std::optional<uint32_t> mm_block_w) :
         devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
@@ -68,7 +74,10 @@ struct StridedAllGatherAsync {
         using_persistent_buffers(using_persistent_buffers),
         tiles_per_chunk(tiles_per_chunk),
         num_workers_per_link(num_workers_per_link),
-        num_buffers_per_channel(num_buffers_per_channel) {}
+        num_buffers_per_channel(num_buffers_per_channel),
+        mm_cores_y(mm_cores_y),
+        mm_block_h(mm_block_h),
+        mm_block_w(mm_block_w) {}
 
     // Add attributes method for reflection
     auto attributes() const {
@@ -87,6 +96,9 @@ struct StridedAllGatherAsync {
         attrs.emplace_back("tiles_per_chunk", tiles_per_chunk);
         attrs.emplace_back("num_worker_per_link", num_workers_per_link);
         attrs.emplace_back("num_buffers_per_channel", num_buffers_per_channel);
+        attrs.emplace_back("mm_cores_y", mm_cores_y);
+        attrs.emplace_back("mm_block_h", mm_block_h);
+        attrs.emplace_back("mm_block_w", mm_block_w);
         return attrs;
     }
 
@@ -125,7 +137,10 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel);
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_h,
+    std::optional<uint32_t> mm_block_w);
 tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -146,6 +161,9 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<uint32_t> mm_cores_y,
+    std::optional<uint32_t> mm_block_h,
+    std::optional<uint32_t> mm_block_w,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
 
 namespace operations {
@@ -165,7 +183,10 @@ Tensor strided_all_gather_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<uint32_t> tiles_per_chunk = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
-    std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
+    std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
+    std::optional<uint32_t> mm_cores_y = std::nullopt,
+    std::optional<uint32_t> mm_block_h = std::nullopt,
+    std::optional<uint32_t> mm_block_w = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental
