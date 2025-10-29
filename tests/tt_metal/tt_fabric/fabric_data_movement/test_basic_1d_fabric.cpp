@@ -2371,7 +2371,7 @@ void UDMFabric1DUnicastCommon(
 
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_linear_sender.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2396,7 +2396,7 @@ void UDMFabric1DUnicastCommon(
 
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_linear_receiver.cpp",
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -3107,6 +3107,7 @@ TEST_F(Fabric1DUDMModeFixture, TestLinearUDMFabricMulticastNocUnicastWrite) {
     FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 
+// UDM Mode Tests - test udm api changes for 1D
 TEST_F(Fabric1DUDMModeFixture, TestLinearUDMFabricUnicastEast) {
     UDMFabric1DUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
 }
