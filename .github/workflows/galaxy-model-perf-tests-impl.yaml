@@ -88,6 +88,15 @@ jobs:
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_sentence_bert_model_perf_tg_device --dispatch-mode ""',
             timeout: 30,
             owner_id: U088413NP0Q, # Ashai Reddy
+          },
+          {
+            name: "Galaxy Mochi model perf tests",
+            model-type: "mochi",
+            arch: wormhole_b0,
+            save-perf-data: true,
+            timeout: 60,
+            cmd: 'export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" && pytest models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0" && TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 and yes_use_cache"',
+            owner_id: U09ELB03XRU # Stephen Osborne
           }
         ]
     name: ${{ matrix.test-group.name }}
