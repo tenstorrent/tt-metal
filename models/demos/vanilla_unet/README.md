@@ -1,75 +1,56 @@
-# Unet Vanilla
+# Vanilla UNet
 
-## Platforms:
-Wormhole (n150, n300)
+## Model Overview
 
-## Prerequisites
-- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
-- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
+Vanilla UNet is a convolutional neural network architecture designed for biomedical image segmentation. The model uses an encoder-decoder structure with skip connections, enabling it to capture both high-level semantic information and fine-grained spatial details.
 
+### Architecture
 
-## How to run (480x640 resolution)
+The UNet architecture consists of:
+- **Encoder Path**: Four downsampling blocks, each with two 3x3 convolutions followed by batch normalization, ReLU activation, and 2x2 max pooling
+- **Bottleneck**: Two 3x3 convolutions with batch normalization and ReLU activation
+- **Decoder Path**: Four upsampling blocks using transposed convolutions, concatenated with skip connections from the encoder, followed by two 3x3 convolutions
+- **Output Layer**: 1x1 convolution to produce the final segmentation mask
 
-Use the following command to run the inference pipeline:
+### Model Details
 
-    ```
-    pytest models/demos/vanilla_unet/tests/pcc/test_ttnn_unet.py::test_unet
-    ```
+- **Input**: RGB images of size 480x640
+- **Output**: Single-channel segmentation mask of size 480x640
+- **Task**: Binary segmentation (identifying regions of interest in brain MRI scans)
+- **Precision**: BFloat16 for activations and weights
 
-### Model performant running with Trace+2CQs
-#### Single Device (BS=1):
+## Getting Started
 
-- For `480x640`, end-2-end perf is `60` FPS
+### Single Image Demo
 
-    ```sh
-    pytest models/demos/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant
-    ```
+Run inference on a single brain MRI image:
 
-#### Multi Device (DP=2, N300):
+```bash
+pytest models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+```
 
-- For `480x640`, end-2-end perf is `119` FPS
+This will:
+1. Load a test brain MRI image from `models/demos/vanilla_unet/demo/images/`
+2. Run inference using the TT-NN implementation
+3. Generate a visualization with:
+   - **Red outline**: Model prediction
+   - **Green outline**: Ground truth segmentation
+4. Save the result to `models/demos/vanilla_unet/demo/pred/result_ttnn_1.png`
 
-    ```sh
-    pytest models/demos/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
-    ```
+## Performance Testing
 
-### Performant Demo with Trace+2CQ
+### Device Performance Benchmarks
 
-#### Single image
-- Use the following command to run the demo for `480x640` resolution:
+Run device performance benchmarks:
 
-    ```
-    pytest models/demos/vanilla_unet/demo/demo.py::test_unet_demo_single_image
-    ```
+```bash
+pytest models/demos/vanilla_unet/tests/test_unet_perf.py::test_vanilla_unet_perf_device
+```
 
-- Output images will be saved in the `models/demos/vanilla_unet/demo/pred` folder
+### End-to-End Performance
 
+Run end-to-end performance tests including compile time and inference throughput:
 
-### Evaluation test:
-
-#### Single Device (BS=1):
-
-- Use the following command to run the performant evaluation with Trace+2CQs:
-
-    ```sh
-    pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet
-    ```
-
-#### Multi Device (DP=2, N300):
-
-- Use the following command to run the performant evaluation with Trace+2CQs:
-
-    ```sh
-    pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp
-    ```
-
-**Note:** If vanilla unet evaluation test fails with the error: `ValueError: Sample larger than population or is negative`
-Try deleting the `imageset` folder in `models/demos/segmentation_evaluation` directory and try running again.
-
-
-## Details
-- Entry point for the model is `models/demos/vanilla_unet/ttnn/ttnn_unet.py`
-- Batch Size: 1 (Single Device).
-- Support Input Resolution: (480, 640) - (Height, Width).
-- Dataset - [mri-segmentation](https://www.kaggle.com/datasets/mateuszbuda/lgg-mri-segmentation)
+```bash
+pytest models/demos/vanilla_unet/tests/test_unet_perf.py::test_vanilla_unet_perf_e2e
+```

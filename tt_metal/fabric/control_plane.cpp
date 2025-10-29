@@ -486,7 +486,7 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
         auto fabric_chip_id = this->routing_table_generator_->mesh_graph->coordinate_to_chip(mesh_id, mesh_coord);
         auto fabric_node_id = FabricNodeId(mesh_id, fabric_chip_id);
 
-        chip_id_t physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+        ChipId physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
 
         // Convert physical chip id to asic id using topology mapper if available
         auto asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
@@ -505,15 +505,16 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
 
     // Validate connections only for the local portion of the mesh
     for (const auto& mesh_coord : mesh_coord_range) {
-        MeshCoordinate mesh_coord_next{mesh_coord[0], mesh_coord[1] + 1};
-        MeshCoordinate mesh_coord_next_row{mesh_coord[0] + 1, mesh_coord[1]};
+        auto mode = mesh_coord_range.get_boundary_mode();
 
-        // Only validate connections to neighbors that are also in the local mesh portion
-        if (mesh_coord_range.contains(mesh_coord_next)) {
-            validate_asic_connections(mesh_coord, mesh_coord_next);
+        auto col_neighbor = mesh_coord.get_neighbor(mesh_shape, 1, 1, mode);
+        auto row_neighbor = mesh_coord.get_neighbor(mesh_shape, 1, 0, mode);
+
+        if (col_neighbor.has_value() && mesh_coord_range.contains(*col_neighbor)) {
+            validate_asic_connections(mesh_coord, *col_neighbor);
         }
-        if (mesh_coord_range.contains(mesh_coord_next_row)) {
-            validate_asic_connections(mesh_coord, mesh_coord_next_row);
+        if (row_neighbor.has_value() && mesh_coord_range.contains(*row_neighbor)) {
+            validate_asic_connections(mesh_coord, *row_neighbor);
         }
     }
 }
@@ -833,7 +834,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
         const auto& local_mesh_coord_range = this->get_coord_range(mesh_id, MeshScope::LOCAL);
 
         // TODO: Remove this once Topology mapper works for multi-mesh systems
-        MeshContainer<chip_id_t> local_mesh_chip_id_container =
+        MeshContainer<ChipId> local_mesh_chip_id_container =
             (this->topology_mapper_ == nullptr)
                 ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
                 : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
@@ -2104,11 +2105,9 @@ void fill_connection_info_fields(
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
     auto channel_allocator = config.channel_allocator.get();
-    TT_FATAL(
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr,
-        "Only FabricStaticSizedChannelsAllocator is supported currently.");
     const auto static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
+    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
     connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
     connection_info.edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel);

@@ -179,8 +179,14 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
                 TT_THROW("Unknown cluster type for P150 board with {} chips", num_chips);
             }
         } else if (board_type == BoardType::P300) {
-            TT_FATAL(num_chips == 2, "Unknown cluster type for P300 board with {}", num_chips);
-            cluster_type = tt::tt_metal::ClusterType::P300;
+            // PCIe is enabled to both chips on the P300 board
+            if (num_chips == 2) {
+                cluster_type = tt::tt_metal::ClusterType::P300;
+            } else if (num_chips == 4) {
+                cluster_type = tt::tt_metal::ClusterType::P300_X2;
+            } else {
+                TT_THROW("Unknown cluster type for P300 board with {} chips", num_chips);
+            }
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
         } else if (board_type == BoardType::UBB_BLACKHOLE) {
@@ -310,6 +316,7 @@ void Cluster::initialize_device_drivers() {
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
+    this->verify_eth_fw_capability();
 }
 
 void Cluster::assert_risc_reset() {
@@ -365,7 +372,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .sdesc_path = sdesc_path,
-                .target_devices = mock_cluster_desc->get_all_chips(),
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
             });
@@ -636,8 +642,8 @@ int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->cluster_desc_->get_bus_id(chip); }
 
 std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
-    if (this->target_type_ == tt::TargetDevice::Mock) {
-        log_warning(tt::LogDevice, "get_physical_slot is not supported for mock devices");
+    if (this->target_type_ != tt::TargetDevice::Silicon) {
+        log_warning(tt::LogDevice, "get_physical_slot is not supported for non-silicon devices");
         return std::nullopt;
     }
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
@@ -850,6 +856,17 @@ void Cluster::verify_sw_fw_versions(
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
         TT_FATAL(sw.minor <= fw.minor, "SW version is newer than FW version");
+    }
+}
+
+void Cluster::verify_eth_fw_capability() const {
+    // get_ethernet_fw_version is not supported in the simulation environment
+    if (rtoptions_.get_simulator_enabled()) {
+        return;
+    }
+    const auto fw_version = this->driver_->get_ethernet_fw_version();
+    if (fw_version) {
+        hal_.verify_eth_fw_version(fw_version.value());
     }
 }
 

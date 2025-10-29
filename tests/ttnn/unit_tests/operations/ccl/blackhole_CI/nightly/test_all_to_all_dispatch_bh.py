@@ -9,16 +9,19 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_for_n_or_less_dev
+
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import (
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     run_all_to_all_dispatch_test,
 )
 from tracy import signpost
 
 
+@skip_for_n_or_less_dev(7)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -29,8 +32,7 @@ from tracy import signpost
 )
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize("num_devices,mesh_shape", [(2, (2, 2))])
-@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2_grid")], indirect=True)
-@pytest.mark.parametrize("cluster_axis", [0], ids=["cluster_row"])
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["row", "column"])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [4])
 @pytest.mark.parametrize("hidden_size", [7168])
@@ -47,7 +49,7 @@ from tracy import signpost
 @pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
 def test_all_to_all_dispatch_broken(
-    mesh_device,
+    bh_2d_mesh_device,
     trace_mode,
     mesh_shape,
     num_devices,
@@ -66,19 +68,20 @@ def test_all_to_all_dispatch_broken(
     device_params,
 ):
     topology = ttnn.Topology.Linear
-    validate_test(num_devices, topology, mesh_device.shape, cluster_axis)
+    validate_test(num_devices, topology, bh_2d_mesh_device.shape, cluster_axis)
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:
         dispatch_devices = mesh_shape[cluster_axis]
-    validate_test(dispatch_devices, topology, mesh_device.shape, 0)
+    validate_test(dispatch_devices, topology, bh_2d_mesh_device.shape, 0)
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     if num_links == "MAX_LINKS":
         num_links = 1
     run_all_to_all_dispatch_test(
-        mesh_device,
+        submesh_device,
         mesh_shape,
         batch,
         experts,

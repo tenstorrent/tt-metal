@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.operations.ccl.test_new_all_broadcast import run_all_broadcast_impl
+from tests.nightly.t3000.ccl.test_new_all_broadcast import run_all_broadcast_impl
 
 
 # Enumerate the post-commit cases explicitly

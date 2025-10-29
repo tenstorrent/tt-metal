@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,9 +50,7 @@ FabricNodeId decode_fabric_node_id(std::uint64_t encoded_value) {
 std::chrono::duration<float> get_topology_mapping_timeout() {
     auto timeout = tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
     if (timeout.count() <= 0.0f) {
-        const char* env_override = std::getenv("TT_FABRIC_BUILD_MAP_TIMEOUT_SECONDS");
-        float seconds = env_override ? std::strtof(env_override, nullptr) : 60.0f;
-        timeout = std::chrono::duration<float>(seconds);
+        timeout = std::chrono::duration<float>(60.0f);
     }
     return timeout;
 }
@@ -145,13 +143,13 @@ FabricNodeId TopologyMapper::get_fabric_node_id_from_asic_id(tt::tt_metal::AsicI
     return asic_id_to_fabric_node_id_.at(asic_id);
 }
 
-FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id) const {
+FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const {
     auto it = physical_chip_id_to_asic_id_.find(physical_chip_id);
     TT_FATAL(it != physical_chip_id_to_asic_id_.end(), "Physical chip id {} not found in mapping", physical_chip_id);
     return asic_id_to_fabric_node_id_.at(it->second);
 }
 
-chip_id_t TopologyMapper::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+ChipId TopologyMapper::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
     auto asic_id = fabric_node_id_to_asic_id_.at(fabric_node_id);
     auto it = asic_id_to_physical_chip_id_.find(asic_id);
     TT_FATAL(
@@ -177,8 +175,10 @@ TopologyMapper::TopologyMapper(
     build_mapping();
 }
 
-chip_id_t TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
-    return asic_id_to_physical_chip_id_.at(asic_id);
+ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
+    auto asic_id_it = asic_id_to_physical_chip_id_.find(asic_id);
+    TT_FATAL(asic_id_it != asic_id_to_physical_chip_id_.end(), "Physical chip id not found for ASIC id {}", asic_id);
+    return asic_id_it->second;
 }
 
 void TopologyMapper::build_asic_physical_chip_id_mappings() {
@@ -187,6 +187,19 @@ void TopologyMapper::build_asic_physical_chip_id_mappings() {
         tt::tt_metal::AsicID asic_id{unique_id};
         asic_id_to_physical_chip_id_.emplace(asic_id, physical_chip_id);
         physical_chip_id_to_asic_id_.emplace(physical_chip_id, asic_id);
+    }
+
+    // Check the physical chip asic ids from UMD cluster with the physical chip asic ids from the physical system
+    // descriptor
+    for (const auto& [physical_chip_id, unique_id] : cluster.get_unique_chip_ids()) {
+        tt::tt_metal::AsicID asic_id{unique_id};
+        auto asic_ids_for_host =
+            physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+        TT_FATAL(
+            std::find(asic_ids_for_host.begin(), asic_ids_for_host.end(), asic_id) != asic_ids_for_host.end(),
+            "Asic id {} in UMD cluster not found for in Physical System {}",
+            asic_id,
+            physical_system_descriptor_.my_host_name());
     }
 }
 
@@ -752,8 +765,8 @@ void TopologyMapper::receive_mapping_from_host(int rank) {
         "Topology mapping size mismatch after streaming receive");
 }
 
-std::map<FabricNodeId, chip_id_t> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
-    std::map<FabricNodeId, chip_id_t> mapping;
+std::map<FabricNodeId, ChipId> TopologyMapper::get_local_logical_mesh_chip_id_to_physical_chip_id_mapping() const {
+    std::map<FabricNodeId, ChipId> mapping;
     const auto& my_host = physical_system_descriptor_.my_host_name();
     // Only include ASICs that are part of the current fabric mapping and reside on this host
     for (const auto& [asic_id, fabric_node_id] : asic_id_to_fabric_node_id_) {
@@ -796,7 +809,7 @@ MeshCoordinateRange TopologyMapper::get_coord_range(MeshId mesh_id, std::optiona
     return mesh_graph_.get_coord_range(mesh_id);
 }
 
-std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const {
+std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const {
     // Compute coord and check which host range contains it
     MeshCoordinate coord = mesh_graph_.chip_to_coordinate(mesh_id, chip_id);
     for (const auto& [key, range] : mesh_host_rank_coord_ranges_) {
@@ -807,35 +820,37 @@ std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh
     return std::nullopt;
 }
 
-MeshContainer<chip_id_t> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
+MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
     // Return global or submesh chip ids using the same indexing convention as MeshGraph.
     if (!host_rank.has_value()) {
         auto shape = mesh_graph_.get_mesh_shape(mesh_id);
-        std::vector<chip_id_t> chip_ids(shape.mesh_size());
+        std::vector<ChipId> chip_ids(shape.mesh_size());
         std::iota(chip_ids.begin(), chip_ids.end(), 0);
-        return MeshContainer<chip_id_t>(shape, chip_ids);
+        return MeshContainer<ChipId>(shape, chip_ids);
     }
 
     // Submesh: iterate over coord range and collect logical chip ids
     MeshCoordinateRange coord_range = get_coord_range(mesh_id, host_rank);
     MeshShape sub_shape = coord_range.shape();
-    std::vector<chip_id_t> sub_chip_ids;
+    std::vector<ChipId> sub_chip_ids;
     sub_chip_ids.reserve(sub_shape.mesh_size());
     for (const auto& coord : coord_range) {
         // Convert coordinate to logical chip id using global mesh shape
         auto chip = mesh_graph_.coordinate_to_chip(mesh_id, coord);
         sub_chip_ids.push_back(chip);
     }
-    return MeshContainer<chip_id_t>(sub_shape, sub_chip_ids);
+    return MeshContainer<ChipId>(sub_shape, sub_chip_ids);
 }
 
 void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
     std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_to_hosts;
     std::unordered_map<MeshId, std::unordered_map<HostName, MeshCoordinateRange>> mesh_host_to_range;
+    // For wraparound-aware construction, accumulate coordinates per host then compute minimal circular ranges.
+    std::unordered_map<MeshId, std::unordered_map<HostName, std::vector<MeshCoordinate>>> mesh_host_to_coords;
 
     // Precompute coordinate per chip from MeshGraph
-    std::unordered_map<MeshId, std::unordered_map<chip_id_t, MeshCoordinate>> per_mesh_chip_to_coord;
+    std::unordered_map<MeshId, std::unordered_map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
     for (const auto& [fabric_node_id, _] : fabric_node_id_to_asic_id_) {
         auto& m = per_mesh_chip_to_coord[fabric_node_id.mesh_id];
         if (m.find(fabric_node_id.chip_id) == m.end()) {
@@ -844,21 +859,77 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
         }
     }
 
-    // Accumulate ranges
+    // Accumulate coordinates per host
     for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
         const auto host = physical_system_descriptor_.get_host_name_for_asic(asic_id);
         mesh_to_hosts[fabric_node_id.mesh_id].insert(host);
         const auto coord = per_mesh_chip_to_coord[fabric_node_id.mesh_id].at(fabric_node_id.chip_id);
-        auto& range_map = mesh_host_to_range[fabric_node_id.mesh_id];
-        auto it = range_map.find(host);
-        if (it == range_map.end()) {
-            range_map.emplace(host, MeshCoordinateRange(coord, coord));
-        } else {
-            auto start = it->second.start_coord();
-            auto end = it->second.end_coord();
-            MeshCoordinate new_start(std::min(start[0], coord[0]), std::min(start[1], coord[1]));
-            MeshCoordinate new_end(std::max(end[0], coord[0]), std::max(end[1], coord[1]));
-            it->second = MeshCoordinateRange(new_start, new_end);
+        mesh_host_to_coords[fabric_node_id.mesh_id][host].push_back(coord);
+    }
+
+    // Build minimal wraparound-aware ranges per host
+    for (const auto& [mesh_id, host_coords_map] : mesh_host_to_coords) {
+        const auto shape = mesh_graph_.get_mesh_shape(mesh_id);
+        auto& range_map = mesh_host_to_range[mesh_id];
+        for (const auto& [host, coords] : host_coords_map) {
+            // Compute unique values per dimension
+            std::vector<uint32_t> unique_r;
+            std::vector<uint32_t> unique_c;
+            unique_r.reserve(coords.size());
+            unique_c.reserve(coords.size());
+            for (const auto& c : coords) {
+                unique_r.push_back(c[0]);
+                unique_c.push_back(c[1]);
+            }
+            auto uniq = [](std::vector<uint32_t>& v) {
+                std::sort(v.begin(), v.end());
+                v.erase(std::unique(v.begin(), v.end()), v.end());
+            };
+            uniq(unique_r);
+            uniq(unique_c);
+
+            auto minimal_circular_span = [](const std::vector<uint32_t>& values, uint32_t dim_size) {
+                // Returns pair(start, end) in circular sense; start may be > end to indicate wrap.
+                if (values.empty()) {
+                    return std::pair<uint32_t, uint32_t>(0, 0);
+                }
+                if (values.size() == 1) {
+                    return std::pair<uint32_t, uint32_t>(values[0], values[0]);
+                }
+                if (values.size() >= dim_size) {
+                    return std::pair<uint32_t, uint32_t>(0u, dim_size - 1);
+                }
+                // values must be sorted unique
+                std::vector<uint32_t> v = values;
+                // compute maximum gap between consecutive values on circle
+                uint32_t max_gap = 0;
+                size_t max_gap_idx = 0;  // gap between v[i] and v[i+1] (wrapping at end)
+                for (size_t i = 0; i < v.size(); ++i) {
+                    uint32_t a = v[i];
+                    uint32_t b = (i + 1 < v.size()) ? v[i + 1] : v[0];
+                    uint32_t gap = (i + 1 < v.size()) ? (b - a) : ((dim_size - a) + b);
+                    if (gap > max_gap) {
+                        max_gap = gap;
+                        max_gap_idx = i;
+                    }
+                }
+                // minimal arc excludes the largest gap; start is next value, end is current value
+                uint32_t start = (max_gap_idx + 1 < v.size()) ? v[max_gap_idx + 1] : v[0];
+                uint32_t end = v[max_gap_idx];
+                return std::make_pair(start, end);
+            };
+
+            auto [row_start, row_end] = minimal_circular_span(unique_r, shape[0]);
+            auto [col_start, col_end] = minimal_circular_span(unique_c, shape[1]);
+            MeshCoordinate start(row_start, col_start);
+            MeshCoordinate end(row_end, col_end);
+
+            bool wraparound = row_start > row_end || col_start > col_end;
+            if (wraparound) {
+                range_map.emplace(host, MeshCoordinateRange(start, end, shape));
+            } else {
+                range_map.emplace(host, MeshCoordinateRange(start, end));
+            }
         }
     }
 

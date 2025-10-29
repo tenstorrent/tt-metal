@@ -279,21 +279,6 @@ run_t3000_tteager_tests() {
 
   echo "LOG_METAL: Running run_t3000_tteager_tests"
 
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather.py -k post_commit ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_matmul.py -k post_commit ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_post_commit.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_send_recv_async.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_t3000.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_expert_token_remap_t3k.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_routing_remap_t3k.py ; fail+=$?
-  pytest -n auto tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py ; fail+=$?
-
   # distributed layernorm
   pytest tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py ; fail+=$?
 
@@ -362,28 +347,41 @@ run_t3000_resnet_tests() {
   fi
 }
 
-
-run_t3000_sd35large_tests() {
+run_t3000_dit_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
+  test_name=${FUNCNAME[1]}
 
-  echo "LOG_METAL: Running run_t3000_sd35large_tests"
+  echo "LOG_METAL: Running ${test_name}"
 
   # Run test_model for sd35 large
-  pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "t3k"; fail+=$?
-  pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py; fail+=$?
-  pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block; fail+=$?
+  for test_cmd in "$@"; do
+    pytest -n auto ${test_cmd} ; fail+=$?
+  done
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_sd35large_tests $duration seconds to complete"
+  echo "LOG_METAL: ${test_name} $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
 }
 
+run_t3000_sd35large_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py -k t3k" \
+    "models/experimental/tt_dit/tests/models/sd35/test_attention_sd35.py" \
+    "models/experimental/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
+}
+
+run_t3000_flux1_tests() {
+  run_t3000_dit_tests \
+    "models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_flux" \
+    "models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block" \
+    "models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux"
+}
 
 run_t3000_tests() {
   # Run ethernet tests
@@ -431,6 +429,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run flux1 tests
+  run_t3000_flux1_tests
 
   # Run trace tests
   run_t3000_trace_stress_tests

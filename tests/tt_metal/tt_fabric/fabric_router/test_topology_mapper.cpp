@@ -232,8 +232,7 @@ TEST_F(TopologyMapperTest, P100MeshGraphTest) {
     EXPECT_EQ(topology_mapper.get_host_rank_for_chip(mesh_id, 0), MeshHostRankId(0));
 
     // Chip IDs list
-    EXPECT_EQ(
-        topology_mapper.get_chip_ids(mesh_id), MeshContainer<chip_id_t>(MeshShape(1, 1), std::vector<chip_id_t>{0}));
+    EXPECT_EQ(topology_mapper.get_chip_ids(mesh_id), MeshContainer<ChipId>(MeshShape(1, 1), std::vector<ChipId>{0}));
 }
 
 TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {

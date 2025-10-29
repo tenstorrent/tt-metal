@@ -11,13 +11,15 @@
 #include <tt_stl/span.hpp>
 #include <cstring>
 
-#include "fabric_fixture.hpp"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
+
+// FIXME: Remove after testing
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt::tt_fabric {
 namespace multi_host_tests {
@@ -440,15 +442,92 @@ TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
     }
 }
 
-TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
-    const std::filesystem::path wh_closetbox_mgd_mesh_graph_desc_path =
+TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
+    // This test is intended for Blackhole 4x4 mesh spanning 2x2 hosts (BHQB)
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
+        log_info(tt::LogTest, "This test is only for Blackhole QuietBox (BHQB)");
+        GTEST_SKIP();
+    }
+
+    const std::filesystem::path bhqb_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_mgd.textproto";
-    auto control_plane = std::make_unique<ControlPlane>(wh_closetbox_mgd_mesh_graph_desc_path.string());
+        "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(bhqb_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, TestBHQB4x4Fabric2DSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
+        log_info(tt::LogTest, "This test is only for Blackhole QuietBox (BHQB)");
+        GTEST_SKIP();
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // 4x4 torus has 32 unique undirected adjacencies: (horizontal 16 + vertical 16)
+    // With bidirectional and 2 ethernet channels per direction -> 32 * 2 * 2 = 128
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    EXPECT_EQ(intramesh_connections.size(), 128);
+
+    for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_TRUE(direction.has_value());
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+}
+
+TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::P150_X4) {
+        log_info(tt::LogTest, "This test is only for Blackhole QuietBox (BHQB)");
+        GTEST_SKIP();
+    }
+
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Intra-mesh adjacency count is determined by the MGD, independent of fabric config
+    const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
+    EXPECT_EQ(intramesh_connections.size(), 128);
+
+    for (const auto& [src_node_id, dst_node_id] : intramesh_connections) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_TRUE(direction.has_value());
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, *direction);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+}
+
+TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
+    auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+    // Just try physical system descriptor for now
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
 }
 
 }  // namespace multi_host_tests

@@ -48,6 +48,13 @@ using Shape = tt::tt_metal::Shape;
 using MeshHostRankId = tt::tt_fabric::MeshHostRankId;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
+using HalProgrammableCoreType = tt::tt_metal::HalProgrammableCoreType;
+using HalL1MemAddrType = tt::tt_metal::HalL1MemAddrType;
+using ShardOrientation = tt::tt_metal::ShardOrientation;
+using ShardSpecBuffer = tt::tt_metal::ShardSpecBuffer;
+using BufferType = tt::tt_metal::BufferType;
+using TensorMemoryLayout = tt::tt_metal::TensorMemoryLayout;
+using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
 using Topology = tt::tt_fabric::Topology;
 
@@ -169,7 +176,7 @@ public:
     }
 
     void run_programs() {
-        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, true);
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
     }
 
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
@@ -220,6 +227,10 @@ public:
     uint32_t get_worker_noc_encoding(const CoreCoord logical_core) const override {
         const auto virtual_core = mesh_device_->worker_core_from_logical_core(logical_core);
         return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
+    }
+
+    CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const override {
+        return mesh_device_->worker_core_from_logical_core(logical_core);
     }
 
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
@@ -328,18 +339,19 @@ public:
         auto all_cores = CoreRangeSet(all_cores_set);
         auto num_cores = all_cores_set.size();
         auto total_size = size_bytes * num_cores;
-        auto shard_params = tt::tt_metal::ShardSpecBuffer(all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
+        auto shard_params = tt::tt_metal::ShardSpecBuffer(
+            all_cores, {1, 1}, tt::tt_metal::ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
 
-        auto buffer_distribution_spec =
-            tt::tt_metal::BufferDistributionSpec(Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+        auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec(
+            Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
         auto buffer_page_mapping = buffer_distribution_spec.compute_page_mapping();
 
         DeviceLocalBufferConfig buffer_specs = {
             .page_size = size_bytes,
             .buffer_type = tt::tt_metal::BufferType::L1,
-            .sharding_args =
-                tt::tt_metal::BufferShardingArgs(buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
+            .sharding_args = tt::tt_metal::BufferShardingArgs(
+                buffer_distribution_spec, shard_params, tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
@@ -500,7 +512,7 @@ public:
         }
 
         const MeshCoordinate& src_coord = get_device_coord(src_node);
-        return compute_destination_nodes_from_hops(src_coord, hops, chip_send_type);
+        return compute_destination_nodes_from_hops(src_node, src_coord, hops, chip_send_type);
     }
 
     bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
@@ -1508,14 +1520,18 @@ private:
         return hops;
     }
 
+    // In a multi-host setup, we currently dont store info about how the meshes are connected across hosts
+    // So we only compute destinations within the local mesh from hops
     std::vector<FabricNodeId> compute_destination_nodes_from_hops(
+        const FabricNodeId& src_node,
         const MeshCoordinate& src_coord,
         const std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType send_type) const {
+        // for now src_node is only passed for multicast, since we dont allow unicast hop expansion across hosts
         if (send_type == ChipSendType::CHIP_UNICAST) {
             return compute_unicast_destinations(src_coord, hops);
         } else if (send_type == ChipSendType::CHIP_MULTICAST) {
-            return compute_multicast_destinations(src_coord, hops);
+            return compute_multicast_destinations(src_node, src_coord, hops);
         } else {
             TT_THROW("Unsupported send type: {}", send_type);
             return {};
@@ -1599,14 +1615,17 @@ private:
     }
 
     std::vector<FabricNodeId> compute_multicast_destinations(
-        const MeshCoordinate& src_coord, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        const FabricNodeId& src_node,
+        const MeshCoordinate& src_coord,
+        const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        // src_node is needed to grab the right mesh id to convert from coord to node id
         // Assume hops is pre-split single map from builder - simulate directly
         auto visited = simulate_multicast_split(src_coord, hops);
 
         std::unordered_set<FabricNodeId> unique_nodes;
         for (const auto& coord : visited) {
             if (coord != src_coord) {
-                unique_nodes.insert(get_fabric_node_id(coord));
+                unique_nodes.insert(get_fabric_node_id(src_node.mesh_id, coord));
             }
         }
 
