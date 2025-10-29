@@ -62,12 +62,13 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
     // NOTE: Output h and w dims are identical for Q, K, V, so any arg that is related to these dims for q_* can be
     // shared for K, V
     uint32_t q_out_h_tiles = input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    uint32_t q_out_w_tiles = head_dim / TILE_WIDTH;  // tiles along head_dim
+    uint32_t q_out_w_tiles = (head_dim + TILE_WIDTH - 1) / TILE_WIDTH;  // FIX: ceiling division for head_dim < 32
     uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
     uint32_t q_out_CHtWt = num_q_heads * q_out_HtWt;
     uint32_t kv_out_CHtWt = num_kv_heads * q_out_HtWt;
-    uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
-    uint32_t kv_num_tiles = num_kv_heads * q_out_w_tiles;
+    // FIX: Use ceiling division to handle head_dim < TILE_WIDTH (32)
+    uint32_t q_num_tiles = (num_q_heads * head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
+    uint32_t kv_num_tiles = (num_kv_heads * head_dim + TILE_WIDTH - 1) / TILE_WIDTH;
 
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
@@ -295,7 +296,7 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
-    uint32_t head_tiles = head_dim / TILE_WIDTH;
+    uint32_t head_tiles = (head_dim + TILE_WIDTH - 1) / TILE_WIDTH;  // FIX: ceiling division for head_dim < 32
     uint32_t head_size = head_tiles * single_tile_size;
 
     auto q_shard_spec = std::get<0>(output).shard_spec().value();
