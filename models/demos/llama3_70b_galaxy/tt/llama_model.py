@@ -49,6 +49,10 @@ class TtTransformer(LightweightModule):
         self.paged_attention_config = paged_attention_config
         self.decode_mode_only = decode_mode_only
         self.bitmask = None
+        self.bitmask_arange = ttnn.arange(
+            start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+        )
+
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
             args=args,
@@ -511,6 +515,21 @@ class TtTransformer(LightweightModule):
         )
         return tt_logits
 
+    def unpack_bitmask(self, bitmask):
+        batch_dim, vocab_dim = bitmask.shape
+        bitmask_to_broadcast = bitmask.reshape((batch_dim, vocab_dim, 1))
+        broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
+        broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
+        unpacked_bitmask = broadcast_unpacked.reshape((batch_dim, -1))
+        converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT)
+        converted_bitmask = ttnn.typecast(converted_bitmask, dtype=ttnn.float32)
+        padded_vocab_dim = 131072
+        unpadded_vocab_dim = self.vocab_size
+        padding_size = padded_vocab_dim - unpadded_vocab_dim
+        full_mask = ttnn.pad(converted_bitmask[:, :unpadded_vocab_dim], [(0, 0), (0, padding_size)], 1.0)
+        result = ttnn.where(full_mask, 0, float("-inf"))
+        return result
+
     def ttnn_decode_forward(
         self,
         x,
@@ -554,7 +573,7 @@ class TtTransformer(LightweightModule):
 
         # apply bit mask for stuctured outputs
         if self.bitmask is not None:
-            bitmask_unpacked = unpack_bitmask(self.bitmask)
+            bitmask_unpacked = self.unpack_bitmask(self.bitmask)
             tt_logits = ttnn.add(tt_logits, bitmask_unpacked, output_tensor=tt_logits)
             bitmask_unpacked.deallocate(True)
 
