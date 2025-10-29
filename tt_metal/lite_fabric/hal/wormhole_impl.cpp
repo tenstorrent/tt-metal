@@ -29,7 +29,9 @@ std::vector<std::filesystem::path> WormholeLiteFabricHal::build_includes(const s
         root_dir / "tt_metal/hw/ckernels/wormhole/metal/llk_io",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib",
-        root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
+        root_dir / "tt_metal/lite_fabric/hw/inc",
+        root_dir / "tt_metal/lite_fabric/hw/inc/wormhole",
+    };
 }
 
 std::vector<std::string> WormholeLiteFabricHal::build_defines() {
