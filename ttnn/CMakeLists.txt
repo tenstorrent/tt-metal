@@ -515,6 +515,7 @@ target_link_libraries(
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
+        TTNN::Ops::AxPlusB
         TTNN::Ops::Experimental::AdaptivePool
         TTNN::Ops::Experimental::AutoFormat
         TTNN::Ops::Experimental::BcastTo
@@ -686,6 +687,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
+add_subdirectory(cpp/ttnn/operations/ax_plus_b)
 add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
 add_subdirectory(cpp/ttnn/operations/experimental/auto_format)
 add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
