@@ -49,6 +49,10 @@ void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
         input_tensor.storage_type());
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
+    TT_FATAL(
+        input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32,
+        "Only FLOAT32 and BFLOAT16 are supported for generic reduction - got {}",
+        input_tensor.dtype());
 }
 
 std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
