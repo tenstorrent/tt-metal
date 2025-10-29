@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 from ...layers.normalization import DistributedLayerNorm, LayerNorm
 from ...layers.linear import ColParallelLinear, Linear
@@ -550,7 +551,7 @@ class SD35Transformer2DModel:
             pooled_projections: Pooled text projections - replicated
             timestep: Timestep tensor - replicated
         """
-        spatial = self.pos_embed(spatial)
+        spatial = self.pos_embed(spatial, already_unfolded=True)
 
         time_embed = self.time_text_embed(timestep, pooled_projections)
         prompt_embed = self.context_embedder(prompt_embed)
@@ -621,3 +622,28 @@ class SD35Transformer2DModel:
         #     )
 
         return spatial_out
+
+    def patchify(self, latents: torch.Tensor) -> torch.Tensor:
+        # N, H, W, C -> 1, N, (H / P) * (W / P), P * P * C
+        batch_size, height, width, channels = latents.shape
+        patch = self.patch_size
+
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
+
+        latents = latents.reshape([batch_size, height // patch, patch, width // patch, patch, channels])
+        return latents.transpose(2, 3).flatten(3, 5).flatten(1, 2).unsqueeze(0)
+
+    def unpatchify(self, spatial: torch.Tensor, *, height: int, width: int) -> torch.Tensor:
+        # 1, N, (H / P) * (W / P), P * P * C -> N, H, W, C
+        one, batch_size, _, _ = spatial.shape
+        assert one == 1
+        patch = self.patch_size
+
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
+
+        spatial = spatial.reshape([batch_size, height // patch, width // patch, patch, patch, -1])
+        return spatial.transpose(2, 3).flatten(3, 4).flatten(1, 2)
