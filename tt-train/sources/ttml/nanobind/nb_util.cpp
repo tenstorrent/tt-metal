@@ -325,15 +325,6 @@ tt::tt_metal::Tensor make_metal_tensor(
             std::span<const NumpyType> numpy_data_span(
                 static_cast<const NumpyType*>(numpy_data.data()), numpy_data.size());
 
-            auto const to_device_maybe_tilize = [device, target_layout](tt::tt_metal::Tensor& t) {
-                t = ttnn::to_device(t, device, tt::tt_metal::MemoryConfig{});
-
-                if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
-                    return t;
-                }
-                return ttnn::tilize_with_zero_padding(t);
-            };
-
             if constexpr (!std::is_same_v<MetalType, NumpyType>) {
                 std::vector<MetalType> converted_data;
                 converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
@@ -344,7 +335,15 @@ tt::tt_metal::Tensor make_metal_tensor(
                               ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
                         : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
 
-                return to_device_maybe_tilize(row_major_tensor);
+                // Move distributed tensor to device
+                if (mapper != nullptr) {
+                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+                }
+
+                if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
+                    return row_major_tensor;
+                }
+                return ttnn::tilize_with_zero_padding(row_major_tensor);
             } else {
                 auto row_major_tensor =
                     (mapper != nullptr)
@@ -352,7 +351,15 @@ tt::tt_metal::Tensor make_metal_tensor(
                               ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
                         : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
 
-                return to_device_maybe_tilize(row_major_tensor);
+                // Move distributed tensor to device
+                if (mapper != nullptr) {
+                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+                }
+
+                if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
+                    return row_major_tensor;
+                }
+                return ttnn::tilize_with_zero_padding(row_major_tensor);
             }
         };
 
