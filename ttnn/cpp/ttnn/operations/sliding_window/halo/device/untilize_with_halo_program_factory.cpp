@@ -88,9 +88,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const CoreRangeSet all_cores = output_tensor.shard_spec().value().grid;
 
     const ShardOrientation shard_orientation = output_tensor.shard_spec().value().orientation;
-    const auto input_shard_shape = output_tensor.shard_spec().value().shape;
+    const auto input_shard_shape = input_tensor.shard_spec().value().shape;
     const auto output_shard_shape = output_tensor.shard_spec().value().shape;
-    TT_ASSERT(input_shard_shape[1] == output_shard_shape[1], "Expected input and output shard shapes to match");
+    TT_ASSERT(input_shard_shape[1] == output_shard_shape[1], "Expected input and output shard widths to match");
 
     const uint32_t input_nhw_height = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t remapped_input_shard_shape_for_output_grid = tt::div_up(input_nhw_height, ncores_nhw);
@@ -106,7 +106,12 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         input_npages = remapped_input_shard_shape_for_output_grid;
     }
 
-    const uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
+    // Calculate aligned stick size - used for both input and output since channels don't change
+    const uint32_t stick_nbytes = output_shard_shape[1] * out_nbytes;
+    uint32_t aligned_stick_nbytes = stick_nbytes;
+    if (stick_nbytes % input_tensor.buffer()->alignment() != 0) {
+        aligned_stick_nbytes = tt::round_up(stick_nbytes, input_tensor.buffer()->alignment());
+    }
     const uint32_t out_tile_size = tt::tile_size(out_df);
 
     CBIndices cb_indices = CBIndices();
@@ -125,14 +130,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         "Block size must be a multiple of tile height (was {})",
         clamped_block_size_height);
 
-    uint32_t out_cb_pagesize = out_stick_nbytes;
+    uint32_t out_cb_pagesize = aligned_stick_nbytes;
     uint32_t out_cb_npages = max_out_nsticks_per_core;
     cb_indices.out_cb_id = cb_indices.get_next_cb_id();
     auto out_cb = create_circular_buffer(
         program, all_cores, cb_indices.out_cb_id, out_df, out_cb_npages, out_cb_pagesize, dst_buffer);
 
     // Used for storing padding immediate values (only used if not zero padding)
-    uint32_t pad_cb_pagesize = out_stick_nbytes;
+    uint32_t pad_cb_pagesize = aligned_stick_nbytes;
     uint32_t pad_cb_npages = 1;
     cb_indices.pad_cb_id0 = cb_indices.get_next_cb_id();
     create_circular_buffer(program, all_cores, cb_indices.pad_cb_id0, out_df, pad_cb_npages, pad_cb_pagesize);
@@ -233,11 +238,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    auto aligned_input_nstick_nbytes = out_stick_nbytes;
-    if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
-        aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
-    }
-
     const uint32_t block_stride = 2;  // Skip every 2nd block because of split reader
     const std::string reader_kernel_name =
         "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp";
@@ -250,12 +250,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
         0,  // padding value cb
         pad_val,
         input_npages,
-        out_stick_nbytes,
+        aligned_stick_nbytes,
         is_block_sharded,
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
-        aligned_input_nstick_nbytes,
         skip_untilize,
         clamped_block_size_height,  // Block size in sticks
         ntiles_per_block,
@@ -299,7 +298,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     core_1_reader_ct_args[1] = cb_indices.gather_config1;
     core_1_reader_ct_args[3] = input_to_writer_cb_id1;
     core_1_reader_ct_args[5] = cb_indices.pad_cb_id1;
-    core_1_reader_ct_args[17] = 1;  // Block start offset
+    core_1_reader_ct_args[16] = 1;  // Block start offset
 
     auto reader_0_kernel_id = CreateKernel(
         program,

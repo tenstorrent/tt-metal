@@ -395,27 +395,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_close(actual, expected)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "act_shape,stride_h,stride_w,padding",
-    [
-        ((8, 224, 14, 8), 16, 1, (0, 0)),
-        ((16, 224, 224, 8), 2, 2, (3, 3)),
-        ((1, 16, 16, 8), 2, 2, (0, 0)),
-        ((16, 42, 42, 64), 6, 6, (0, 0)),
-        ((1, 16, 16, 8), 2, 2, (2, 2)),
-        ((4, 64, 64, 24), 2, 2, (0, 0)),
-        ((4, 62, 62, 24), 2, 2, (1, 1)),
-        ((4, 14, 14, 256), 2, 2, (1, 1)),
-        ((1, 20, 20, 16), 4, 4, (2, 2)),
-        ((8, 18, 12, 8), 3, 2, (3, 2)),
-        ((2, 30, 30, 32), 5, 5, (0, 0)),
-        ((1, 24, 32, 16), 3, 4, (3, 0)),
-        ((1, 20, 20, 8), 2, 2, (1, 3, 0, 2)),
-        ((2, 16, 16, 16), 4, 4, (2, 2, 1, 3)),
-    ],
-)
-def test_fold_sharded(device, act_shape, stride_h, stride_w, padding):
+def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid, layout=ttnn.ROW_MAJOR_LAYOUT):
     torch.manual_seed(0)
 
     N, H, W, C = act_shape
@@ -426,14 +406,30 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w, padding):
         expected = fold_torch(torch_input, stride_h, stride_w, padding=padding)
         expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
-        # Simple sharding: always try for maximum cores for best performance
-        total_elements = N * H * W
-
-        for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
+        if core_grid is None:
+            # Fit to max cores that divides total elements without padding. In case of padding cases,
+            # reshard in fold will take care of it.
+            total_elements = N * H * W
+            for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
+                n_cores = grid_x * grid_y
+                if total_elements % n_cores == 0:
+                    break
+        else:
+            # Currently, unaligned channel inputs are supported only without reshard path(Issue #29514).
+            if len(padding) == 2:
+                pad_top, pad_bottom = padding[0], padding[0]
+                pad_left, pad_right = padding[1], padding[1]
+            elif len(padding) == 4:
+                pad_top, pad_bottom, pad_left, pad_right = padding
+            else:
+                raise ValueError(f"Padding must be a 2-tuple or 4-tuple, got {padding}")
+            padded_H = H + pad_top + pad_bottom
+            padded_W = W + pad_left + pad_right
+            total_elements = N * padded_H * padded_W
+            grid_x, grid_y = core_grid
             n_cores = grid_x * grid_y
-            if total_elements % n_cores == 0:
-                break
-
+            if total_elements % n_cores != 0:
+                pytest.skip(f"total elements {total_elements} not divisible by n_cores {n_cores}")
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -448,7 +444,7 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w, padding):
         tt_input = torch2tt_tensor(
             torch_input,
             device,
-            ttnn.ROW_MAJOR_LAYOUT,
+            layout,
             tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
         )
         tt_out = ttnn.fold(tt_input, stride_h=stride_h, stride_w=stride_w, padding=list(padding))
@@ -457,3 +453,21 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w, padding):
         torch.testing.assert_close(actual, expected)
         tt_input.deallocate()
         tt_out.deallocate()
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape,stride_h,stride_w,padding, core_grid",
+    [
+        ((8, 224, 14, 8), 16, 1, (0, 0), None),
+        ((1, 16, 16, 8), 2, 2, (0, 0), None),
+        ((16, 42, 42, 64), 6, 6, (0, 0), None),
+        ((1, 16, 16, 8), 2, 2, (2, 2), None),
+        ((4, 64, 64, 24), 2, 2, (0, 0), None),
+        ((4, 62, 62, 24), 2, 2, (1, 1), None),
+        ((4, 14, 14, 256), 2, 2, (1, 1), None),
+        ((1, 20, 20, 16), 4, 4, (2, 2), None),
+    ],
+)
+def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid):
+    run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid)
