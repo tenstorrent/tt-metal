@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -158,8 +159,7 @@ Any rank of tensor is supported, however tensors with rank &gt; 4 can only apply
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">padding</span></code>: (list[Tuple[int,int]]): padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">value</span></code>: (Union[float,int]): value to pad with.</p>
 <p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">use_multicore</span></code>: (Optional[bool]) switch to use multicore implementation
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to <cite>None</cite>.
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">queue_id</span></code>: (Optional[int]): command queue id. Defaults to <cite>0</cite>.</p>
+:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to <cite>None</cite>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>

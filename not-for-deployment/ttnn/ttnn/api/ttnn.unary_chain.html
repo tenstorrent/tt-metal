@@ -22,6 +22,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -335,7 +336,7 @@
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor.</p></li>
-<li><p><strong>ops_chain</strong> (<em>list</em><em>[</em><em>ttnn.UnaryWithParam</em><em>]</em>) – list of unary ops to be chained.</p></li>
+<li><p><strong>ops_chain</strong> (<em>list</em><em>[</em><em>ttnn.EltwiseUnaryWithParam</em><em>]</em>) – list of unary ops to be chained.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
@@ -344,7 +345,6 @@
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -377,7 +377,7 @@
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">ops_chain</span> <span class="o">=</span> <span class="p">[</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">RELU</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">EXP</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">POWER</span><span class="p">,</span> <span class="mi">2</span><span class="p">)]</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">ops_chain</span> <span class="o">=</span> <span class="p">[</span><span class="n">ttnn</span><span class="o">.</span><span class="n">EltwiseUnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">RELU</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">EltwiseUnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">EXP</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">EltwiseUnaryWithParam</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">UnaryOpType</span><span class="o">.</span><span class="n">POWER</span><span class="p">,</span> <span class="mi">2</span><span class="p">)]</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">unary_chain</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">ops_chain</span><span class="p">)</span>
 </pre></div>
 </div>

@@ -19,6 +19,7 @@
         <script src="_static/doctools.js?v=888ff710"></script>
         <script src="_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="_static/posthog.js?v=aa5946f9"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" /> 
@@ -450,10 +451,10 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/mask_tile.html#_CPPv4N7ckernel16mask_posinf_tileE8uint32_t8uint32_t">ckernel::mask_posinf_tile (C++ function)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="tt_metal/apis/kernel_apis/compute/mask_tile.html#_CPPv4N7ckernel9mask_tileE8uint32_t8uint32_t10DataFormat">ckernel::mask_tile (C++ function)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="tt_metal/apis/kernel_apis/compute/mask_tile.html#_CPPv4N7ckernel14mask_tile_initEv">ckernel::mask_tile_init (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/matmul_block.html#_CPPv4N7ckernel12matmul_blockE8uint32_t8uint32_t8uint32_t8uint32_t8uint32_tK8uint32_t8uint32_t8uint32_t8uint32_t">ckernel::matmul_block (C++ function)</a>
@@ -623,6 +624,10 @@
       <li><a href="tt_metal/apis/kernel_apis/compute/rsub_tile.html#_CPPv4N7ckernel14rsub_tile_initEv">ckernel::rsub_tile_init (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/binop_with_scalar_tile.html#_CPPv4N7ckernel15rsub_unary_tileE8uint32_t8uint32_t">ckernel::rsub_unary_tile (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/selu_tile.html#_CPPv4N7ckernel9selu_tileE8uint32_t8uint32_t8uint32_t">ckernel::selu_tile (C++ function)</a>
+</li>
+      <li><a href="tt_metal/apis/kernel_apis/compute/selu_tile.html#_CPPv4N7ckernel14selu_tile_initEv">ckernel::selu_tile_init (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/sigmoid_tile.html#_CPPv4I_i_bEN7ckernel12sigmoid_tileEv8uint32_t">ckernel::sigmoid_tile (C++ function)</a>
 </li>
@@ -848,7 +853,7 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_barrier_with_trid.html#_CPPv432noc_async_read_barrier_with_trid8uint32_t7uint8_t">noc_async_read_barrier_with_trid (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_one_packet.html#_CPPv425noc_async_read_one_packet8uint64_t8uint32_t8uint32_t7uint8_t8uint32_t">noc_async_read_one_packet (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_one_packet.html#_CPPv4I_bE25noc_async_read_one_packetv8uint64_t8uint32_t8uint32_t7uint8_t8uint32_t">noc_async_read_one_packet (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_one_packet_set_state.html#_CPPv435noc_async_read_one_packet_set_state8uint64_t8uint32_t7uint8_t">noc_async_read_one_packet_set_state (C++ function)</a>
 </li>
@@ -862,7 +867,7 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_read_with_state.html#_CPPv4I_bE25noc_async_read_with_statev8uint32_t8uint32_t8uint32_t7uint8_t">noc_async_read_with_state (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write.html#_CPPv4I_8uint32_t_bE15noc_async_writev8uint32_t8uint64_t8uint32_t7uint8_t8uint32_t">noc_async_write (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write.html#_CPPv4I_8uint32_t_b_bE15noc_async_writev8uint32_t8uint64_t8uint32_t7uint8_t8uint32_t">noc_async_write (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_barrier.html#_CPPv423noc_async_write_barrier7uint8_t">noc_async_write_barrier (C++ function)</a>
 </li>
@@ -874,21 +879,21 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_multicast_loopback_src.html#_CPPv438noc_async_write_multicast_loopback_srcNSt8uint32_tENSt8uint64_tENSt8uint32_tENSt8uint32_tEb7uint8_t">noc_async_write_multicast_loopback_src (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_multicast_one_packet.html#_CPPv436noc_async_write_multicast_one_packetNSt8uint32_tENSt8uint64_tENSt8uint32_tENSt8uint32_tEb7uint8_t">noc_async_write_multicast_one_packet (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_multicast_one_packet.html#_CPPv4I_bE36noc_async_write_multicast_one_packetvNSt8uint32_tENSt8uint64_tENSt8uint32_tENSt8uint32_tEb7uint8_t">noc_async_write_multicast_one_packet (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_one_packet.html#_CPPv426noc_async_write_one_packetNSt8uint32_tENSt8uint64_tENSt8uint32_tE7uint8_t8uint32_t">noc_async_write_one_packet (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_one_packet.html#_CPPv4I_b_bE26noc_async_write_one_packetvNSt8uint32_tENSt8uint64_tENSt8uint32_tE7uint8_t8uint32_t">noc_async_write_one_packet (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_one_packet_set_state.html#_CPPv4I_bE36noc_async_write_one_packet_set_statev8uint64_t8uint32_t7uint8_t7uint8_t">noc_async_write_one_packet_set_state (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_one_packet_with_state.html#_CPPv4I_bE37noc_async_write_one_packet_with_statev8uint32_t8uint32_t7uint8_t">noc_async_write_one_packet_with_state (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_page.html#_CPPv4I0_bE20noc_async_write_pagevK8uint32_tRK7AddrGen8uint32_t8uint32_t8uint32_t7uint8_t">noc_async_write_page (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_page.html#_CPPv4I0_b_bE20noc_async_write_pagevK8uint32_tRK7AddrGen8uint32_t8uint32_t8uint32_t7uint8_t">noc_async_write_page (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_shard.html#_CPPv4I0E21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t">noc_async_write_shard (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_write_shard.html#_CPPv4I0_bE21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t">noc_async_write_shard (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_async_writes_flushed.html#_CPPv424noc_async_writes_flushed7uint8_t">noc_async_writes_flushed (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_inline_dw_write.html#_CPPv4I_14InlineWriteDst_bE19noc_inline_dw_writev8uint64_t8uint32_t7uint8_t7uint8_t7uint8_t">noc_inline_dw_write (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_inline_dw_write.html#_CPPv4I_14InlineWriteDst_b_bE19noc_inline_dw_writev8uint64_t8uint32_t7uint8_t7uint8_t7uint8_t8uint32_t">noc_inline_dw_write (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/data_movement/noc_inline_dw_write_set_state.html#_CPPv4I_b_bE29noc_inline_dw_write_set_statev8uint64_t8uint32_t7uint8_t7uint8_t7uint8_t7uint8_t">noc_inline_dw_write_set_state (C++ function)</a>
 </li>
@@ -934,28 +939,8 @@
 </li>
       <li><a href="tt_metal/apis/host_apis/buffers/DeallocateBuffer.html#_CPPv4N2tt8tt_metal16DeallocateBufferER6Buffer">tt::tt_metal::DeallocateBuffer (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EnqueueProgram.html#_CPPv4N2tt8tt_metal14EnqueueProgramER12CommandQueueR7Programb">tt::tt_metal::EnqueueProgram (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EnqueueReadBuffer.html#_CPPv4I0EN2tt8tt_metal17EnqueueReadBufferEvR12CommandQueueR6BufferRNSt6vectorI5DTypeEEb">tt::tt_metal::EnqueueReadBuffer (C++ function)</a>, <a href="tt_metal/apis/host_apis/command_queue/EnqueueReadBuffer.html#_CPPv4N2tt8tt_metal17EnqueueReadBufferER12CommandQueueRKNSt7variantINSt17reference_wrapperI6BufferEENSt10shared_ptrI6BufferEEEEPvb">[1]</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EnqueueReadSubBuffer.html#_CPPv4I0EN2tt8tt_metal20EnqueueReadSubBufferEvR12CommandQueueR6BufferRNSt6vectorI5DTypeEERK12BufferRegionb">tt::tt_metal::EnqueueReadSubBuffer (C++ function)</a>, <a href="tt_metal/apis/host_apis/command_queue/EnqueueReadSubBuffer.html#_CPPv4N2tt8tt_metal20EnqueueReadSubBufferER12CommandQueueNSt7variantINSt17reference_wrapperI6BufferEENSt10shared_ptrI6BufferEEEEPvRK12BufferRegionb">[1]</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EnqueueRecordEvent.html#_CPPv4N2tt8tt_metal18EnqueueRecordEventER12CommandQueueRKNSt10shared_ptrI5EventEEN2tt3stl4SpanIK11SubDeviceIdEE">tt::tt_metal::EnqueueRecordEvent (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EnqueueWaitForEvent.html#_CPPv4N2tt8tt_metal19EnqueueWaitForEventER12CommandQueueRKNSt10shared_ptrI5EventEE">tt::tt_metal::EnqueueWaitForEvent (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EnqueueWriteBuffer.html#_CPPv4I0EN2tt8tt_metal18EnqueueWriteBufferEvR12CommandQueueRKNSt7variantINSt17reference_wrapperI6BufferEENSt10shared_ptrI6BufferEEEERNSt6vectorI5DTypeEEb">tt::tt_metal::EnqueueWriteBuffer (C++ function)</a>, <a href="tt_metal/apis/host_apis/command_queue/EnqueueWriteBuffer.html#_CPPv4N2tt8tt_metal18EnqueueWriteBufferER12CommandQueueRKNSt7variantINSt17reference_wrapperI6BufferEENSt10shared_ptrI6BufferEEEE12HostDataTypeb">[1]</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EnqueueWriteSubBuffer.html#_CPPv4I0EN2tt8tt_metal21EnqueueWriteSubBufferEvR12CommandQueueRKNSt7variantINSt17reference_wrapperI6BufferEENSt10shared_ptrI6BufferEEEERNSt6vectorI5DTypeEERK12BufferRegionb">tt::tt_metal::EnqueueWriteSubBuffer (C++ function)</a>, <a href="tt_metal/apis/host_apis/command_queue/EnqueueWriteSubBuffer.html#_CPPv4N2tt8tt_metal21EnqueueWriteSubBufferER12CommandQueueRKNSt7variantINSt17reference_wrapperI6BufferEENSt10shared_ptrI6BufferEEEE12HostDataTypeRK12BufferRegionb">[1]</a>
-</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EventQuery.html#_CPPv4N2tt8tt_metal10EventQueryERKNSt10shared_ptrI5EventEE">tt::tt_metal::EventQuery (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/EventSynchronize.html#_CPPv4N2tt8tt_metal16EventSynchronizeERKNSt10shared_ptrI5EventEE">tt::tt_metal::EventSynchronize (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/Finish.html#_CPPv4N2tt8tt_metal6FinishER12CommandQueueN2tt3stl4SpanIK11SubDeviceIdEE">tt::tt_metal::Finish (C++ function)</a>
-</li>
       <li><a href="tt_metal/apis/host_apis/buffers/CircularBuffers.html#_CPPv4N2tt8tt_metal23GetCircularBufferConfigER7Program8CBHandle">tt::tt_metal::GetCircularBufferConfig (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal20GetCommonRuntimeArgsERK7Program12KernelHandle">tt::tt_metal::GetCommonRuntimeArgs (C++ function)</a>
@@ -966,17 +951,11 @@
 </li>
       <li><a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal14GetRuntimeArgsERK7Program12KernelHandle">tt::tt_metal::GetRuntimeArgs (C++ function)</a>, <a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal14GetRuntimeArgsERK7Program12KernelHandleRK9CoreCoord">[1]</a>
 </li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/LightMetalBeginCapture.html#_CPPv4N2tt8tt_metal22LightMetalBeginCaptureEv">tt::tt_metal::LightMetalBeginCapture (C++ function)</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/LightMetalEndCapture.html#_CPPv4N2tt8tt_metal20LightMetalEndCaptureEv">tt::tt_metal::LightMetalEndCapture (C++ function)</a>
-</li>
       <li><a href="tt_metal/apis/host_apis/profiler/ReadMeshDeviceProfilerResults.html#_CPPv4N2tt8tt_metal29ReadMeshDeviceProfilerResultsERN11distributed10MeshDeviceE17ProfilerReadStateRKNSt8optionalI24ProfilerOptionalMetadataEE">tt::tt_metal::ReadMeshDeviceProfilerResults (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal20SetCommonRuntimeArgsERK7Program12KernelHandleN3stl4SpanIK8uint32_tEE">tt::tt_metal::SetCommonRuntimeArgs (C++ function)</a>, <a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal20SetCommonRuntimeArgsERK7Program12KernelHandleNSt16initializer_listI8uint32_tEE">[1]</a>
 </li>
       <li><a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal14SetRuntimeArgsERK7Program12KernelHandleRKNSt6vectorI9CoreCoordEERKNSt6vectorINSt6vectorI8uint32_tEEEE">tt::tt_metal::SetRuntimeArgs (C++ function)</a>, <a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal14SetRuntimeArgsERK7Program12KernelHandleRKNSt7variantI9CoreCoord9CoreRange12CoreRangeSetEEN3stl4SpanIK8uint32_tEE">[1]</a>, <a href="tt_metal/apis/host_apis/runtime_args/runtime_args.html#_CPPv4N2tt8tt_metal14SetRuntimeArgsERK7Program12KernelHandleRKNSt7variantI9CoreCoord9CoreRange12CoreRangeSetEENSt16initializer_listI8uint32_tEE">[2]</a>
-</li>
-      <li><a href="tt_metal/apis/host_apis/command_queue/Synchronize.html#_CPPv4N2tt8tt_metal11SynchronizeEP7IDeviceNSt8optionalI7uint8_tEEN2tt3stl4SpanIK11SubDeviceIdEE">tt::tt_metal::Synchronize (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/host_apis/buffers/CircularBuffers.html#_CPPv4N2tt8tt_metal28UpdateCircularBufferPageSizeER7Program8CBHandle7uint8_t8uint32_t">tt::tt_metal::UpdateCircularBufferPageSize (C++ function)</a>
 </li>

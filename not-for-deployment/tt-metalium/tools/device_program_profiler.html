@@ -20,6 +20,7 @@
         <script src="../_static/doctools.js?v=888ff710"></script>
         <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../_static/posthog.js?v=aa5946f9"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -66,18 +67,19 @@
 <li class="toctree-l2"><a class="reference internal" href="watcher.html">Watcher</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Device Program Profiler</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#how-to-run">How to Run</a></li>
-</ul>
-</li>
-<li class="toctree-l3"><a class="reference internal" href="#example">Example</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#description">Description</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#enabling-device-profiling">Enabling Device Profiling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#instrumenting-kernel-code">Instrumenting Kernel Code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#controlling-profiling-from-host-code">Controlling Profiling from Host Code</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-walkthrough-test-full-buffer">Example Walkthrough: <code class="docutils literal notranslate"><span class="pre">test_full_buffer</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="#analyzing-profiler-output">Analyzing Profiler Output</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#tracy-gui-integration">Tracy GUI Integration</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#limitations">Limitations</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="inspector.html">Inspector</a></li>
+<li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
 </ul>
 </li>
 </ul>
@@ -115,69 +117,114 @@
   <section id="device-program-profiler">
 <span id="id1"></span><h1>Device Program Profiler<a class="headerlink" href="#device-program-profiler" title="Permalink to this heading"></a>
 </h1>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Tools are only fully supported on source builds.</p>
-</div>
-<section id="overview">
-<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+<p>Device-side performance profiling provides a scope-based method for analyzing kernel performance on Tenstorrent hardware, similar to how Tracy works for host-side code. It is a powerful tool for identifying performance bottlenecks and optimizing kernel execution. Profiling is available on all RISC-V cores within a Tensix (including both compute and data movement kernels), as well as on cores outside of a Tensix (such as Ethernet tiles).</p>
+<p>This document provides a guide for developers on how to use the device program profiler. It assumes you are familiar with the basic programming examples.</p>
+<section id="enabling-device-profiling">
+<h2>Enabling Device Profiling<a class="headerlink" href="#enabling-device-profiling" title="Permalink to this heading"></a>
 </h2>
-<p>Device-side performance profiling follows the same scope based profiling method that tracy uses on the host side.</p>
-<p>The macro <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN(</span> <span class="pre">zone_name</span> <span class="pre">)</span></code> is used similar to tracy’s <code class="docutils literal notranslate"><span class="pre">ZoneScopedN</span></code> macro to profile C++ scopes and assign them a custom name.</p>
-<section id="how-to-run">
-<h3>How to Run<a class="headerlink" href="#how-to-run" title="Permalink to this heading"></a>
-</h3>
-<p>Device-side profiling is only allowed in profiler builds. <code class="docutils literal notranslate"><span class="pre">build_metal.sh</span> <span class="pre">--enable-profiler</span> <span class="pre">--build-programming-examples</span></code> is the script for building profiler builds.</p>
-<p>Because downloading profiler results can add high runtime overhead, <code class="docutils literal notranslate"><span class="pre">TT_METAL_DEVICE_PROFILER=1</span></code> environment variable has to be set to perform the download.</p>
-<p>The commands to build and run the <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> example after following <a class="reference internal" href="../get_started/get_started.html#getting-started"><span class="std std-ref">Getting Started</span></a>:</p>
-<div class="highlight-sh notranslate">
-<div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
-build_metal.sh<span class="w"> </span>--enable-profiler
-<span class="nv">TT_METAL_DEVICE_PROFILER</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./build/programming_examples/profiler/test_full_buffer
+<p>To use the device profiler, you must first build Metalium with profiling enabled. This can be done using the following build script command:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>./build_metal.sh<span class="w"> </span>--enable-profiler
 </pre></div>
 </div>
-<p>The generated csv is <code class="docutils literal notranslate"><span class="pre">profile_log_device.csv</span></code> and is saved under <code class="docutils literal notranslate"><span class="pre">{$TT_METAL_HOME}/generated/profiler/.logs</span></code> by default.</p>
-<p><code class="docutils literal notranslate"><span class="pre">build_metal.sh</span> <span class="pre">--enable-profiler</span> <span class="pre">--build-programming-examples</span></code> also enables tracy for the build by using the <code class="docutils literal notranslate"><span class="pre">ENABLE_TRACY=ON</span></code> cmake option. In tracy builds, device-side profiling data is also sent to tracy’s GUI.</p>
+<p>This command enables both device-side profiling and Tracy for host-side profiling. For a general overview of profiling in Metalium and how to use the Tracy GUI, see <a class="reference internal" href="tracy_profiler.html#tracy-profiler"><span class="std std-ref">Tracy Profiler</span></a>.</p>
+<p>Device profiling is disabled by default to avoid unnecessary runtime overhead. To enable profiling, set the environment variable before running your application. You can do this either in your shell session or inline when launching your program:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nv">TT_METAL_DEVICE_PROFILER</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>/path/to/your/application
+</pre></div>
+</div>
+<p>This flag ensures that the overhead is only incurred when you are actively profiling device code.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Profiling, kernel debug print and watcher cannot be used at the same time, as both features use a significant amount of SRAM for data storage and will conflict with each other. Ensure that <code class="docutils literal notranslate"><span class="pre">TT_METAL_DPRINT_CORES</span></code>, <code class="docutils literal notranslate"><span class="pre">TT_METAL_WATCHER</span></code> and <code class="docutils literal notranslate"><span class="pre">TT_METAL_DEVICE_PROFILER</span></code> are not set simultaneously.</p>
+</div>
 </section>
-</section>
-<section id="example">
-<h2>Example<a class="headerlink" href="#example" title="Permalink to this heading"></a>
+<section id="instrumenting-kernel-code">
+<h2>Instrumenting Kernel Code<a class="headerlink" href="#instrumenting-kernel-code" title="Permalink to this heading"></a>
 </h2>
-<section id="description">
-<h3>Description<a class="headerlink" href="#description" title="Permalink to this heading"></a>
-</h3>
-<p><code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> is a profiler programming example. It show cases how we can use <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> to annotate time on kernel code.</p>
-<p>In this example device side profiling is used to measure the cycle count on the series of “nop” instructions that are looped.</p>
-<p>The host code of the <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> example is in <code class="docutils literal notranslate"><span class="pre">{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/test_full_buffer.cpp</span></code></p>
-<p>On top of tt_metal’s program dispatch API calls, two additional steps specific to this example are taken, which are:</p>
-<ol class="arabic simple">
-<li><p>Setting <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code> and <code class="docutils literal notranslate"><span class="pre">LOOP_SIZE</span></code> defines for the kernels</p></li>
-<li><p>Calling ReadDeviceProfilerResults after the call to Finish to collect the device side profiling data</p></li>
-</ol>
-<p>The kernel code for full buffer is in <code class="docutils literal notranslate"><span class="pre">{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp</span></code> and demonstrated below:</p>
+<p>To profile a section of your C++ kernel, you can use the <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN(zone_name)</span></code> macro. This works just like Tracy’s <code class="docutils literal notranslate"><span class="pre">ZoneScopedN</span></code>, creating a named zone that will be captured by the profiler.</p>
+<p>First, include the necessary header in your kernel file:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tools/profiler/kernel_profiler.hpp&gt;</span>
+</pre></div>
+</div>
+<p>Then, wrap the code you want to measure with the macro:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DeviceZoneScopedN</span><span class="p">(</span><span class="s">"MyCustomZone"</span><span class="p">);</span>
+<span class="w">    </span><span class="c1">// Kernel code to be profiled</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> annotation introduces some overhead. Use it selectively in performance-critical sections, and be cautious when interpreting timings for code with many <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> annotations.</p>
+</div>
+</section>
+<section id="controlling-profiling-from-host-code">
+<h2>Controlling Profiling from Host Code<a class="headerlink" href="#controlling-profiling-from-host-code" title="Permalink to this heading"></a>
+</h2>
+<p>After instrumenting your kernels, the profiling data is automatically collected when closing the device.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Run the program</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+
+<span class="c1">// Also reads profiler results from the device</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>If for any reason you need to manually trigger the reading of profiling results (for example, more then 1000 kernel runs before device close), you can call <code class="docutils literal notranslate"><span class="pre">ReadDeviceProfilerResults</span></code>:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Manually read profiler results from the device (if needed)</span>
+<span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">ReadDeviceProfilerResults</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>This call should be placed after you have finished running the program of interest. It signals the device to sync the profiling results, which can then be viewed in the Tracy client or analyzed from the generated CSV file.</p>
+</section>
+<section id="example-walkthrough-test-full-buffer">
+<h2>Example Walkthrough: <code class="docutils literal notranslate"><span class="pre">test_full_buffer</span></code><a class="headerlink" href="#example-walkthrough-test-full-buffer" title="Permalink to this heading"></a>
+</h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> programming example, located in <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/profiler/test_full_buffer</span></code>, demonstrates how to use the device profiler and will be used throughout this guide to illustrate the concepts.</p>
+<p>The host code in <code class="docutils literal notranslate"><span class="pre">test_full_buffer.cpp</span></code> sets up and runs a simple kernel, defines compile-time arguments like <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code>, and calls <code class="docutils literal notranslate"><span class="pre">ReadDeviceProfilerResults</span></code> to collect the data.</p>
+<p>The kernel code in <code class="docutils literal notranslate"><span class="pre">kernels/full_buffer.cpp</span></code> uses <code class="docutils literal notranslate"><span class="pre">DeviceZoneScopedN</span></code> to profile a loop of <code class="docutils literal notranslate"><span class="pre">nop</span></code> instructions:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
 <span class="linenos"> 2</span><span class="c1">//</span>
 <span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
 <span class="linenos"> 4</span>
 <span class="linenos"> 5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;cstdint&gt;</span>
-<span class="linenos"> 6</span>
-<span class="linenos"> 7</span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos"> 8</span><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">LOOP_COUNT</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">++</span><span class="p">)</span>
-<span class="linenos"> 9</span><span class="w">    </span><span class="p">{</span>
-<span class="linenos">10</span><span class="w">        </span><span class="n">DeviceZoneScopedN</span><span class="p">(</span><span class="s">"TEST-FULL"</span><span class="p">);</span>
-<span class="linenos">11</span><span class="c1">//Max unroll size</span>
-<span class="linenos">12</span><span class="cp">#pragma GCC unroll 65534</span>
-<span class="linenos">13</span><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">LOOP_SIZE</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span>
-<span class="linenos">14</span><span class="w">        </span><span class="p">{</span>
-<span class="linenos">15</span><span class="w">            </span><span class="k">asm</span><span class="p">(</span><span class="s">"nop"</span><span class="p">);</span>
-<span class="linenos">16</span><span class="w">        </span><span class="p">}</span>
-<span class="linenos">17</span><span class="w">    </span><span class="p">}</span>
-<span class="linenos">18</span><span class="p">}</span>
+<span class="linenos"> 6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tools/profiler/kernel_profiler.hpp&gt;</span>
+<span class="linenos"> 7</span>
+<span class="linenos"> 8</span><span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 9</span><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">LOOP_COUNT</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">++</span><span class="p">)</span>
+<span class="linenos">10</span><span class="w">    </span><span class="p">{</span>
+<span class="linenos">11</span><span class="w">        </span><span class="n">DeviceZoneScopedN</span><span class="p">(</span><span class="s">"TEST-FULL"</span><span class="p">);</span>
+<span class="linenos">12</span><span class="w">        </span><span class="c1">//Max unroll size</span>
+<span class="linenos">13</span><span class="w">        </span><span class="cp">#pragma GCC unroll 65534</span>
+<span class="linenos">14</span><span class="w">        </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">LOOP_SIZE</span><span class="p">;</span><span class="w"> </span><span class="n">j</span><span class="o">++</span><span class="p">)</span>
+<span class="linenos">15</span><span class="w">        </span><span class="p">{</span>
+<span class="linenos">16</span><span class="w">            </span><span class="k">asm</span><span class="p">(</span><span class="s">"nop"</span><span class="p">);</span>
+<span class="linenos">17</span><span class="w">        </span><span class="p">}</span>
+<span class="linenos">18</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">19</span><span class="p">}</span>
 </pre></div>
 </div>
-<p>The inner for loop of “nop” instructions is executed multiple times. The count is determined by the define variable <code class="docutils literal notranslate"><span class="pre">LOOP_COUNT</span></code> defined by the host side code.</p>
-<p>Device-side profiler provides marker information for all RISCs and cores used in the program. The following is the portion of the output csv of the <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> test for BRISC on worker core 1,1 on device 0:</p>
+<p>To build and run this example:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
+build_metal.sh<span class="w"> </span>--enable-profiler<span class="w"> </span>--build-programming-examples
+<span class="nv">TT_METAL_DEVICE_PROFILER</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>./build/programming_examples/profiler/test_full_buffer
+</pre></div>
+</div>
+<p>The results will be available in the Tracy GUI and in the <code class="docutils literal notranslate"><span class="pre">profile_log_device.csv</span></code> file.</p>
+</section>
+<section id="analyzing-profiler-output">
+<h2>Analyzing Profiler Output<a class="headerlink" href="#analyzing-profiler-output" title="Permalink to this heading"></a>
+</h2>
+<p>The primary output of the device profiler is a CSV file, which provides detailed, machine-readable data for analysis. For visual inspection of device-side profiling results alongside host-side data, see <a class="reference internal" href="tracy_profiler.html#tracy-profiler"><span class="std std-ref">Tracy Profiler</span></a>.</p>
+<p>A CSV file named <code class="docutils literal notranslate"><span class="pre">profile_log_device.csv</span></code> is generated in the <code class="docutils literal notranslate"><span class="pre">${TT_METAL_HOME}/generated/profiler/.logs/</span></code> directory. This file contains the raw profiling data, including the start and end times for each zone, and is useful for automated analysis.</p>
+<p>Here is a snippet from the CSV generated by the <code class="docutils literal notranslate"><span class="pre">full_buffer</span></code> programming example:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="nl">ARCH</span><span class="p">:</span><span class="w"> </span><span class="n">grayskull</span><span class="p">,</span><span class="w"> </span><span class="n">CHIP_FREQ</span><span class="p">[</span><span class="n">MHz</span><span class="p">]</span><span class="o">:</span><span class="w"> </span><span class="mi">1202</span>
 <span class="n">PCIe</span><span class="w"> </span><span class="n">slot</span><span class="p">,</span><span class="w"> </span><span class="n">core_x</span><span class="p">,</span><span class="w"> </span><span class="n">core_y</span><span class="p">,</span><span class="w"> </span><span class="n">RISC</span><span class="w"> </span><span class="n">processor</span><span class="w"> </span><span class="n">type</span><span class="p">,</span><span class="w"> </span><span class="n">timer_id</span><span class="p">,</span><span class="w"> </span><span class="n">time</span><span class="p">[</span><span class="n">cycles</span><span class="w"> </span><span class="n">since</span><span class="w"> </span><span class="n">reset</span><span class="p">],</span><span class="w"> </span><span class="n">stat</span><span class="w"> </span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">Run</span><span class="w"> </span><span class="n">ID</span><span class="p">,</span><span class="w"> </span><span class="n">zone</span><span class="w"> </span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">zone</span><span class="w"> </span><span class="n">phase</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">line</span><span class="p">,</span><span class="w"> </span><span class="n">source</span><span class="w"> </span><span class="n">file</span>
@@ -187,38 +234,28 @@ build_metal.sh<span class="w"> </span>--enable-profiler
 <span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">90791</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712325701</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">BRISC</span><span class="o">-</span><span class="n">KERNEL</span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">40</span><span class="w"> </span><span class="p">,</span><span class="n">tt</span><span class="o">-</span><span class="n">metal</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">hw</span><span class="o">/</span><span class="n">firmware</span><span class="o">/</span><span class="n">src</span><span class="o">/</span><span class="n">tt</span><span class="mi">-1</span><span class="n">xx</span><span class="o">/</span><span class="n">brisck</span><span class="p">.</span><span class="n">cc</span>
 <span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">36986</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712279499</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
 <span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">102522</span><span class="p">,</span><span class="mi">11233712279792</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
-<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">36986</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712279863</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
-<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">102522</span><span class="p">,</span><span class="mi">11233712280147</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
-<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">36986</span><span class="w"> </span><span class="p">,</span><span class="mi">11233712280205</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">begin</span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
-<span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="n">BRISC</span><span class="p">,</span><span class="mi">102522</span><span class="p">,</span><span class="mi">11233712280470</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="n">TEST</span><span class="o">-</span><span class="n">FULL</span><span class="w">   </span><span class="p">,</span><span class="n">end</span><span class="w">  </span><span class="p">,</span><span class="mi">10</span><span class="w"> </span><span class="p">,.</span><span class="o">/</span><span class="n">kernel</span><span class="p">.</span><span class="n">cpp</span>
-<span class="p">.</span>
-<span class="p">.</span>
-<span class="p">.</span>
-<span class="p">.</span>
+<span class="p">...</span>
 </pre></div>
 </div>
-<p>You can see that the log starts with <code class="docutils literal notranslate"><span class="pre">BRISC-FW</span></code> and <code class="docutils literal notranslate"><span class="pre">BRISC-KERNEL</span></code> begin and end entries. These are always present in device profiler data. Following the source file and line number presented in the log is the best way to understand what scope in code they are profiling.</p>
-<p>In short, <code class="docutils literal notranslate"><span class="pre">BRISC-FW</span></code> is profiling the duration of a single iteration of BRISC forever loop. <code class="docutils literal notranslate"><span class="pre">BRISC-KERNEL</span></code> is profiling the duration of the kernel main function.</p>
-<p>After the default markers, the log presents the data for the <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code> zone from the full buffer test. Source file is pointing to the intermediate kernel source file that gets
-generated. Future updates will make this field to point to the original kernel file.</p>
-<p>In total profiling 125 scopes are supported by device-side profiler. In the snippet above, only the first three entries for the <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code> scope is shown.</p>
-<p>Below is couple of screenshots from tracy’s GUI, presenting the full buffer example.</p>
-<p>Looking at one iteration of FW loop, you can see that all RISCs are reporting 125 profiled zones under their <code class="docutils literal notranslate"><span class="pre">KERNEL</span></code> scope.</p>
-<img alt="tract device zoomed out" src="../_images/tracy-device-zoom-out.png">
-<p>Zooming in to the scopes, you can see single <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code> zones presented in series.</p>
-<img alt="tract device zoomed in" src="../_images/tracy-device-zoom-in.png">
+<p>The log includes default markers like <code class="docutils literal notranslate"><span class="pre">BRISC-FW</span></code> (profiling a single iteration of the BRISC firmware loop) and <code class="docutils literal notranslate"><span class="pre">BRISC-KERNEL</span></code> (profiling the duration of the kernel’s <code class="docutils literal notranslate"><span class="pre">main</span></code> function). Following these are the custom zones you defined, such as <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code>. The source file and line number can help you trace the origin of each zone.</p>
+<section id="tracy-gui-integration">
+<h3>Tracy GUI Integration<a class="headerlink" href="#tracy-gui-integration" title="Permalink to this heading"></a>
+</h3>
+<p>When a Tracy client is running, the device profiling data is automatically sent to it, allowing for interactive visualization. You can see the execution timeline for each RISC on each core.</p>
+<p>The following screenshot shows a high-level view of the profiled zones. You can see that each RISC reports the zones captured under its main <code class="docutils literal notranslate"><span class="pre">KERNEL</span></code> scope.</p>
+<img alt="Tracy device zoomed out" src="../_images/tracy-device-zoom-out.png">
+<p>Zooming in reveals the individual <code class="docutils literal notranslate"><span class="pre">TEST-FULL</span></code> zones executing in series.</p>
+<img alt="Tracy device zoomed in" src="../_images/tracy-device-zoom-in.png">
 </section>
 </section>
 <section id="limitations">
 <h2>Limitations<a class="headerlink" href="#limitations" title="Permalink to this heading"></a>
 </h2>
 <ul class="simple">
-<li><p>Each core has limited L1 buffer for recording device side scopes. Space for only 125 scopes is reserved.</p></li>
-<li><p>The cycle count from RISCs on the same core are perfectly synced as they all read from the same clock counter.</p></li>
-<li><p>The cycle counts from RISCs on different cores are closely synced with minor skews, allowing for accurate comparisons on event timestamps across cores.
-<strong>Note</strong> on Grayskull <code class="docutils literal notranslate"><span class="pre">tensix_reset</span></code> and <code class="docutils literal notranslate"><span class="pre">tt-smi</span></code> soft resets will significantly worsen the skew between core clocks making core to core comparison inaccurate and wrong. Full host
-reboot is required for syncing core clocks if soft reset is used.</p></li>
-<li><p>The cycle counts from cores on different devices are usually not synced. Comparing times across devices requires this consideration.</p></li>
+<li><p><strong>Buffer Size</strong>: Each core has a limited L1 buffer for storing scope data, with space for only 125 scopes.</p></li>
+<li><p><strong>Clock Sync (Intra-Core)</strong>: The cycle counts from RISCs on the same core are perfectly synced as they read from the same clock counter.</p></li>
+<li><p><strong>Clock Sync (Inter-Core)</strong>: The cycle counts from RISCs on different cores are closely synced but may have minor skews.</p></li>
+<li><p><strong>Clock Sync (Inter-Device)</strong>: The cycle counts from cores on different devices are generally not synced.</p></li>
 </ul>
 </section>
 </section>

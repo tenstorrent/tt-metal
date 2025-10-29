@@ -20,6 +20,7 @@
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
@@ -117,9 +118,8 @@
 </h2>
 <p>SFPI is the programming interface to the SFPU.  It consists of a C++ wrapper
 around a RISCV GCC compiler base which has been extended with vector data types and
-__builtin intrinsics to generate SFPU instructions.  The wrapper provides a
+<code class="docutils literal notranslate"><span class="pre">__builtin</span></code> intrinsics to generate SFPU instructions.  The wrapper provides a
 C++ like interface for programming.</p>
-<p>SFPI is supported on Grayskull and Wormhole.</p>
 </section>
 <section id="compiler-options-flags">
 <h2>Compiler Options/Flags<a class="headerlink" href="#compiler-options-flags" title="Permalink to this heading"></a>
@@ -133,13 +133,12 @@ C++ like interface for programming.</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p>grayskull</p></li>
 <li><p>wormhole</p></li>
+<li><p>blackhole</p></li>
 </ul>
 </div>
 </blockquote>
-<p>Note that the arch specification above overrides any <code class="docutils literal notranslate"><span class="pre">-march=&lt;xyz&gt;</span></code> to either
-<code class="docutils literal notranslate"><span class="pre">-march=rv32iy</span></code> for grayskull or <code class="docutils literal notranslate"><span class="pre">-march=rv32iw</span></code> for wormhole.</p>
+<p>Note that the arch specification above overrides any <code class="docutils literal notranslate"><span class="pre">-march=&lt;xyz&gt;</span></code> that comes after it on the command line.</p>
 <p>Further, the following options disable parts of the SFPI enabled compiler:</p>
 <blockquote>
 <div>
@@ -147,22 +146,22 @@ C++ like interface for programming.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-warn</span></code>: disable sfpu specific warnings/errors</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-combine</span></code>: disable sfpu instruction combining</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-cc</span></code>: disable sfpu CC optimizations</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-replay</span></code>: disable sfpu REPLAY optimizations (wormhole only)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">-fno-rvtt-sfpu-replay</span></code>: disable sfpu REPLAY optimizations</p></li>
 </ul>
 </div>
 </blockquote>
 <section id="example">
 <h3>Example<a class="headerlink" href="#example" title="Permalink to this heading"></a>
 </h3>
-<p>Before going into details, below is a simple example of SFPI code:</p>
+<p>Before going into details, below is a simple example of SFPI code showcasing the main capabilities of SFPI kernels (please refer to <a class="reference internal" href="../../../examples/custom_sfpi.html#custom-sfpu"><span class="std std-ref">Writing Custom SFPU Operations</span></a> for details on writing and invoking them). The example itself is not particularly useful, but it does show a number of features of SFPI:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">silly</span><span class="p">(</span><span class="kt">bool</span><span class="w"> </span><span class="n">take_abs</span><span class="p">)</span>
 <span class="p">{</span>
 <span class="w">    </span><span class="c1">// dst_reg[n] loads into a temporary LREG</span>
 <span class="w">    </span><span class="n">vFloat</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">2.0F</span><span class="p">;</span>
 
-<span class="w">    </span><span class="c1">// This emits a load, move, mad (on GS uses the "+/0 .5" feature of MAD)</span>
-<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="o">-</span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">vConst0p6929</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">0.5F</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// This emits a load, move, mad</span>
+<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="o">-</span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">vConstFloatPrgm0</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">0.5F</span><span class="p">;</span>
 
 <span class="w">    </span><span class="c1">// This emits a load, loadi, mad (a * dst_reg[] goes down the mad path)</span>
 <span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">1.2F</span><span class="p">;</span>
@@ -210,6 +209,16 @@ C++ like interface for programming.</p>
 </ul>
 </div>
 </blockquote>
+<p>And also some implications</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p>Standard C++ <code class="docutils literal notranslate"><span class="pre">if</span></code> statements cannot be used to handle vector conditionals</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">v_if</span></code> implements condition via predication - only vector operations are predicated</p></li>
+<li><p>Same performance consideration apply SFPI as for any SIMT architecture - avoid divergent <code class="docutils literal notranslate"><span class="pre">v_if</span></code> execution paths</p></li>
+</ul>
+</div>
+</blockquote>
 </section>
 </section>
 <section id="details">
@@ -235,42 +244,15 @@ namespace.</p>
 </ul>
 </div>
 </blockquote>
-<p>Each of the <code class="docutils literal notranslate"><span class="pre">v</span></code> types is a strongly typed wrapper around the weakly typed compiler
-data type <code class="docutils literal notranslate"><span class="pre">__rvtt_vec_t</span></code>.  On Grayskull this is a vector of 64 19 bit values while on Wormhole this is a vector of 32 32 bit values.</p>
-<p>LRegs are the SFPU’s general purpose vector registers.  <code class="docutils literal notranslate"><span class="pre">LRegs</span></code> enumerates
-these registers.</p>
+<p>Each of the <code class="docutils literal notranslate"><span class="pre">v</span></code> types is a strongly typed wrapper around the weakly typed compiler data type <code class="docutils literal notranslate"><span class="pre">__rvtt_vec_t</span></code>. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32-bit values. Users should be aware that vector length may change with future architectures</p>
+<p>LRegs are the SFPU’s general purpose vector registers.  <code class="docutils literal notranslate"><span class="pre">LRegs</span></code> enumerates these registers.</p>
 <section id="user-visible-constants">
 <h4>User Visible Constants<a class="headerlink" href="#user-visible-constants" title="Permalink to this heading"></a>
 </h4>
-<p>Constant registers are implemented as objects which can be referenced
-wherever a vector can be used.</p>
+<p>Constant registers are implemented as objects which can be referenced wherever a vector can be used. On Wormhole and Blackhole the following variables are defined:</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li>
-<p>Grayskull:</p>
-<ul>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst0</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst0p6929</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConstNeg1p0068</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst1p4424</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst0p8369</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConstNeg0p5</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst1</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConstNeg1</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst0p0020</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConstNeg0p6748</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConstNeg0p3447</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConstTileId</span></code>, enumerates the vector elements: [0..63]</p></li>
-</ul>
-</li>
-</ul>
-</div>
-</blockquote>
-<ul class="simple">
-<li>
-<p>Wormhole:</p>
-<ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConst0</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConst1</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConst0p8373</span></code></p></li>
@@ -280,8 +262,8 @@ wherever a vector can be used.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm1</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm1</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm2</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm2</span></code></p></li>
 </ul>
-</li>
-</ul>
+</div>
+</blockquote>
 </section>
 <section id="user-visible-objects">
 <h4>User Visible Objects<a class="headerlink" href="#user-visible-objects" title="Permalink to this heading"></a>
@@ -298,9 +280,7 @@ wherever a vector can be used.</p>
 <section id="macros">
 <h4>Macros<a class="headerlink" href="#macros" title="Permalink to this heading"></a>
 </h4>
-<p>The only macros used within the wrapper implement the predicated conditional
-processing mechanism.  These (of course) do not fall within the SFPI namespace
-and for brevity run some chance of a namespace collision.  They are:</p>
+<p>The only macros used within the wrapper implement the predicated conditional processing mechanism. These (of course) do not fall within the SFPI namespace and for brevity run some chance of a namespace collision. They are:</p>
 <blockquote>
 <div>
 <ul class="simple">
@@ -314,11 +294,32 @@ and for brevity run some chance of a namespace collision.  They are:</p>
 </ul>
 </div>
 </blockquote>
-<p>The conditionals work mostly as expected but note the required <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> at
-the end of an if/else chain.  Forgetting this results in compilation
-errors as the <code class="docutils literal notranslate"><span class="pre">v_if</span></code> macro contains a <code class="docutils literal notranslate"><span class="pre">{</span></code> which is matched by the <code class="docutils literal notranslate"><span class="pre">v_endif</span></code>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">v_block</span></code> and <code class="docutils literal notranslate"><span class="pre">v_and</span></code> allow for the following code to progressively “narrow” the CC
-state:</p>
+<p>The conditionals work mostly as expected but note the required <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> at the end of an if/else chain. Forgetting this results in compilation errors as the <code class="docutils literal notranslate"><span class="pre">v_if</span></code> macro contains a <code class="docutils literal notranslate"><span class="pre">{</span></code> which is matched by the <code class="docutils literal notranslate"><span class="pre">v_endif</span></code>:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">v_if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">v_elseif</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">v_else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="n">v_endif</span><span class="p">;</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">dst_reg[0]</span></code> is assigned <code class="docutils literal notranslate"><span class="pre">a</span></code> where <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&lt;</span> <span class="pre">b</span></code>, <code class="docutils literal notranslate"><span class="pre">b</span></code> where <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&gt;</span> <span class="pre">b</span></code> and <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">+</span> <span class="pre">b</span></code> where <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">==</span> <span class="pre">b</span></code>.</p>
+<p>However note that <code class="docutils literal notranslate"><span class="pre">v_if</span></code> and alike works via predication. In other words, both sides of the conditional are executed and only the enabled vector elements are written. RISC-V instructions are executed normally. For example:</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="n">v_if</span><span class="w"> </span><span class="p">(</span><span class="n">a</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">b</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"a &lt; b</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span><span class="w"> </span><span class="n">v_else</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dst_reg</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">;</span>
+<span class="w">    </span><span class="n">DPRINT</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">"a &gt;= b</span><span class="se">\n</span><span class="s">"</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="n">v_endif</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Will result in both <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&lt;</span> <span class="pre">b</span></code> and <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&gt;=</span> <span class="pre">b</span></code> being printed, but only the elements where <code class="docutils literal notranslate"><span class="pre">a</span> <span class="pre">&gt;=</span> <span class="pre">b</span></code> being written to <code class="docutils literal notranslate"><span class="pre">dst_reg[0]</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">v_block</span></code> and <code class="docutils literal notranslate"><span class="pre">v_and</span></code> allow for the following code to progressively “narrow” the CC state:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">v_block</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n</span><span class="p">;</span><span class="w"> </span><span class="n">x</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -330,8 +331,7 @@ state:</p>
 <span class="n">v_endblock</span><span class="p">;</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">v_and</span></code> can be used inside any predicated conditional block (i.e., a <code class="docutils literal notranslate"><span class="pre">v_block</span></code>
-or a <code class="docutils literal notranslate"><span class="pre">v_if</span></code>).</p>
+<p><code class="docutils literal notranslate"><span class="pre">v_and</span></code> can be used inside any predicated conditional block (i.e., a <code class="docutils literal notranslate"><span class="pre">v_block</span></code> or a <code class="docutils literal notranslate"><span class="pre">v_if</span></code>).</p>
 </section>
 </section>
 <section id="data-type-details">
@@ -360,7 +360,7 @@ or a <code class="docutils literal notranslate"><span class="pre">v_if</span></c
 <ul class="simple">
 <li><p>Assignment: from integer, dst_reg[n]</p></li>
 <li><p>Conversion: <code class="docutils literal notranslate"><span class="pre">reinterpret&lt;AnotherVecType&gt;()</span></code> converts, in place, between vFloat and vUInt</p></li>
-<li><p>Operators: <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;=</span></code>, <code class="docutils literal notranslate"><span class="pre">|</span></code>, <code class="docutils literal notranslate"><span class="pre">|=</span></code>, <code class="docutils literal notranslate"><span class="pre">~</span></code>, <code class="docutils literal notranslate"><span class="pre">^</span></code>, <code class="docutils literal notranslate"><span class="pre">^=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code> and <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">+=</span></code>, <code class="docutils literal notranslate"><span class="pre">-=</span></code>, <code class="docutils literal notranslate"><span class="pre">++</span></code>, <code class="docutils literal notranslate"><span class="pre">--</span></code>.  (there is no signed right shift on Grayskull or Wormhole)</p></li>
+<li><p>Operators: <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;=</span></code>, <code class="docutils literal notranslate"><span class="pre">|</span></code>, <code class="docutils literal notranslate"><span class="pre">|=</span></code>, <code class="docutils literal notranslate"><span class="pre">~</span></code>, <code class="docutils literal notranslate"><span class="pre">^</span></code>, <code class="docutils literal notranslate"><span class="pre">^=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code> (Wormhole only) and <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">+=</span></code>, <code class="docutils literal notranslate"><span class="pre">-=</span></code>, <code class="docutils literal notranslate"><span class="pre">++</span></code>, <code class="docutils literal notranslate"><span class="pre">--</span></code>.  (there is no signed right shift)</p></li>
 <li><p>Conditionals: all 6 (<code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>) are supported.  Note that <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code> and <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> pay a performance penalty relative to the others</p></li>
 </ul>
 </div>
@@ -374,12 +374,12 @@ or a <code class="docutils literal notranslate"><span class="pre">v_if</span></c
 <ul class="simple">
 <li><p>Assignment: from unsigned integer, dst_reg[n]</p></li>
 <li><p>Conversion: <code class="docutils literal notranslate"><span class="pre">reinterpret&lt;AnotherVecType&gt;()</span></code> converts, in place, between vFloat and vInt</p></li>
-<li><p>Operators: <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;=</span></code>, <code class="docutils literal notranslate"><span class="pre">|</span></code>, <code class="docutils literal notranslate"><span class="pre">|=</span></code>, <code class="docutils literal notranslate"><span class="pre">~</span></code>, <code class="docutils literal notranslate"><span class="pre">^</span></code>, <code class="docutils literal notranslate"><span class="pre">^=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">+=</span></code>, <code class="docutils literal notranslate"><span class="pre">-=</span></code>, <code class="docutils literal notranslate"><span class="pre">++</span></code>, <code class="docutils literal notranslate"><span class="pre">--</span></code></p></li>
+<li><p>Operators: <code class="docutils literal notranslate"><span class="pre">&amp;</span></code>, <code class="docutils literal notranslate"><span class="pre">&amp;=</span></code>, <code class="docutils literal notranslate"><span class="pre">|</span></code>, <code class="docutils literal notranslate"><span class="pre">|=</span></code>, <code class="docutils literal notranslate"><span class="pre">~</span></code>, <code class="docutils literal notranslate"><span class="pre">^</span></code>, <code class="docutils literal notranslate"><span class="pre">^=</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;&lt;</span></code> (Wormhole only), <code class="docutils literal notranslate"><span class="pre">&gt;&gt;</span></code> (Wormhole only) and <code class="docutils literal notranslate"><span class="pre">+</span></code>, <code class="docutils literal notranslate"><span class="pre">-</span></code>, <code class="docutils literal notranslate"><span class="pre">+=</span></code>, <code class="docutils literal notranslate"><span class="pre">-=</span></code>, <code class="docutils literal notranslate"><span class="pre">++</span></code>, <code class="docutils literal notranslate"><span class="pre">--</span></code></p></li>
 <li><p>Conditionals: all 6 (<code class="docutils literal notranslate"><span class="pre">&lt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">==</span></code>, <code class="docutils literal notranslate"><span class="pre">!=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;=</span></code>, <code class="docutils literal notranslate"><span class="pre">&gt;</span></code>) are supported.  Note that <code class="docutils literal notranslate"><span class="pre">&lt;=</span></code> and <code class="docutils literal notranslate"><span class="pre">&gt;</span></code> pay a performance penalty relative to the others</p></li>
 </ul>
 </div>
 </blockquote>
-<p>Note that on Wormhole, the destination register format is always determined by the run time.  So, for example, reading a vInt when the format is set to float32 gives unexpected results.</p>
+<p>Note that, the destination register format is always determined by the runtime. So, for example, reading a vInt when the format is set to float32 gives unexpected results.</p>
 </section>
 </section>
 <section id="library">
@@ -387,9 +387,6 @@ or a <code class="docutils literal notranslate"><span class="pre">v_if</span></c
 </h3>
 <p>Below <code class="docutils literal notranslate"><span class="pre">Vec</span></code> means any vector type.</p>
 <p>Below is a list of library calls, further documentation is below.</p>
-<section id="grayskull-and-wormhole">
-<h4>Grayskull and Wormhole<a class="headerlink" href="#grayskull-and-wormhole" title="Permalink to this heading"></a>
-</h4>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">exexp</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
 <span class="n">vInt</span><span class="w"> </span><span class="n">exexp_nodebias</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
@@ -431,33 +428,35 @@ or a <code class="docutils literal notranslate"><span class="pre">v_if</span></c
 <span class="n">vFloat</span><span class="w"> </span><span class="n">lut_sign</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">vFloat</span><span class="w"> </span><span class="n">v</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l0</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l1</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">vUInt</span><span class="w"> </span><span class="n">l2</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">offset</span><span class="p">)</span>
 </pre></div>
 </div>
-<dl class="simple">
-<dt>‘’l0’’, ‘’l1’’, ‘’l2’’ each contain 2 8-bit floating point values ‘’A’’ and ‘’B’’ with ‘’A’’ in bits 15:8 and ‘’B’’ in bits 7:0. The 8-bit format is:</dt>
-<dd>
+<p><code class="docutils literal notranslate"><span class="pre">l0</span></code>, <code class="docutils literal notranslate"><span class="pre">l1</span></code>, <code class="docutils literal notranslate"><span class="pre">l2</span></code> each contain 2 8-bit floating point values <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> with <code class="docutils literal notranslate"><span class="pre">A</span></code> in bits 15:8 and <code class="docutils literal notranslate"><span class="pre">B</span></code> in bits 7:0. The 8-bit format is:</p>
+<blockquote>
+<div>
 <ul class="simple">
 <li><p>0xFF represents the value 0, otherwise</p></li>
 <li><p>bit[7] is the sign bit, bit[6:4] is the unsigned exponent_extender and bit[3:0] is the mantissa</p></li>
 </ul>
-</dd>
-<dt>Floating point representations of ‘’A’’ and ‘’B’’ (19-bit on GS and 32-bit on WH) are constructed by:</dt>
-<dd>
+</div>
+</blockquote>
+<p>Floating point representations of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> (19-bit on GS and 32-bit on WH) are constructed by:</p>
+<blockquote>
+<div>
 <ul class="simple">
 <li><p>Using the sign bit</p></li>
 <li><p>Generating an 8-bit exponent as (127 – exponent_extender)</p></li>
 <li><p>Generating a mantissa by padding the right of the specified 4 bit mantissa with 0s</p></li>
 </ul>
-</dd>
-<dt>‘’A’’ and ‘’B’’ are selected from one of ‘’l0’’, ‘’l1’’ or ‘’l2’’ based on the value in ‘’v’’ as follows:</dt>
-<dd>
+</div>
+</blockquote>
+<p><code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> are selected from one of <code class="docutils literal notranslate"><span class="pre">l0</span></code>, <code class="docutils literal notranslate"><span class="pre">l1</span></code> or <code class="docutils literal notranslate"><span class="pre">l2</span></code> based on the value in <code class="docutils literal notranslate"><span class="pre">v</span></code> as follows:</p>
+<blockquote>
+<div>
 <ul class="simple">
-<li><p>‘’l0’’ when ‘’v’’ &lt; 0</p></li>
-<li><p>‘’l1’’ when ‘’v’’ == 0</p></li>
-<li><p>‘’l2’’ when ‘’v’’ &gt; 0</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">l0</span></code> when <code class="docutils literal notranslate"><span class="pre">v</span></code> &lt; 0</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">l1</span></code> when <code class="docutils literal notranslate"><span class="pre">v</span></code> == 0</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">l2</span></code> when <code class="docutils literal notranslate"><span class="pre">v</span></code> &gt; 0</p></li>
 </ul>
-</dd>
-</dl>
-<p>XXXX is this backwards?
-Returns the result of the computation ‘’A * ABS(v) + B’’.  The ‘’lut_sgn’’ variation discards the calculated sign bit and instead uses the sign of ‘’v’’.</p>
+</div>
+</blockquote>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">vInt</span><span class="w"> </span><span class="n">lz</span><span class="p">(</span><span class="n">Vec</span><span class="w"> </span><span class="n">v</span><span class="p">)</span>
 </pre></div>
@@ -474,10 +473,6 @@ Returns the result of the computation ‘’A * ABS(v) + B’’.  The ‘’lut
 </pre></div>
 </div>
 <p>Performs a left shift (when ‘’amt’’ is positive) or right shift (when ‘’amt’’ is negative) of ‘’v’’ by ‘’amt’’ bits.</p>
-</section>
-<section id="wormhole-only">
-<h4>Wormhole only<a class="headerlink" href="#wormhole-only" title="Permalink to this heading"></a>
-</h4>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="n">vec_swap</span><span class="p">(</span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">A</span><span class="p">,</span><span class="w"> </span><span class="n">Vec</span><span class="o">&amp;</span><span class="w"> </span><span class="n">B</span><span class="p">)</span>
 </pre></div>
@@ -518,13 +513,10 @@ Returns the result of the computation ‘’A * ABS(v) + B’’.  The ‘’lut
 </div>
 <p>Returns the rounded value performing round-to-even when ‘’round_mode’’ is 0 and stochastic rounding when ‘’round_mode’’ is 1.</p>
 </section>
-</section>
 <section id="immediate-floating-point-values">
 <h3>Immediate Floating Point Values<a class="headerlink" href="#immediate-floating-point-values" title="Permalink to this heading"></a>
 </h3>
-<p>Assigning a float to a vFloat behaves slightly different on Grayskull vs Wormhole.
-On Grayskull, the value is interpreted as an fp16b; use the conversion routines below
-to explicitly specify the format.  On Wormhole, the floating point value is converted
+<p>Assigning a float to a <code class="docutils literal notranslate"><span class="pre">vFloat</span></code>, the floating point value is converted
 to an fp16a, fp16b, or fp32 by first looking to see if the range fits in fp16b
 and if not using fp16a (or fp32).  If the value is not known at compile time,
 then it is loaded as an fp32.  Note that on Wormhole fp32 loads take 2 cycles.</p>
@@ -555,7 +547,7 @@ examples below.</p>
 <section id="vbool">
 <h4>vBool<a class="headerlink" href="#vbool" title="Permalink to this heading"></a>
 </h4>
-<p><code class="docutils literal notranslate"><span class="pre">vBool</span></code> doesn’t exist yet, but the functionality can be obtained by executing
+<p><code class="docutils literal notranslate"><span class="pre">vBool</span></code> doesn’t exist, but the functionality can be obtained by executing
 conditional instructions outside of a <code class="docutils literal notranslate"><span class="pre">v_if</span></code> and assigning the result to a
 <code class="docutils literal notranslate"><span class="pre">vInt</span></code>.  This can be useful to, e.g., use RISCV code to conditionally generate
 an SFPU predicate.  For example, the following function evaluates different
@@ -587,7 +579,7 @@ the predication is determined at runtime.</p>
 <section id="assigning-and-using-constant-registers">
 <h4>Assigning and Using Constant Registers<a class="headerlink" href="#assigning-and-using-constant-registers" title="Permalink to this heading"></a>
 </h4>
-<p>Programmable constant registers (Wormhole only) are accessed and assigned just
+<p>Programmable constant registers are accessed and assigned just
 like any other variables, for example:</p>
 <div class="highlight-c++ notranslate">
 <div class="highlight"><pre><span></span><span class="n">vConstFloatPrgm0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">3.14159265</span><span class="p">;</span>
@@ -599,6 +591,12 @@ then assigns the LReg to the constant register and so takes 1 cycle longer
 than just loading an LReg.  Accessing a constant register is just as fast as
 accessing an LReg.  Loading a constant register loads the same value into all
 vector elements.</p>
+<p>Using programmable constants reduces the mount of loads needed during kernel
+execution and so can improve performance. However, users should be aware that
+other functions may overwrite the constant registers (this is what some of the
+<code class="docutils literal notranslate"><span class="pre">init_*</span></code> functions do).  Therefore, if a constant register is used, it
+should be placed in the initialization function and users needs to ensure
+no other function overwrites it before use.</p>
 </section>
 <section id="assigning-lregs">
 <h4>Assigning LRegs<a class="headerlink" href="#assigning-lregs" title="Permalink to this heading"></a>
@@ -638,7 +636,6 @@ available will result in the cryptic: <code class="docutils literal notranslate"
 <p>The compiler does a reasonable job with lifetime analysis when assigning
 variables to registers.  Reloading or recalculating results helps the compiler
 free up and re-use registers and is a good way to correct a spilling error.</p>
-<p>Grayskull has 4 general purpose LRegs, Wormhole has 8.</p>
 </section>
 <section id="optimizer">
 <h3>Optimizer<a class="headerlink" href="#optimizer" title="Permalink to this heading"></a>
@@ -652,11 +649,10 @@ implemented.  The optimizer will handle the following items:</p>
 <ul class="simple">
 <li><p>MAD generation (from MUL/ADD)</p></li>
 <li><p>MULI, ADDI generation (from MUL + const, or ADD + const)</p></li>
-<li><p>Adding a 0.5f to the end of ADD/MULL/MAD/MULI/ADDI (Grayskull only)</p></li>
 <li><p>Swapping the order of arguments to instructions that use the destination-as-source, e.g., SFPOR to minimize the need for register moves</p></li>
 <li><p>CC enables (PUSHC, POPC, etc.)</p></li>
 <li><p>Instruction combining for comparison operations.  For example, a subtract of 5 followed by a compare against 0 gets combined into one operation</p></li>
-<li><p>Wormhole only: NOP insertion for instructions which must be followed by an independent instruction or NOP.  Note that this pass (presently) does not move instructions to fill the slot but will skip adding a NOP if the next instruction is independent.  In other words, reordering your code to reduce dependent chains of instructions may improve performance</p></li>
+<li><p>NOP insertion for instructions which must be followed by an independent instruction or <code class="docutils literal notranslate"><span class="pre">SFPNOP</span></code>. Note that this pass (presently) does not move instructions to fill the slot but will skip adding a <code class="docutils literal notranslate"><span class="pre">SFPNOP</span></code> if the next instruction is independent. In other words, reordering your code to reduce dependent chains of instructions may improve performance</p></li>
 </ul>
 </div>
 </blockquote>
@@ -667,7 +663,7 @@ an ADDI into code that runs out of registers with a MAD.  (future todo to fix th
 <section id="sfpreplay">
 <h3>SFPREPLAY<a class="headerlink" href="#sfpreplay" title="Permalink to this heading"></a>
 </h3>
-<p>The <code class="docutils literal notranslate"><span class="pre">SFPREPLAY</span></code> instruction available on Wormhole allows the RISCV processor
+<p>The <code class="docutils literal notranslate"><span class="pre">SFPREPLAY</span></code> instruction available on Wormhole and Blackhole allows the RISCV processor
 to submit up to 32 SFP instructions at once.  The compiler looks for sequences
 of instructions that repeat, stores these and then “replays” them later.</p>
 <p>The current implementation of this is very much first cut: it does not handle
@@ -675,30 +671,15 @@ kernels with rolled up loops very well.  Best performance is typically attained 
 unrolling the top level loop and then letting the compiler find the repetitions
 and replace them with <code class="docutils literal notranslate"><span class="pre">SFPREPLAY</span></code>.  This works well when the main loop
 contains &lt; 32 instructions, but performance starts to degrade again as the
-number of instructions grows (future work).</p>
+number of instructions grows.</p>
 <p>The other issue that can arise with <code class="docutils literal notranslate"><span class="pre">SFPREPLAY</span></code> is that sometimes the last
 unrolled loop of instructions uses different registers than the prior
 loops resulting in imperfect utilization of the replay.</p>
 </section>
-<section id="emulation">
-<h3>Emulation<a class="headerlink" href="#emulation" title="Permalink to this heading"></a>
-</h3>
-<p>There is an emulator for the SFPU that works at the __builtin level.
-Compilation and runtime are extremely fast (sub 1 second) so this may be
-useful during development.</p>
-<p>Look in the file main.cc in the <code class="docutils literal notranslate"><span class="pre">sfpi</span></code> submodule under <code class="docutils literal notranslate"><span class="pre">src/ckernels</span></code>, there
-is an example kernel there to lead the way.</p>
-<p>The main difference between compilation and running on HW is that the emulator
-has an infinite number of registers and so code that runs there may fail on
-the HW due to spilling.  The <code class="docutils literal notranslate"><span class="pre">Makefile</span></code> builds for both rv32 (generating a
-<code class="docutils literal notranslate"><span class="pre">.S</span></code> file) and x86 (to run through emulation) and so an “out of registers”
-message for rv32 tells you you have work to do.</p>
-<p>The emulator for WH is not fully implemented (missing some of the new WH specific instructions)</p>
-</section>
 <section id="tools">
 <h3>Tools<a class="headerlink" href="#tools" title="Permalink to this heading"></a>
 </h3>
-<p>The sfpi submodule contains a <code class="docutils literal notranslate"><span class="pre">tools</span></code> directory.  <code class="docutils literal notranslate"><span class="pre">cd</span></code> into that directory and
+<p>The <cite>sfpi  repository&lt;https://github.com/tenstorrent/sfpi&gt;</cite> contains a <code class="docutils literal notranslate"><span class="pre">tools</span></code> directory.  <code class="docutils literal notranslate"><span class="pre">cd</span></code> into that directory and
 type <code class="docutils literal notranslate"><span class="pre">make</span></code> to build <code class="docutils literal notranslate"><span class="pre">fp16c</span></code> which is a converter that converts floating point
 values to fp16a, fp16b and the LUT instruction’s fp8 as well as the other way
 (integer to float/fp16a/fp16b/fp8).  This is useful for writing optimal code or
@@ -734,10 +715,13 @@ Therefore, all function calls must be inlined.  To ensure this use
 <section id="register-spilling">
 <h3>Register Spilling<a class="headerlink" href="#register-spilling" title="Permalink to this heading"></a>
 </h3>
-<p>The compiler does not implement register spilling.  Since Grayskull only has 4
-LRegs, running out of registers is a common occurrence.  If you see the
+<p>The compiler does not implement register spilling.  Since there are only 8 general purpose
+LRegs, running out of registers is not an uncommon occurrence.  If you see the
 following: <code class="docutils literal notranslate"><span class="pre">error:</span> <span class="pre">cannot</span> <span class="pre">store</span> <span class="pre">SFPU</span> <span class="pre">register</span> <span class="pre">(reigster</span> <span class="pre">spill?)</span> <span class="pre">-</span> <span class="pre">exiting!</span></code>
 you have most likely run out of registers.</p>
+<p>You can potentially spill registers by storing values to <code class="docutils literal notranslate"><span class="pre">l_reg[]</span></code> and
+reloading them later. However this is not done automatically via the compiler
+as it does not know which of <code class="docutils literal notranslate"><span class="pre">l_reg[]</span></code> values need to be preserved.</p>
 </section>
 <section id="error-messages">
 <h3>Error Messages<a class="headerlink" href="#error-messages" title="Permalink to this heading"></a>
@@ -754,7 +738,7 @@ called by a wrapper function before showing the line number in the user’s code
 <ul class="simple">
 <li><p>Forgetting a <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> results in mismatched {} error which can be confusing (however, catches the case where a <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> is missing!)</p></li>
 <li><p>In general, incorrect use of vector operations (e.g., accidentally using a scalar argument instead of a vector) results in warnings/errors within the wrapper rather than in the calling code</p></li>
-<li><p>Keeping too many variables alive at once (4 on GS) requires register spilling which is not implemented and causes a compiler abort</p></li>
+<li><p>Keeping too many variables alive at once requires register spilling which is not implemented and causes a compiler abort</p></li>
 <li><p>The gcc compiler occasionally moves a value from one register to another for no apparent reason.  At this point it appears there is nothing that can be done about this besides hoping that the issue is fixed in a future version of gcc.</p></li>
 </ul>
 </div>

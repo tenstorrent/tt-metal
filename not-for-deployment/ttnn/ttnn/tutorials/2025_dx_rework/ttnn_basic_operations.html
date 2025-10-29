@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>More Basic Tensor Operations &mdash; TT-NN  documentation</title>
+  <title>Basic Tensor Operations &mdash; TT-NN  documentation</title>
       <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
@@ -23,6 +23,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
@@ -63,15 +64,15 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
-<li class="toctree-l2 current"><a class="current reference internal" href="#">More Basic Tensor Operations</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#Import-the-necessary-libraries">Import the necessary libraries</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Basic Tensor Operations</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Open-the-Device">Open the Device</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#Host-Tensor-Creation">Host Tensor Creation</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Convert-Host-Tensors-to-TT-NN-Tiled-Tensors-or-Create-Natively-on-Device">Convert Host Tensors to TT-NN Tiled Tensors or Create Natively on Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Host-Tensor-Conversion-and-Creation">Host Tensor Conversion and Creation</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#Tile-Based-Arithmetic-Operations">Tile-Based Arithmetic Operations</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Simulated-Broadcasting-(Row-Vector-Expansion)">Simulated Broadcasting (Row Vector Expansion)</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Simulated-Broadcasting---Row-Vector-Expansion">Simulated Broadcasting - Row Vector Expansion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
@@ -108,7 +109,7 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
-      <li class="breadcrumb-item active">More Basic Tensor Operations</li>
+      <li class="breadcrumb-item active">Basic Tensor Operations</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../../../_sources/ttnn/tutorials/2025_dx_rework/ttnn_basic_operations.ipynb.txt" rel="nofollow"> View page source</a>
       </li>
@@ -118,13 +119,13 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="More-Basic-Tensor-Operations">
-<h1>More Basic Tensor Operations<a class="headerlink" href="#More-Basic-Tensor-Operations" title="Permalink to this heading"></a>
+  <section id="Basic-Tensor-Operations">
+<h1>Basic Tensor Operations<a class="headerlink" href="#Basic-Tensor-Operations" title="Permalink to this heading"></a>
 </h1>
-<p>We will review a simple example that demonstrates how to create various tensors and perform basic arithmetic operations on them using TT-NN, a high-level Python API. These operations include addition, multiplication, and matrix multiplication, as well as simulating broadcasting a row vector across a tile.</p>
+<p>This simple example demonstrates how to create various tensors and perform basic arithmetic operations using TT-NN, a high-level Python API. These operations include addition, multiplication, and matrix multiplication, and simulating broadcasting a row vector across a tile.</p>
 <p>Let’s create the example file, <code class="docutils literal notranslate"><span class="pre">ttnn_basic_operations.py</span></code></p>
-<section id="Import-the-necessary-libraries">
-<h2>Import the necessary libraries<a class="headerlink" href="#Import-the-necessary-libraries" title="Permalink to this heading"></a>
+<section id="Import-Libraries">
+<h2>Import Libraries<a class="headerlink" href="#Import-Libraries" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -140,17 +141,17 @@
 </div>
 </div>
 </section>
-<section id="Open-Tenstorrent-device">
-<h2>Open Tenstorrent device<a class="headerlink" href="#Open-Tenstorrent-device" title="Permalink to this heading"></a>
+<section id="Open-the-Device">
+<h2>Open the Device<a class="headerlink" href="#Open-the-Device" title="Permalink to this heading"></a>
 </h2>
-<p>Create device on which we will run our program.</p>
+<p>Create a device to run our program.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Open Tenstorrent device</span>
+<div class="highlight"><pre><span></span><span class="c1"># Open the Device</span>
 <span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 </pre></div>
 </div>
@@ -159,7 +160,7 @@
 <section id="Host-Tensor-Creation">
 <h2>Host Tensor Creation<a class="headerlink" href="#Host-Tensor-Creation" title="Permalink to this heading"></a>
 </h2>
-<p>Create a tensor for our tests and fill with different values. We will use this and other tensors to demonstrate various operations. Learn more about Tensors <a class="reference internal" href="../../tensor.html"><span class="doc">here</span></a>.</p>
+<p>Create a test tensor with different values that can demonstrate various operations. Learn more about Tensors <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/docs/source/ttnn/ttnn/tensor.rst">here</a>.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -172,11 +173,11 @@
 </div>
 </div>
 </section>
-<section id="Convert-Host-Tensors-to-TT-NN-Tiled-Tensors-or-Create-Natively-on-Device">
-<h2>Convert Host Tensors to TT-NN Tiled Tensors or Create Natively on Device<a class="headerlink" href="#Convert-Host-Tensors-to-TT-NN-Tiled-Tensors-or-Create-Natively-on-Device" title="Permalink to this heading"></a>
+<section id="Host-Tensor-Conversion-and-Creation">
+<h2>Host Tensor Conversion and Creation<a class="headerlink" href="#Host-Tensor-Conversion-and-Creation" title="Permalink to this heading"></a>
 </h2>
-<p>Tensix cores operate most efficiently on tiled data, allowing them to perform a large amount of compute in parallel.</p>
-<p>To convert PyTorch host tensors to TT-NN tiled tensors, we introduce a <code class="docutils literal notranslate"><span class="pre">to_tt_tile()</span></code> helper function. We use it to create a device tensor based on the <code class="docutils literal notranslate"><span class="pre">host_rand</span></code> PyTorch tensor.</p>
+<p>Tensix cores operate most efficiently on tiled data, performing parallel computations. The host tensor is converted to a TT-NN tiled tensor or is created natively on the device.</p>
+<p>To convert PyTorch host tensors to TT-NN tiled tensors, use the following helper function: <code class="docutils literal notranslate"><span class="pre">to_tt_tile()</span></code>. This helper function creates a device tensor based on the <code class="docutils literal notranslate"><span class="pre">host_rand</span></code> PyTorch tensor.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -191,8 +192,7 @@
 </pre></div>
 </div>
 </div>
-<p>Alternatively, we can create and initialize tensors directly on the device using TT-NN’s tensor creation functions.</p>
-<p>Creating tensors directly on the device is more efficient as it avoids the overhead of transfering data from the host to the device.</p>
+<p>Alternatively, we can create and initialize tensors directly on the device using TT-NN’s tensor creation functions. Creating tensors directly on the device is more efficient, it avoids the overhead of transfering data from the host to the device.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -228,7 +228,7 @@
 <section id="Tile-Based-Arithmetic-Operations">
 <h2>Tile-Based Arithmetic Operations<a class="headerlink" href="#Tile-Based-Arithmetic-Operations" title="Permalink to this heading"></a>
 </h2>
-<p>Let’s use some of the tensors we created and perform different operations on them.</p>
+<p>Tensors can perform the following arithmetic operations:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -248,11 +248,10 @@
 </div>
 </div>
 </section>
-<section id="Simulated-Broadcasting-(Row-Vector-Expansion)">
-<h2>Simulated Broadcasting (Row Vector Expansion)<a class="headerlink" href="#Simulated-Broadcasting-(Row-Vector-Expansion)" title="Permalink to this heading"></a>
+<section id="Simulated-Broadcasting---Row-Vector-Expansion">
+<h2>Simulated Broadcasting - Row Vector Expansion<a class="headerlink" href="#Simulated-Broadcasting---Row-Vector-Expansion" title="Permalink to this heading"></a>
 </h2>
-<p>Let’s simulate broadcasting a row vector across a tile. Every element of a given column will contain the same value.</p>
-<p>This is useful for operations that require expanding a smaller tensor to match the dimensions of a larger one.</p>
+<p>Let’s simulate broadcasting a row vector across a tile. Every element of a given column will contain the same value. This is useful for operations that require expanding a smaller tensor to match the dimensions of a larger one.</p>
 <div class="math notranslate nohighlight">
 \[\begin{split}\begin{bmatrix}
 1 &amp; 2 &amp; \cdots &amp; 30 &amp; 31 \\
@@ -282,8 +281,8 @@
 </div>
 </div>
 </section>
-<section id="Close-The-Device">
-<h2>Close The Device<a class="headerlink" href="#Close-The-Device" title="Permalink to this heading"></a>
+<section id="Close-the-Device">
+<h2>Close the Device<a class="headerlink" href="#Close-the-Device" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -296,12 +295,12 @@
 </div>
 </div>
 </section>
-<section id="Full-example-and-output">
-<h2>Full example and output<a class="headerlink" href="#Full-example-and-output" title="Permalink to this heading"></a>
+<section id="Full-Example-and-Output">
+<h2>Full Example and Output<a class="headerlink" href="#Full-Example-and-Output" title="Permalink to this heading"></a>
 </h2>
 <p>Lets put everything together in a complete example that can be run directly.</p>
 <p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_basic_operations.py">ttnn_basic_operations.py</a></p>
-<p>Running this script will generate output the as shown below:</p>
+<p>Running this script will generate the following output:</p>
 <div class="highlight-console notranslate">
 <div class="highlight"><pre><span></span><span class="gp">$ </span>python3<span class="w"> </span><span class="nv">$TT_METAL_HOME</span>/ttnn/tutorials/basic_python/ttnn_basic_operations.py
 <span class="go">2025-07-07 13:13:04.850 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>

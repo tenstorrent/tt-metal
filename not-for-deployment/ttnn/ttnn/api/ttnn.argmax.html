@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -146,6 +147,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">argmax</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.argmax',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.reduction.argmax_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_create_golden_function.&lt;locals&gt;.golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.argmax" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.argmax(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">dim:</span> <span class="pre">Optional[int]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">keepdim:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">output_tensor:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
 <p>Returns the indices of the maximum value of elements in the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
 If no <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is provided, it will return the indices of maximum value of all elements in given <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
 <dl class="field-list simple">
@@ -162,7 +164,6 @@ If no <code class="xref py py-attr docutils literal notranslate"><span class="pr
 <li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to keep the reduced dimension. Defaults to <cite>False</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -180,30 +181,30 @@ If no <code class="xref py py-attr docutils literal notranslate"><span class="pr
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>dtype
-- layout</p></th>
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>FLOAT32
-- ROW_MAJOR</p></td>
+<td><p>FLOAT32</p></td>
+<td><p>ROW_MAJOR</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>BFLOAT16
-- ROW_MAJOR</p></td>
+<td><p>BFLOAT16</p></td>
+<td><p>ROW_MAJOR</p></td>
 </tr>
 <tr class="row-even">
-<td><p>UINT32
-- ROW_MAJOR</p></td>
+<td><p>UINT32</p></td>
+<td><p>ROW_MAJOR</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>INT32
-- ROW_MAJOR</p></td>
+<td><p>INT32</p></td>
+<td><p>ROW_MAJOR</p></td>
 </tr>
 <tr class="row-even">
-<td><p>UINT16
-- ROW_MAJOR</p></td>
+<td><p>UINT16</p></td>
+<td><p>ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
@@ -214,31 +215,46 @@ If no <code class="xref py py-attr docutils literal notranslate"><span class="pr
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>dtype
-- layout</p></th>
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>UINT32
-- ROW_MAJOR</p></td>
+<td><p>UINT32</p></td>
+<td><p>ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
 </div>
 <dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
 <dt>Limitations:</dt>
 <dd>
-<p>Currently this op only supports dimension-specific reduction on the last dimension (i.e. <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> = -1).</p>
+<ul class="simple">
+<li><p>All input tensors must be on-device.</p></li>
+<li><p>Currently this op only supports dimension-specific reduction on the last dimension (i.e. <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> = -1).</p></li>
+<li><p>Sharding is not supported for this operation</p></li>
+</ul>
 </dd>
 </dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
-<p>input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)</p>
-<p># Last dim reduction yields shape of [1, 1, 32, 1]
-output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)</p>
-<p># All dim reduction yields shape of []
-output_alldim = ttnn.argmax(input_tensor)</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">],</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+
+<span class="c1"># Last dim reduction yields shape of [1, 1, 32, 1]</span>
+<span class="n">output_onedim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="c1"># All dim reduction yields shape of []</span>
+<span class="n">output_alldim</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
+</pre></div>
+</div>
 </div>
 </dd>
 </dl>

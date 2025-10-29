@@ -22,6 +22,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -148,6 +149,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">cumsum</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.cumsum',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.reduction.cumsum_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.cumsum" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.cumsum(input:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">dim:</span> <span class="pre">int,</span> <span class="pre">dtype:</span> <span class="pre">Optional[ttnn.DataType]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">reverse_order:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">out:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
 <p>Returns cumulative sum of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> along dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>
 For a given <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code> of size N, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> will also contain N elements and be such that:</p>
 <div class="math notranslate nohighlight">
@@ -157,7 +159,7 @@ For a given <code class="xref py py-attr docutils literal notranslate"><span cla
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – input tensor</p></li>
+<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – input tensor. Must be on the device.</p></li>
 <li><p><strong>dim</strong> (<em>int</em>) – dimension along which to compute cumulative sum</p></li>
 </ul>
 </dd>
@@ -205,21 +207,36 @@ For a given <code class="xref py py-attr docutils literal notranslate"><span cla
 </tbody>
 </table>
 </div>
-<p>Example:</p>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>Preallocated output must have the same shape as the input</p></li>
+<li><p>Preallocated output for integer types is not supported</p></li>
+</ul>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
-
-<span class="c1"># Create tensor</span>
+<div class="highlight"><pre><span></span><span class="c1"># Create tensor</span>
 <span class="n">tensor_input</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
 <span class="c1"># Apply ttnn.cumsum() on dim=0</span>
 <span class="n">tensor_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">tensor_input</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
 <span class="c1"># With preallocated output and dtype</span>
-<span class="n">preallocated_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">preallocated_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
 
-<span class="n">tensor_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">tensor_input</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="n">preallocated_output</span><span class="p">)</span>
+<span class="n">tensor_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">tensor_input</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">out</span><span class="o">=</span><span class="n">preallocated_output</span><span class="p">)</span>
 </pre></div>
+</div>
 </div>
 </dd>
 </dl>

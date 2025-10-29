@@ -22,6 +22,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -146,6 +147,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.softmax',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.softmax_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.softmax" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.softmax(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">dim:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">-1,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">numeric_stable:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
 <p>Computes the softmax function over the specified dimension of the input tensor.</p>
 <p>The softmax function is defined as:</p>
 <div class="math notranslate nohighlight">
@@ -155,7 +157,7 @@
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor to apply softmax to.</p></li>
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor to apply softmax to. Must be on the device.</p></li>
 <li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – The dimension along which to compute softmax. Defaults to -1 (last dimension).</p></li>
 </ul>
 </dd>
@@ -165,7 +167,7 @@
 <ul class="simple">
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the output tensor. If not provided, inherits from input tensor.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the operation.</p></li>
-<li><p><strong>numeric_stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use numerically stable softmax computation. Defaults to False.</p></li>
+<li><p><strong>numeric_stable</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use numerically stable softmax computation. Defaults to True.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -174,21 +176,40 @@
 <p><em>ttnn.Tensor</em> – Output tensor with softmax applied along the specified dimension.</p>
 </dd>
 </dl>
-<p>Supported dtypes and layouts</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The tensors support the following data types and layouts:</p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
+<th class="head"><p>Dtypes
+- Layouts</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B
+- TILE</p></td>
 </tr>
 </tbody>
 </table>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded (L1): Height sharded</p></li>
+</ul>
+</dd>
+<dt>Limitations:</dt>
+<dd>
+<ul class="simple">
+<li><p>All tensors must be on-device, interleaved, and tile layout.</p></li>
+<li><p>Using the attention-optimized kernels requires a 4D input tensor and reducing on the last dimension.</p></li>
+</ul>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">

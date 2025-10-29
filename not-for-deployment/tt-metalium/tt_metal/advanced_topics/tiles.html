@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -68,6 +69,7 @@
 </li>
 <li class="toctree-l3"><a class="reference internal" href="memory_for_kernel_developers.html">Memory from a kernel developer’s perspective</a></li>
 <li class="toctree-l3"><a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html">Compute Engines and Data Flow within Tensix</a></li>
+<li class="toctree-l3"><a class="reference internal" href="fp32_accuracy.html">Achieving FP32 Accuracy for Computation</a></li>
 </ul>
 </li>
 </ul>
@@ -128,14 +130,14 @@
 </h2>
 <p>Most tiles are not stored as a simple flat array. Instead, a 32x32 tile is subdivided into four 16x16 faces, where each face is stored as a contiguous block in memory. The faces are arranged sequentially in memory, creating a hierarchical structure that enables efficient access patterns for the matrix and vector engines in each Tensix core.</p>
 <figure class="align-center" id="id4">
-<a class="reference internal image-reference" href="../../_images/tenstorrent-32x32tile-16x16face-structure.webp"><img alt="32x32 tile with 16x16 faces" src="../../_images/tenstorrent-32x32tile-16x16face-structure.webp" style="width: 940.5500000000001px; height: 666.9px;"></a>
+<a class="reference internal image-reference" href="../../_images/tenstorrent-32x32tile-16x16face-structure.webp"><img alt="32x32 tile with 16x16 faces" src="../../_images/tenstorrent-32x32tile-16x16face-structure.webp" style="width: 85%;"></a>
 <figcaption>
 <p><span class="caption-text">A 32x32 tile is organized into four 16x16 faces.</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
 </figcaption>
 </figure>
 <p>For example, consider a bfloat16 tile starting at address <code class="docutils literal notranslate"><span class="pre">0x1000</span></code> with a size of <code class="docutils literal notranslate"><span class="pre">0x800</span></code> (2KB). The tile occupies memory from <code class="docutils literal notranslate"><span class="pre">0x1000</span></code> to <code class="docutils literal notranslate"><span class="pre">0x17FF</span></code>, with the four 16x16 faces located at addresses <code class="docutils literal notranslate"><span class="pre">0x1000</span></code>, <code class="docutils literal notranslate"><span class="pre">0x1200</span></code>, <code class="docutils literal notranslate"><span class="pre">0x1400</span></code>, and <code class="docutils literal notranslate"><span class="pre">0x1600</span></code> respectively.</p>
 <figure class="align-center" id="id5">
-<a class="reference internal image-reference" href="../../_images/tenstorrent-32x32tile-16x16face-memory-layout.webp"><img alt="32x32 tile with 16x16 face memory layout" src="../../_images/tenstorrent-32x32tile-16x16face-memory-layout.webp" style="width: 640.9px; height: 607.1px;"></a>
+<a class="reference internal image-reference" href="../../_images/tenstorrent-32x32tile-16x16face-memory-layout.webp"><img alt="32x32 tile with 16x16 face memory layout" src="../../_images/tenstorrent-32x32tile-16x16face-memory-layout.webp" style="width: 85%;"></a>
 <figcaption>
 <p><span class="caption-text">Memory layout of a 32x32 tile with 16x16 faces with address of each face annotated.</span><a class="headerlink" href="#id5" title="Permalink to this image"></a></p>
 </figcaption>

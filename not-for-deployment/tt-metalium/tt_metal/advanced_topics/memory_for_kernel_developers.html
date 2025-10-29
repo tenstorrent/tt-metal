@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -69,6 +70,7 @@
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html">Compute Engines and Data Flow within Tensix</a></li>
+<li class="toctree-l3"><a class="reference internal" href="fp32_accuracy.html">Achieving FP32 Accuracy for Computation</a></li>
 </ul>
 </li>
 </ul>
@@ -227,14 +229,14 @@
 <p>Due to the lack of a linear, flat address space, data placement (onto each memory resource) requires explicit decisions about distribution and chunk size. Distribution will be discussed in a future section. The chunk size, or the amount of data stored before switching to the next storage location, is referred to as the <strong>page size</strong>.</p>
 <p>In row-major layout, a single row of the tensor occupies one page, enabling simpler programming and lower logic overhead for common patterns of data access.</p>
 <figure class="align-center" id="id3">
-<a class="reference internal image-reference" href="../../_images/tenstorrent-row-major-memory-layout.webp"><img alt="The row-major memory layout of a tensor." src="../../_images/tenstorrent-row-major-memory-layout.webp" style="width: 787.8000000000001px; height: 594.75px;"></a>
+<a class="reference internal image-reference" href="../../_images/tenstorrent-row-major-memory-layout.webp"><img alt="The row-major memory layout of a tensor." src="../../_images/tenstorrent-row-major-memory-layout.webp" style="width: 65%;"></a>
 <figcaption>
 <p><span class="caption-text">The row-major memory layout of a tensor. The data is stored in a single contiguous block of memory, with the last dimension varying the fastest.</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
 </figcaption>
 </figure>
 <p>In contrast, the tiled layout provides optimal performance for computations on the Tensix core. It divides the tensor into smaller tiles, typically 2D tiles of size 32x32 (padded as needed). Each tile is stored in a separate page, enabling efficient access patterns that align with the Tensix core’s internal compute units. See <a class="reference internal" href="tiles.html#tiles"><span class="std std-ref">Tile documentation</span></a> for details on the tile layout and its implications.</p>
 <figure class="align-center" id="id4">
-<a class="reference internal image-reference" href="../../_images/tenstorrent-tile-memory-layout.webp"><img alt="The tiled memory layout of a tensor." src="../../_images/tenstorrent-tile-memory-layout.webp" style="width: 936.0px; height: 452.40000000000003px;"></a>
+<a class="reference internal image-reference" href="../../_images/tenstorrent-tile-memory-layout.webp"><img alt="The tiled memory layout of a tensor." src="../../_images/tenstorrent-tile-memory-layout.webp" style="width: 65%;"></a>
 <figcaption>
 <p><span class="caption-text">The tiled memory layout of a tensor.</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
 </figcaption>
@@ -358,7 +360,7 @@
 </h3>
 <p>Interleaved memory, while simple and generic, does not always provide optimal performance for all kernels. It can lead to NoC contention since each link can only carry one packet at a time. When multiple packets attempt to traverse the same link, one must wait, causing delays and reduced throughput. The problem is true for both Interleaved DRAM and SRAM buffers. This is particularly problematic for high-bandwidth kernels with predictable access patterns, such as matrix multiplication or convolution. In these cases, more advanced memory allocation schemes that reduce contention and improve data locality often provide better performance.</p>
 <figure class="align-center" id="id7">
-<a class="reference internal image-reference" href="../../_images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp"><img alt="NoC congestion under DRAM access" src="../../_images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp" style="width: 1040.0px; height: 911.3000000000001px;"></a>
+<a class="reference internal image-reference" href="../../_images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp"><img alt="NoC congestion under DRAM access" src="../../_images/tenstorrent-wormhole-interleaved-noc-path-congestion.webp" style="width: 65%;"></a>
 <figcaption>
 <p><span class="caption-text">It is possible to have contention on the NoC when multiple packets try to traverse the same link.</span><a class="headerlink" href="#id7" title="Permalink to this image"></a></p>
 </figcaption>

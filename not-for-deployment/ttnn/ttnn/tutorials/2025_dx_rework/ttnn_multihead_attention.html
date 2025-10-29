@@ -23,6 +23,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
@@ -63,22 +64,12 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">Basic Tensor Operations</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Multi-Head Attention</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#Write-Multi-Head-Attention-using-ttnn">Write Multi-Head Attention using ttnn</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Write-Multi-Head-Attention-with-TT-NN">Write Multi-Head Attention with TT-NN</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#Configuration">Configuration</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Initialize-activations-and-weights-using-torch">Initialize activations and weights using torch</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Convert-activations-and-weights-to-ttnn">Convert activations and weights to ttnn</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Run-the-first-iteration-of-Multi-Head-Attention">Run the first iteration of Multi-Head Attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Run-a-subsequent-iteration-of-Multi-Head-Attention">Run a subsequent iteration of Multi-Head Attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Write-optimized-version-of-Multi-Head-Attention">Write optimized version of Multi-Head Attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Pre-process-the-parameters-of-the-optimized-model">Pre-process the parameters of the optimized model</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Run-the-first-iteration-of-the-optimized-Multi-Head-Attention">Run the first iteration of the optimized Multi-Head Attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Run-a-subsequent-iteration-of-the-optimized-Multi-Head-Attention">Run a subsequent iteration of the optimized Multi-Head Attention</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Check-that-the-output-of-the-optimized-version-matches-the-output-of-the-original-implementation">Check that the output of the optimized version matches the output of the original implementation</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Close-the-device">Close the device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
@@ -126,7 +117,7 @@
   <section id="Multi-Head-Attention">
 <h1>Multi-Head Attention<a class="headerlink" href="#Multi-Head-Attention" title="Permalink to this heading"></a>
 </h1>
-<p>Multi-Head Attention is an important part of all Transformer-based models. This tutorial will show how to write it and how to then optimize it.</p>
+<p>Multi-Head Attention is an important part of all Transformer-based models. This tutorial shows how to write and optimize Multi-Head Attention.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -146,10 +137,10 @@
 </pre></div>
 </div>
 </div>
-<section id="Write-Multi-Head-Attention-using-ttnn">
-<h2>Write Multi-Head Attention using ttnn<a class="headerlink" href="#Write-Multi-Head-Attention-using-ttnn" title="Permalink to this heading"></a>
+<section id="Write-Multi-Head-Attention-with-TT-NN">
+<h2>Write Multi-Head Attention with TT-NN<a class="headerlink" href="#Write-Multi-Head-Attention-with-TT-NN" title="Permalink to this heading"></a>
 </h2>
-<p>Multi-head can be implemented in <code class="docutils literal notranslate"><span class="pre">torch</span></code> using just 6 operations:</p>
+<p>Multi-head can be implemented in <code class="docutils literal notranslate"><span class="pre">torch</span></code> using the following six operations:</p>
 <ol class="arabic simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">torch.matmul</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">torch.add</span></code></p></li>
@@ -158,7 +149,7 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">torch.mul</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">torch.softmax</span></code></p></li>
 </ol>
-<p><code class="docutils literal notranslate"><span class="pre">ttnn</span></code> provides the same APIs for these operations. Multi-head attention can therefore be implemented in a similar fashion. Except, when using <code class="docutils literal notranslate"><span class="pre">ttnn</span></code>, the user should be mindful of the tensor layout.</p>
+<p><code class="docutils literal notranslate"><span class="pre">TT-NN</span></code> provides the same APIs for these operations. Multi-head Attention can be implemented similarly. Be mindful of the tensor layout except when using <code class="docutils literal notranslate"><span class="pre">TT-NN</span></code>.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -208,7 +199,7 @@
     <span class="n">attention_scores</span> <span class="o">=</span> <span class="n">query</span> <span class="o">@</span> <span class="n">key</span>
     <span class="n">attention_scores</span> <span class="o">=</span> <span class="n">attention_scores</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">/</span> <span class="p">(</span><span class="n">head_size</span><span class="o">**</span><span class="mf">0.5</span><span class="p">))</span>
     <span class="n">attention_scores</span> <span class="o">+=</span> <span class="n">attention_mask</span>
-    <span class="n">attention_probs</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">attention_scores</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">attention_probs</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">attention_scores</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">numeric_stable</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
     <span class="n">context_layer</span> <span class="o">=</span> <span class="n">attention_probs</span> <span class="o">@</span> <span class="n">value</span>
     <span class="n">context_layer</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">context_layer</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">))</span>
@@ -223,7 +214,7 @@
 </pre></div>
 </div>
 </div>
-<p>Now that the model is written, let’s create input tensors to run it and test it</p>
+<p>Now that the model is written, create input tensors to run and test it.</p>
 </section>
 <section id="Configuration">
 <h2>Configuration<a class="headerlink" href="#Configuration" title="Permalink to this heading"></a>
@@ -242,10 +233,7 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Initialize-activations-and-weights-using-torch">
-<h2>Initialize activations and weights using torch<a class="headerlink" href="#Initialize-activations-and-weights-using-torch" title="Permalink to this heading"></a>
-</h2>
+<p>Initialize activations and weights with Torch:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -265,10 +253,7 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Convert-activations-and-weights-to-ttnn">
-<h2>Convert activations and weights to ttnn<a class="headerlink" href="#Convert-activations-and-weights-to-ttnn" title="Permalink to this heading"></a>
-</h2>
+<p>Convert activations and weights to TT-NN:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -288,10 +273,7 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Run-the-first-iteration-of-Multi-Head-Attention">
-<h2>Run the first iteration of Multi-Head Attention<a class="headerlink" href="#Run-the-first-iteration-of-Multi-Head-Attention" title="Permalink to this heading"></a>
-</h2>
+<p>Run the first iteration of Multi-Head Attention:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -327,12 +309,9 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Run-a-subsequent-iteration-of-Multi-Head-Attention">
-<h2>Run a subsequent iteration of Multi-Head Attention<a class="headerlink" href="#Run-a-subsequent-iteration-of-Multi-Head-Attention" title="Permalink to this heading"></a>
-</h2>
-<p>The first iteration of Multi-Head Attention should take several seconds to process. As <code class="docutils literal notranslate"><span class="pre">ttnn</span></code> configures and compiles device code for operations on-the-fly, most of the execution time is spent on this compilation process.</p>
-<p>Fortunately, both the configuration and the compiled device code are stored in a program cache. This means that subsequent iterations will be significantly faster (around two orders of magnitude faster than the first iteration).</p>
+<p>Run a subsequent iteration of Multi-Head Attention:</p>
+<p>The first iteration of Multi-Head Attention will take several seconds to process. As <code class="docutils literal notranslate"><span class="pre">TT-NN</span></code> configures and compiles device code for operations on-the-fly, most execution time is spent compiling.</p>
+<p>Fortunately, configuration and compiled device code are stored in a program cache. This means that subsequent iterations will be significantly faster, about two orders of magnitude faster than the first iteration.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -368,19 +347,16 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Write-optimized-version-of-Multi-Head-Attention">
-<h2>Write optimized version of Multi-Head Attention<a class="headerlink" href="#Write-optimized-version-of-Multi-Head-Attention" title="Permalink to this heading"></a>
-</h2>
-<p>Optimized version of the multi-head attention can be written by:</p>
+<p>Write an optimized version of Multi-Head Attention:</p>
+<p>The optimized version of Multi-Head Attention can be written by:</p>
 <ul class="simple">
-<li><p>Tilizing all of the tensors ahead of time</p></li>
-<li><p>Using more performant matmuls that fuse bias and specify the number of cores they execute on</p></li>
-<li><p>Putting every tensor into L1</p></li>
-<li><p>Using bfloat8_b data_type</p></li>
-<li><p>Using custom <code class="docutils literal notranslate"><span class="pre">ttnn.transformer</span></code> operations instead of <code class="docutils literal notranslate"><span class="pre">ttnn.permute</span></code> and <code class="docutils literal notranslate"><span class="pre">ttnn.reshape</span></code></p></li>
+<li><p>Tilizing all of the tensors ahead of time.</p></li>
+<li><p>Using more performant matmuls that fuse bias and specify the number of cores they execute on.</p></li>
+<li><p>Putting every tensor into L1.</p></li>
+<li><p>Using bfloat8_b data_type.</p></li>
+<li><p>Using custom <code class="docutils literal notranslate"><span class="pre">ttnn.transformer</span></code> operations instead of <code class="docutils literal notranslate"><span class="pre">ttnn.permute</span></code> and <code class="docutils literal notranslate"><span class="pre">ttnn.reshape</span></code> operations.</p></li>
 </ul>
-<p><code class="docutils literal notranslate"><span class="pre">ttnn.deallocate</span></code> calls are needed because otherwise, the cores on the device will run out of the L1 memory</p>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.deallocate</span></code> calls are required, otherwise cores on the device will run out of the L1 memory.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -464,14 +440,11 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Pre-process-the-parameters-of-the-optimized-model">
-<h2>Pre-process the parameters of the optimized model<a class="headerlink" href="#Pre-process-the-parameters-of-the-optimized-model" title="Permalink to this heading"></a>
-</h2>
+<p>Pre-process the parameters of the optimized model:</p>
 <ol class="arabic simple">
-<li><p>Fuse QKV weights and biases</p></li>
-<li><p>Reshape and tilize for the optimized operations using preprocess_linear_weight and preprocess_linear_bias</p></li>
-<li><p>Move to device</p></li>
+<li><p>Fuse QKV weights and biases.</p></li>
+<li><p>Reshape and tilize for optimized operations using preprocess_linear_weight and preprocess_linear_bias.</p></li>
+<li><p>Move to device.</p></li>
 </ol>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -499,10 +472,7 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Run-the-first-iteration-of-the-optimized-Multi-Head-Attention">
-<h2>Run the first iteration of the optimized Multi-Head Attention<a class="headerlink" href="#Run-the-first-iteration-of-the-optimized-Multi-Head-Attention" title="Permalink to this heading"></a>
-</h2>
+<p>Run the first iteration of optimized Multi-Head Attention:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -535,10 +505,7 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Run-a-subsequent-iteration-of-the-optimized-Multi-Head-Attention">
-<h2>Run a subsequent iteration of the optimized Multi-Head Attention<a class="headerlink" href="#Run-a-subsequent-iteration-of-the-optimized-Multi-Head-Attention" title="Permalink to this heading"></a>
-</h2>
+<p>Run a subsequent iteration of optimized Multi-Head Attention:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -570,11 +537,8 @@
 </pre></div>
 </div>
 </div>
-<p>Note that the optimized multi-head attention is 2 orders of magnitude faster than the initial version</p>
-</section>
-<section id="Check-that-the-output-of-the-optimized-version-matches-the-output-of-the-original-implementation">
-<h2>Check that the output of the optimized version matches the output of the original implementation<a class="headerlink" href="#Check-that-the-output-of-the-optimized-version-matches-the-output-of-the-original-implementation" title="Permalink to this heading"></a>
-</h2>
+<p>Note that the optimized multi-head attention is two orders of magnitude faster than the initial version.</p>
+<p>Check that the output of the optimized version matches the output of the original implementation:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -588,10 +552,7 @@
 </pre></div>
 </div>
 </div>
-</section>
-<section id="Close-the-device">
-<h2>Close the device<a class="headerlink" href="#Close-the-device" title="Permalink to this heading"></a>
-</h2>
+<p>Close the device:</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -603,12 +564,12 @@
 </div>
 </div>
 </section>
-<section id="Full-example-and-output">
-<h2>Full example and output<a class="headerlink" href="#Full-example-and-output" title="Permalink to this heading"></a>
+<section id="Full-Example-and-Output">
+<h2>Full Example and Output<a class="headerlink" href="#Full-Example-and-Output" title="Permalink to this heading"></a>
 </h2>
-<p>Lets put everything together in a complete example that can be run directly.</p>
+<p>Lets put everything together in a complete example that can be run directly:</p>
 <p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_multihead_attention.py">ttnn_multihead_attention.py</a></p>
-<p>Running this script will generate output the as shown below:</p>
+<p>Running the following script to generate output:</p>
 <div class="highlight-console notranslate">
 <div class="highlight"><pre><span></span><span class="gp">$ </span>python3<span class="w"> </span><span class="nv">$TT_METAL_HOME</span>/ttnn/tutorials/basic_python/ttnn_multihead_attention.py
 <span class="go">2025-07-07 13:06:38.768 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>

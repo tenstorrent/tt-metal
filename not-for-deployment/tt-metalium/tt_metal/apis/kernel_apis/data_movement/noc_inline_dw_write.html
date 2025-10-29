@@ -20,6 +20,7 @@
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
@@ -112,8 +113,8 @@
 <h1>noc_inline_dw_write<a class="headerlink" href="#noc-inline-dw-write" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_14InlineWriteDst_bE19noc_inline_dw_writev8uint64_t8uint32_t7uint8_t7uint8_t7uint8_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">InlineWriteDst</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">dst_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">InlineWriteDst</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">DEFAULT</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">posted</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1a4c697a6403c90d7178029757c4b07f65"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_inline_dw_write</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">val</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">be</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0xF</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">vc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">NOC_UNICAST_WRITE_VC</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_14InlineWriteDst_bE19noc_inline_dw_writev8uint64_t8uint32_t7uint8_t7uint8_t7uint8_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_14InlineWriteDst_b_bE19noc_inline_dw_writev8uint64_t8uint32_t7uint8_t7uint8_t7uint8_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">InlineWriteDst</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">dst_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">InlineWriteDst</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">DEFAULT</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">posted</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">flush</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1a6469dc483ed653b79485910c1c0d05f8"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_inline_dw_write</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">addr</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">val</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">be</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0xF</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">vc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">NOC_UNICAST_WRITE_VC</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">customized_src_addr</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_14InlineWriteDst_b_bE19noc_inline_dw_writev8uint64_t8uint32_t7uint8_t7uint8_t7uint8_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Initiates an asynchronous write of a 32-bit value to a NOC destination. Typically used for writing registers, but can be used for memory locations as well. The destination is specified as a 64-bit NOC address (see <em>noc_async_write</em>). The advantage over using <em>noc_async_write</em> is that we don’t use a Tensix L1 memory source location; the write value is written directly into a register. Unlike using <em>noc_async_write</em>, there are also no address alignment concerns. Also, see <em>noc_async_write_barrier</em>.</p>
@@ -167,7 +168,21 @@
 <td><p>False    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>InlineWriteDst (template parameter)   </p></td>
+<td><p>customized_src_addr   </p></td>
+<td><p>Custom source address for storing the value to be written   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Any uint32_t value   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p></p></td>
+<td><p>(required when <code class="docutils literal notranslate"><span class="pre">flush</span></code> is false)   </p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dst_type (template parameter)   </p></td>
 <td><p>Whether the write is targeting L1 or a Stream Register   </p></td>
 <td><p>InlineWriteDst   </p></td>
 <td><p>DEFAULT, L1, REG   </p></td>
@@ -178,11 +193,33 @@
 <td><p>Whether the call is posted (i.e. ack requirement)   </p></td>
 <td><p>bool   </p></td>
 <td><p>true or false   </p></td>
-<td><p>False   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>flush (template parameter)   </p></td>
+<td><p>Whether to flush the NOC transaction before issuing the   </p></td>
+<td><p>bool   </p></td>
+<td><p>true or false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p></p></td>
+<td><p>write (<code class="docutils literal notranslate"><span class="pre">false</span></code> callers must prevent races on the caller   </p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd">
+<td><p></p></td>
+<td><p>side)   </p></td>
+<td><p></p></td>
+<td><p></p></td>
+<td><p></p></td>
 </tr>
 </tbody>
 </table>
 
+<p>When <code class="docutils literal notranslate"><span class="pre">flush</span></code> is disabled the caller is responsible for providing a valid <code class="docutils literal notranslate"><span class="pre">customized_src_addr</span></code> scratch location and ensuring no outstanding inline write uses that address before issuing another write. </p>
 </dd>
 </dl>
 

@@ -20,11 +20,12 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Host APIs" href="host_apis.html" />
-    <link rel="prev" title="Compute Engines and Data Flow within Tensix" href="../advanced_topics/compute_engines_and_dataflow_within_tensix.html" /> 
+    <link rel="prev" title="Achieving FP32 Accuracy for Computation" href="../advanced_topics/fp32_accuracy.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -116,23 +117,6 @@
 <li class="toctree-l3"><a class="reference internal" href="host_apis/buffers/CreateSemaphore.html">CreateSemaphore</a></li>
 <li class="toctree-l3"><a class="reference internal" href="host_apis/buffers/DeallocateBuffer.html">DeallocateBuffer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="host_apis/buffers/AssignGlobalBufferToProgram.html">AssignGlobalBufferToProgram</a></li>
-</ul>
-</li>
-<li class="toctree-l2">
-<a class="reference internal" href="host_apis/command_queue/command_queue.html">CommandQueue</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EnqueueWriteBuffer.html">EnqueueWriteBuffer</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EnqueueWriteSubBuffer.html">EnqueueWriteSubBuffer</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EnqueueReadBuffer.html">EnqueueReadBuffer</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EnqueueReadSubBuffer.html">EnqueueReadSubBuffer</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EnqueueProgram.html">EnqueueProgram</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EnqueueRecordEvent.html">EnqueueRecordEvent</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EnqueueWaitForEvent.html">EnqueueWaitForEvent</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EventQuery.html">EventQuery</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/EventSynchronize.html">EventSynchronize</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/LightMetalBeginCapture.html">LightMetalBeginCapture</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/LightMetalEndCapture.html">LightMetalEndCapture</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/Finish.html">Finish</a></li>
-<li class="toctree-l3"><a class="reference internal" href="host_apis/command_queue/Synchronize.html">Synchronize</a></li>
 </ul>
 </li>
 <li class="toctree-l2">
@@ -405,6 +389,7 @@
 <li class="toctree-l7"><a class="reference internal" href="kernel_apis/compute/atan_tile.html">atan_tile</a></li>
 <li class="toctree-l7"><a class="reference internal" href="kernel_apis/compute/acos_tile.html">acos_tile</a></li>
 <li class="toctree-l7"><a class="reference internal" href="kernel_apis/compute/acosh_tile.html">acosh_tile</a></li>
+<li class="toctree-l7"><a class="reference internal" href="kernel_apis/compute/selu_tile.html">selu_tile</a></li>
 </ul>
 </li>
 <li class="toctree-l6">
@@ -483,12 +468,7 @@
 <li class="toctree-l6"><a class="reference internal" href="kernel_apis/sfpu/llk.html#vuint">vUInt</a></li>
 </ul>
 </li>
-<li class="toctree-l5">
-<a class="reference internal" href="kernel_apis/sfpu/llk.html#library">Library</a><ul>
-<li class="toctree-l6"><a class="reference internal" href="kernel_apis/sfpu/llk.html#grayskull-and-wormhole">Grayskull and Wormhole</a></li>
-<li class="toctree-l6"><a class="reference internal" href="kernel_apis/sfpu/llk.html#wormhole-only">Wormhole only</a></li>
-</ul>
-</li>
+<li class="toctree-l5"><a class="reference internal" href="kernel_apis/sfpu/llk.html#library">Library</a></li>
 <li class="toctree-l5">
 <a class="reference internal" href="kernel_apis/sfpu/llk.html#immediate-floating-point-values">Immediate Floating Point Values</a><ul>
 <li class="toctree-l6"><a class="reference internal" href="kernel_apis/sfpu/llk.html#boolean-operators">Boolean Operators</a></li>
@@ -504,7 +484,6 @@
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/sfpu/llk.html#register-pressure-management">Register Pressure Management</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/sfpu/llk.html#optimizer">Optimizer</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/sfpu/llk.html#sfpreplay">SFPREPLAY</a></li>
-<li class="toctree-l5"><a class="reference internal" href="kernel_apis/sfpu/llk.html#emulation">Emulation</a></li>
 <li class="toctree-l5"><a class="reference internal" href="kernel_apis/sfpu/llk.html#tools">Tools</a></li>
 </ul>
 </li>
@@ -532,7 +511,7 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="../advanced_topics/compute_engines_and_dataflow_within_tensix.html" class="btn btn-neutral float-left" title="Compute Engines and Data Flow within Tensix" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../advanced_topics/fp32_accuracy.html" class="btn btn-neutral float-left" title="Achieving FP32 Accuracy for Computation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="host_apis.html" class="btn btn-neutral float-right" title="Host APIs" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

@@ -23,6 +23,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
@@ -63,19 +64,19 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">Basic Tensor Operations</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Basic Convolution</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#Import-the-necessary-libraries">Import the necessary libraries</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Set-manual-seed-for-reproducibility">Set manual seed for reproducibility</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Create-forward-method">Create forward method</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Set-input-and-convolution-parameters">Set input and convolution parameters</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Create-tensors">Create tensors</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Run-convolution-operation">Run convolution operation</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Set-Manual-Seed">Set Manual Seed</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Open-the-Device">Open the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Create-Forward-Method">Create Forward Method</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Set-Input-and-Convolution-Parameters">Set Input and Convolution Parameters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Create-Tensors">Create Tensors</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Run-the-Convolution-Operation">Run the Convolution Operation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_simplecnn_inference.html">Running a Simple CNN Inference on CIFAR-10</a></li>
@@ -122,10 +123,10 @@
   <section id="Basic-Convolution">
 <h1>Basic Convolution<a class="headerlink" href="#Basic-Convolution" title="Permalink to this heading"></a>
 </h1>
-<p>In this tutorial we present the operation of the convolution layer in building neural models.</p>
-<p>Lets create the example file, <code class="docutils literal notranslate"><span class="pre">ttnn_basic_conv.py</span></code></p>
-<section id="Import-the-necessary-libraries">
-<h2>Import the necessary libraries<a class="headerlink" href="#Import-the-necessary-libraries" title="Permalink to this heading"></a>
+<p>This tutorial details convolution layer operation when building neural models.</p>
+<p>We will create an example file, <code class="docutils literal notranslate"><span class="pre">ttnn_basic_conv.py</span></code></p>
+<section id="Import-Libraries">
+<h2>Import Libraries<a class="headerlink" href="#Import-Libraries" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -140,10 +141,10 @@
 </div>
 </div>
 </section>
-<section id="Set-manual-seed-for-reproducibility">
-<h2>Set manual seed for reproducibility<a class="headerlink" href="#Set-manual-seed-for-reproducibility" title="Permalink to this heading"></a>
+<section id="Set-Manual-Seed">
+<h2>Set Manual Seed<a class="headerlink" href="#Set-Manual-Seed" title="Permalink to this heading"></a>
 </h2>
-<p>Setting a manual seed ensures that the results are reproducible by initializing the random number generators to a fixed state.</p>
+<p>Setting a manual seed ensures that results are reproducible by initializing random number generators to a fixed state.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -155,10 +156,10 @@
 </div>
 </div>
 </section>
-<section id="Open-Tenstorrent-device">
-<h2>Open Tenstorrent device<a class="headerlink" href="#Open-Tenstorrent-device" title="Permalink to this heading"></a>
+<section id="Open-the-Device">
+<h2>Open the Device<a class="headerlink" href="#Open-the-Device" title="Permalink to this heading"></a>
 </h2>
-<p>Create necessary device on which we will run our program, with custom L1 memory config. An extra parameter we use here, <code class="docutils literal notranslate"><span class="pre">l1_small_size</span></code>, sets aside a portion of the on-chip L1 memory for sliding-window operations, like convolutions, and other kernels that need quick, scratchpad-like memory. For simple CNNs, 8 kB will be enough, moving up to 32 kB or more for more complex models.</p>
+<p>Create the device that will run the program, with custom L1 memory config. The following parameter we use here, <code class="docutils literal notranslate"><span class="pre">l1_small_size</span></code>, allocates on-chip L1 memory for sliding-window operations like convolutions, kernels, and memory. 8kB is enough for simple CNNs, 32kB or more for more complex models.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -170,10 +171,10 @@
 </div>
 </div>
 </section>
-<section id="Create-forward-method">
-<h2>Create forward method<a class="headerlink" href="#Create-forward-method" title="Permalink to this heading"></a>
+<section id="Create-Forward-Method">
+<h2>Create Forward Method<a class="headerlink" href="#Create-Forward-Method" title="Permalink to this heading"></a>
 </h2>
-<p>This function performs the convolution operation on the input tensor using the initialized layer parameters. Amongst other inputs, the convolution function takes a configuration parameter: <a class="reference internal" href="../../api/ttnn.Conv2dConfig.html"><span class="doc">ttnn.Conv2dConfig</span></a>.</p>
+<p>This function executes convolution operations on input tensors using initialized layer parameters. Convolutions require the following configuration parameter: <a class="reference internal" href="../../api/ttnn.Conv2dConfig.html"><span class="doc">ttnn.Conv2dConfig</span></a>.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -226,8 +227,8 @@
 </div>
 </div>
 </section>
-<section id="Set-input-and-convolution-parameters">
-<h2>Set input and convolution parameters<a class="headerlink" href="#Set-input-and-convolution-parameters" title="Permalink to this heading"></a>
+<section id="Set-Input-and-Convolution-Parameters">
+<h2>Set Input and Convolution Parameters<a class="headerlink" href="#Set-Input-and-Convolution-Parameters" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -244,10 +245,10 @@
 </div>
 </div>
 </section>
-<section id="Create-tensors">
-<h2>Create tensors<a class="headerlink" href="#Create-tensors" title="Permalink to this heading"></a>
+<section id="Create-Tensors">
+<h2>Create Tensors<a class="headerlink" href="#Create-Tensors" title="Permalink to this heading"></a>
 </h2>
-<p>We need to create the input tensor, weight tensor, and bias tensor that will be used for the convolution operation. Learn more about Tensors <a class="reference internal" href="../../tensor.html"><span class="doc">here</span></a>.</p>
+<p>To create the input tensor, weight tensor, and bias tensor for the convolution operation, see the <a class="reference internal" href="../../tensor.html"><span class="doc">Tensors Creation Guide</span></a>.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -266,8 +267,8 @@
 </div>
 </div>
 </section>
-<section id="Run-convolution-operation">
-<h2>Run convolution operation<a class="headerlink" href="#Run-convolution-operation" title="Permalink to this heading"></a>
+<section id="Run-the-Convolution-Operation">
+<h2>Run the Convolution Operation<a class="headerlink" href="#Run-the-Convolution-Operation" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -282,8 +283,8 @@
 </div>
 </div>
 </section>
-<section id="Close-The-Device">
-<h2>Close The Device<a class="headerlink" href="#Close-The-Device" title="Permalink to this heading"></a>
+<section id="Close-the-Device">
+<h2>Close the Device<a class="headerlink" href="#Close-the-Device" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -296,8 +297,8 @@
 </div>
 </div>
 </section>
-<section id="Full-example-and-output">
-<h2>Full example and output<a class="headerlink" href="#Full-example-and-output" title="Permalink to this heading"></a>
+<section id="Full-Example-and-Output">
+<h2>Full Example and Output<a class="headerlink" href="#Full-Example-and-Output" title="Permalink to this heading"></a>
 </h2>
 <p>Lets put everything together in a complete example that can be run directly.</p>
 <p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_basic_conv.py">ttnn_basic_conv.py</a></p>

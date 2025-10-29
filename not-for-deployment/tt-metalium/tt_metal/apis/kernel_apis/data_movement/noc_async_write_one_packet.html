@@ -20,6 +20,7 @@
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
@@ -112,11 +113,76 @@
 <h1>noc_async_write_one_packet<a class="headerlink" href="#noc-async-write-one-packet" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv426noc_async_write_one_packetNSt8uint32_tENSt8uint64_tENSt8uint32_tE7uint8_t8uint32_t">
-<span class="target" id="dataflow__api_8h_1a915921a919b5c05a505f2b6590eccb16"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_write_one_packet</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_local_l1_addr</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dst_noc_addr</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">size</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">vc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">NOC_UNICAST_WRITE_VC</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv426noc_async_write_one_packetNSt8uint32_tENSt8uint64_tENSt8uint32_tE7uint8_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_b_bE26noc_async_write_one_packetvNSt8uint32_tENSt8uint64_tENSt8uint32_tE7uint8_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">enable_noc_tracing</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">true</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">posted</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1a78e6588a8e28ba8ef56d46402959a95f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_write_one_packet</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_local_l1_addr</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">dst_noc_addr</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">size</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">vc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">NOC_UNICAST_WRITE_VC</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_bE26noc_async_write_one_packetvNSt8uint32_tENSt8uint64_tENSt8uint32_tE7uint8_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Initiates an asynchronous write for a single packet with size &lt;= NOC_MAX_BURST_SIZE (i.e. maximum packet size). Refer to <em>noc_async_write</em> for more details. </p>
+<p>Initiates an asynchronous write for a single packet with size &lt;= NOC_MAX_BURST_SIZE (i.e. maximum packet size). Refer to <em>noc_async_write</em> for more details.</p>
+<p>Return value: None</p>
+<p></p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument   </p></th>
+<th class="head"><p>Description   </p></th>
+<th class="head"><p>Type   </p></th>
+<th class="head"><p>Valid Range   </p></th>
+<th class="head"><p>Required    </p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>src_local_l1_addr   </p></td>
+<td><p>Source address in local L1 memory   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0..1MB   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dst_noc_addr   </p></td>
+<td><p>Encoding of the destination NOC location (x,y)+address   </p></td>
+<td><p>uint64_t   </p></td>
+<td><p>Results of <em>get_noc_addr</em> calls   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>size   </p></td>
+<td><p>Size of data transfer in bytes   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>0..1MB   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>noc   </p></td>
+<td><p>Which NOC to use for the transaction   </p></td>
+<td><p>uint8_t   </p></td>
+<td><p>0 or 1   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>vc   </p></td>
+<td><p>Which VC to use for the transaction   </p></td>
+<td><p>uint8_t   </p></td>
+<td><p>0-3 (Unicast VCs)   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>enable_noc_tracing (template argument)   </p></td>
+<td><p>NOC tracing enable   </p></td>
+<td><p>bool   </p></td>
+<td><p>true or false   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>posted (template argument)   </p></td>
+<td><p>Whether the write is posted (i.e. no ack required)   </p></td>
+<td><p>bool   </p></td>
+<td><p>true or false   </p></td>
+<td><p>False   </p></td>
+</tr>
+</tbody>
+</table>
+
 </dd>
 </dl>
 

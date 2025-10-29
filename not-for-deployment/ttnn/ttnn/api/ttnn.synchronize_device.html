@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -123,33 +124,32 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.synchronize_device">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">synchronize_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="o"><span class="pre">*</span></span><span class="n"><span class="pre">args</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.synchronize_device" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">synchronize_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn._ttnn.multi_device.MeshDevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cq_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn._ttnn.types.QueueId</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_device_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn._ttnn.device.SubDeviceId</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.synchronize_device" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Overloaded function.</p>
-<ol class="arabic">
-<li>
-<p>synchronize_device(device: tt::tt_metal::IDevice, cq_id: Optional[ttnn._ttnn.types.QueueId] = None, sub_device_ids: list[ttnn._ttnn.device.SubDeviceId] = []) -&gt; None</p>
-<blockquote>
-<div>
 <p>Synchronize the device with host by waiting for all operations to complete.
 If cq_id is provided then only the operations associated with that cq_id are waited for,
 otherwise operations for all command queues are waited on.
 If the device has been configured with sub-devices, then sub_device_ids can be provided to only wait
 for the operations that ran on the specified sub-devices, otherwise all sub-devices (the entire chip) are waited on.</p>
-<dl>
-<dt>Args:</dt>
-<dd>
-<p>device (ttnn.device.Device): The device to synchronize with.
-cq_id (int, optional): The command queue ID to synchronize. Defaults to <cite>None</cite>.
-sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to synchronize. Defaults to sub-devices set by set_sub_device_stall_group.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>device</strong> (<em>ttnn.device.Device</em>) – The device to synchronize with.</p></li>
+<li><p><strong>cq_id</strong> (<em>int</em><em>, </em><em>optional</em>) – The command queue ID to synchronize. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>sub_device_ids</strong> (<em>List</em><em>[</em><em>ttnn.SubDeviceId</em><em>]</em><em>, </em><em>optional</em>) – The sub-device IDs to synchronize. Defaults to sub-devices set by set_sub_device_stall_group.</p></li>
+</ul>
 </dd>
-<dt>Returns:</dt>
-<dd>
-<p><cite>None</cite>: The op ensures that all operations are completed.</p>
+<dt class="field-even">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<p><cite>None</cite> – The op ensures that all operations are completed.</p>
 </dd>
-<dt>Example:</dt>
-<dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
@@ -157,46 +157,7 @@ sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to synchro
 <span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
 </pre></div>
 </div>
-</dd>
-</dl>
 </div>
-</blockquote>
-</li>
-<li>
-<p>synchronize_device(device: ttnn._ttnn.multi_device.MeshDevice, cq_id: Optional[ttnn._ttnn.types.QueueId] = None, sub_device_ids: list[ttnn._ttnn.device.SubDeviceId] = []) -&gt; None</p>
-<blockquote>
-<div>
-<p>Synchronize the device with host by waiting for all operations to complete.
-If cq_id is provided then only the operations associated with that cq_id are waited for,
-otherwise operations for all command queues are waited on.
-If the device has been configured with sub-devices, then sub_device_ids can be provided to only wait
-for the operations that ran on the specified sub-devices, otherwise all sub-devices (the entire chip) are waited on.</p>
-<dl>
-<dt>Args:</dt>
-<dd>
-<p>device (ttnn.device.Device): The device to synchronize with.
-cq_id (int, optional): The command queue ID to synchronize. Defaults to <cite>None</cite>.
-sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to synchronize. Defaults to sub-devices set by set_sub_device_stall_group.</p>
-</dd>
-<dt>Returns:</dt>
-<dd>
-<p><cite>None</cite>: The op ensures that all operations are completed.</p>
-</dd>
-<dt>Example:</dt>
-<dd>
-<div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Assume some operations are queued on the device</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">ttnn</span><span class="o">.</span><span class="n">synchronize_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
-</pre></div>
-</div>
-</dd>
-</dl>
-</div>
-</blockquote>
-</li>
-</ol>
 </dd>
 </dl>
 

@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -144,6 +145,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sparse_matmul</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.sparse_matmul',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.matmul.sparse_matmul_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.sparse_matmul" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.sparse_matmul(input_tensor_a:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">input_tensor_b:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">sparsity:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">nnz:</span> <span class="pre">Optional[int]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">is_input_a_sparse:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">dtype:</span> <span class="pre">Optional[ttnn.DataType]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">program_config:</span> <span class="pre">Optional[ttnn.MatmulProgramConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">core_grid:</span> <span class="pre">Optional[ttnn.CoreGrid]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">output_tile:</span> <span class="pre">Optional[list[int]]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">optional_output_tensor:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">global_cb:</span> <span class="pre">Optional[ttnn.GlobalCircularBuffer]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">sub_device_id:</span> <span class="pre">Optional[ttnn.SubDeviceId]</span> <span class="pre">=</span> <span class="pre">None)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
 <p>Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
@@ -176,6 +178,62 @@
 <p><em>ttnn.Tensor</em> – the output tensor with sparse results.</p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The tensors support the following data types and layouts:</p>
+<table class="docutils align-default" id="id2">
+<caption>
+<span class="caption-text">input_tensor_a</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<table class="docutils align-default" id="id3">
+<caption>
+<span class="caption-text">input_tensor_b</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32</p></td>
+<td><p>TILE</p></td>
+</tr>
+</tbody>
+</table>
+<p>FLOAT32 is only supported if <code class="xref py py-attr docutils literal notranslate"><span class="pre">nnz</span></code> is provided.</p>
+<table class="docutils align-default" id="id4">
+<caption>
+<span class="caption-text">sparsity</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>BFLOAT16</p></td>
+<td><p>ROW_MAJOR</p></td>
+</tr>
+</tbody>
+</table>
+</div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">

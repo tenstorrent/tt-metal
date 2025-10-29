@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -72,6 +73,7 @@
 <li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
@@ -115,11 +117,11 @@
 <p>We now build a program that will perform operations using the SFPU (vector engine/Special Function Processing Unit). Though not packing as much punch as the FPU (Matrix Engine), the SFPU is a powerful unit that can perform complex element-wise operations. This example will show how to use the SFPU to perform <code class="docutils literal notranslate"><span class="pre">exp(x)</span></code> on the input data.</p>
 <p>This example is similar to the previous example of adding two vectors using the FPU. But instead of using the FPU, we will use the SFPU. And only 1 input buffer is used instead of 2. The SFPU can perform a variety of operations not just exponential, such as square root, sine, cosine, ReLU and more.</p>
 <p>We’ll go through this code section by section. The fully source code for this example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/eltwise_sfpu</span></code> directory.</p>
-<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">eltwise_sfpu</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
+<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">metal_example_eltwise_sfpu</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
 ./build_metal.sh
-./build/programming_examples/eltwise_sfpu
+./build/programming_examples/metal_example_eltwise_sfpu
 </pre></div>
 </div>
 <section id="program-setup">
@@ -131,16 +133,17 @@
 <li><p>Allocate circular buffers for communication between kernels</p></li>
 <li><p>Setup both data movement and compute kernels</p></li>
 </ul>
-<p>First, allocate the buffers using the interleaved config with page size set to the tile size (in bytes). This is the most common buffer type and configuration used in Metalium as it fits how the compute engine expects data to be sent in. Then data is generated and written to the source buffer. The destination buffer is not initialized as it will be filled with the results later.</p>
+<p>First, allocate the buffers using the mesh buffer API. This uses a two-layer configuration: <code class="docutils literal notranslate"><span class="pre">DeviceLocalBufferConfig</span></code> for per-device properties and <cite>ReplicatedBufferConfig</cite> for mesh-wide distribution. Page size is set to the tile size (in bytes), which matches how the compute engine expects data. The destination buffer is not initialized as it will be filled with results later.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
-<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">,</span>
+<div class="highlight"><pre><span></span><span class="n">distributed</span><span class="o">::</span><span class="n">DeviceLocalBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
 <span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span><span class="p">};</span>
-
-<span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Buffer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
-<span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Buffer</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
+<span class="p">};</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">ReplicatedBufferConfig</span><span class="w"> </span><span class="n">buffer_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size_bytes</span>
+<span class="p">};</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshBuffer</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">buffer_config</span><span class="p">,</span><span class="w"> </span><span class="n">dram_config</span><span class="p">,</span><span class="w"> </span><span class="n">mesh_device</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshBuffer</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">buffer_config</span><span class="p">,</span><span class="w"> </span><span class="n">dram_config</span><span class="p">,</span><span class="w"> </span><span class="n">mesh_device</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
 
 <span class="c1">// Fill a host buffer with random data and upload to the device.</span>
 <span class="n">std</span><span class="o">::</span><span class="n">mt19937</span><span class="w"> </span><span class="nf">rng</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">random_device</span><span class="p">{}());</span>
@@ -150,30 +153,30 @@
 <span class="w">    </span><span class="n">v</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bfloat16</span><span class="p">(</span><span class="n">dist</span><span class="p">(</span><span class="n">rng</span><span class="p">));</span>
 <span class="p">}</span>
 
-<span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">src0_vec</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking=*/</span><span class="nb">false</span><span class="p">);</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueWriteMeshBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">src0_vec</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking=*/</span><span class="nb">false</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Then we allocate the circular buffers. Again page size is set to tile size. There is 2 pages in each circular buffer to allow overlapping of data movement and compute operations. (data movement kernels will send/consume 1 tile at a time in this example).</p>
 <p>Next, create the kernels. Nothing different from the previous examples besides being different kernels.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reader_args</span><span class="p">;</span>
-<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src0_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">reader_args</span><span class="p">);</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src0_dram_buffer</span><span class="o">-&gt;</span><span class="n">get_backing_buffer</span><span class="p">()).</span><span class="n">append_to</span><span class="p">(</span><span class="n">reader_args</span><span class="p">);</span>
 <span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>
-<span class="w">    </span><span class="s">"tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/read_tile.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"eltwise_sfpu/kernels/dataflow/read_tile.cpp"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">core</span><span class="p">,</span>
 <span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_1</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_1_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reader_args</span><span class="p">});</span>
 
 <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_args</span><span class="p">;</span>
-<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">dst_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">writer_args</span><span class="p">);</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">dst_dram_buffer</span><span class="o">-&gt;</span><span class="n">get_backing_buffer</span><span class="p">()).</span><span class="n">append_to</span><span class="p">(</span><span class="n">writer_args</span><span class="p">);</span>
 <span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>
-<span class="w">    </span><span class="s">"tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/write_tile.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"eltwise_sfpu/kernels/dataflow/write_tile.cpp"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">core</span><span class="p">,</span>
 <span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">writer_args</span><span class="p">});</span>
 <span class="n">KernelHandle</span><span class="w"> </span><span class="n">eltwise_sfpu_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>
-<span class="w">    </span><span class="s">"tt_metal/programming_examples/eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">core</span><span class="p">,</span>
 <span class="w">    </span><span class="n">ComputeConfig</span><span class="p">{</span>
 <span class="w">        </span><span class="p">.</span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">,</span>
@@ -310,13 +313,16 @@
 <section id="program-execution-and-final-check">
 <h2>Program execution and final check<a class="headerlink" href="#program-execution-and-final-check" title="Permalink to this heading"></a>
 </h2>
-<p>Finally we can run the program. The program is enqueued to the command queue and the results are read back from the device. Then compared against the expected results.</p>
+<p>Finally we can run the program. The program is enqueued to the mesh command queue and the results are read back from the device. Then compared against the expected results.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
-<span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshWorkload</span><span class="w"> </span><span class="n">workload</span><span class="p">;</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">MeshCoordinateRange</span><span class="w"> </span><span class="n">device_range</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshCoordinateRange</span><span class="p">(</span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">shape</span><span class="p">());</span>
+<span class="n">workload</span><span class="p">.</span><span class="n">add_program</span><span class="p">(</span><span class="n">device_range</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">program</span><span class="p">));</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueMeshWorkload</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
 
 <span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
-<span class="n">EnqueueReadBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueReadMeshBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
 
 <span class="k">for</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="kt">float</span><span class="w"> </span><span class="n">expected</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bfloat16</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">exp</span><span class="p">(</span><span class="n">src0_vec</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">to_float</span><span class="p">())).</span><span class="n">to_float</span><span class="p">();</span>
@@ -326,7 +332,7 @@
 <span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">log_error</span><span class="p">(</span><span class="n">tt</span><span class="o">::</span><span class="n">LogTest</span><span class="p">,</span><span class="w"> </span><span class="s">"Result mismatch at index {}: {} != {}"</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">expected</span><span class="p">,</span><span class="w"> </span><span class="n">result</span><span class="p">);</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>
-<span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+<span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">close</span><span class="p">();</span>
 </pre></div>
 </div>
 </section>

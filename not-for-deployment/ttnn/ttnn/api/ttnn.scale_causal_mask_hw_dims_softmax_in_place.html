@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -144,15 +145,11 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">scale_causal_mask_hw_dims_softmax_in_place</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.scale_causal_mask_hw_dims_softmax_in_place',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.scale_causal_mask_hw_dims_softmax_in_place_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.scale_causal_mask_hw_dims_softmax_in_place" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.scale_causal_mask_hw_dims_softmax_in_place(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">scale:</span> <span class="pre">Optional[float]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">mask:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">program_config:</span> <span class="pre">Optional[ttnn.SoftmaxProgramConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">numeric_stable:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
 <p>Specialized in-place operation for causal masked softmax with height-width dimension constraints.</p>
 <p>This is an optimized version of scale_mask_softmax_in_place specifically designed for transformer
-attention patterns where the causal mask only affects the height and width dimensions. This operation
-provides better performance for specific use cases with the following constraints:</p>
-<p><strong>Requirements:</strong>
-* Input tensor should be sharded for optimal performance
-* Attention mask must be interleaved and have shape [1, 1, H, W] (hw_dims_only)
-* The mask is treated as a causal mask by design
-* Scale parameter is typically provided for attention scaling</p>
+attention patterns where the causal mask only affects the height and width dimensions.
+This operation provides better performance than general <a class="reference internal" href="ttnn.scale_mask_softmax_in_place.html#ttnn.scale_mask_softmax_in_place" title="ttnn.scale_mask_softmax_in_place"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.scale_mask_softmax_in_place()</span></code></a> for these specific constraints.</p>
 <p>The operation performs:
 1. Scales the input: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">*=</span> <span class="pre">scale</span></code> (if scale is provided)
 2. Applies causal mask: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">+=</span> <span class="pre">mask</span></code> (with broadcasting from [1, 1, H, W])
@@ -182,21 +179,23 @@ provides better performance for specific use cases with the following constraint
 <p><em>ttnn.Tensor</em> – The same tensor as input with the specialized causal scale-mask-softmax operation applied in-place.</p>
 </dd>
 </dl>
-<p>Supported dtypes and layouts:</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The tensors support the following data types and layouts:</p>
 <table class="docutils align-default" id="id2">
 <caption>
 <span class="caption-text">Input Tensor (Sharded)</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
+<th class="head"><p>Dtypes
+- Layouts</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B
+- TILE</p></td>
 </tr>
 </tbody>
 </table>
@@ -206,26 +205,31 @@ provides better performance for specific use cases with the following constraint
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
+<th class="head"><p>Dtypes
+- Layouts</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
-<td><p>TILE (interleaved)</p></td>
+<td><p>BFLOAT16, BFLOAT8_B
+- TILE (interleaved)</p></td>
 </tr>
 </tbody>
 </table>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
+</div>
+<dl class="simple">
+<dt>Limitations:</dt>
+<dd>
 <ul class="simple">
 <li><p>This is an experimental/specialized feature optimized for specific transformer attention patterns.</p></li>
+<li><p>Inputs must be on the device.</p></li>
 <li><p>Input tensor must be sharded for optimal performance.</p></li>
-<li><p>Mask shape is constrained to [1, 1, H, W] format.</p></li>
-<li><p>Provides better performance than general scale_mask_softmax_in_place for these specific constraints.</p></li>
+<li><p>Attention mask must be interleaved and have shape [1, 1, H, W] (i.e. hw_dims_only)</p></li>
+<li><p>The mask is treated as a causal mask by design</p></li>
+<li><p>Scale parameter is typically provided for attention scaling</p></li>
 </ul>
-</div>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">

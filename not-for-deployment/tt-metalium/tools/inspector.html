@@ -20,10 +20,11 @@
         <script src="../_static/doctools.js?v=888ff710"></script>
         <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../_static/posthog.js?v=aa5946f9"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Support" href="../resources/support.html" />
+    <link rel="next" title="tt-triage" href="triage.html" />
     <link rel="prev" title="Device Program Profiler" href="device_program_profiler.html" /> 
 </head>
 
@@ -69,8 +70,15 @@
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Inspector</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#enabling">Enabling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#extending">Extending</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#examples">Examples</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#using-in-tt-triage">Using in tt-triage</a></li>
 </ul>
 </li>
+<li class="toctree-l3"><a class="reference internal" href="#limitations">Limitations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="triage.html">tt-triage</a></li>
 </ul>
 </li>
 </ul>
@@ -121,13 +129,95 @@ and query Metal host runtime data.</p>
 </h2>
 <p>Configure the Inspector by setting the following environment variables:</p>
 <div class="highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_INSPECTOR</span><span class="o">=</span><span class="mi">1</span>                              <span class="c1"># optional: enable/disable the Inspector. Default is `1` (enabled).</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_LOG_PATH</span><span class="o">=</span><span class="n">logging_path</span>          <span class="c1"># optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT</span><span class="o">=</span><span class="mi">1</span>  <span class="c1"># optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `0` (disabled).</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS</span><span class="o">=</span><span class="mi">0</span>     <span class="c1"># optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).</span>
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_INSPECTOR</span><span class="o">=</span><span class="mi">1</span>                                  <span class="c1"># optional: enable/disable the Inspector. Default is `1` (enabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_LOG_PATH</span><span class="o">=</span><span class="n">logging_path</span>              <span class="c1"># optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT</span><span class="o">=</span><span class="mi">1</span>      <span class="c1"># optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `0` (disabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS</span><span class="o">=</span><span class="mi">0</span>         <span class="c1"># optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS</span><span class="o">=</span><span class="n">localhost</span><span class="p">:</span><span class="mi">50051</span> <span class="c1"># optional: set the address of the Inspector RPC server. Default is `localhost:50051`.</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC</span><span class="o">=</span><span class="mi">1</span>                              <span class="c1"># optional: enable/disable the Inspector RPC server. Default is `1` (enabled).</span>
 </pre></div>
 </div>
-<p>Enabling the Inspector will override <cite>TT_METAL_RISCV_DEBUG_INFO</cite> and debugging info will be generated for riscv elfs.</p>
+<p>Enabling the Inspector will override <cite>TT_METAL_RISCV_DEBUG_INFO</cite> and debugging info will be generated for riscv elfs.
+You can also use unix sockets for the RPC server by setting <cite>TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS</cite> to a unix socket path,
+e.g. <cite>unix:/tmp/inspector_socket</cite>.</p>
+</section>
+<section id="extending">
+<h2>Extending<a class="headerlink" href="#extending" title="Permalink to this heading"></a>
+</h2>
+<p>To add new RPC functionality, review the <code class="docutils literal notranslate"><span class="pre">Inspector</span></code> interface in the <code class="docutils literal notranslate"><span class="pre">tt_metal/impl/debug/inspector/rpc.capnp</span></code> file.
+Add your new method to this interface.
+This will generate a corresponding callback that you can attach by calling <code class="docutils literal notranslate"><span class="pre">Inspector::get_rpc_server().setYourNewMethodCallback(...)</span></code>.
+Next, implement your callback to handle the request and send a response to the client.</p>
+<section id="examples">
+<h3>Examples<a class="headerlink" href="#examples" title="Permalink to this heading"></a>
+</h3>
+<p>Example changes in <code class="docutils literal notranslate"><span class="pre">tt_metal/impl/debug/inspector/rpc.capnp</span></code>:</p>
+<div class="highlight-capnp notranslate">
+<div class="highlight"><pre><span></span><span class="k">interface</span><span class="w"> </span><span class="n">Inspector</span><span class="w"> </span>{
+<span class="w">    </span><span class="n">getHelloWorld</span><span class="w"> </span><span class="nd">@0</span><span class="w"> </span>()<span class="w"> </span>-&gt;<span class="w"> </span>(<span class="n">message</span><span class="w"> </span><span class="nc">:Text</span>);
+
+<span class="w">    </span><span class="n">sumTwoNumbers</span><span class="w"> </span><span class="nd">@1</span><span class="w"> </span>(<span class="n">a</span><span class="w"> </span><span class="nc">:Int32</span>,<span class="w"> </span><span class="n">b</span><span class="w"> </span><span class="nc">:Int32</span>)<span class="w"> </span>-&gt;<span class="w"> </span>(<span class="n">result</span><span class="w"> </span><span class="nc">:Int32</span>);
+
+<span class="w">    </span><span class="n">...</span><span class="w"> </span><span class="n">other</span><span class="w"> </span><span class="n">methods</span><span class="w"> </span><span class="n">...</span>
+}
+</pre></div>
+</div>
+<p>Example changes in your Metal host runtime code:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"tt_metal/impl/debug/inspector.hpp"</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"impl/debug/inspector/rpc_server_generated.hpp"</span>
+
+<span class="c1">// In your initialization code</span>
+<span class="n">Inspector</span><span class="o">::</span><span class="n">get_rpc_server</span><span class="p">().</span><span class="n">setGetHelloWorldCallback</span><span class="p">(</span>
+<span class="w">    </span><span class="p">[](</span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">result</span><span class="p">.</span><span class="n">setMessage</span><span class="p">(</span><span class="s">"Hello, World!"</span><span class="p">);</span>
+<span class="w">    </span><span class="p">});</span>
+<span class="n">Inspector</span><span class="o">::</span><span class="n">get_rpc_server</span><span class="p">().</span><span class="n">setSumTwoNumbersCallback</span><span class="p">(</span>
+<span class="w">    </span><span class="p">[](</span><span class="k">auto</span><span class="w"> </span><span class="n">params</span><span class="p">,</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">result</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">result</span><span class="p">.</span><span class="n">setResult</span><span class="p">(</span><span class="n">params</span><span class="p">.</span><span class="n">getA</span><span class="p">()</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">params</span><span class="p">.</span><span class="n">getB</span><span class="p">());</span>
+<span class="w">    </span><span class="p">});</span>
+</pre></div>
+</div>
+</section>
+<section id="using-in-tt-triage">
+<h3>Using in tt-triage<a class="headerlink" href="#using-in-tt-triage" title="Permalink to this heading"></a>
+</h3>
+<p>After adding your new RPC method, you can use it in the <code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> tool to fetch data from the Metal host runtime.
+The tool automatically generates code to call your new RPC method.
+In your script, add a dependency to the inspector data script:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">inspector_data</span><span class="w"> </span><span class="kn">import</span> <span class="n">run</span> <span class="k">as</span> <span class="n">get_inspector_data</span><span class="p">,</span> <span class="n">InspectorData</span>
+
+<span class="n">script_config</span> <span class="o">=</span> <span class="n">ScriptConfig</span><span class="p">(</span>
+   <span class="n">depends</span><span class="o">=</span><span class="p">[</span><span class="s2">"inspector_data"</span><span class="p">],</span>
+<span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">Context</span><span class="p">):</span>
+    <span class="n">inspector_data</span> <span class="o">=</span> <span class="n">get_inspector_data</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">context</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>You can then call your new RPC method:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">hello_world</span> <span class="o">=</span> <span class="n">inspector_data</span><span class="o">.</span><span class="n">getHelloWorld</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">hello_world</span><span class="o">.</span><span class="n">message</span><span class="p">)</span>
+
+<span class="n">sum_result</span> <span class="o">=</span> <span class="n">inspector_data</span><span class="o">.</span><span class="n">sumTwoNumbers</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sum of 3 and 5 is </span><span class="si">{</span><span class="n">sum_result</span><span class="o">.</span><span class="n">result</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="limitations">
+<h2>Limitations<a class="headerlink" href="#limitations" title="Permalink to this heading"></a>
+</h2>
+<p>Inspector data is designed to be available even after the Metal host runtime exits.
+To achieve this, data is serialized to disk in the <code class="docutils literal notranslate"><span class="pre">generated/inspector</span></code> directory.
+Methods of the <code class="docutils literal notranslate"><span class="pre">Inspector</span></code> interface that do not require arguments are automatically serialized during Metal runtime exit.
+If you add a method that requires arguments, you must implement serialization and deserialization for that data yourself.
+Serialization should be implemented in the Metal host runtime code, and deserialization in the <code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> tool.</p>
+<p>It is acceptable to add methods that require arguments and query Metal host runtime state during execution, and use this data in
+<code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> scripts to provide insights into the system’s state during execution.
+If you run a <code class="docutils literal notranslate"><span class="pre">tt-triage</span></code> script that requires data which is not serialized, you will receive an error indicating that script execution is blocked due to a dependency failure.</p>
 </section>
 </section>
 
@@ -137,7 +227,7 @@ and query Metal host runtime data.</p>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="device_program_profiler.html" class="btn btn-neutral float-left" title="Device Program Profiler" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="../resources/support.html" class="btn btn-neutral float-right" title="Support" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="triage.html" class="btn btn-neutral float-right" title="tt-triage" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

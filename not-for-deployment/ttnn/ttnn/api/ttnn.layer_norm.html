@@ -22,6 +22,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -146,24 +147,26 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">layer_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.layer_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.layer_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.layer_norm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<dl>
-<dt>Compute layer norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</dt>
-<dd>
-<p>See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer Normalization</a> for more details.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.layer_norm(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">epsilon:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">1e-12,</span> <span class="pre">weight:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">bias:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">residual_input_tensor:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">program_config:</span> <span class="pre">Optional[ttnn.ProgramConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
+<blockquote>
+<div>
+<p>Compute layer norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
+See <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer Normalization</a> for more details.</p>
 <div class="math notranslate nohighlight">
 \[\text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta\]</div>
 <dl class="simple">
 <dt>Where:</dt>
 <dd>
 <ul class="simple">
-<li><p><span class="math notranslate nohighlight">\(\mu\)</span> and <span class="math notranslate nohighlight">\(\sigma^2\)</span> are the mean and variance of the input tensor, respectively</p></li>
+<li><p><span class="math notranslate nohighlight">\(\mu\)</span> is the mean of the input tensor. This is computed over the last dimension of the input tensor (W).</p></li>
+<li><p><span class="math notranslate nohighlight">\(\sigma^2\)</span> is the variance of the input tensor. This is computed over the last dimension of the input tensor (W) and is biased.</p></li>
 <li><p><span class="math notranslate nohighlight">\(\gamma\)</span> and <span class="math notranslate nohighlight">\(\beta\)</span> are the learnable scale and shift parameters, respectively</p></li>
 <li><p><span class="math notranslate nohighlight">\(\epsilon\)</span> is a small constant</p></li>
 </ul>
 </dd>
 </dl>
-</dd>
-</dl>
+</div>
+</blockquote>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -181,8 +184,12 @@
 <li><p><strong>residual_input_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>program_config</strong> (<em>ttnn.ProgramConfig</em><em>, </em><em>optional</em>) – Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em>) – </p></li>
-<li><p><strong>Returns</strong> – ttnn.Tensor: the output tensor.</p></li>
 </ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -268,24 +275,30 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, BFLOAT8_B (typically matches input; PRE_ALL_GATHER produces BF16)</p></td>
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
 <td><p>TILE</p></td>
 </tr>
 </tbody>
 </table>
-<p>Rank: input rank must be &gt;= 1. See Limitations for additional sharding/distributed constraints.</p>
+<p>Output dtype typically matches input; PRE_ALL_GATHER produces BF16</p>
 </div>
 <dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded (L1): Block sharded</p></li>
+</ul>
+</dd>
 <dt>Limitations:</dt>
 <dd>
 <ul class="simple">
-<li><p>All input tensors must be on-device.</p></li>
+<li><p>All input tensors must be on-device and have a rank &gt;= 1.</p></li>
 <li><p>Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.</p></li>
-<li><p>If <cite>residual_input_tensor</cite> is provided, it must match the input’s padded shape.</p></li>
-<li><p><cite>weight</cite>/<cite>bias</cite> tensors:
-- If TILE: last padded dim must match input’s last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
-- If ROW_MAJOR: last padded dim must be TILE_WIDTH and the stick count must align with the input width.</p></li>
 <li><p>If the input is sharded, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">residual_input_tensor</span></code> must have identical shard spec and memory config.</p></li>
+<li><p>If <cite>residual_input_tensor</cite> is provided, it must match the input’s padded shape.</p></li>
+<li><p>If TILE: <cite>weight</cite> and <cite>bias</cite> padded dim must match input’s last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).</p></li>
+<li><p>If ROW_MAJOR: <cite>weight</cite> and <cite>bias</cite> last padded dim must be TILE_WIDTH and the stick count must align with the input width.</p></li>
 </ul>
 </dd>
 </dl>

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smoothstep using SFPI &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/examples/custom_sfpi_smoothstep.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Advanced Topics" href="../advanced_topics/index.html" />
+    <link rel="prev" title="Vector addition using SFPI" href="custom_sfpi_add.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Programming Examples</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="dram_loopback.html">DRAM Loopback</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_binary.html">Eltwise binary</a></li>
+<li class="toctree-l2"><a class="reference internal" href="eltwise_sfpu.html">Eltwise SFPU</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_add.html">Vector addition using SFPI</a></li>
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Smoothstep using SFPI</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#building-and-running">Building and Running</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#program-setup">Program setup</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#the-kernels">The Kernels</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#custom-sfpi-implementation-of-smoothstep">Custom SFPI Implementation of Smoothstep</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#runtime-arguments-and-execution">Runtime Arguments and Execution</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#conclusion">Conclusion</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Programming Examples</a></li>
+          <li class="breadcrumb-item"><a href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a></li>
+      <li class="breadcrumb-item active">Smoothstep using SFPI</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/tt_metal/examples/custom_sfpi_smoothstep.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="smoothstep-using-sfpi">
+<span id="custom-sfpi-smoothstep"></span><h1>Smoothstep using SFPI<a class="headerlink" href="#smoothstep-using-sfpi" title="Permalink to this heading"></a>
+</h1>
+<p>This document details the implementation of a custom SFPI kernel for the <code class="docutils literal notranslate"><span class="pre">smoothstep</span></code> function. It is intended for developers familiar with parallel programming concepts who are new to the Tenstorrent platform.</p>
+<p>This example builds upon the <a class="reference internal" href="custom_sfpi_add.html#custom-sfpi-add"><span class="std std-ref">Vector addition using SFPI</span></a> example, and introduces the following advanced SFPI concepts:</p>
+<ul class="simple">
+<li><p><strong>Parameter Passing:</strong> Passing scalar arguments to an SFPI kernel.</p></li>
+<li><p><strong>Vector Predicates:</strong> Performing element-wise conditional operations.</p></li>
+</ul>
+<p>The <code class="docutils literal notranslate"><span class="pre">smoothstep</span></code> function is a non-linear interpolation function commonly used in graphics (see <a class="reference external" href="https://www.khronos.org/registry/OpenGL-Refpages/gl4/html/smoothstep.xhtml">GLSL smoothstep documentation</a> for reference). It is defined as:</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}\operatorname{smoothstep}(e_0, e_1, x) =
+\begin{cases}
+0, &amp; x \leq e_0, \\
+1, &amp; x \geq e_1, \\
+\left( \dfrac{x - e_0}{e_1 - e_0} \right)^2 \bigl(3 - 2 \tfrac{x - e_0}{e_1 - e_0}\bigr),
+&amp; e_0 &lt; x &lt; e_1 .
+\end{cases}\end{split}\]</div>
+<p>Although <code class="docutils literal notranslate"><span class="pre">smoothstep</span></code> is conceptually simple, its implementation is complex enough to demonstrate several advanced features of SFPI, such as parameter passing and vector predicates.</p>
+<p>The full source code is available in the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/custom_sfpi_smoothstep</span></code> directory.</p>
+<section id="building-and-running">
+<h2>Building and Running<a class="headerlink" href="#building-and-running" title="Permalink to this heading"></a>
+</h2>
+<p>Build the example using the <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
+./build_metal.sh<span class="w"> </span>--build-programming-examples
+</pre></div>
+</div>
+<p>Run the example:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>./build/programming_examples/metal_example_custom_sfpi_smoothstep
+</pre></div>
+</div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Tenstorrent does not guarantee backward compatibility for user-implemented SFPI functions.</p>
+</div>
+</section>
+<section id="program-setup">
+<h2>Program setup<a class="headerlink" href="#program-setup" title="Permalink to this heading"></a>
+</h2>
+<p>The host-side setup for this custom SFPI example follows the standard pattern: mesh device initialization, DRAM buffer creation, circular buffer allocation for kernel communication, and kernel creation. Unlike binary operations that require two input buffers, smoothstep is a unary operation requiring only a single input buffer (<code class="docutils literal notranslate"><span class="pre">src0_dram_buffer</span></code>) plus the output buffer (<code class="docutils literal notranslate"><span class="pre">dst_dram_buffer</span></code>). Correspondingly, we need only one input circular buffer (<code class="docutils literal notranslate"><span class="pre">cb_in0</span></code>) and one output buffer (<code class="docutils literal notranslate"><span class="pre">cb_out0</span></code>).</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Create a 1x1 mesh on device 0 (same API scales to multi-device meshes)</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">device_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">mesh_device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshDevice</span><span class="o">::</span><span class="n">create_unit_mesh</span><span class="p">(</span><span class="n">device_id</span><span class="p">);</span>
+
+<span class="c1">// Submit work via the mesh command queue: uploads/downloads and program execution</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">MeshCommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">mesh_command_queue</span><span class="p">();</span>
+<span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateProgram</span><span class="p">();</span>
+
+<span class="c1">// A MeshWorkload is a collection of programs that will be executed on the mesh</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">MeshWorkload</span><span class="w"> </span><span class="n">workload</span><span class="p">;</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">MeshCoordinateRange</span><span class="w"> </span><span class="n">device_range</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshCoordinateRange</span><span class="p">(</span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">shape</span><span class="p">());</span>
+
+<span class="c1">// Configure mesh buffers with single-tile page size</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">DeviceLocalBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span><span class="p">};</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">ReplicatedBufferConfig</span><span class="w"> </span><span class="n">dram_buffer_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">};</span>
+
+<span class="c1">// DRAM buffers: single input + one output for unary operation</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">src0_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshBuffer</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">dram_buffer_config</span><span class="p">,</span><span class="w"> </span><span class="n">dram_config</span><span class="p">,</span><span class="w"> </span><span class="n">mesh_device</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshBuffer</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">dram_buffer_config</span><span class="p">,</span><span class="w"> </span><span class="n">dram_config</span><span class="p">,</span><span class="w"> </span><span class="n">mesh_device</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
+
+<span class="c1">// Circular buffers for kernel communication</span>
+<span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="cm">/* cb_in0 config */</span><span class="p">);</span>
+<span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="cm">/* cb_out0 config */</span><span class="p">);</span>
+
+<span class="c1">// Kernels: reader, writer, and custom SFPU compute</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">reader</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="s">"..../read_tiles.cpp"</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">DataMovementConfig</span><span class="p">{...});</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">writer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="s">"..../write_tile.cpp"</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">DataMovementConfig</span><span class="p">{...});</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">compute</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="s">"..../tiles_smoothstep.cpp"</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">ComputeConfig</span><span class="p">{});</span>
+</pre></div>
+</div>
+</section>
+<section id="the-kernels">
+<h2>The Kernels<a class="headerlink" href="#the-kernels" title="Permalink to this heading"></a>
+</h2>
+<section id="data-movement-kernels">
+<h3>Data Movement Kernels<a class="headerlink" href="#data-movement-kernels" title="Permalink to this heading"></a>
+</h3>
+<p>The reader kernel reads tiles from a single source DRAM buffer and pushes them into the input circular buffer. Since smoothstep is a unary operation, we only need to read from one source buffer.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/dataflow/read_tiles.cpp</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">in0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_in0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_in0_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>The writer kernel is straightforward: it reads result tiles from the output circular buffer and writes them to the destination DRAM buffer.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/dataflow/write_tile.cpp</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">c_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">...</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_out0_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_read_ptr</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_write_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">out0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_write_barrier</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="sfpi-compute-kernel">
+<h3>SFPI Compute Kernel<a class="headerlink" href="#sfpi-compute-kernel" title="Permalink to this heading"></a>
+</h3>
+<p>The compute kernel is where the custom SFPI logic resides. It waits for tiles from the input CB, performs the smoothstep operation using the SFPI, and pushes the result to the output CB.</p>
+<p>The overall flow follows the standard pattern for unary compute kernels:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp</span>
+<span class="k">namespace</span><span class="w"> </span><span class="nn">NAMESPACE</span><span class="w"> </span><span class="p">{</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">MAIN</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">n_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_in0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">cb_out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_16</span><span class="p">;</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0.0f</span><span class="p">;</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// pre-calculate inverse as it is used multiple times and slow (the Baby RISC-V cores)</span>
+<span class="w">    </span><span class="c1">// uses software floating-point. Constexpr making this evaulation compile-time</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0f</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="n">edge1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">edge0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="n">init_sfpu</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">n_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">tile_regs_acquire</span><span class="p">();</span>
+<span class="w">        </span><span class="n">copy_tile</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span><span class="w"> </span><span class="c1">// input x</span>
+<span class="w">        </span><span class="n">my_smoothstep_tiles</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">);</span><span class="w">  </span><span class="c1">// &lt;-- Custom SFPI smoothstep</span>
+<span class="w">        </span><span class="n">tile_regs_commit</span><span class="p">();</span>
+<span class="w">        </span><span class="n">tile_regs_wait</span><span class="p">();</span>
+<span class="w">        </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">pack_tile</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">cb_out0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_out0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="w">        </span><span class="n">tile_regs_release</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="custom-sfpi-implementation-of-smoothstep">
+<h2>Custom SFPI Implementation of Smoothstep<a class="headerlink" href="#custom-sfpi-implementation-of-smoothstep" title="Permalink to this heading"></a>
+</h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">my_smoothstep_tiles</span></code> function uses the layered abstraction pattern shown in previous examples. This section focuses on the new concepts introduced in this kernel.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/kernels/compute/tiles_smoothstep.cpp</span>
+
+<span class="cp">#ifdef TRISC_MATH</span>
+
+<span class="c1">// Low-level function operating on a tile face</span>
+<span class="kt">void</span><span class="w"> </span><span class="nf">my_smoothstep_tile_face</span><span class="p">(</span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">size_t</span><span class="w"> </span><span class="n">vectors_per_face</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">vectors_per_face</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">vFloat</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_reg</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+<span class="w">        </span><span class="n">vFloat</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">edge0</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">;</span>
+<span class="w">        </span><span class="n">v_if</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst0</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="n">v_elseif</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst1</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="w">        </span><span class="n">v_endif</span><span class="p">;</span>
+<span class="w">        </span><span class="n">vFloat</span><span class="w"> </span><span class="n">result</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="mf">3.0f</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mf">2.0f</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">t</span><span class="p">);</span>
+<span class="w">        </span><span class="n">dst_reg</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="p">}</span>
+<span class="cp">#endif </span><span class="c1">// TRISC_MATH</span>
+
+<span class="c1">// High-level API function</span>
+<span class="c1">// Accepts `edge0`, `edge1` and `inv_delta` as parameters</span>
+<span class="kr">inline</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">my_smoothstep_tile</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">MATH</span><span class="p">(</span><span class="n">_llk_math_eltwise_unary_sfpu_params_</span><span class="o">&lt;</span><span class="nb">false</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">        </span><span class="n">smoothstep_tile_face</span><span class="p">,</span>
+<span class="w">        </span><span class="n">idx_dst0</span><span class="p">,</span>
+<span class="w">        </span><span class="n">VectorMode</span><span class="o">::</span><span class="n">RC</span><span class="p">,</span><span class="w"> </span><span class="c1">// Apply on all 4 faces of the tile</span>
+<span class="w">        </span><span class="n">edge0</span><span class="p">,</span>
+<span class="w">        </span><span class="n">edge1</span><span class="p">,</span>
+<span class="w">        </span><span class="n">inv_delta</span><span class="p">));</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<section id="parameter-passing">
+<h3>Parameter Passing<a class="headerlink" href="#parameter-passing" title="Permalink to this heading"></a>
+</h3>
+<p>The <cite>smoothstep</cite> function needs two scalar parameters: <code class="docutils literal notranslate"><span class="pre">edge0</span></code> and <code class="docutils literal notranslate"><span class="pre">edge1</span></code>. These are passed to the SFPI kernel using the <code class="docutils literal notranslate"><span class="pre">_llk_math_eltwise_unary_sfpu_params_</span></code> helper function.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// Passes edge0 and edge1 as arguments to the SFPI kernel</span>
+<span class="n">my_smoothstep_tile</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">idx_dst0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">);</span>
+<span class="c1">// ↓</span>
+<span class="c1">// Use the parameters for all elements in the tile face</span>
+<span class="n">my_smoothstep_tile_face</span><span class="p">(</span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">inv_delta</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The helper function is a template that takes the low-level face function as its first argument, followed by the destination register index, vector mode, and any scalar parameters required by the face function. This approach makes it easy to pass constants or runtime values into the SFPI kernel.</p>
+</section>
+<section id="vector-predicates">
+<h3>Vector Predicates<a class="headerlink" href="#vector-predicates" title="Permalink to this heading"></a>
+</h3>
+<p>The clamping of the intermediate value <code class="docutils literal notranslate"><span class="pre">t</span></code> to the [0, 1] range is implemented using vector predicates.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">v_if</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst0</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">v_elseif</span><span class="p">(</span><span class="n">t</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst1</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">sfpi</span><span class="o">::</span><span class="n">vConst1</span><span class="p">;</span><span class="w"> </span><span class="p">}</span>
+<span class="n">v_endif</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">v_if</span></code> and <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code> instructions perform element-wise conditional assignments on the <code class="docutils literal notranslate"><span class="pre">vFloat</span></code> vector <code class="docutils literal notranslate"><span class="pre">t</span></code>. Each lane of the SIMD vector is evaluated independently. A <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> is required to terminate the conditional block.</p>
+<p>The SFPI constants <code class="docutils literal notranslate"><span class="pre">sfpi::vConst0</span></code> and <code class="docutils literal notranslate"><span class="pre">sfpi::vConst1</span></code> are vectors with all 32 lanes set to 0.0f and 1.0f, respectively. These constants are hardware-defined, readily available for SFPI programs, and do not require manual initialization. Using these pre-defined constants is more efficient than using literal values because the SFPU operates on vectors. Literal values would require broadcasting to a vector, which adds instructions and overhead.</p>
+<p>This is analogous to conditional execution in other parallel programming models, where a mask is used to control which processing elements are active.</p>
+</section>
+</section>
+<section id="runtime-arguments-and-execution">
+<h2>Runtime Arguments and Execution<a class="headerlink" href="#runtime-arguments-and-execution" title="Permalink to this heading"></a>
+</h2>
+<p>Back on the host, we set the runtime arguments for the kernels. Since this is a unary operation, the reader and writer kernels need only a single DRAM buffer address each, and all three kernels need to know the number of tiles to process.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp</span>
+<span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">reader</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">src0_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">n_tiles</span>
+<span class="p">});</span>
+
+<span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">writer</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">dst_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">n_tiles</span>
+<span class="p">});</span>
+
+<span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">compute</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">n_tiles</span>
+<span class="p">});</span>
+</pre></div>
+</div>
+<p>Finally, we add the program to the mesh workload and enqueue it for execution, then read back the results from the destination DRAM buffer to verify correctness against the expected smoothstep function output.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp</span>
+<span class="c1">// Add the program to the workload for the mesh</span>
+<span class="n">workload</span><span class="p">.</span><span class="n">add_program</span><span class="p">(</span><span class="n">device_range</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">program</span><span class="p">));</span>
+
+<span class="c1">// Enqueue the workload for execution on the mesh (non-blocking) and wait for completion</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueMeshWorkload</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking=*/</span><span class="nb">false</span><span class="p">);</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueReadMeshBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="n">dst_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking*/</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+
+<span class="c1">// Validation against golden smoothstep output</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// CPU version of the same smoothstep function for validation</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">smoothstep</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="kt">float</span><span class="w"> </span><span class="n">edge0</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">edge1</span><span class="p">,</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">x</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">(</span><span class="n">x</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">edge0</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="p">(</span><span class="n">edge1</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">edge0</span><span class="p">);</span>
+<span class="w">        </span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">clamp</span><span class="p">(</span><span class="n">x</span><span class="p">,</span><span class="w"> </span><span class="mf">0.0f</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">x</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">(</span><span class="mi">3</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">x</span><span class="p">);</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">expected</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">smoothstep</span><span class="p">(</span><span class="mf">0.0f</span><span class="p">,</span><span class="w"> </span><span class="mf">1.0f</span><span class="p">,</span><span class="w"> </span><span class="n">a_data</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">to_float</span><span class="p">());</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">actual</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">result_vec</span><span class="p">[</span><span class="n">i</span><span class="p">].</span><span class="n">to_float</span><span class="p">();</span>
+<span class="w">    </span><span class="c1">// Check for match within tolerance...</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+<section id="conclusion">
+<h2>Conclusion<a class="headerlink" href="#conclusion" title="Permalink to this heading"></a>
+</h2>
+<p>This example demonstrates the implementation of a custom SFPI kernel with parameter passing and conditional logic. Key takeaways are:</p>
+<ul class="simple">
+<li><p><strong>Parameter Passing:</strong> The <code class="docutils literal notranslate"><span class="pre">_llk_math_eltwise_*_sfpu_params_</span></code> family of functions is used to pass scalar arguments to a custom SFPI kernel.</p></li>
+<li><p><strong>Vector Predicates:</strong> The <code class="docutils literal notranslate"><span class="pre">v_if</span></code>, <code class="docutils literal notranslate"><span class="pre">v_elseif</span></code>, and <code class="docutils literal notranslate"><span class="pre">v_endif</span></code> instructions provide a mechanism for element-wise conditional logic within an SFPI kernel.</p></li>
+<li><p><strong>Unary Operations:</strong> Unary SFPI kernels can be implemented efficiently by performing the computation in-place in the destination registers.</p></li>
+</ul>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="custom_sfpi_add.html" class="btn btn-neutral float-left" title="Vector addition using SFPI" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../advanced_topics/index.html" class="btn btn-neutral float-right" title="Advanced Topics" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

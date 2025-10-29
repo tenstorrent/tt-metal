@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -144,6 +145,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">scale_mask_softmax_in_place</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.scale_mask_softmax_in_place',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.scale_mask_softmax_in_place_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.scale_mask_softmax_in_place" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.scale_mask_softmax_in_place(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">scale:</span> <span class="pre">Optional[float]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">mask:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">program_config:</span> <span class="pre">Optional[ttnn.SoftmaxProgramConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">is_causal_mask:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">numeric_stable:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
 <p>Computes a fused scale-mask-softmax operation along the last dimension in-place.</p>
 <p>This operation modifies the input tensor directly and performs the following sequence:
 1. Optionally scales the input: <code class="docutils literal notranslate"><span class="pre">input_tensor</span> <span class="pre">*=</span> <span class="pre">scale</span></code> (if scale is provided)
@@ -177,21 +179,23 @@ as it reuses the input tensor for output, avoiding additional memory allocation.
 <p><em>ttnn.Tensor</em> – The same tensor as input with the fused scale-mask-softmax operation applied in-place.</p>
 </dd>
 </dl>
-<p>Supported dtypes and layouts:</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>The tensors support the following data types and layouts:</p>
 <table class="docutils align-default" id="id2">
 <caption>
 <span class="caption-text">Input Tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
+<th class="head"><p>Dtypes
+- Layouts</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, BFLOAT8_B</p></td>
-<td><p>TILE</p></td>
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B
+- TILE</p></td>
 </tr>
 </tbody>
 </table>
@@ -201,28 +205,31 @@ as it reuses the input tensor for output, avoiding additional memory allocation.
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
-<th class="head"><p>Ranks</p></th>
+<th class="head"><p>Dtypes
+- Layouts
+- Ranks</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B</p></td>
-<td><p>TILE, ROW_MAJOR</p></td>
-<td><p>2, 3, 4</p></td>
+<td><p>BFLOAT16, BFLOAT8_B
+- TILE, ROW_MAJOR
+- 2, 3, 4</p></td>
 </tr>
 </tbody>
 </table>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
+</div>
+<dl class="simple">
+<dt>Limitations:</dt>
+<dd>
 <ul class="simple">
 <li><p>All tensors must be on-device.</p></li>
 <li><p>For unsharded ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor.</p></li>
 <li><p>For sharded inputs: mask must be TILE layout with identical padded shape to input.</p></li>
 <li><p>Internal block size constraints may restrict in-place operation for very large width tensors.</p></li>
 </ul>
-</div>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">

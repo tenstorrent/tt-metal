@@ -19,6 +19,7 @@
         <script src="_static/doctools.js?v=888ff710"></script>
         <script src="_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="_static/posthog.js?v=aa5946f9"></script>
     <script src="_static/js/theme.js"></script>
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" /> 
@@ -268,6 +269,8 @@
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.config_tensors_in_dram">config_tensors_in_dram (ttnn.Conv2dConfig property)</a>
+</li>
       <li><a href="ttnn/api/ttnn.conj.html#ttnn.conj">conj (in module ttnn)</a>
 </li>
       <li><a href="ttnn/api/ttnn.conj_bw.html#ttnn.conj_bw">conj_bw (in module ttnn)</a>
@@ -320,15 +323,19 @@
 </li>
       <li><a href="ttnn/api/ttnn.digamma_bw.html#ttnn.digamma_bw">digamma_bw (in module ttnn)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="ttnn/api/ttnn.div.html#ttnn.div">div (in module ttnn)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="ttnn/api/ttnn.div_bw.html#ttnn.div_bw">div_bw (in module ttnn)</a>
 </li>
       <li><a href="ttnn/api/ttnn.div_no_nan.html#ttnn.div_no_nan">div_no_nan (in module ttnn)</a>
 </li>
       <li><a href="ttnn/api/ttnn.div_no_nan_bw.html#ttnn.div_no_nan_bw">div_no_nan_bw (in module ttnn)</a>
+</li>
+      <li><a href="ttnn/api/ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceHeight">DRAMSliceHeight (ttnn.Conv2dSliceConfig.SliceTypeEnum attribute)</a>
+</li>
+      <li><a href="ttnn/api/ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceWidth">DRAMSliceWidth (ttnn.Conv2dSliceConfig.SliceTypeEnum attribute)</a>
 </li>
       <li><a href="ttnn/api/ttnn.experimental.dropout.html#ttnn.experimental.dropout">dropout (in module ttnn.experimental)</a>
 </li>
@@ -357,8 +364,6 @@
       <li><a href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_activation_reuse">enable_activation_reuse (ttnn.Conv2dConfig property)</a>
 </li>
       <li><a href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_kernel_stride_folding">enable_kernel_stride_folding (ttnn.Conv2dConfig property)</a>
-</li>
-      <li><a href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_split_reader">enable_split_reader (ttnn.Conv2dConfig property)</a>
 </li>
       <li><a href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.enable_weights_double_buffer">enable_weights_double_buffer (ttnn.Conv2dConfig property)</a>
 </li>
@@ -421,6 +426,8 @@
       <li><a href="ttnn/api/ttnn.fmod.html#ttnn.fmod">fmod (in module ttnn)</a>
 </li>
       <li><a href="ttnn/api/ttnn.fmod_bw.html#ttnn.fmod_bw">fmod_bw (in module ttnn)</a>
+</li>
+      <li><a href="ttnn/api/ttnn.Conv2dConfig.html#ttnn.Conv2dConfig.force_split_reader">force_split_reader (ttnn.Conv2dConfig property)</a>
 </li>
       <li><a href="ttnn/api/ttnn.format_input_tensor.html#ttnn.format_input_tensor">format_input_tensor() (in module ttnn)</a>
 </li>
@@ -598,6 +605,8 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="ttnn/api/ttnn.l1_loss.html#ttnn.l1_loss">l1_loss (in module ttnn)</a>
 </li>
+      <li><a href="ttnn/api/ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig.SliceTypeEnum.L1Full">L1Full (ttnn.Conv2dSliceConfig.SliceTypeEnum attribute)</a>
+</li>
       <li><a href="ttnn/api/ttnn.layer_norm.html#ttnn.layer_norm">layer_norm (in module ttnn)</a>
 </li>
       <li><a href="ttnn/api/ttnn.lcm.html#ttnn.lcm">lcm (in module ttnn)</a>
@@ -638,10 +647,10 @@
 </li>
       <li><a href="ttnn/api/ttnn.log1p_bw.html#ttnn.log1p_bw">log1p_bw (in module ttnn)</a>
 </li>
-      <li><a href="ttnn/api/ttnn.log2.html#ttnn.log2">log2 (in module ttnn)</a>
-</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="ttnn/api/ttnn.log2.html#ttnn.log2">log2 (in module ttnn)</a>
+</li>
       <li><a href="ttnn/api/ttnn.log2_bw.html#ttnn.log2_bw">log2_bw (in module ttnn)</a>
 </li>
       <li><a href="ttnn/api/ttnn.log_bw.html#ttnn.log_bw">log_bw (in module ttnn)</a>
@@ -898,6 +907,8 @@
 </li>
       <li><a href="ttnn/api/ttnn.rad2deg_bw.html#ttnn.rad2deg_bw">rad2deg_bw (in module ttnn)</a>
 </li>
+      <li><a href="ttnn/api/ttnn.rand.html#ttnn.rand">rand (in module ttnn)</a>
+</li>
       <li><a href="ttnn/tensor.html#ttnn.Shape.rank">rank (ttnn.Shape property)</a>
 </li>
       <li><a href="ttnn/api/ttnn.rdiv.html#ttnn.rdiv">rdiv (in module ttnn)</a>
@@ -1028,14 +1039,10 @@
 </li>
       <li><a href="ttnn/api/ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig.slice_type">slice_type (ttnn.Conv2dSliceConfig property)</a>
 </li>
-      <li><a href="ttnn/api/ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig.SliceTypeEnum.SliceHeight">SliceHeight (ttnn.Conv2dSliceConfig.SliceTypeEnum attribute)</a>
-</li>
-      <li><a href="ttnn/api/ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig.SliceTypeEnum.SliceWidth">SliceWidth (ttnn.Conv2dSliceConfig.SliceTypeEnum attribute)</a>
+      <li><a href="ttnn/api/ttnn.softmax.html#ttnn.softmax">softmax (in module ttnn)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="ttnn/api/ttnn.softmax.html#ttnn.softmax">softmax (in module ttnn)</a>
-</li>
       <li><a href="ttnn/api/ttnn.softmax_in_place.html#ttnn.softmax_in_place">softmax_in_place (in module ttnn)</a>
 </li>
       <li><a href="ttnn/api/ttnn.SoftmaxDefaultProgramConfig.html#ttnn.SoftmaxDefaultProgramConfig">SoftmaxDefaultProgramConfig (class in ttnn)</a>

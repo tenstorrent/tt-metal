@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -146,31 +147,37 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">var</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.var',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.reduction.var_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_create_golden_function.&lt;locals&gt;.golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.var" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>var</p>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.var(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">dim:</span> <span class="pre">Optional[int]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">keepdim:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.ComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">scalar:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">1.0,</span> <span class="pre">correction:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
 <p>Computes the var of the input tensor <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_a</span></code> along the specified dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.
 If no dimension is provided, var is computed over all dimensions yielding a single value.</p>
-<blockquote>
-<div>
-<dl>
-<dt>Args:</dt>
-<dd>
-<p>input_a (ttnn.Tensor): the input tensor.
-dim (number): dimension value to reduce over.
-keepdim (bool, optional): keep original dimension size. Defaults to <cite>False</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_a</strong> (<em>ttnn.Tensor</em>) – the input tensor. Must be on the device.</p></li>
+<li><p><strong>dim</strong> (<em>number</em>) – dimension value to reduce over.</p></li>
+<li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – keep original dimension size. Defaults to <cite>False</cite>.</p></li>
+</ul>
 </dd>
-<dt>Keyword Args:</dt>
-<dd>
-<p>memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to <cite>None</cite>.
-compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to <cite>None</cite>.
-scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to <cite>1.0</cite>.
-correction (bool, optional): Applies only to std - whether to apply Bessel’s correction (i.e. N-1). Defaults to <cite>True</cite>.</p>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.ComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>scalar</strong> (<em>float</em><em>, </em><em>optional</em>) – A scaling factor to be applied to the input tensor. Defaults to <cite>1.0</cite>.</p></li>
+<li><p><strong>correction</strong> (<em>bool</em><em>, </em><em>optional</em>) – Applies only to <a class="reference internal" href="ttnn.std.html#ttnn.std" title="ttnn.std"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.std()</span></code></a> - whether to apply Bessel’s correction (i.e. N-1). Defaults to <cite>True</cite>.</p></li>
+</ul>
 </dd>
-<dt>Returns:</dt>
-<dd>
-<p>ttnn.Tensor: the output tensor.</p>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
-<dt>Note:</dt>
-<dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
 <p>The input tensor supports the following data types and layouts:</p>
 <table class="docutils align-default" id="id2">
 <caption>
@@ -178,45 +185,53 @@ correction (bool, optional): Applies only to std - whether to apply Bessel’s c
 </caption>
 <thead>
 <tr class="row-odd">
-<th class="head"><p>dtype
-- layout</p></th>
+<th class="head"><p>dtype</p></th>
+<th class="head"><p>layout</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>FLOAT32
-- ROW_MAJOR, TILE</p></td>
+<td><p>FLOAT32</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>BFLOAT16
-- ROW_MAJOR, TILE</p></td>
+<td><p>BFLOAT16</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 <tr class="row-even">
-<td><p>BFLOAT8_B
-- ROW_MAJOR, TILE</p></td>
+<td><p>BFLOAT8_B</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 <tr class="row-odd">
-<td><p>INT32
-- ROW_MAJOR, TILE</p></td>
+<td><p>INT32</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 <tr class="row-even">
-<td><p>UINT32
-- ROW_MAJOR, TILE</p></td>
+<td><p>UINT32</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 </tbody>
 </table>
 <p>The output tensor will match the data type and layout of the input tensor.</p>
+</div>
+<dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded (L1): Width, Height, and ND sharding</p></li>
+<li><p>Output sharding/layout will mirror the input</p></li>
+</ul>
 </dd>
 </dl>
-<p>Example:</p>
-<blockquote>
-<div>
-<p>input_a = ttnn.rand(1, 2), dtype=torch.bfloat16, device=device)
-output = ttnn.var(input_a, dim, memory_config)</p>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">input_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">var</span><span class="p">(</span><span class="n">input_a</span><span class="p">,</span> <span class="n">dim</span><span class="p">,</span> <span class="n">memory_config</span><span class="p">)</span>
+</pre></div>
 </div>
-</blockquote>
 </div>
-</blockquote>
 </dd>
 </dl>
 

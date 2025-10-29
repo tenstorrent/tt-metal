@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -187,6 +188,16 @@ RELU, SILU, GELU, SIGMOID, TANH, etc.</p>
 </dl>
 
 <dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.config_tensors_in_dram">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">config_tensors_in_dram</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.config_tensors_in_dram" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Boolean that determines where config tensors should be stored. Setting it to true stores them in DRAM. False stores them in L1_SMALL.
+Config tensors are used by Conv2D, Pooling and other 2D ops to store how data should be loaded, instead of computing on device RISC-cores.</p>
+</dd>
+</dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.core_grid">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">core_grid</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.core_grid" title="Permalink to this definition"></a>
 </dt>
@@ -261,17 +272,6 @@ where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].</p></li>
 
 <hr class="docutils">
 <dl class="py property">
-<dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_split_reader">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_split_reader</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_split_reader" title="Permalink to this definition"></a>
-</dt>
-<dd>
-<p>This uses both the reader &amp; writer cores to carry out the activation reader operation.
-This is useful when the input tensor is large, and the activation reader is a bottleneck.
-This is only supported for Height Sharded Conv2D.</p>
-</dd>
-</dl>
-
-<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.enable_weights_double_buffer">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">enable_weights_double_buffer</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.enable_weights_double_buffer" title="Permalink to this definition"></a>
 </dt>
@@ -281,6 +281,20 @@ This improves performance, but increases the memory usage of the weights tensor.
 </dd>
 </dl>
 
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.force_split_reader">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">force_split_reader</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.force_split_reader" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>===================== EXPERIMENTAL FEATURE ======================</p>
+<p>This uses both the reader &amp; writer cores to carry out the activation reader operation.
+This is useful when the input tensor is large, and the activation reader is a bottleneck.
+This is only supported for Height Sharded Conv2D.
+Setting this overrides the split reader heuristic.</p>
+</dd>
+</dl>
+
+<hr class="docutils">
 <dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.full_inner_dim">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">full_inner_dim</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.full_inner_dim" title="Permalink to this definition"></a>

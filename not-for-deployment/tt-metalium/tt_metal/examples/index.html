@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -65,6 +66,7 @@
 <li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
@@ -186,6 +188,44 @@
 <li class="toctree-l3"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#new-compute-kernel-fused-bias-addition-and-activation-functions">New Compute Kernel: Fused Bias Addition and Activation Functions</a></li>
 <li class="toctree-l3"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#semaphores">Semaphores</a></li>
 <li class="toctree-l3"><a class="reference internal" href="matmul_multi_core_optimizations/data_mcast.html#kernel-runtime-arguments">Kernel Runtime Arguments</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1">
+<a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a><ul>
+<li class="toctree-l2">
+<a class="reference internal" href="custom_sfpi_add.html">Vector addition using SFPI</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_add.html#program-setup">Program setup</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="custom_sfpi_add.html#the-kernels">The Kernels</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="custom_sfpi_add.html#data-movement-kernels">Data Movement Kernels</a></li>
+<li class="toctree-l4"><a class="reference internal" href="custom_sfpi_add.html#sfpi-compute-kernel">SFPI Compute Kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_add.html#custom-sfpi-implementation">Custom SFPI Implementation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_add.html#runtime-arguments-and-execution">Runtime Arguments and Execution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_add.html#conclusion">Conclusion</a></li>
+</ul>
+</li>
+<li class="toctree-l2">
+<a class="reference internal" href="custom_sfpi_smoothstep.html">Smoothstep using SFPI</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_smoothstep.html#building-and-running">Building and Running</a></li>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_smoothstep.html#program-setup">Program setup</a></li>
+<li class="toctree-l3">
+<a class="reference internal" href="custom_sfpi_smoothstep.html#the-kernels">The Kernels</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="custom_sfpi_smoothstep.html#data-movement-kernels">Data Movement Kernels</a></li>
+<li class="toctree-l4"><a class="reference internal" href="custom_sfpi_smoothstep.html#sfpi-compute-kernel">SFPI Compute Kernel</a></li>
+</ul>
+</li>
+<li class="toctree-l3">
+<a class="reference internal" href="custom_sfpi_smoothstep.html#custom-sfpi-implementation-of-smoothstep">Custom SFPI Implementation of Smoothstep</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="custom_sfpi_smoothstep.html#parameter-passing">Parameter Passing</a></li>
+<li class="toctree-l4"><a class="reference internal" href="custom_sfpi_smoothstep.html#vector-predicates">Vector Predicates</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_smoothstep.html#runtime-arguments-and-execution">Runtime Arguments and Execution</a></li>
+<li class="toctree-l3"><a class="reference internal" href="custom_sfpi_smoothstep.html#conclusion">Conclusion</a></li>
 </ul>
 </li>
 </ul>

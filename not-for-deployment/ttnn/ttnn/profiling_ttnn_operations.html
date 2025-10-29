@@ -20,6 +20,7 @@
         <script src="../_static/doctools.js?v=888ff710"></script>
         <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../_static/posthog.js?v=aa5946f9"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -107,7 +108,7 @@
 <div class="highlight-sh notranslate">
 <div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
 build_metal.sh<span class="w"> </span>--enable-profiler
-./tt_metal/tools/profiler/profile_this.py<span class="w"> </span>-n<span class="w"> </span>resnet<span class="w"> </span>-c<span class="w"> </span><span class="s2">"pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"</span>
+./tools/tracy/profile_this.py<span class="w"> </span>-n<span class="w"> </span>resnet<span class="w"> </span>-c<span class="w"> </span><span class="s2">"pytest models/demos/resnet/tests/test_perf_resnet.py::test_perf_bare_metal[20-0.0185-25]"</span>
 </pre></div>
 </div>
 <p>After the commands finish, the location of the generated csv will be printed on console similar to the image below:</p>

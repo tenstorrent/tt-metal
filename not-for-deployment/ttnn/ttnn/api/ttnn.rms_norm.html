@@ -20,6 +20,9 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -144,12 +147,24 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">rms_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.rms_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.rms_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.rms_norm" title="Permalink to this definition"></a>
 </dt>
 <dd>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.rms_norm(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">epsilon:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">1e-12,</span> <span class="pre">weight:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">bias:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">residual_input_tensor:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">program_config:</span> <span class="pre">Optional[ttnn.ProgramConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
+<blockquote>
+<div>
+<p>Computes RMS norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
+See <a class="reference external" href="https://arxiv.org/pdf/1910.07467">Root Mean Square Layer Normalization</a> for more details.</p>
+<div class="math notranslate nohighlight">
+\[\text{RMS_norm}(x, \gamma, \beta, \epsilon) = \frac{x}{\sqrt{\epsilon+\frac{1}{N}\sum_{i=1}^{N}x^{2}}} \cdot \gamma + \beta\]</div>
 <dl class="simple">
-<dt>Computes RMS norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</dt>
+<dt>Where:</dt>
 <dd>
-<p>See <a class="reference external" href="https://arxiv.org/pdf/1910.07467">Root Mean Square Layer Normalization</a> for more details.</p>
+<ul class="simple">
+<li><p><span class="math notranslate nohighlight">\(\gamma\)</span> and <span class="math notranslate nohighlight">\(\beta\)</span> are optional scale and shift parameters</p></li>
+<li><p><span class="math notranslate nohighlight">\(\epsilon\)</span> is a small constant</p></li>
+</ul>
 </dd>
 </dl>
+</div>
+</blockquote>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -246,18 +261,24 @@
 </tr>
 </tbody>
 </table>
-<p>Rank: input rank must be &gt;= 1.</p>
 </div>
 <dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
 <dt>Limitations:</dt>
 <dd>
 <ul class="simple">
-<li><p>All input tensors must be on-device.</p></li>
+<li><p>All input tensors must be on-device and have a rank &gt;= 1.</p></li>
 <li><p>Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.</p></li>
-<li><p>If <cite>residual_input_tensor</cite> is provided, it must match the input’s padded shape.</p></li>
-<li><p><cite>weight</cite>/<cite>bias</cite> tensors:
-- If TILE: last padded dim must match input’s last padded dim.
-- If ROW_MAJOR: last padded dim must be TILE_WIDTH.</p></li>
+<li><p>If <cite>residual_input_tensor</cite> is provided, it must match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>’s padded shape.</p></li>
+<li><p>If the <cite>weight</cite>/<cite>bias</cite> tensors are TILE layout: last padded dim must match <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>’s last padded dim.</p></li>
+<li><p>If the <cite>weight</cite>/<cite>bias</cite> tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.</p></li>
+<li><p>If the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is sharded, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> must also be sharded. In that case, the
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> memory layout and buffer type must match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>’s memory configuration.</p></li>
 </ul>
 </dd>
 </dl>

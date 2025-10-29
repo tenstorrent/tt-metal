@@ -23,6 +23,7 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
@@ -63,19 +64,19 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">Basic Tensor Operations</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Running a Simple CNN Inference on CIFAR-10</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#Setup-and-Imports">Setup and Imports</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Load-CIFAR-10-Dataset">Load CIFAR-10 Dataset</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Open-the-Device">Open the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Load-the-CIFAR-10-Dataset">Load the CIFAR-10 Dataset</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#Load-or-Initialize-Weights">Load or Initialize Weights</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Define-Convolution-+-Pooling-Stage">Define Convolution + Pooling Stage</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Define-Convolution-and-Pooling-Stage">Define Convolution and Pooling Stage</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#Run-Inference-on-Test-Samples">Run Inference on Test Samples</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_visualizer.html">TT-NN Visualizer</a></li>
@@ -121,19 +122,19 @@
   <section id="Running-a-Simple-CNN-Inference-on-CIFAR-10">
 <h1>Running a Simple CNN Inference on CIFAR-10<a class="headerlink" href="#Running-a-Simple-CNN-Inference-on-CIFAR-10" title="Permalink to this heading"></a>
 </h1>
-<p>This tutorial demonstrates how to use <strong>TTNN</strong> to perform inference with a simple Convolutional Neural Network (CNN) on the CIFAR-10 dataset.</p>
+<p>This tutorial demonstrates how to use <strong>TT-NN</strong> to perform inference with a simple Convolutional Neural Network (CNN) on the CIFAR-10 dataset.</p>
 <p>We will:</p>
 <ul class="simple">
-<li><p>Load the CIFAR-10 dataset</p></li>
-<li><p>Define a simple CNN using TT-NN operations</p></li>
-<li><p>Run inference on sample images</p></li>
-<li><p>Observe the outputs and accuracy</p></li>
+<li><p>Load the CIFAR-10 dataset.</p></li>
+<li><p>Define a simple CNN using TT-NN operations.</p></li>
+<li><p>Run inference on sample images.</p></li>
+<li><p>Observe outputs and accuracy.</p></li>
 </ul>
 <section id="Setup-and-Imports">
 <h2>Setup and Imports<a class="headerlink" href="#Setup-and-Imports" title="Permalink to this heading"></a>
 </h2>
-<p>In this script, several libraries are imported to support image classification using a simple cnn on the CIFAR-10 dataset. The os module is used to check if pretrained weight files exist on disk. torch is used for loading model weights, torchvision and its transforms submodule are used to download the CIFAR-10 dataset and apply necessary preprocessing, such as converting images to tensors and normalizing pixel values. The ttnn library is the Tenstorrent neural network API, responsible for
-interfacing with Tenstorrent hardware, performing operations like convolution, pooling, activation, and linear layers, and managing data layout and type conversions between PyTorch and TT-NN formats. Finally, loguru is used for logging messages and debugging output, providing insights into model operations and predictions throughout the inference process.</p>
+<p>In this script, several libraries are imported to support image classification using a simple CNN on the CIFAR-10 dataset. The OS module checks if pretrained weight files exist on disk. Torch loads model weights, torchvision and its transforms submodule downloads the CIFAR-10 dataset and applies preprocessing, converting images to tensors and normalizing pixel values for example. The TT-NN library is Tenstorrent’s neural network API, responsible for interfacing with Tenstorrent hardware. TT-NN
+performs operations like convolution, pooling, activation, linear layers, data layout management, and type conversions between PyTorch and TT-NN formats. Finally, loguru logs messages and debugging output, providing insights into model operations and predictions throughout the inference process.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -150,10 +151,10 @@ interfacing with Tenstorrent hardware, performing operations like convolution, p
 </div>
 </div>
 </section>
-<section id="Open-Tenstorrent-device">
-<h2>Open Tenstorrent device<a class="headerlink" href="#Open-Tenstorrent-device" title="Permalink to this heading"></a>
+<section id="Open-the-Device">
+<h2>Open the Device<a class="headerlink" href="#Open-the-Device" title="Permalink to this heading"></a>
 </h2>
-<p>Create necessary device on which we will run our program, with custom L1 memory config. An extra parameter we use here, <code class="docutils literal notranslate"><span class="pre">l1_small_size</span></code>, sets aside a portion of the on-chip L1 memory for sliding-window operations, like convolutions, and other kernels that need quick, scratchpad-like memory. For simple CNNs, 8 kB will be enough, moving up to 32 kB or more for more complex models.</p>
+<p>Create the device to run the program with custom L1 memory config. The following parameter allocates on-chip L1 memory for sliding-window operations like convolutions, and other kernels that need quick, scratchpad-like memory: <code class="docutils literal notranslate"><span class="pre">l1_small_size</span></code>. 8 kB is enough for simple CNNS, complex models require up to 32 kB or more.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -166,10 +167,10 @@ interfacing with Tenstorrent hardware, performing operations like convolution, p
 </div>
 </div>
 </section>
-<section id="Load-CIFAR-10-Dataset">
-<h2>Load CIFAR-10 Dataset<a class="headerlink" href="#Load-CIFAR-10-Dataset" title="Permalink to this heading"></a>
+<section id="Load-the-CIFAR-10-Dataset">
+<h2>Load the CIFAR-10 Dataset<a class="headerlink" href="#Load-the-CIFAR-10-Dataset" title="Permalink to this heading"></a>
 </h2>
-<p>We will normalize the images and load the test set.</p>
+<p>Normalize images and load the test set.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -189,7 +190,7 @@ interfacing with Tenstorrent hardware, performing operations like convolution, p
 <section id="Load-or-Initialize-Weights">
 <h2>Load or Initialize Weights<a class="headerlink" href="#Load-or-Initialize-Weights" title="Permalink to this heading"></a>
 </h2>
-<p>Optimally we would load pretrained weights and use those for the model, but in case the weights file is not found, just default to random values which most likely will yield poor results. You can run the provided <code class="docutils literal notranslate"><span class="pre">train_and_export_cnn.py</span></code> script to generate the weights to a file named <code class="docutils literal notranslate"><span class="pre">simple_cnn_cifar10_weights.pt</span></code>.</p>
+<p>Optimally, pretrained weights are loaded and used for the model, but in case the weights file is not found, default to random values which will likely yield poor results. Run the provided <code class="docutils literal notranslate"><span class="pre">train_and_export_cnn.py</span></code> script to generate weights to a file named <code class="docutils literal notranslate"><span class="pre">simple_cnn_cifar10_weights.pt</span></code>.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -220,13 +221,13 @@ interfacing with Tenstorrent hardware, performing operations like convolution, p
 </div>
 </div>
 </section>
-<section id="Define-Convolution-+-Pooling-Stage">
-<h2>Define Convolution + Pooling Stage<a class="headerlink" href="#Define-Convolution-+-Pooling-Stage" title="Permalink to this heading"></a>
+<section id="Define-Convolution-and-Pooling-Stage">
+<h2>Define Convolution and Pooling Stage<a class="headerlink" href="#Define-Convolution-and-Pooling-Stage" title="Permalink to this heading"></a>
 </h2>
-<p>This function, conv_pool_stage, encapsulates a typical convolutional neural network stage where an input tensor undergoes a 2D convolution followed by an activation and a max pooling operation, all using Tenstorrent’s TT-NN API. It accepts an input tensor in NHWC layout, along with metadata such as its shape, the number of output channels, references to specific weight and bias tensors, the activation type (e.g., ReLU), and the target hardware device. First, it extracts the appropriate weight
-and bias tensors from the given dictionary and reshapes the bias to a broadcastable shape. It defines convolution parameters—kernel size, stride, and padding—and sets up a TT-NN-specific configuration that includes the activation function. If enabled, it logs details like tensor shapes and convolution parameters for debugging the first sample. The convolution is then performed using ttnn.conv2d, followed by a max pooling operation configured with standard 2×2 kernel and stride values. Again, if
-logging is enabled, pooling parameters and resulting tensor shapes are recorded. Finally, the resulting TT tensor after max pooling is returned to be used in the next stage of the network. This function modularizes a common pattern in CNNs and provides flexibility for different layers and debug logging.</p>
-<p>Amongst other inputs, the convolution function takes a configuration parameter described in more detail here: <a class="reference internal" href="../../api/ttnn.Conv2dConfig.html"><span class="doc">ttnn.Conv2dConfig</span></a>.</p>
+<p>The function, <code class="docutils literal notranslate"><span class="pre">conv_pool_stage</span></code>, encapsulates a typical convolutional neural network stage where an input tensor undergoes a 2D convolution followed by an activation and a max pooling operation, all using Tenstorrent’s TT-NN API. It accepts an input tensor in NHWC layout, along with metadata like shape, number of output channels, references to specific weight and bias tensors, activation type (e.g., ReLU), and the target hardware device. First, it extracts the appropriate weight and bias
+tensors from the given dictionary and reshapes the bias to a broadcastable shape. It defines convolution parameters—kernel sizegur, stride, and padding. It sets up a TT-NN specific configuration including the activation function. If enabled, it logs details like tensor shapes and convolution parameters for debugging the first sample. The convolution is then performed using <code class="docutils literal notranslate"><span class="pre">ttnn.conv2d</span></code>, followed by a max pooling operation configured with standard 2×2 kernel and stride values. Again, if
+logging is enabled, pooling parameters and resulting tensor shapes are recorded. Finally, the resulting TT tensor after max pooling is returned for use in the next stage of the network. This function modularizes a common pattern in CNNs and provides flexibility for different layers and debug logging.</p>
+<p>For more information on convolution functions see: <a class="reference internal" href="../../api/ttnn.Conv2dConfig.html"><span class="doc">ttnn.Conv2dConfig</span></a>.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -356,9 +357,9 @@ logging is enabled, pooling parameters and resulting tensor shapes are recorded.
 <section id="Run-Inference-on-Test-Samples">
 <h2>Run Inference on Test Samples<a class="headerlink" href="#Run-Inference-on-Test-Samples" title="Permalink to this heading"></a>
 </h2>
-<p>This code snippet performs inference on the first five test samples from the CIFAR-10 dataset using a simple convolutional neural network (SimpleCNN) running on Tenstorrent hardware via the TT-NN API. It initializes counters for tracking the number of correct predictions and total samples processed. For each sample, it converts the input image from a PyTorch tensor to a TT-NN tensor, rearranging its layout from NCHW to NHWC format. The image is then passed through two convolution + pooling
-stages using the conv_pool_stage function. The output is flattened and passed through two fully connected layers (FC1 and FC2), with ReLU applied after FC1. The weights and biases for these layers are converted to the appropriate TT-NN format with tiling and transposing as needed. After obtaining the final logits from FC2, the output is converted back to a PyTorch tensor, and the predicted label is determined by taking the index of the highest logit. The prediction is compared to the true label
-to update the accuracy counters, and the result for each sample is logged. Finally, the overall inference accuracy is printed after processing the five samples.</p>
+<p>This code sample performs inference on the first five test samples from the CIFAR-10 dataset using a simple convolutional neural network (SimpleCNN) running on Tenstorrent hardware via the TT-NN API. It initializes counters tracking correct predictions and total samples processed. For each sample, it converts the input image from a PyTorch tensor to a TT-NN tensor, rearranging its layout from NCHW to NHWC format. The image is then passed through two convolution and pooling stages using the
+<code class="docutils literal notranslate"><span class="pre">conv_pool_stage</span></code> function. The output is flattened and passed through two fully connected layers (FC1 and FC2), with ReLU applied after FC1. The weights and biases for these layers are converted to the appropriate TT-NN format with tiling and transposing as needed. After obtaining the final logits from FC2, the output is converted back to a PyTorch tensor, and the predicted label is determined by taking the index of the highest logit. The prediction is compared to the true label to update the
+accuracy counters, and the result for each sample is logged. Finally, the overall inference accuracy is printed after processing the five samples.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -448,8 +449,8 @@ to update the accuracy counters, and the result for each sample is logged. Final
 </div>
 </div>
 </section>
-<section id="Close-The-Device">
-<h2>Close The Device<a class="headerlink" href="#Close-The-Device" title="Permalink to this heading"></a>
+<section id="Close-the-Device">
+<h2>Close the Device<a class="headerlink" href="#Close-the-Device" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -464,12 +465,12 @@ to update the accuracy counters, and the result for each sample is logged. Final
 <p>We have built and run a simple CNN using Tenstorrent’s TT-NN library on the CIFAR-10 dataset, observed predictions, and computed accuracy on a few samples.</p>
 <p>For full-scale inference or training, pre-trained weights should be used, and additional optimization strategies may be applied.</p>
 </section>
-<section id="Full-example-and-output">
-<h2>Full example and output<a class="headerlink" href="#Full-example-and-output" title="Permalink to this heading"></a>
+<section id="Full-Example-and-Output">
+<h2>Full Example and Output<a class="headerlink" href="#Full-Example-and-Output" title="Permalink to this heading"></a>
 </h2>
 <p>Lets put everything together in a complete example that can be run directly.</p>
 <p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_simplecnn_inference.py">ttnn_simplecnn_inference.py</a></p>
-<p>Running this script will generate output the as shown below:</p>
+<p>Running this script will generate the following output:</p>
 <div class="highlight-console notranslate">
 <div class="highlight"><pre><span></span><span class="gp">$ </span>python3<span class="w"> </span><span class="nv">$TT_METAL_HOME</span>/ttnn/tutorials/basic_python/ttnn_simplecnn_inference.py
 <span class="go">2025-07-07 13:10:17.041 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>

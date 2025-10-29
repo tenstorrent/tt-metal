@@ -20,6 +20,7 @@
         <script src="../_static/doctools.js?v=888ff710"></script>
         <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../_static/posthog.js?v=aa5946f9"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -306,34 +307,32 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos">127</span><span class="w">    </span><span class="c1">// API call to map user arguments to operation attributes and tensor args.</span>
 <span class="linenos">128</span><span class="w">    </span><span class="c1">// This is the only method that is called by the user</span>
 <span class="linenos">129</span><span class="w">    </span><span class="c1">// The user will be able to call the operation using `tensor_return_value_t output =</span>
-<span class="linenos">130</span><span class="w">    </span><span class="c1">// ttnn::prim::example(input_tensor)` after the op is registered Keep in mind that the the overload with `queue_id`</span>
-<span class="linenos">131</span><span class="w">    </span><span class="c1">// argument will be added automatically for primitive operations So, the user can also call this operation using</span>
-<span class="linenos">132</span><span class="w">    </span><span class="c1">// `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`</span>
-<span class="linenos">133</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">tuple</span><span class="o">&lt;</span><span class="n">operation_attributes_t</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">invoke</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">);</span>
+<span class="linenos">130</span><span class="w">    </span><span class="c1">// ttnn::prim::example(input_tensor)` after the op is registered</span>
+<span class="linenos">131</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">tuple</span><span class="o">&lt;</span><span class="n">operation_attributes_t</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">invoke</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">);</span>
+<span class="linenos">132</span>
+<span class="linenos">133</span><span class="w">    </span><span class="c1">// Optional methods</span>
 <span class="linenos">134</span>
-<span class="linenos">135</span><span class="w">    </span><span class="c1">// Optional methods</span>
-<span class="linenos">136</span>
-<span class="linenos">137</span><span class="w">    </span><span class="c1">// In case the operation need a custom hash function, the following method can be implemented</span>
-<span class="linenos">138</span><span class="w">    </span><span class="cm">/* static tt::stl::hash::hash_t compute_program_hash(</span>
-<span class="linenos">139</span><span class="cm">        const operation_attributes_t&amp;, const tensor_args_t&amp;);</span>
-<span class="linenos">140</span><span class="cm">    */</span>
-<span class="linenos">141</span>
-<span class="linenos">142</span><span class="w">    </span><span class="c1">// In case the operation needs a custom create_op_performance_model, this method can be implemented</span>
-<span class="linenos">143</span><span class="w">    </span><span class="cm">/*</span>
-<span class="linenos">144</span><span class="cm">    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(</span>
-<span class="linenos">145</span><span class="cm">        const operation_attributes_t&amp;,</span>
-<span class="linenos">146</span><span class="cm">        const tensor_args_t&amp;,</span>
-<span class="linenos">147</span><span class="cm">        tensor_return_value_t&amp;);</span>
-<span class="linenos">148</span><span class="cm">    */</span>
-<span class="linenos">149</span><span class="p">};</span>
+<span class="linenos">135</span><span class="w">    </span><span class="c1">// In case the operation need a custom hash function, the following method can be implemented</span>
+<span class="linenos">136</span><span class="w">    </span><span class="cm">/* static tt::stl::hash::hash_t compute_program_hash(</span>
+<span class="linenos">137</span><span class="cm">        const operation_attributes_t&amp;, const tensor_args_t&amp;);</span>
+<span class="linenos">138</span><span class="cm">    */</span>
+<span class="linenos">139</span>
+<span class="linenos">140</span><span class="w">    </span><span class="c1">// In case the operation needs a custom create_op_performance_model, this method can be implemented</span>
+<span class="linenos">141</span><span class="w">    </span><span class="cm">/*</span>
+<span class="linenos">142</span><span class="cm">    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(</span>
+<span class="linenos">143</span><span class="cm">        const operation_attributes_t&amp;,</span>
+<span class="linenos">144</span><span class="cm">        const tensor_args_t&amp;,</span>
+<span class="linenos">145</span><span class="cm">        tensor_return_value_t&amp;);</span>
+<span class="linenos">146</span><span class="cm">    */</span>
+<span class="linenos">147</span><span class="p">};</span>
+<span class="linenos">148</span>
+<span class="linenos">149</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
 <span class="linenos">150</span>
-<span class="linenos">151</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
-<span class="linenos">152</span>
-<span class="linenos">153</span><span class="c1">// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example</span>
-<span class="linenos">154</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">prim</span><span class="w"> </span><span class="p">{</span>
-<span class="linenos">155</span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">example</span><span class="w"> </span><span class="o">=</span>
-<span class="linenos">156</span><span class="w">    </span><span class="n">ttnn</span><span class="o">::</span><span class="n">register_operation</span><span class="o">&lt;</span><span class="s">"ttnn::prim::example"</span><span class="p">,</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">ExampleDeviceOperation</span><span class="o">&gt;</span><span class="p">();</span>
-<span class="linenos">157</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::prim</span>
+<span class="linenos">151</span><span class="c1">// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example</span>
+<span class="linenos">152</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">prim</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">153</span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">example</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos">154</span><span class="w">    </span><span class="n">ttnn</span><span class="o">::</span><span class="n">register_operation</span><span class="o">&lt;</span><span class="s">"ttnn::prim::example"</span><span class="p">,</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">ExampleDeviceOperation</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="linenos">155</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::prim</span>
 </pre></div>
 </div>
 </div>
@@ -419,9 +418,9 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos"> 23</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="p">{};</span>
 <span class="linenos"> 24</span>
 <span class="linenos"> 25</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
-<span class="linenos"> 26</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format</span><span class="p">);</span>
+<span class="linenos"> 26</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tile_size</span><span class="p">(</span><span class="n">cb_data_format</span><span class="p">);</span>
 <span class="linenos"> 27</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
-<span class="linenos"> 28</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format_output</span><span class="p">);</span>
+<span class="linenos"> 28</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tile_size</span><span class="p">(</span><span class="n">cb_data_format_output</span><span class="p">);</span>
 <span class="linenos"> 29</span>
 <span class="linenos"> 30</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">physical_volume</span><span class="p">()</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_HW</span><span class="p">;</span>
 <span class="linenos"> 31</span>
@@ -577,9 +576,9 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos"> 23</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="p">{};</span>
 <span class="linenos"> 24</span>
 <span class="linenos"> 25</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
-<span class="linenos"> 26</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format</span><span class="p">);</span>
+<span class="linenos"> 26</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tile_size</span><span class="p">(</span><span class="n">cb_data_format</span><span class="p">);</span>
 <span class="linenos"> 27</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
-<span class="linenos"> 28</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format_output</span><span class="p">);</span>
+<span class="linenos"> 28</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tile_size</span><span class="p">(</span><span class="n">cb_data_format_output</span><span class="p">);</span>
 <span class="linenos"> 29</span>
 <span class="linenos"> 30</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">physical_volume</span><span class="p">()</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_HW</span><span class="p">;</span>
 <span class="linenos"> 31</span>
@@ -800,29 +799,28 @@ The operation will be auto-registered in python. If the operation is called <cit
 <span class="linenos">22</span>
 <span class="linenos">23</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
 <span class="linenos">24</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
-<span class="linenos">25</span><span class="cm">        // The overload with `queue_id` argument will be added automatically for primitive operations</span>
-<span class="linenos">26</span><span class="cm">        // This specific function can be called from python as `ttnn.prim.example(input_tensor)` or</span>
-<span class="linenos">27</span><span class="cm">        // `ttnn.prim.example(input_tensor, queue_id=queue_id)`</span>
-<span class="linenos">28</span><span class="cm">        ttnn::pybind_overload_t{</span>
-<span class="linenos">29</span><span class="cm">            [](const decltype(ttnn::prim::example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
-<span class="linenos">30</span><span class="cm">                return self(input_tensor);</span>
-<span class="linenos">31</span><span class="cm">            },</span>
-<span class="linenos">32</span><span class="cm">            py::arg("input_tensor")});</span>
-<span class="linenos">33</span>
-<span class="linenos">34</span><span class="cm">    bind_registered_operation(</span>
-<span class="linenos">35</span><span class="cm">        module,</span>
-<span class="linenos">36</span><span class="cm">        ttnn::composite_example,</span>
-<span class="linenos">37</span><span class="cm">        R"doc(composite_example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
-<span class="linenos">38</span>
-<span class="linenos">39</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
-<span class="linenos">40</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
-<span class="linenos">41</span><span class="cm">        ttnn::pybind_overload_t{</span>
-<span class="linenos">42</span><span class="cm">            [](const decltype(ttnn::composite_example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
-<span class="linenos">43</span><span class="cm">                return self(input_tensor);</span>
-<span class="linenos">44</span><span class="cm">            },</span>
-<span class="linenos">45</span><span class="cm">            py::arg("input_tensor")});</span>
-<span class="linenos">46</span><span class="cm">}</span>
-<span class="linenos">47</span><span class="cm">*/</span>
+<span class="linenos">25</span><span class="cm">        // This specific function can be called from python as `ttnn.prim.example(input_tensor)` or</span>
+<span class="linenos">26</span><span class="cm">        // `ttnn.prim.example(input_tensor)`</span>
+<span class="linenos">27</span><span class="cm">        ttnn::pybind_overload_t{</span>
+<span class="linenos">28</span><span class="cm">            [](const decltype(ttnn::prim::example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
+<span class="linenos">29</span><span class="cm">                return self(input_tensor);</span>
+<span class="linenos">30</span><span class="cm">            },</span>
+<span class="linenos">31</span><span class="cm">            py::arg("input_tensor")});</span>
+<span class="linenos">32</span>
+<span class="linenos">33</span><span class="cm">    bind_registered_operation(</span>
+<span class="linenos">34</span><span class="cm">        module,</span>
+<span class="linenos">35</span><span class="cm">        ttnn::composite_example,</span>
+<span class="linenos">36</span><span class="cm">        R"doc(composite_example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
+<span class="linenos">37</span>
+<span class="linenos">38</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
+<span class="linenos">39</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
+<span class="linenos">40</span><span class="cm">        ttnn::pybind_overload_t{</span>
+<span class="linenos">41</span><span class="cm">            [](const decltype(ttnn::composite_example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
+<span class="linenos">42</span><span class="cm">                return self(input_tensor);</span>
+<span class="linenos">43</span><span class="cm">            },</span>
+<span class="linenos">44</span><span class="cm">            py::arg("input_tensor")});</span>
+<span class="linenos">45</span><span class="cm">}</span>
+<span class="linenos">46</span><span class="cm">*/</span>
 </pre></div>
 </div>
 </div>

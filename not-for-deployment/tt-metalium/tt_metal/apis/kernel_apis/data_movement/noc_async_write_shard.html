@@ -20,6 +20,7 @@
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
@@ -112,8 +113,8 @@
 <h1>noc_async_write_shard<a class="headerlink" href="#noc-async-write-shard" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I0E21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">typename</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">DSpec</span></span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1a56df1e746df120d02591f02246412980"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_write_shard</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">shard_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">TensorAccessor</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="#_CPPv4I0E21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t" title="noc_async_write_shard::DSpec"><span class="n"><span class="pre">DSpec</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">s</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_local_l1_addr</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I0E21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I0_bE21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">typename</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">DSpec</span></span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">posted</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="dataflow__api_8h_1aaf82a4c48b534080548f603eb4f95f68"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">noc_async_write_shard</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">shard_id</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">TensorAccessor</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="#_CPPv4I0_bE21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t" title="noc_async_write_shard::DSpec"><span class="n"><span class="pre">DSpec</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">s</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">src_local_l1_addr</span></span>, <span class="n"><span class="pre">uint8_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">noc</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">noc_index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I0_bE21noc_async_write_shardvK8uint32_tRK14TensorAccessorI5DSpecENSt8uint32_tE7uint8_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Initiates an asynchronous write of a shard from a local L1 address to a destination noc address. The size of the transaction and the destination address are determined by the TensorAccessor object. This function only works for sharded tensors.</p>
@@ -156,6 +157,20 @@
 <td><p>Which NOC to use for the transaction   </p></td>
 <td><p>uint8_t   </p></td>
 <td><p>0 or 1   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>DSpec (template parameter)   </p></td>
+<td><p>DistributionSpec type   </p></td>
+<td><p>typename   </p></td>
+<td><p>Any DistributionSpec object   </p></td>
+<td><p>False    </p></td>
+</tr>
+<tr class="row-odd">
+<td><p>posted (template parameter)   </p></td>
+<td><p>Whether the write is posted (i.e. no ack required)   </p></td>
+<td><p>bool   </p></td>
+<td><p>true or false   </p></td>
 <td><p>False   </p></td>
 </tr>
 </tbody>

@@ -4,12 +4,12 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>EnqueueRecordEvent &mdash; TT-Metalium  documentation</title>
+  <title>selu_tile &mdash; TT-Metalium  documentation</title>
       <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/host_apis/command_queue/EnqueueRecordEvent.html" />
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/apis/kernel_apis/compute/selu_tile.html" />
   <!--[if lt IE 9]>
     <script src="../../../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -20,11 +20,12 @@
         <script src="../../../../_static/doctools.js?v=888ff710"></script>
         <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
-    <link rel="next" title="EnqueueWaitForEvent" href="EnqueueWaitForEvent.html" />
-    <link rel="prev" title="EnqueueProgram" href="EnqueueProgram.html" /> 
+    <link rel="next" title="relu_tile" href="relu_tile.html" />
+    <link rel="prev" title="acosh_tile" href="acosh_tile.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -61,32 +62,18 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../examples/index.html">Programming Examples</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../advanced_topics/index.html">Advanced Topics</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="../../index.html">APIs</a><ul class="current">
-<li class="toctree-l2 current"><a class="reference internal" href="../../host_apis.html">Host APIs</a><ul class="current">
-<li class="toctree-l3"><a class="reference internal" href="../program/program.html">Program</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../buffers/buffers.html">Buffers</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="command_queue.html">CommandQueue</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="EnqueueWriteBuffer.html">EnqueueWriteBuffer</a></li>
-<li class="toctree-l4"><a class="reference internal" href="EnqueueWriteSubBuffer.html">EnqueueWriteSubBuffer</a></li>
-<li class="toctree-l4"><a class="reference internal" href="EnqueueReadBuffer.html">EnqueueReadBuffer</a></li>
-<li class="toctree-l4"><a class="reference internal" href="EnqueueReadSubBuffer.html">EnqueueReadSubBuffer</a></li>
-<li class="toctree-l4"><a class="reference internal" href="EnqueueProgram.html">EnqueueProgram</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">EnqueueRecordEvent</a></li>
-<li class="toctree-l4"><a class="reference internal" href="EnqueueWaitForEvent.html">EnqueueWaitForEvent</a></li>
-<li class="toctree-l4"><a class="reference internal" href="EventQuery.html">EventQuery</a></li>
-<li class="toctree-l4"><a class="reference internal" href="EventSynchronize.html">EventSynchronize</a></li>
-<li class="toctree-l4"><a class="reference internal" href="LightMetalBeginCapture.html">LightMetalBeginCapture</a></li>
-<li class="toctree-l4"><a class="reference internal" href="LightMetalEndCapture.html">LightMetalEndCapture</a></li>
-<li class="toctree-l4"><a class="reference internal" href="Finish.html">Finish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="Synchronize.html">Synchronize</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../host_apis.html">Host APIs</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#common-apis">Common APIs</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../kernel_apis.html#data-movement">Data Movement</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../../kernel_apis.html#compute">Compute</a><ul class="current">
+<li class="toctree-l4 current"><a class="reference internal" href="compute.html">Compute APIs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../pack_unpack/packing_apis.html">Packing APIs</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../sfpu/llk.html">Low Level Kernels</a></li>
 </ul>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="../device_management/device_management.html">Device Management</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../kernels/kernels.html">Kernels</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../runtime_args/runtime_args.html">Runtime Arguments</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../profiler/profiler.html">Profiler</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="../../kernel_apis.html">Kernel APIs</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../../../tools/index.html">Tools</a></li>
@@ -112,11 +99,11 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
           <li class="breadcrumb-item"><a href="../../index.html">APIs</a></li>
-          <li class="breadcrumb-item"><a href="../../host_apis.html">Host APIs</a></li>
-          <li class="breadcrumb-item"><a href="command_queue.html">CommandQueue</a></li>
-      <li class="breadcrumb-item active">EnqueueRecordEvent</li>
+          <li class="breadcrumb-item"><a href="../../kernel_apis.html">Kernel APIs</a></li>
+          <li class="breadcrumb-item"><a href="compute.html">Compute APIs</a></li>
+      <li class="breadcrumb-item active">selu_tile</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../../../../_sources/tt_metal/apis/host_apis/command_queue/EnqueueRecordEvent.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../../../../_sources/tt_metal/apis/kernel_apis/compute/selu_tile.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -124,15 +111,26 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="enqueuerecordevent">
-<h1>EnqueueRecordEvent<a class="headerlink" href="#enqueuerecordevent" title="Permalink to this heading"></a>
+  <section id="selu-tile">
+<h1>selu_tile<a class="headerlink" href="#selu-tile" title="Permalink to this heading"></a>
 </h1>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N2tt8tt_metal18EnqueueRecordEventER12CommandQueueRKNSt10shared_ptrI5EventEEN2tt3stl4SpanIK11SubDeviceIdEE">
-<span class="target" id="namespacett_1_1tt__metal_1a952a17388fcb643ee92680730dabe479"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">tt_metal</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">EnqueueRecordEvent</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">CommandQueue</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">cq</span></span>, <span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">Event</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">event</span></span>, <span class="n"><span class="pre">tt</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">stl</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">Span</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">SubDeviceId</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">sub_device_ids</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="p"><span class="pre">{</span></span><span class="p"><span class="pre">}</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N2tt8tt_metal18EnqueueRecordEventER12CommandQueueRKNSt10shared_ptrI5EventEEN2tt3stl4SpanIK11SubDeviceIdEE" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel14selu_tile_initEv">
+<span class="target" id="namespaceckernel_1a66ccf9ac0c292954237bdaa95783931f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">selu_tile_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14selu_tile_initEv" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Enqueues a command to record an Event on the device for a given CQ, and updates the Event object for the user. Return value: void </p>
+<p>Please refer to documentation for any_init. </p>
+</dd>
+</dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel9selu_tileE8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1a6a35fa2a45b4890677bb55e42dff3cbb"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">selu_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel9selu_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Performs element-wise computation of: selu = scale *(max(0,x) + min(0,alpha * (exp(x)-1))) by broadcast , where x is each element of a tile in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
+<p>Return value: None</p>
+<p></p>
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd">
@@ -145,25 +143,25 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>cq   </p></td>
-<td><p>The command queue object which dispatches the command to the hardware   </p></td>
-<td><p>CommandQueue &amp;   </p></td>
-<td><p></p></td>
-<td><p>Yes    </p></td>
+<td><p>idst   </p></td>
+<td><p>The index of the tile in DST register buffer to perform the computation on   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-odd">
-<td><p>event   </p></td>
-<td><p>An event that will be populated by this function, and inserted in CQ   </p></td>
-<td><p>std::shared_ptr&lt;Event&gt;   </p></td>
+<td><p>param0   </p></td>
+<td><p>scale value   </p></td>
+<td><p>uint32_t   </p></td>
 <td><p></p></td>
-<td><p>Yes    </p></td>
+<td><p>True    </p></td>
 </tr>
 <tr class="row-even">
-<td><p>sub_device_ids   </p></td>
-<td><p>The sub-device ids to wait for completion on. If empty, waits for all sub-devices   </p></td>
-<td><p>tt::stl::Span&lt;const uint32_t&gt;   </p></td>
+<td><p>param1   </p></td>
+<td><p>alpha value   </p></td>
+<td><p>uint32_t   </p></td>
 <td><p></p></td>
-<td><p>No   </p></td>
+<td><p>True   </p></td>
 </tr>
 </tbody>
 </table>
@@ -178,8 +176,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="EnqueueProgram.html" class="btn btn-neutral float-left" title="EnqueueProgram" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="EnqueueWaitForEvent.html" class="btn btn-neutral float-right" title="EnqueueWaitForEvent" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="acosh_tile.html" class="btn btn-neutral float-left" title="acosh_tile" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="relu_tile.html" class="btn btn-neutral float-right" title="relu_tile" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

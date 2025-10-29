@@ -20,11 +20,12 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Tiles" href="tiles.html" />
-    <link rel="prev" title="Data Multicasting in matmul_multicore_reuse_mcast" href="../examples/matmul_multi_core_optimizations/data_mcast.html" /> 
+    <link rel="prev" title="Smoothstep using SFPI" href="../examples/custom_sfpi_smoothstep.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -64,6 +65,7 @@
 <li class="toctree-l3"><a class="reference internal" href="tiles.html">Tiles</a></li>
 <li class="toctree-l3"><a class="reference internal" href="memory_for_kernel_developers.html">Memory from a kernel developer’s perspective</a></li>
 <li class="toctree-l3"><a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html">Compute Engines and Data Flow within Tensix</a></li>
+<li class="toctree-l3"><a class="reference internal" href="fp32_accuracy.html">Achieving FP32 Accuracy for Computation</a></li>
 </ul>
 </li>
 </ul>
@@ -144,6 +146,13 @@
 <li class="toctree-l2"><a class="reference internal" href="compute_engines_and_dataflow_within_tensix.html#vector-engine-sfpu">Vector engine/SFPU</a></li>
 </ul>
 </li>
+<li class="toctree-l1">
+<a class="reference internal" href="fp32_accuracy.html">Achieving FP32 Accuracy for Computation</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="fp32_accuracy.html#host-side-configuration">Host-Side Configuration</a></li>
+<li class="toctree-l2"><a class="reference internal" href="fp32_accuracy.html#kernel-side-implementation">Kernel-Side Implementation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="fp32_accuracy.html#distinguishing-between-matrix-and-vector-engine-apis">Distinguishing Between matrix and vector engine APIs</a></li>
+</ul>
+</li>
 </ul>
 </div>
 </section>
@@ -154,7 +163,7 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="../examples/matmul_multi_core_optimizations/data_mcast.html" class="btn btn-neutral float-left" title="Data Multicasting in matmul_multicore_reuse_mcast" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../examples/custom_sfpi_smoothstep.html" class="btn btn-neutral float-left" title="Smoothstep using SFPI" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="tiles.html" class="btn btn-neutral float-right" title="Tiles" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

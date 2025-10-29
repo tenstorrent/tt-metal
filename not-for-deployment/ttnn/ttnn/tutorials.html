@@ -20,6 +20,7 @@
         <script src="../_static/doctools.js?v=888ff710"></script>
         <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../_static/posthog.js?v=aa5946f9"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -60,7 +61,7 @@
 <li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Tutorials</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_add_tensors.html">Add Tensors</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html">Basic Tensor Operations</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html">Multi-Head Attention</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html">Basic Convolution</a></li>
@@ -144,68 +145,58 @@ directory of the <strong>TT-Metal</strong> repository.</p>
 </ul>
 </li>
 <li class="toctree-l1">
-<a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html">More Basic Tensor Operations</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Import-the-necessary-libraries">Import the necessary libraries</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html">Basic Tensor Operations</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Open-the-Device">Open the Device</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Host-Tensor-Creation">Host Tensor Creation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Convert-Host-Tensors-to-TT-NN-Tiled-Tensors-or-Create-Natively-on-Device">Convert Host Tensors to TT-NN Tiled Tensors or Create Natively on Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Host-Tensor-Conversion-and-Creation">Host Tensor Conversion and Creation</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Tile-Based-Arithmetic-Operations">Tile-Based Arithmetic Operations</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Simulated-Broadcasting-(Row-Vector-Expansion)">Simulated Broadcasting (Row Vector Expansion)</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Simulated-Broadcasting---Row-Vector-Expansion">Simulated Broadcasting - Row Vector Expansion</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_operations.html#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l1">
 <a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html">MLP Inference</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Import-the-necessary-libraries">Import the necessary libraries</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Open-the-Device">Open the Device</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Load-MNIST-Test-Data">Load MNIST Test Data</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Load-Pretrained-MLP-Weights">Load Pretrained MLP Weights</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Basic-accuracy-tracking,-inference,-loop,-and-image-flattening">Basic accuracy tracking, inference, loop, and image flattening</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Accuracy-Tracking,-Inference,-Loop,-and-Image-Flattening">Accuracy Tracking, Inference, Loop, and Image Flattening</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_mlp_inference_mnist.html#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l1">
 <a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html">Multi-Head Attention</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Write-Multi-Head-Attention-using-ttnn">Write Multi-Head Attention using ttnn</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Write-Multi-Head-Attention-with-TT-NN">Write Multi-Head Attention with TT-NN</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Configuration">Configuration</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Initialize-activations-and-weights-using-torch">Initialize activations and weights using torch</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Convert-activations-and-weights-to-ttnn">Convert activations and weights to ttnn</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Run-the-first-iteration-of-Multi-Head-Attention">Run the first iteration of Multi-Head Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Run-a-subsequent-iteration-of-Multi-Head-Attention">Run a subsequent iteration of Multi-Head Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Write-optimized-version-of-Multi-Head-Attention">Write optimized version of Multi-Head Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Pre-process-the-parameters-of-the-optimized-model">Pre-process the parameters of the optimized model</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Run-the-first-iteration-of-the-optimized-Multi-Head-Attention">Run the first iteration of the optimized Multi-Head Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Run-a-subsequent-iteration-of-the-optimized-Multi-Head-Attention">Run a subsequent iteration of the optimized Multi-Head Attention</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Check-that-the-output-of-the-optimized-version-matches-the-output-of-the-original-implementation">Check that the output of the optimized version matches the output of the original implementation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Close-the-device">Close the device</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_multihead_attention.html#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l1">
 <a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html">Basic Convolution</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Import-the-necessary-libraries">Import the necessary libraries</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Set-manual-seed-for-reproducibility">Set manual seed for reproducibility</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Create-forward-method">Create forward method</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Set-input-and-convolution-parameters">Set input and convolution parameters</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Create-tensors">Create tensors</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Run-convolution-operation">Run convolution operation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Set-Manual-Seed">Set Manual Seed</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Open-the-Device">Open the Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Create-Forward-Method">Create Forward Method</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Set-Input-and-Convolution-Parameters">Set Input and Convolution Parameters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Create-Tensors">Create Tensors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Run-the-Convolution-Operation">Run the Convolution Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_basic_conv.html#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l1">
 <a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html">Running a Simple CNN Inference on CIFAR-10</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Setup-and-Imports">Setup and Imports</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Load-CIFAR-10-Dataset">Load CIFAR-10 Dataset</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Open-the-Device">Open the Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Load-the-CIFAR-10-Dataset">Load the CIFAR-10 Dataset</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Load-or-Initialize-Weights">Load or Initialize Weights</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Define-Convolution-+-Pooling-Stage">Define Convolution + Pooling Stage</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Define-Convolution-and-Pooling-Stage">Define Convolution and Pooling Stage</a></li>
 <li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Run-Inference-on-Test-Samples">Run Inference on Test Samples</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l2"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_simplecnn_inference.html#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l1">
@@ -215,7 +206,7 @@ directory of the <strong>TT-Metal</strong> repository.</p>
 <li class="toctree-l2">
 <a class="reference internal" href="tutorials/2025_dx_rework/ttnn_visualizer.html#model-profiling">Model Profiling</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_visualizer.html#generating-the-memory-report">Generating the Memory Report</a></li>
-<li class="toctree-l3"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_visualizer.html#generating-the-performance-report">Generating the Performance Report</a></li>
+<li class="toctree-l3"><a class="reference internal" href="tutorials/2025_dx_rework/ttnn_visualizer.html#generating-performance-reports">Generating Performance Reports</a></li>
 </ul>
 </li>
 <li class="toctree-l2">

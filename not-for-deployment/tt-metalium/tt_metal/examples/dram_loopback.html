@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -76,6 +77,7 @@
 <li class="toctree-l2"><a class="reference internal" href="matmul_single_core.html">Matmul (Single Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core.html">Matmul (Multi Core)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_multi_core_optimized.html">Matmul (Multi Core Optimized)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="custom_sfpi.html">Writing Custom SFPU Operations using SFPI</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced_topics/index.html">Advanced Topics</a></li>
@@ -118,12 +120,12 @@
 </h1>
 <p>This is the simplest example of using the TT-Metal API. A data movement core in the Tensix copies data from DRAM into its L1(SRAM) buffer and back out to DRAM. Hence “loopback”.</p>
 <p>We’ll go through this code section by section. The full source code for this example is available under the <code class="docutils literal notranslate"><span class="pre">tt_metal/programming_examples/loopback</span></code> directory.</p>
-<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">loopback</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
+<p>Building the example can be done by adding a <code class="docutils literal notranslate"><span class="pre">--build-programming-examples</span></code> flag to the build script or adding the <code class="docutils literal notranslate"><span class="pre">-DBUILD_PROGRAMMING_EXAMPLES=ON</span></code> flag to the cmake command and results in the <code class="docutils literal notranslate"><span class="pre">metal_example_loopback</span></code> executable in the <code class="docutils literal notranslate"><span class="pre">build/programming_examples</span></code> directory. For example:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span>&lt;/path/to/tt-metal&gt;
 ./build_metal.sh<span class="w"> </span>--build-programming-examples
 <span class="c1"># To run the example</span>
-./build/programming_examples/loopback
+./build/programming_examples/metal_example_loopback
 </pre></div>
 </div>
 <section id="device-initialization">
@@ -131,21 +133,21 @@
 </h2>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">device_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
-<span class="k">auto</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateDevice</span><span class="p">(</span><span class="n">device_id</span><span class="p">);</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">mesh_device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshDevice</span><span class="o">::</span><span class="n">create_unit_mesh</span><span class="p">(</span><span class="n">device_id</span><span class="p">);</span>
 </pre></div>
 </div>
-<p>First we open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N-1). Thus device 0 is the first device and always available if one is installed.</p>
+<p>First, create a mesh device. For these introductory examples, all programs run on a single device. However in TT-Metal, all operations use a mesh abstraction - even a single device is represented as a 1x1 mesh. This approach keeps the API consistent and makes it easy to scale from one device to many. The device ID is an index into the list of available devices (starting from 0). Device 0 is always present if any device is installed.</p>
 </section>
 <section id="program-setup">
 <h2>Program setup<a class="headerlink" href="#program-setup" title="Permalink to this heading"></a>
 </h2>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">CommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">command_queue</span><span class="p">();</span>
+<div class="highlight"><pre><span></span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshCommandQueue</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cq</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">mesh_command_queue</span><span class="p">();</span>
 <span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateProgram</span><span class="p">();</span>
 </pre></div>
 </div>
-<p>Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. And commands are operations that are run on the device, including but not limited to upload/download of data and program execution.</p>
-<p>Next, we create a <code class="docutils literal notranslate"><span class="pre">Program</span></code> object that we will fill in later. A program is a set of kernels that are executed on the device. If you are familiar with OpenCL, the program in Metalium is different from OpenCL in that All Tensix cores need to to run the exact same kernel at the same time. However in this example, we are only going to use one of all the cores in the device.</p>
+<p>Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. Commands include operations run on the device such as upload/download of data and program execution. The mesh command queue handles operations across the entire mesh (in this case, our single device).</p>
+<p>Next, we create a <code class="docutils literal notranslate"><span class="pre">Program</span></code> object that we will fill in later. A program is a set of kernels that are executed on the device. Unlike OpenCL where all cores must run identical kernels simultaneously, Metalium allows different kernels on different cores at the same time. However in this example, we’re only using one core.</p>
 </section>
 <section id="create-buffers-in-dram-and-l1-sram">
 <h2>Create buffers in DRAM and L1 (SRAM)<a class="headerlink" href="#create-buffers-in-dram-and-l1-sram" title="Permalink to this heading"></a>
@@ -159,37 +161,36 @@
 </ul>
 <p>There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as it can be mistaken as similar to L1 cache in a CPU. In fact, the L1 is a SRAM scratchpad on the Tensix. Each generation of Tenstorrent processors has a different amount of L1 memory per Tensix. Grayskull had 1MB and Wormhole/Blackhole has 1.5MB.</p>
 <p>Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won’t touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in for each (input and output) DRAM buffer. Thus the total size of each DRAM buffer is 50 * 2048 = 102400 bytes. And a single tile worth of buffer on the L1 is 2048 bytes as well. So that we can copy a single tile at a time.</p>
-<p>Note the <code class="docutils literal notranslate"><span class="pre">page_size</span></code> argument in the buffer config and the <code class="docutils literal notranslate"><span class="pre">Interleaved</span></code> in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every <code class="docutils literal notranslate"><span class="pre">page_size</span></code> bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.</p>
-<p>The L1 buffer is created with a size equal to the size of a single tile, which will act as a buffer for old temporary data. Then be written back to DRAM.</p>
+<p>Note the <code class="docutils literal notranslate"><span class="pre">page_size</span></code> argument in the buffer config. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. The default buffer allocation strategy simply round-robin the data across all banks every <code class="docutils literal notranslate"><span class="pre">page_size</span></code> bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enables easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.</p>
+<p>Mesh buffers use two configuration layers: <code class="docutils literal notranslate"><span class="pre">DeviceLocalBufferConfig</span></code> specifies properties like page size and buffer type, while <code class="docutils literal notranslate"><span class="pre">ReplicatedBufferConfig</span></code> handles distribution across the mesh. Since we’re using a unit mesh (single device), “replicated” simply means allocated on that device.</p>
+<p>The L1 buffer is created with a size equal to the size of a single tile (2048 bytes), which will act as a temporary buffer for copying data one tile at a time from input DRAM to output DRAM.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">50</span><span class="p">;</span>
-<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TILE_WIDTH</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">TILE_HEIGHT</span><span class="p">;</span>
-<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="n">bfloat16</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size</span><span class="p">;</span>
-<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span>
-<span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">l1_config</span><span class="p">{</span>
-<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">L1</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">elements_per_tile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_WIDTH</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_HEIGHT</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">sizeof</span><span class="p">(</span><span class="n">bfloat16</span><span class="p">)</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">elements_per_tile</span><span class="p">;</span>
+<span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span>
+
+<span class="c1">// allocation properties within a device</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">DeviceLocalBufferConfig</span><span class="w"> </span><span class="n">l1_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">L1</span>
 <span class="p">};</span>
 
-<span class="n">Buffer</span><span class="w"> </span><span class="n">l1_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">l1_config</span><span class="p">);</span>
+<span class="c1">// overall buffer size across all device in mesh</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">ReplicatedBufferConfig</span><span class="w"> </span><span class="n">l1_buffer_config</span><span class="p">{.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">};</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">l1_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshBuffer</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">l1_buffer_config</span><span class="p">,</span><span class="w"> </span><span class="n">l1_config</span><span class="p">,</span><span class="w"> </span><span class="n">mesh_device</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
 </pre></div>
 </div>
-<p>The only difference between the L1 and DRAM buffer is the <code class="docutils literal notranslate"><span class="pre">BufferType</span></code>. The L1 buffer is created with a <code class="docutils literal notranslate"><span class="pre">BufferType::L1</span></code> and the DRAM buffer is created with a <code class="docutils literal notranslate"><span class="pre">BufferType::DRAM</span></code>.</p>
+<p>The DRAM buffers differ from the L1 buffer in two ways: the <code class="docutils literal notranslate"><span class="pre">BufferType</span></code> (<code class="docutils literal notranslate"><span class="pre">BufferType::DRAM</span></code> instead of <code class="docutils literal notranslate"><span class="pre">BufferType::L1</span></code>) and the size (50 tiles for DRAM vs. 1 tile for L1). The L1 buffer acts as a temporary single-tile buffer while the kernel copies data tile-by-tile from input to output DRAM.</p>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">tt_metal</span><span class="o">::</span><span class="n">InterleavedBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
-<span class="w">    </span><span class="p">.</span><span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span>
-<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
+<div class="highlight"><pre><span></span><span class="n">distributed</span><span class="o">::</span><span class="n">DeviceLocalBufferConfig</span><span class="w"> </span><span class="n">dram_config</span><span class="p">{</span>
+<span class="w">    </span><span class="p">.</span><span class="n">page_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">,</span>
+<span class="w">    </span><span class="p">.</span><span class="n">buffer_type</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">BufferType</span><span class="o">::</span><span class="n">DRAM</span>
 <span class="p">};</span>
 
-<span class="n">Buffer</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
-<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">input_dram_buffer_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
-
-<span class="n">Buffer</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateBuffer</span><span class="p">(</span><span class="n">dram_config</span><span class="p">);</span>
-<span class="k">const</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_dram_buffer_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">();</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">ReplicatedBufferConfig</span><span class="w"> </span><span class="n">dram_buffer_config</span><span class="p">{.</span><span class="n">size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_buffer_size</span><span class="p">};</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshBuffer</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">dram_buffer_config</span><span class="p">,</span><span class="w"> </span><span class="n">dram_config</span><span class="p">,</span><span class="w"> </span><span class="n">mesh_device</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshBuffer</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">dram_buffer_config</span><span class="p">,</span><span class="w"> </span><span class="n">dram_config</span><span class="p">,</span><span class="w"> </span><span class="n">mesh_device</span><span class="p">.</span><span class="n">get</span><span class="p">());</span>
 </pre></div>
 </div>
 </section>
@@ -197,13 +198,13 @@
 <h2>Sending real data into DRAM<a class="headerlink" href="#sending-real-data-into-dram" title="Permalink to this heading"></a>
 </h2>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input_vec</span><span class="p">(</span><span class="n">num_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">tile_size</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">input_vec</span><span class="p">(</span><span class="n">elements_per_tile</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
 <span class="n">std</span><span class="o">::</span><span class="n">mt19937</span><span class="w"> </span><span class="nf">rng</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">random_device</span><span class="p">{}());</span>
 <span class="n">std</span><span class="o">::</span><span class="n">uniform_real_distribution</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="w"> </span><span class="n">distribution</span><span class="p">(</span><span class="mf">0.0f</span><span class="p">,</span><span class="w"> </span><span class="mf">100.0f</span><span class="p">);</span>
 <span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">val</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">input_vec</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">val</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">bfloat16</span><span class="p">(</span><span class="n">distribution</span><span class="p">(</span><span class="n">rng</span><span class="p">));</span>
 <span class="p">}</span>
-<span class="n">EnqueueWriteBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">input_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueWriteMeshBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">input_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">input_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>Send in a randomly-generated BFP16 (Brain 16bit floating point) vector that will act as our input data tensor.</p>
@@ -215,15 +216,18 @@
 <p>Create a kernel that will copy data from DRAM to L1 and back. Since we are only using one Tensix core, <code class="docutils literal notranslate"><span class="pre">{0,</span> <span class="pre">0}</span></code> is the only core (core on the most top left) we use. And as we are moving data from DRAM to L1, This is a data movement kernel using the movement processor 0, and the default NoC interface.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">};</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compile_args</span><span class="p">;</span>
-<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">input_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">compile_args</span><span class="p">);</span>
-<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">output_dram_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">compile_args</span><span class="p">);</span>
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dram_copy_compile_time_args</span><span class="p">;</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">input_dram_buffer</span><span class="o">-&gt;</span><span class="n">get_backing_buffer</span><span class="p">()).</span><span class="n">append_to</span><span class="p">(</span><span class="n">dram_copy_compile_time_args</span><span class="p">);</span>
+<span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">output_dram_buffer</span><span class="o">-&gt;</span><span class="n">get_backing_buffer</span><span class="p">()).</span><span class="n">append_to</span><span class="p">(</span><span class="n">dram_copy_compile_time_args</span><span class="p">);</span>
 
 <span class="n">KernelHandle</span><span class="w"> </span><span class="n">dram_copy_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateKernel</span><span class="p">(</span>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>
-<span class="w">    </span><span class="s">"tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp"</span><span class="p">,</span>
+<span class="w">    </span><span class="s">"loopback/kernels/loopback_dram_copy.cpp"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">core</span><span class="p">,</span>
-<span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compile_args</span><span class="p">}</span>
+<span class="w">    </span><span class="n">DataMovementConfig</span><span class="p">{</span>
+<span class="w">        </span><span class="p">.</span><span class="n">processor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DataMovementProcessor</span><span class="o">::</span><span class="n">RISCV_0</span><span class="p">,</span>
+<span class="w">        </span><span class="p">.</span><span class="n">noc</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">NOC</span><span class="o">::</span><span class="n">RISCV_0_default</span><span class="p">,</span>
+<span class="w">        </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dram_copy_compile_time_args</span><span class="p">}</span>
 <span class="p">);</span>
 </pre></div>
 </div>
@@ -237,7 +241,7 @@
 </ul>
 <p>Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to <code class="docutils literal notranslate"><span class="pre">TT_METAL_HOME</span></code>. If the file is not found, an error will be thrown.</p>
 </div>
-<p>The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.</p>
+<p>The kernel itself is simple. It takes the buffer addresses and the number of tiles to copy. It copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier()</span></code> and <code class="docutils literal notranslate"><span class="pre">noc_async_write_barrier()</span></code> after each operation to ensure data integrity before proceeding to the next loop iteration.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp</span>
@@ -267,7 +271,7 @@
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p><code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> handles address generation for all kinds of buffers automatically. Without the helper, the kernel implementation would be:</p>
+<p><code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> handles address generation for all kinds of buffers automatically, including the complexity of bank interleaving. Without the helper, the kernel implementation would need to manually calculate NoC addresses for each tile, taking into account how data is distributed across DRAM banks. The <code class="docutils literal notranslate"><span class="pre">TensorAccessor</span></code> abstraction greatly simplifies this by handling all the bank addressing and page size calculations internally. Here’s what the manual implementation would look like:</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">constexpr</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_dram_banks</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span><span class="w"> </span><span class="c1">// Number of DRAM banks on Wormhole</span>
 <span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -294,18 +298,13 @@
 </h2>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">runtime_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">l1_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
-<span class="w">    </span><span class="n">input_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
-<span class="w">    </span><span class="n">output_dram_buffer</span><span class="p">.</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">l1_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">input_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span>
+<span class="w">    </span><span class="n">output_dram_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span>
 <span class="w">    </span><span class="n">num_tiles</span>
 <span class="p">};</span>
 
-<span class="n">SetRuntimeArgs</span><span class="p">(</span>
-<span class="w">    </span><span class="n">program</span><span class="p">,</span>
-<span class="w">    </span><span class="n">dram_copy_kernel_id</span><span class="p">,</span>
-<span class="w">    </span><span class="n">core</span><span class="p">,</span>
-<span class="w">    </span><span class="n">runtime_args</span>
-<span class="p">);</span>
+<span class="n">SetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">dram_copy_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="n">runtime_args</span><span class="p">);</span>
 </pre></div>
 </div>
 <p>We now set runtime arguments for our data movement kernel. The kernel can then access these arguments at runtime. For this specific kernel, we need to pass in the following arguments:</p>
@@ -320,13 +319,17 @@
 <h2>Running the program<a class="headerlink" href="#running-the-program" title="Permalink to this heading"></a>
 </h2>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">EnqueueProgram</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="nb">false</span><span class="p">);</span>
-<span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshWorkload</span><span class="w"> </span><span class="n">workload</span><span class="p">;</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">MeshCoordinateRange</span><span class="w"> </span><span class="n">device_range</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">distributed</span><span class="o">::</span><span class="n">MeshCoordinateRange</span><span class="p">(</span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">shape</span><span class="p">());</span>
+<span class="n">workload</span><span class="p">.</span><span class="n">add_program</span><span class="p">(</span><span class="n">device_range</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">program</span><span class="p">));</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueMeshWorkload</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking=*/</span><span class="nb">false</span><span class="p">);</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">Finish</span><span class="p">(</span><span class="n">cq</span><span class="p">);</span>
 <span class="c1">// Equivalently, we could have done:</span>
-<span class="c1">// EnqueueProgram(cq, program, true);</span>
+<span class="c1">// distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);</span>
 </pre></div>
 </div>
-<p>Finally, we launch our program. The <code class="docutils literal notranslate"><span class="pre">Finish</span></code> call waits for the the host program only continues execution after everything in the command queue has been completed. The final argument in <code class="docutils literal notranslate"><span class="pre">EnqueueProgram</span></code> indicates that the program is non-blocking. Setting it to <code class="docutils literal notranslate"><span class="pre">true</span></code> would cause the program to block until the program is finished. Efficiently, this is the same as calling <code class="docutils literal notranslate"><span class="pre">Finish</span></code> after the program is enqueued.</p>
+<p>Finally, we launch our program. First, we create a <code class="docutils literal notranslate"><span class="pre">MeshWorkload</span></code> representing a collection of programs to be executed across the mesh. Each program in the workload is associated with a range of devices where it should run. In our case, we have a single program running on our entire (unit) mesh.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">distributed::Finish</span></code> call waits for the host program—execution only continues after everything in the command queue has been completed. The final argument in <code class="docutils literal notranslate"><span class="pre">EnqueueMeshWorkload</span></code> indicates that the execution is non-blocking. Setting it to <code class="docutils literal notranslate"><span class="pre">true</span></code> would cause the program to block until the workload is finished. This is effectively the same as calling <code class="docutils literal notranslate"><span class="pre">distributed::Finish</span></code> after the workload is enqueued.</p>
 </section>
 <section id="download-the-result-and-verify-output">
 <h2>Download the result and verify output<a class="headerlink" href="#download-the-result-and-verify-output" title="Permalink to this heading"></a>
@@ -335,7 +338,7 @@
 it matches what we sent. Again the final <code class="docutils literal notranslate"><span class="pre">true</span></code> argument causes the data transfer to be blocking. Thus we know that the data is fully available when the function returns.</p>
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">bfloat16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">result_vec</span><span class="p">;</span>
-<span class="n">EnqueueReadBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="n">output_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
+<span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueReadMeshBuffer</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">result_vec</span><span class="p">,</span><span class="w"> </span><span class="n">output_dram_buffer</span><span class="p">,</span><span class="w"> </span><span class="nb">true</span><span class="p">);</span>
 
 <span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">input_vec</span><span class="p">.</span><span class="n">size</span><span class="p">();</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">input_vec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="n">result_vec</span><span class="p">[</span><span class="n">i</span><span class="p">])</span><span class="w"> </span><span class="p">{</span>
@@ -350,10 +353,10 @@ it matches what we sent. Again the final <code class="docutils literal notransla
 <h2>Validation and teardown<a class="headerlink" href="#validation-and-teardown" title="Permalink to this heading"></a>
 </h2>
 <div class="highlight-cpp notranslate">
-<div class="highlight"><pre><span></span><span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">CloseDevice</span><span class="p">(</span><span class="n">device</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">close</span><span class="p">();</span>
 </pre></div>
 </div>
-<p>We now use <code class="docutils literal notranslate"><span class="pre">CloseDevice</span></code> to teardown our device. This releases resources associated with the device.</p>
+<p>We now use <code class="docutils literal notranslate"><span class="pre">mesh_device-&gt;close()</span></code> to teardown our mesh device. This releases resources associated with the device.</p>
 <p>Now we can start adding some compute to our program. Please refer to the <a class="reference internal" href="eltwise_binary.html#eltwise-binary-example"><span class="std std-ref">Eltwise binary example</span></a>.</p>
 </section>
 </section>

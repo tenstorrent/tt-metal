@@ -20,10 +20,11 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.matmul" href="ttnn.matmul.html" />
+    <link rel="next" title="ttnn.rand" href="ttnn.rand.html" />
     <link rel="prev" title="ttnn.full" href="ttnn.full.html" /> 
 </head>
 
@@ -72,6 +73,7 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.ones_like.html">ttnn.ones_like</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.full.html">ttnn.full</a></li>
 <li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.full_like</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.rand.html">ttnn.rand</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
@@ -157,7 +159,6 @@
 <li><p><strong>device</strong> (<em>ttnn.Device</em><em> | </em><em>ttnn.MeshDevice</em><em>, </em><em>optional</em>) – The device on which the tensor will be allocated. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – The memory configuration of the tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – command queue id. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span>
@@ -188,7 +189,7 @@
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="ttnn.full.html" class="btn btn-neutral float-left" title="ttnn.full" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.matmul.html" class="btn btn-neutral float-right" title="ttnn.matmul" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.rand.html" class="btn btn-neutral float-right" title="ttnn.rand" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

@@ -23,11 +23,12 @@
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
         <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
         <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../../genindex.html" />
     <link rel="search" title="Search" href="../../../search.html" />
     <link rel="next" title="Multi-Head Attention" href="ttnn_multihead_attention.html" />
-    <link rel="prev" title="More Basic Tensor Operations" href="ttnn_basic_operations.html" /> 
+    <link rel="prev" title="Basic Tensor Operations" href="ttnn_basic_operations.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -63,15 +64,15 @@
 <li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
 <li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
-<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">More Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">Basic Tensor Operations</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">MLP Inference</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="#Import-the-necessary-libraries">Import the necessary libraries</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Open-Tenstorrent-device">Open Tenstorrent device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Import-Libraries">Import Libraries</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Open-the-Device">Open the Device</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#Load-MNIST-Test-Data">Load MNIST Test Data</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#Load-Pretrained-MLP-Weights">Load Pretrained MLP Weights</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Basic-accuracy-tracking,-inference,-loop,-and-image-flattening">Basic accuracy tracking, inference, loop, and image flattening</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Close-The-Device">Close The Device</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#Full-example-and-output">Full example and output</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Accuracy-Tracking,-Inference,-Loop,-and-Image-Flattening">Accuracy Tracking, Inference, Loop, and Image Flattening</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Close-the-Device">Close the Device</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Full-Example-and-Output">Full Example and Output</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
@@ -122,12 +123,11 @@
 </h1>
 <p>In this example we will combine insight from the previous examples, and use TT-NN with PyTorch to perform a simple MLP inference task. This will demonstrate how to use TT-NN for tensor operations and model inference.</p>
 <p>Lets create the example file, <code class="docutils literal notranslate"><span class="pre">ttnn_mlp_inference_mnist.py</span></code></p>
-<section id="Import-the-necessary-libraries">
-<h2>Import the necessary libraries<a class="headerlink" href="#Import-the-necessary-libraries" title="Permalink to this heading"></a>
+<section id="Import-Libraries">
+<h2>Import Libraries<a class="headerlink" href="#Import-Libraries" title="Permalink to this heading"></a>
 </h2>
-<p>In this script, a set of essential libraries are imported to perform inference on the MNIST digit classification task using a multi-layer perceptron (MLP) accelerated by Tenstorrent hardware. The torch library provides utilities for loading and manipulating data, while torchvision and its transforms submodule are used to download the MNIST dataset and apply normalization and tensor conversion to the image inputs. The ttnn library is the core interface for compiling and running neural network
-operations on Tenstorrent devices, including tensor creation, data layout transformation, and layer computation (e.g., linear, relu). The os module is used to check for the existence of a pretrained weights file on disk. Finally, loguru is used to provide clear and structured logging throughout the script, including loading status, prediction results, and final accuracy reporting. These imports collectively enable a pipeline that loads data, runs inference on a custom backend, and logs the
-outcome efficiently.</p>
+<p>In this script, a set of essential libraries are imported to perform inference on the MNIST digit classification task using a multi-layer perceptron (MLP) accelerated by Tenstorrent hardware. The torch library provides utilities for loading and manipulating data, while torchvision and its transforms submodule download the MNIST dataset and apply normalization and tensor conversion to the image inputs. The TT-NN library is the core interface for compiling and running neural network operations on
+Tenstorrent devices, including tensor creation, data layout transformation, and layer computation (e.g., linear, relu). The OS module checks for a pretrained weights file on disk. Finally, loguru provides clear and structured logging throughout the script, including loading status, prediction results, and final accuracy reporting. These imports enable a pipeline that loads data, runs inference on a custom backend, and logs the outcome efficiently.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -145,10 +145,10 @@ outcome efficiently.</p>
 </div>
 </div>
 </section>
-<section id="Open-Tenstorrent-device">
-<h2>Open Tenstorrent device<a class="headerlink" href="#Open-Tenstorrent-device" title="Permalink to this heading"></a>
+<section id="Open-the-Device">
+<h2>Open the Device<a class="headerlink" href="#Open-the-Device" title="Permalink to this heading"></a>
 </h2>
-<p>Create necessary device on which we will run our program.</p>
+<p>Create the device to run the program.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -164,7 +164,7 @@ outcome efficiently.</p>
 <section id="Load-MNIST-Test-Data">
 <h2>Load MNIST Test Data<a class="headerlink" href="#Load-MNIST-Test-Data" title="Permalink to this heading"></a>
 </h2>
-<p>Load and convert the MNIST 28x28 grayscale images to tensors and normalize them. Subsequently, lets create a DataLoader to iterate through the dataset. This will allow us to perform inference on each image in the dataset.</p>
+<p>Load and convert MNIST 28x28 grayscale images to tensors for normalization. Subsequently, create a DataLoader to iterate through the dataset. This will allow us to perform inference on each image in the dataset.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -182,7 +182,7 @@ outcome efficiently.</p>
 <section id="Load-Pretrained-MLP-Weights">
 <h2>Load Pretrained MLP Weights<a class="headerlink" href="#Load-Pretrained-MLP-Weights" title="Permalink to this heading"></a>
 </h2>
-<p>Load the pretrained MLP weights from a file. You can run the provided <code class="docutils literal notranslate"><span class="pre">train_and_export_mlp.py</span></code> script to generate the weights to a file named <code class="docutils literal notranslate"><span class="pre">mlp_mnist_weights.pt</span></code>. Alternatively, if weights file is not found, random weights values will be generated to test functionality, but expect poor prediction results there.</p>
+<p>Load the pretrained MLP weights from a file. Run the following script <code class="docutils literal notranslate"><span class="pre">train_and_export_mlp.py</span></code> Alternatively, if the weights file is not found, random weights values will be generated to test functionality, but expect poor prediction results.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -212,12 +212,12 @@ outcome efficiently.</p>
 </div>
 </div>
 </section>
-<section id="Basic-accuracy-tracking,-inference,-loop,-and-image-flattening">
-<h2>Basic accuracy tracking, inference, loop, and image flattening<a class="headerlink" href="#Basic-accuracy-tracking,-inference,-loop,-and-image-flattening" title="Permalink to this heading"></a>
+<section id="Accuracy-Tracking,-Inference,-Loop,-and-Image-Flattening">
+<h2>Accuracy Tracking, Inference, Loop, and Image Flattening<a class="headerlink" href="#Accuracy-Tracking,-Inference,-Loop,-and-Image-Flattening" title="Permalink to this heading"></a>
 </h2>
-<p>This code snippet performs inference on the first five test samples from the MNIST dataset using a multi-layer perceptron (MLP) executed on Tenstorrent hardware via the TT-NN API. It initializes counters for tracking the number of correct predictions. For each sample, the input image is flattened into a 1D vector and converted from a PyTorch tensor to a TT-NN tensor with bfloat16 precision and TILE_LAYOUT for efficient execution. The tensor is then passed sequentially through three fully
-connected layers: each of the first two layers applies a linear transformation followed by a ReLU activation, while the final layer produces raw logits for the 10 output classes (digits 0–9). For each layer, the weights are transposed and the biases are reshaped to match TT-NN’s expected input dimensions. After computing the final output, it is converted back to a PyTorch tensor, and the class with the highest activation is selected as the predicted label. The prediction is compared with the
-true label to update the accuracy counters, and the result is logged. Once all five samples are processed, the script logs the overall prediction accuracy.</p>
+<p>The following code snippet performs inference on the first five test samples from the MNIST dataset using a multi-layer perceptron (MLP) executed on Tenstorrent hardware via the TT-NN API. It initializes counters for tracking the number of correct predictions. For each sample, the input image is flattened into a 1D vector and converted from a PyTorch tensor to a TT-NN tensor with bfloat16 precision and TILE_LAYOUT for efficient execution. The tensor is then passed sequentially through three
+fully connected layers: each of the first two layers applies a linear transformation followed by a ReLU activation, while the final layer produces raw logits for the 10 output classes (digits 0–9). For each layer, the weights are transposed and the biases are reshaped to match TT-NN’s expected input dimensions. After computing the final output, it is converted back to a PyTorch tensor, and the class with the highest activation is selected as the predicted label. The prediction is compared with
+the true label to update the accuracy counters, and the result is logged. Once all five samples are processed, the script logs the overall prediction accuracy.</p>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
 <div class="highlight"><pre><span></span>[ ]:
@@ -275,8 +275,8 @@ true label to update the accuracy counters, and the result is logged. Once all f
 </div>
 </div>
 </section>
-<section id="Close-The-Device">
-<h2>Close The Device<a class="headerlink" href="#Close-The-Device" title="Permalink to this heading"></a>
+<section id="Close-the-Device">
+<h2>Close the Device<a class="headerlink" href="#Close-the-Device" title="Permalink to this heading"></a>
 </h2>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate">
@@ -289,12 +289,12 @@ true label to update the accuracy counters, and the result is logged. Once all f
 </div>
 </div>
 </section>
-<section id="Full-example-and-output">
-<h2>Full example and output<a class="headerlink" href="#Full-example-and-output" title="Permalink to this heading"></a>
+<section id="Full-Example-and-Output">
+<h2>Full Example and Output<a class="headerlink" href="#Full-Example-and-Output" title="Permalink to this heading"></a>
 </h2>
 <p>Lets put everything together in a complete example that can be run directly.</p>
 <p><a class="reference external" href="https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py">ttnn_mlp_inference_mnist.py</a></p>
-<p>Running this script will generate output the as shown below:</p>
+<p>Run the following script to generate output:</p>
 <div class="highlight-console notranslate">
 <div class="highlight"><pre><span></span><span class="gp">$ </span>python3<span class="w"> </span><span class="nv">$TT_METAL_HOME</span>/ttnn/tutorials/basic_python/ttnn_mlp_inference_mnist.py
 <span class="go">2025-07-07 13:03:41.990 | info     |   SiliconDriver | Opened PCI device 7; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:198)</span>
@@ -334,7 +334,7 @@ true label to update the accuracy counters, and the result is logged. Once all f
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn_basic_operations.html" class="btn btn-neutral float-left" title="More Basic Tensor Operations" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn_basic_operations.html" class="btn btn-neutral float-left" title="Basic Tensor Operations" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
         <a href="ttnn_multihead_attention.html" class="btn btn-neutral float-right" title="Multi-Head Attention" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 

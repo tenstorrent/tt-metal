@@ -20,6 +20,7 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
@@ -170,6 +171,7 @@
 <li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – Configuration for convolution. Default: None</p></li>
 <li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – Configuration for compute kernel. Default: None</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>None</em>) – Output Tensor’s Memory Configuration. Default: None</p></li>
+<li><p><strong>slice_config</strong> (<a class="reference internal" href="ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><em>ttnn.Conv2dSliceConfig</em></a><em>, </em><em>None</em>) – Configuration for slicing the input &amp; output tensors when they are in DRAM. If this is set to None, and the input is in DRAM, DRAM Slicing will be automatically enabled. Default: None</p></li>
 <li><p><strong>return_output_dim</strong> (<em>bool</em>) – If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,</p></li>
 <li><p><strong>return_weights_and_bias</strong> (<em>bool</em>) – If true, the op also returns the preprocessed weight and bias on device .</p></li>
 </ul>

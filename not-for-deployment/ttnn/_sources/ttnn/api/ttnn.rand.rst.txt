@@ -1,0 +1,8 @@
+﻿ttnn.rand
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.rand:
+
+.. autodata:: ttnn.rand
