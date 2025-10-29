@@ -165,6 +165,33 @@ def test_softplus(device, h, w, beta, threshold):
     run_activation_softplus_test(device, h, w, beta, threshold, ttnn.softplus)
 
 
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 2, 64, 120])),
+        (torch.Size([1, 3, 320, 320])),
+        (torch.Size([1, 1, 25600, 128])),
+    ),
+)
+@pytest.mark.parametrize("input_range", [(-10, 10), (-50, 50)])
+def test_softplus_bf16_ulp(device, input_range, input_shapes):
+    """Test softplus accuracy across BF16 range using ULP metric"""
+    low, high = input_range
+    num_elements = torch.prod(torch.tensor(input_shapes)).item()
+    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
+    torch_input = torch_input[:num_elements].reshape(input_shapes)
+
+    golden_function = ttnn.get_golden_function(ttnn.softplus)
+    golden = golden_function(torch_input, beta=1.0, threshold=20.0)
+
+    tt_in = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_result = ttnn.softplus(tt_in, beta=1.0, threshold=20.0)
+    result = ttnn.to_torch(tt_result)
+
+    assert_with_ulp(result, golden, ulp_threshold=2.0)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanhshrink(device, h, w):
