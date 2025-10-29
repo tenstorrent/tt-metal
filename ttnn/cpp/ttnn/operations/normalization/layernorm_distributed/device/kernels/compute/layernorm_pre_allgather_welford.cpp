@@ -53,6 +53,7 @@ void MAIN {
 
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_x2);
 
+    DPRINT << "WELFORDS!" << ENDL();
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr uint32_t dst0 = 0;
         constexpr uint32_t dst1 = 1;
