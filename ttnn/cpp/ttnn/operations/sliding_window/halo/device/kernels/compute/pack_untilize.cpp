@@ -39,10 +39,14 @@ void MAIN {
     for (uint32_t block_idx = 0; block_idx < total_blocks; block_idx++) {
         const uint32_t out_cb_id = (block_idx % NUM_RISCV_DATA_MOVEMENT_CORES == 0) ? out_cb_id0 : out_cb_id1;
 
+        DPRINT << "Processing block " << block_idx << ", output CB ID: " << out_cb_id << ENDL();
+
         cb_wait_front(src_cb_id, tiles_per_block);
         cb_reserve_back(out_cb_id, tiles_per_block);
 
-        UNPACK(tt::compute::common::print_full_tile(src_cb_id, 0));
+        UNPACK(tt::compute::common::print_full_tile(src_cb_id, 0, true));
+        UNPACK(DPRINT << "src read addr: " << get_local_cb_interface(src_cb_id).fifo_rd_ptr * 16 << ENDL());
+        UNPACK(DPRINT << "out write addr: " << get_local_cb_interface(out_cb_id).fifo_wr_ptr * 16 << ENDL());
 
         if constexpr (use_pack_untilize) {
             pack_untilize_block<tiles_per_row>(src_cb_id, block_size, out_cb_id);
