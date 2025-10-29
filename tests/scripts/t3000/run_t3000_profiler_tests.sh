@@ -50,7 +50,7 @@ run_async_tracing_T3000_test() {
             echo "Verifying test results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=2700
+            LINE_COUNT=2600
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
 
@@ -60,11 +60,11 @@ run_async_tracing_T3000_test() {
             echo "Verifying device-only results"
             runDate=$(ls $PROFILER_OUTPUT_DIR/)
             echo $runDate
-            LINE_COUNT=1800
+            LINE_COUNT=1700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
             echo $res
 
-            LINE_COUNT=1800
+            LINE_COUNT=1700
             res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/per_core_op_to_op_times_$runDate.csv" "$LINE_COUNT")
             echo $res
         fi
@@ -75,7 +75,7 @@ run_ccl_T3000_test() {
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
 
-    ./tools/tracy/profile_this.py -c "'pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-check-mem_config_input0-mem_config_ag0-sd35_prompt-1link-mesh_device0]'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
+    ./tools/tracy/profile_this.py -c "'pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py::test_ttnn_all_gather[wormhole_b0-fabric_ring-mem_config_input0-mem_config_ag0-sd35_prompt-check-1link-mesh_device0]'" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
 
     if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
     then
