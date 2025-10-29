@@ -443,7 +443,7 @@ TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
     auto control_plane = std::make_unique<ControlPlane>(bhqb_mesh_graph_desc_path.string());
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
@@ -454,7 +454,7 @@ TEST(MultiHost, TestBHQB4x4Fabric2DSanity) {
     }
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 

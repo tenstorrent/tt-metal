@@ -1466,10 +1466,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D)
-                receiver_forward_packet<
-                    receiver_channel,
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                receiver_forward_packet<receiver_channel>(
                     packet_header,
                     cached_routing_fields,
                     downstream_edm_interfaces_vc0,

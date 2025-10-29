@@ -730,7 +730,6 @@ void TestDevice::create_sync_kernel() {
 
     // TODO: fetch these dynamically
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
-    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
     // Assuming single sync core per device for now
     TT_FATAL(
@@ -752,7 +751,6 @@ void TestDevice::create_sync_kernel() {
     // Compile-time args
     std::vector<uint32_t> ct_args = {
         is_2D_routing_enabled,
-        is_dynamic_routing_enabled,
         (uint32_t)num_sync_connections,                      /* num sync fabric connections */
         static_cast<uint32_t>(senders_.size() + 1),          /* num local sync cores (all senders + sync core) */
         sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
@@ -843,7 +841,6 @@ void TestDevice::create_sync_kernel() {
 void TestDevice::create_sender_kernels() {
     // Unified sender kernel creation - handles both fabric and mux connections based on per-pattern flow control
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
-    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size()) + 1;
 
     TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
@@ -860,7 +857,6 @@ void TestDevice::create_sender_kernels() {
         // Compile-time args (FLOW_CONTROL_ENABLED removed - now handled per-traffic-config)
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled,
-            is_dynamic_routing_enabled,
             (uint32_t)num_connections,                           /* num connections (from FabricConnectionManager) */
             sender.configs_.size(),                              /* num traffic configs */
             (uint32_t)benchmark_mode_,                           /* benchmark mode */
@@ -960,7 +956,6 @@ void TestDevice::create_sender_kernels() {
 
 void TestDevice::create_receiver_kernels() {
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
-    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
     TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
     TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
@@ -976,7 +971,6 @@ void TestDevice::create_receiver_kernels() {
         // Compile-time args (order must match receiver kernel .cpp file)
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled ? 1u : 0u,                       /* IS_2D_FABRIC */
-            is_dynamic_routing_enabled ? 1u : 0u,                  /* USE_DYNAMIC_ROUTING */
             receiver.configs_.size(),                              /* NUM_TRAFFIC_CONFIGS */
             benchmark_mode_ ? 1u : 0u,                             /* BENCHMARK_MODE */
             receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */

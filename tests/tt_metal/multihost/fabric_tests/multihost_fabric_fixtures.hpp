@@ -263,7 +263,7 @@ public:
             GTEST_SKIP() << "Skipping since this is not a supported system.";
         }
 
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
     void TearDown() override {

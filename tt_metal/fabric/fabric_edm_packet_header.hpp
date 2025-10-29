@@ -646,6 +646,9 @@ static_assert(
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
+#ifndef FABRIC_2D_TMP  // TODO: remove this ifdef after validation
+#define FABRIC_2D_TMP
+#endif
 #define PACKET_HEADER_TYPE tt::tt_fabric::HybridMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else

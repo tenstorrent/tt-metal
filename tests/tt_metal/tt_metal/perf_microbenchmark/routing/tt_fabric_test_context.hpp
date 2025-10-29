@@ -675,9 +675,6 @@ private:
                     per_receiver_config.receiver_credit_info->credit_return_address = credit_return_address;
 
                     std::optional<std::unordered_map<RoutingDirection, uint32_t>> reverse_hops = std::nullopt;
-                    if (!fixture_->is_dynamic_routing_enabled()) {
-                        reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
-                    }
                     per_receiver_config.receiver_credit_info->hops = reverse_hops;
                 }
 

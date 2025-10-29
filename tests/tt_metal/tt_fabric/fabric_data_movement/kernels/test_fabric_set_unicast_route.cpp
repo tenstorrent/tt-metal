@@ -9,6 +9,78 @@
 
 using namespace tt::tt_fabric;
 
+// old runtime implementation moved from tt_fabric_api.h
+void fabric_set_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t my_dev_id,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+    uint16_t ew_dim) {
+    uint32_t ns_hops = 0;
+    uint32_t target_dev = dst_dev_id;
+    uint32_t target_col = 0;
+
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_mesh_id = routing_table->my_mesh_id;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->routing_fields.value = 0;
+    packet_header->mcast_params_16 = 0;
+    if (my_mesh_id != dst_mesh_id) {
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
+        // dst_dev_id = exit_node;
+    }
+
+    while (target_dev >= ew_dim) {
+        target_dev -= ew_dim;
+        target_col++;
+    }
+    uint32_t my_col = 0;
+    uint32_t my_dev = my_dev_id;
+    while (my_dev >= ew_dim) {
+        my_dev -= ew_dim;
+        my_col++;
+    }
+
+    eth_chan_directions outgoing_direction;
+    uint32_t ew_hops = 0;
+    if (target_col == my_col) {
+        if (my_dev < target_dev) {
+            // My device is west of target device
+            outgoing_direction = eth_chan_directions::EAST;
+            ew_hops = target_dev - my_dev;
+        } else {
+            // My device is east of target device
+            outgoing_direction = eth_chan_directions::WEST;
+            ew_hops = my_dev - target_dev;
+        }
+        fabric_set_route(packet_header, outgoing_direction, 0, 0, ew_hops, true);
+    } else {
+        // First hop is north/south. Calculate the number of required hops before turning east/west
+        uint32_t ns_hops = 0;
+        if (target_col > my_col) {
+            // Target device is south of my device
+            ns_hops = target_col - my_col;
+            outgoing_direction = eth_chan_directions::SOUTH;
+        } else {
+            // Target device is north of my device
+            ns_hops = my_col - target_col;
+            outgoing_direction = eth_chan_directions::NORTH;
+        }
+
+        // determine the east/west hops
+        uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        fabric_set_route(
+            packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops - bool(ew_hops), ew_hops == 0);
+        if (ew_hops) {
+            // +1 because this branch is now implementing the turn
+            fabric_set_route(
+                packet_header, (eth_chan_directions)turn_direction, 0, ns_hops - bool(ew_hops), ew_hops + 1, true);
+        }
+    }
+}
+
 void kernel_main() {
     uint32_t src_mesh_id = get_arg_val<uint32_t>(0);
     uint32_t src_fabric_dev_id = get_arg_val<uint32_t>(1);
