@@ -1307,8 +1307,6 @@ def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
     for i in range(devices):
         torch_reference += torch_inputs_per_device[i]
 
-    logger.info(f"torch_reference: {torch_reference}")
-
     tt_input = ttnn.from_torch(
         torch.cat(torch_inputs_per_device, dim=0),
         layout=ttnn.TILE_LAYOUT,

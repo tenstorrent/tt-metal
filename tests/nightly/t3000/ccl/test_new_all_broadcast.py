@@ -524,7 +524,7 @@ def test_all_broadcast_sharded_2x4(
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
     [

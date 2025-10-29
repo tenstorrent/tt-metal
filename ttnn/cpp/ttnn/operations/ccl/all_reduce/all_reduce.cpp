@@ -19,6 +19,23 @@ ttnn::Tensor ExecuteAllReduce::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology) {
+    // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call all-reduce on cluster_axis=1, then
+    // all-reduce on cluster_axis=0
+    if (cluster_axis == std::nullopt) {
+        auto mesh_shape = input_tensor.device()->get_view().shape();
+        // Check if flat mesh (1x...M...x1) where M = total mesh volume
+        // if it is not flat, then we need to call all-reduce from dim=0 to dim=-1
+        uint32_t num_devices = mesh_shape.mesh_size();
+        bool is_not_flat_mesh = std::none_of(
+            mesh_shape.cbegin(), mesh_shape.cend(), [num_devices](uint32_t dim) { return dim == num_devices; });
+        if (is_not_flat_mesh) {
+            Tensor tensor = input_tensor;
+            for (int i = 0; i < mesh_shape.dims(); ++i) {
+                tensor = ttnn::all_reduce(tensor, i, subdevice_id, memory_config, num_links, topology);
+            }
+            return tensor;
+        }
+    }
     // Get mesh device from input tensor
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_reduce operation");
