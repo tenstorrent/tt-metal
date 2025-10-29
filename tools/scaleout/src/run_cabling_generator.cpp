@@ -18,7 +18,7 @@
 using namespace tt::scaleout_tools;
 
 struct InputConfig {
-    std::string cluster_descriptor_path;
+    std::string cabling_descriptor_path;
     std::string deployment_descriptor_path;
     std::string output_name;
     bool loc_info = true;  // Default to detailed location info
@@ -29,35 +29,44 @@ bool file_exists(const std::string& path) {
 }
 
 InputConfig parse_arguments(int argc, char** argv) {
-    cxxopts::Options options("run_cabling_generator", "Generate factory system descriptor and cabling guide from cluster and deployment descriptors");
+    cxxopts::Options options(
+        "run_cabling_generator",
+        "Generate factory system descriptor and cabling guide from cabling and deployment descriptors");
 
-    options.add_options()
-        ("c,cluster", "Path to the cluster descriptor file (.textproto)", cxxopts::value<std::string>())
-        ("d,deployment", "Path to the deployment descriptor file (.textproto)", cxxopts::value<std::string>())
-        ("o,output", "Name suffix for output files (without extensions) - optional, defaults to empty", cxxopts::value<std::string>()->default_value(""))
-        ("s,simple", "Generate simple CSV output (hostname-based) instead of detailed location information (rack, shelf, etc.)", cxxopts::value<bool>()->default_value("false")->implicit_value("true"))
-        ("h,help", "Print usage information");
+    options.add_options()(
+        "c,cabling", "Path to the cabling descriptor file (.textproto)", cxxopts::value<std::string>())(
+        "d,deployment", "Path to the deployment descriptor file (.textproto)", cxxopts::value<std::string>())(
+        "o,output",
+        "Name suffix for output files (without extensions) - optional, defaults to empty",
+        cxxopts::value<std::string>()->default_value(""))(
+        "s,simple",
+        "Generate simple CSV output (hostname-based) instead of detailed location information (rack, shelf, etc.)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))("h,help", "Print usage information");
 
     try {
         auto result = options.parse(argc, argv);
 
-        if (result.count("help")) {
+        if (result.count("help") || argc == 1) {
             std::cout << options.help() << std::endl;
             std::cout << "\nOutput files:" << std::endl;
             std::cout << "  - out/scaleout/factory_system_descriptor_<output_name>.textproto" << std::endl;
             std::cout << "  - out/scaleout/cabling_guide_<output_name>.csv" << std::endl;
             std::cout << "\nExamples:" << std::endl;
-            std::cout << "  " << argv[0] << " --cluster cluster.textproto --deployment deployment.textproto" << std::endl;
+            std::cout << "  " << argv[0] << " --cabling cabling.textproto --deployment deployment.textproto"
+                      << std::endl;
             std::cout << "  # Generates files with default names (no suffix)" << std::endl;
-            std::cout << "  " << argv[0] << " --cluster cluster.textproto --deployment deployment.textproto --output test" << std::endl;
+            std::cout << "  " << argv[0]
+                      << " --cabling cabling.textproto --deployment deployment.textproto --output test" << std::endl;
             std::cout << "  # Generates detailed CSV with rack/shelf information" << std::endl;
-            std::cout << "  " << argv[0] << " --cluster cluster.textproto --deployment deployment.textproto --output test --simple" << std::endl;
+            std::cout << "  " << argv[0]
+                      << " --cabling cabling.textproto --deployment deployment.textproto --output test --simple"
+                      << std::endl;
             std::cout << "  # Generates simple CSV with hostname information only" << std::endl;
             exit(0);
         }
 
-        if (!result.count("cluster")) {
-            throw std::invalid_argument("Cluster descriptor path is required");
+        if (!result.count("cabling")) {
+            throw std::invalid_argument("Cabling descriptor path is required");
         }
 
         if (!result.count("deployment")) {
@@ -65,14 +74,14 @@ InputConfig parse_arguments(int argc, char** argv) {
         }
 
         InputConfig config;
-        config.cluster_descriptor_path = result["cluster"].as<std::string>();
+        config.cabling_descriptor_path = result["cabling"].as<std::string>();
         config.deployment_descriptor_path = result["deployment"].as<std::string>();
         config.output_name = result["output"].as<std::string>();
         config.loc_info = !result["simple"].as<bool>();
 
-        // Validate cluster descriptor file
-        if (!file_exists(config.cluster_descriptor_path)) {
-            throw std::invalid_argument("Cluster descriptor file not found: '" + config.cluster_descriptor_path + "'");
+        // Validate cabling descriptor file
+        if (!file_exists(config.cabling_descriptor_path)) {
+            throw std::invalid_argument("Cabling descriptor file not found: '" + config.cabling_descriptor_path + "'");
         }
 
         // Validate deployment descriptor file
@@ -81,8 +90,9 @@ InputConfig parse_arguments(int argc, char** argv) {
         }
 
         // Validate file extensions
-        if (!config.cluster_descriptor_path.ends_with(".textproto")) {
-            throw std::invalid_argument("Cluster descriptor file should have .textproto extension: '" + config.cluster_descriptor_path + "'");
+        if (!config.cabling_descriptor_path.ends_with(".textproto")) {
+            throw std::invalid_argument(
+                "Cabling descriptor file should have .textproto extension: '" + config.cabling_descriptor_path + "'");
         }
 
         if (!config.deployment_descriptor_path.ends_with(".textproto")) {
@@ -113,12 +123,12 @@ int main(int argc, char** argv) {
         InputConfig config = parse_arguments(argc, argv);
 
         std::cout << "Generating cabling configuration..." << std::endl;
-        std::cout << "  Cluster descriptor: " << config.cluster_descriptor_path << std::endl;
+        std::cout << "  Cabling descriptor: " << config.cabling_descriptor_path << std::endl;
         std::cout << "  Deployment descriptor: " << config.deployment_descriptor_path << std::endl;
         std::cout << "  Output name suffix: " << config.output_name << std::endl;
 
         std::cout << "Loading descriptors and initializing generator..." << std::endl;
-        CablingGenerator cabling_generator(config.cluster_descriptor_path, config.deployment_descriptor_path);
+        CablingGenerator cabling_generator(config.cabling_descriptor_path, config.deployment_descriptor_path);
 
         std::string factory_output = "out/scaleout/factory_system_descriptor_" + config.output_name + ".textproto";
         std::string cabling_output = "out/scaleout/cabling_guide_" + config.output_name + ".csv";
