@@ -230,6 +230,7 @@ class MochiPipeline(DiffusionPipeline):
                 model_name="mochi-1-preview",
                 subfolder="transformer",
                 parallel_config=parallel_config,
+                mesh_shape=mesh_device.shape,
                 dtype="bf16",
             )
             assert os.path.exists(

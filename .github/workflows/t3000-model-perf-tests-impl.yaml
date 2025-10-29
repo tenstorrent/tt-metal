@@ -29,6 +29,7 @@ jobs:
           { name: "t3k CNN sentence_bert model perf tests", model: "sentence_bert", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
           { name: "t3k DiT SD3.5 model perf tests", model: "stable_diffusion_35_large", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_stable_diffusion_35_large_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
           { name: "t3k DiT Mochi model perf tests", model: "mochi", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_mochi_tests, timeout: 75, owner_id: U09ELB03XRU}, # Stephen Osborne
+          { name: "t3k DiT Flux.1-dev model perf tests", model: "flux1-dev", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_flux1_tests, timeout: 75, owner_id: U08TED0JM9D}, # Samuel Adesoye
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
