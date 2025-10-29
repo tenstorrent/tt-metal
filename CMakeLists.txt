@@ -183,7 +183,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-parentheses>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-pragmas>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-aliasing>"
