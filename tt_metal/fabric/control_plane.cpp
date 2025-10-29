@@ -322,6 +322,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
         std::vector<MeshId> local_mesh_ids;
         for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            // TODO: #24528 - Move this to use TopologyMapper once Topology mapper works for multi-mesh systems
             const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
             TT_FATAL(
                 host_ranks.size() == 1 && *host_ranks.values().front() == 0,
