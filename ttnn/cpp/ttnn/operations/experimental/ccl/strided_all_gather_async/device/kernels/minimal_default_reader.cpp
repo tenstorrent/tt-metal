@@ -28,6 +28,7 @@ constexpr bool direction = get_compile_time_arg_val(7);  // 1 is forward, 0 is b
 constexpr bool fuse_op = get_compile_time_arg_val(8);
 constexpr uint32_t tiles_per_chunk = get_compile_time_arg_val(9);
 constexpr uint32_t ag_worker_cores = get_compile_time_arg_val(10);
+constexpr uint32_t ag_worker_id = get_compile_time_arg_val(11);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -49,7 +50,7 @@ void kernel_main() {
     uint32_t mm_block_h = get_arg_val<uint32_t>(arg_idx++);
     uint32_t mm_cores_y = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 11;
+    constexpr uint32_t ct_idx = 12;
 
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
@@ -94,7 +95,7 @@ void kernel_main() {
     uint32_t global_tile_id_start = input_tile_id_start;
     uint32_t global_tile_index = 0;
     uint32_t tiles_per_bh = input_tensor_Wt * input_tensor_Ht;
-    uint32_t chunks_per_core = div_up(input_tiles_per_core, tiles_per_chunk);
+    uint32_t chunks_per_core = div_up(tiles_per_bh, tiles_per_chunk);
     uint32_t tiles_read = 0;
     uint32_t sem_target = 0;
 
@@ -114,6 +115,7 @@ void kernel_main() {
                 mm_block_h,
                 input_tensor_Ht / mm_cores_y,
                 max_tiles_per_packet,
+                ag_worker_id,
                 ag_worker_cores,
                 input_tensor_addrgen,
                 input_tensor_page_size,
@@ -149,6 +151,7 @@ void kernel_main() {
                         mm_block_h,
                         input_tensor_Ht / mm_cores_y,
                         max_tiles_per_packet,
+                        ag_worker_id,
                         ag_worker_cores,
                         input_tensor_addrgen,
                         input_tensor_page_size,

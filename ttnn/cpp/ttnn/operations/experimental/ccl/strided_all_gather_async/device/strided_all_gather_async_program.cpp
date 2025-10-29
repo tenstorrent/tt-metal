@@ -436,6 +436,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     fuse_op,                          // fused op
                     tiles_per_chunk_val,
                     global_worker_count,
+                    global_worker_id,
                 };
                 tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_compile_args);
                 tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_reader_compile_args);
@@ -498,6 +499,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     dir,                              // direction
                     tiles_per_chunk_val,
                     global_worker_count,
+                    global_worker_id,
                 };
                 strided_fabric_mux_connection_ct_args(
                     worker == 0,
