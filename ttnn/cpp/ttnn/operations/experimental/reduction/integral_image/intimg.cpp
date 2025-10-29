@@ -14,7 +14,7 @@ void IntImgOperation::validate(const Tensor& input_tensor) {
     const auto& dtype = input_tensor.dtype();
     TT_FATAL(shape.rank() == 4, "Input tensor's rank must be 4, it is {} instead", shape.rank());
 
-    TT_FATAL(shape[0] != 1, "Only one batch expected, there are {} batches instead", shape[0]);
+    TT_FATAL(shape[0] == 1, "Only one batch expected, there are {} batches instead", shape[0]);
 
     TT_FATAL(
         dtype == DataType::BFLOAT16,
