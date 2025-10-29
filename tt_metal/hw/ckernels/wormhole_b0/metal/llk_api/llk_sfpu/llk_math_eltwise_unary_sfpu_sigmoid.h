@@ -12,11 +12,11 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_sigmoid_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reduce, APPROXIMATE>(sfpu::_init_reduce_sdpa_<DataFormat::Float16_b>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::sigmoid, APPROXIMATE>(sfpu::sigmoid_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_sigmoid(uint dst_index, int vector_mode = (int)VectorMode::RC_custom) {
+inline void llk_math_eltwise_unary_sfpu_sigmoid(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_sigmoid<APPROXIMATE>, dst_index, vector_mode);
 }
