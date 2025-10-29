@@ -15,11 +15,6 @@
 #include <type_traits>
 #include "tt_fabric_udm_impl.hpp"
 
-// Forward declarations for fabric connection management
-namespace tt::tt_fabric {
-class WorkerToFabricEdmSender;
-}
-
 namespace tt::tt_fabric::udm {
 
 /**
@@ -46,9 +41,9 @@ namespace tt::tt_fabric::udm {
  *
  * Each processor maintains its own counter.
  */
-extern uint32_t fabric_reads_num_acked;
-extern uint32_t fabric_nonposted_writes_acked;
-extern uint32_t fabric_nonposted_atomics_acked;
+inline uint32_t fabric_reads_num_acked __attribute__((used)) = 0;
+inline uint32_t fabric_nonposted_writes_acked __attribute__((used)) = 0;
+inline uint32_t fabric_nonposted_atomics_acked __attribute__((used)) = 0;
 
 /**
  * @brief Fabric barrier types - equivalent to NocBarrierType
@@ -197,13 +192,9 @@ inline __attribute__((always_inline)) void fabric_fast_write(
     bool multicast = false,
     uint32_t num_dests = 1,
     uint16_t trid = 0) {
-    // Get or create the singleton fabric connection
-    auto& connection = get_fabric_connection();
+    auto& connection = get_or_open_fabric_connection();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
-    // Allocate packet header from pool
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::allocate_header();
-
-    // Configure packet header based on operation type
     if (multicast) {
         // TODO: Set up multicast header with proper routing
 
@@ -219,9 +210,6 @@ inline __attribute__((always_inline)) void fabric_fast_write(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
 
     fabric_nonposted_writes_acked += num_dests;
-
-    // Return packet header to pool
-    PacketHeaderPool::release_header(reinterpret_cast<volatile tt_l1_ptr uint8_t*>(packet_header));
 }
 
 }  // namespace tt::tt_fabric::udm

@@ -588,6 +588,11 @@ public:
 struct UDMLowLatencyPacketHeader : public LowLatencyPacketHeader {
     UDMControlFields udm_control;
     uint8_t padding[3];  // Padding to align to 48 bytes
+
+    // Override to return correct size for UDMLowLatencyPacketHeader
+    size_t get_payload_size_including_header() volatile const {
+        return get_payload_size_excluding_header() + sizeof(UDMLowLatencyPacketHeader);
+    }
 } __attribute__((packed));
 static_assert(sizeof(UDMLowLatencyPacketHeader) == 48, "sizeof(UDMLowLatencyPacketHeader) is not equal to 48B");
 
@@ -721,6 +726,11 @@ static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHead
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
     uint8_t padding[3];  // Padding to align to 80 bytes
+
+    // Override to return correct size for UDMHybridMeshPacketHeader
+    size_t get_payload_size_including_header() volatile const {
+        return get_payload_size_excluding_header() + sizeof(UDMHybridMeshPacketHeader);
+    }
 } __attribute__((packed));
 static_assert(sizeof(UDMHybridMeshPacketHeader) == 80, "sizeof(UDMHybridMeshPacketHeader) is not equal to 80B");
 
