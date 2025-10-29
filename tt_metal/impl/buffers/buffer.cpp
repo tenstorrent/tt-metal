@@ -256,12 +256,12 @@ Buffer::Buffer(
     Private) :
     device_(device),
     size_(size),
-    page_size_(page_size),
     buffer_type_(buffer_type),
     buffer_layout_(sharding_args.buffer_layout()),
     bottom_up_(bottom_up.value_or(this->is_dram())),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
+    page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
