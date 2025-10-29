@@ -336,6 +336,17 @@ class GroupNorm(Module):
     ):
         super().__init__()
 
+        """
+        Args:
+            num_channels: Number of channels in the input tensor.
+            num_groups: Number of groups.
+            eps: Epsilon value for numerical stability.
+            mesh_device: The device to use.
+            mesh_axis: The mesh axis to use for sharding.
+            core_grid: The core grid to use.
+            num_out_blocks: The number of output blocks to use.
+            torch_ref: The torch reference layer.
+        """
         self.eps = eps or torch_ref.eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
@@ -409,7 +420,6 @@ class GroupNorm(Module):
         return torch.cat(torch_sharded_lst, dim=0)
 
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1) -> ttnn.Tensor:
-        self.num_out_blocks = num_out_blocks
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(
@@ -421,7 +431,7 @@ class GroupNorm(Module):
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
-            num_out_blocks=self.num_out_blocks,
+            num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
         x = x.reshape([batch_size, height, width, channels])
