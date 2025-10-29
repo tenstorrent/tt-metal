@@ -160,30 +160,6 @@ class Generator:
 
         return tt_out_trace
 
-    def can_enable_trace(self, prefill_seq_len):
-        """
-        This function is used to determine if trace should be enabled for the prefill.
-        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
-        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
-        There is no support to pass them as a tensor, and then inside the trace read it as a number.
-        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
-        """
-        if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
-            return False
-        if prefill_seq_len > self.model_args[0].max_prefill_chunk_size:
-            return False
-        if hasattr(self.model_args[0], "sliding_window") and getattr(self.model_args[0], "sliding_window") != None:
-            return False
-        return True
-
-    def model_supports_trace(self):
-        """
-        This function is used to determine if trace should be enabled for the model.
-        """
-        if "mixtral" in self.model_args[0].model_name.lower():
-            return False
-        return True
-
     # Note: This function is called by vLLM
     def prefill_forward_text(
         self,
@@ -201,7 +177,7 @@ class Generator:
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        enable_trace = enable_trace and self.model_supports_trace()
+        enable_trace = enable_trace and self.model_args[0].model_supports_trace()
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -230,7 +206,9 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
 
-            enable_trace_current_prompt = enable_trace and self.can_enable_trace(prefill_seq_len)
+            enable_trace_current_prompt = enable_trace and self.model_args[model_id].trace_supported_seq_len(
+                prefill_seq_len
+            )
 
             logger.info(
                 f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
