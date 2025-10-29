@@ -18,7 +18,6 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
-    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
     const std::optional<const DataType>& dtype,
     const std::optional<bool>& use_2d_core_grid) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
@@ -48,7 +47,7 @@ ttnn::Tensor ExecuteRMSNormPostAllGather::invoke(
                        .compute_kernel_config = kernel_config_val,
                        .dtype = dtype,
                        .use_2d_core_grid = use_2d_core_grid,
-                       .program_config = distributed_program_config},
+                       .program_config = program_config.value_or(LayerNormDefaultProgramConfig{})},
                    {input_tensor, stats},
                    {weight, bias})
             .at(0);

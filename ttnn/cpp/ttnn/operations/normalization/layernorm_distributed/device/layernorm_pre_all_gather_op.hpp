@@ -11,6 +11,7 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "layernorm/device/layernorm_types.hpp"
+#include "layernorm_distributed_types.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -36,7 +37,6 @@ struct LayerNormPreAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     LayerNormProgramConfig program_config;
     std::optional<bool> use_2d_core_grid;
-    LayerNormDefaultProgramConfig program_config;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;

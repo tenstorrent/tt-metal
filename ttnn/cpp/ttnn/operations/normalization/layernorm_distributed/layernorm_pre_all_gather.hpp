@@ -20,7 +20,6 @@ struct ExecuteLayerNormPreAllGather {
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
-    py::arg("program_config") = LayerNormDefaultProgramConfig{},
 };
 
 }  // namespace operations::normalization
