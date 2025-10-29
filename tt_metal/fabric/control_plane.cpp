@@ -435,53 +435,52 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) con
     return FabricNodeId(MeshId{0}, 0);
 }
 
-void ControlPlane::init_control_plane(
-    const std::string& mesh_graph_desc_file,
-    std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
-        logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+void ControlPlane::initialize() {
+    try {
+        this->is_initialized_ = true;
 
-    this->initialize_distributed_contexts();
+        const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+        const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(this->mesh_graph_desc_file_);
+        this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+            driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+        this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
-        // Do not initialize topology mapper if user provided physical chip mapping
-        this->topology_mapper_ = nullptr;
-        this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
-    } else {
-        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
-        this->load_physical_chip_mapping(
-            topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
+        this->initialize_distributed_contexts();
+
+        if (this->logical_mesh_chip_id_to_physical_chip_id_mapping_.empty()) {
+            this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+                *this->routing_table_generator_->mesh_graph,
+                *this->physical_system_descriptor_,
+                this->local_mesh_binding_);
+            this->logical_mesh_chip_id_to_physical_chip_id_mapping_ =
+                this->topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping();
+        }
+
+        this->validate_mesh_connections();
+
+        this->generate_intermesh_connectivity();
+
+        // Printing, only enabled with log_debug
+        this->routing_table_generator_->mesh_graph->print_connectivity();
+    } catch (const std::exception& e) {
+        this->is_initialized_ = false;
+        log_critical(tt::LogFabric, "Failed to initialize control plane: {}", e.what());
+        throw;
     }
-    this->generate_intermesh_connectivity();
-
-    // Printing, only enabled with log_debug
-    this->routing_table_generator_->mesh_graph->print_connectivity();
 }
 
-ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
-    init_control_plane(mesh_graph_desc_file, std::nullopt);
-}
+ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) : mesh_graph_desc_file_(mesh_graph_desc_file) {}
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
-    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-}
-
-void ControlPlane::load_physical_chip_mapping(
-    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
-    this->validate_mesh_connections();
-}
+    const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) :
+    mesh_graph_desc_file_(mesh_graph_desc_file),
+    logical_mesh_chip_id_to_physical_chip_id_mapping_(logical_mesh_chip_id_to_physical_chip_id_mapping) {}
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     MeshShape mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
     auto get_physical_chip_id = [&](const MeshCoordinate& mesh_coord) {
         auto fabric_chip_id = this->routing_table_generator_->mesh_graph->coordinate_to_chip(mesh_id, mesh_coord);
@@ -515,6 +514,7 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
 }
 
 void ControlPlane::validate_mesh_connections() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
         if (this->is_local_mesh(mesh_id)) {
             this->validate_mesh_connections(mesh_id);
@@ -524,11 +524,13 @@ void ControlPlane::validate_mesh_connections() const {
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(
     chan_id_t eth_chan_id, const std::vector<chan_id_t>& eth_chans_in_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto it = std::find(eth_chans_in_direction.begin(), eth_chans_in_direction.end(), eth_chan_id);
     return std::distance(eth_chans_in_direction.begin(), it);
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(FabricNodeId fabric_node_id, chan_id_t eth_chan_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     TT_FATAL(
         this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id),
         "Mesh {} Chip {} out of bounds",
@@ -555,6 +557,7 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(FabricNodeId fabric_node_i
 
 chan_id_t ControlPlane::get_downstream_eth_chan_id(
     routing_plane_id_t src_routing_plane_id, const std::vector<chan_id_t>& candidate_target_chans) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     if (candidate_target_chans.empty()) {
         return eth_chan_magic_values::INVALID_DIRECTION;
     }
@@ -581,6 +584,7 @@ chan_id_t ControlPlane::get_downstream_eth_chan_id(
 };
 
 void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     // Routing tables contain direction from chip to chip
     // Convert it to be unique per ethernet channel
 
@@ -803,6 +807,7 @@ size_t ControlPlane::get_num_live_routing_planes(
 // fabric routers on device
 void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     this->intra_mesh_routing_tables_.clear();
     this->inter_mesh_routing_tables_.clear();
     this->router_port_directions_to_physical_eth_chan_map_.clear();
@@ -953,6 +958,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 }
 
 void ControlPlane::write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     FabricNodeId fabric_node_id{mesh_id, chip_id};
     const auto& chip_intra_mesh_routing_tables = this->intra_mesh_routing_tables_.at(fabric_node_id);
     const auto& chip_inter_mesh_routing_tables = this->inter_mesh_routing_tables_.at(fabric_node_id);
@@ -1045,6 +1051,7 @@ void ControlPlane::write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     for (const auto& [fabric_node_id, mapped_physical_chip_id] :
          this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         if (mapped_physical_chip_id == physical_chip_id) {
@@ -1060,6 +1067,7 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 }
 
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     TT_ASSERT(logical_mesh_chip_id_to_physical_chip_id_mapping_.contains(fabric_node_id));
     return logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
 }
@@ -1145,6 +1153,7 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
 
 std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
     FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::vector<chan_id_t> valid_eth_chans;
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
@@ -1158,6 +1167,7 @@ std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
 }
 
 eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDirection direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     eth_chan_directions dir;
     switch (direction) {
         case RoutingDirection::N: dir = eth_chan_directions::NORTH; break;
@@ -1171,6 +1181,7 @@ eth_chan_directions ControlPlane::routing_direction_to_eth_direction(RoutingDire
 
 std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fabric_eth_channels(
     FabricNodeId fabric_node_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::set<std::pair<chan_id_t, eth_chan_directions>> active_fabric_eth_channels;
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
@@ -1182,6 +1193,7 @@ std::set<std::pair<chan_id_t, eth_chan_directions>> ControlPlane::get_active_fab
 }
 
 eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_node_id, int chan) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
         for (const auto& eth_chan : eth_chans) {
@@ -1195,6 +1207,7 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
 
 std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     // Query the mesh coord range owned by the current host
     auto host_local_coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
     auto src_mesh_coord = this->routing_table_generator_->mesh_graph->chip_to_coordinate(
@@ -1242,6 +1255,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
 
 std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto src_mesh_id = src_fabric_node_id.mesh_id;
     auto src_chip_id = src_fabric_node_id.chip_id;
     auto dst_mesh_id = dst_fabric_node_id.mesh_id;
@@ -1264,6 +1278,7 @@ std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
 
 std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& forwarding_direction = get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
     if (!forwarding_direction.has_value()) {
         return {};
@@ -1274,6 +1289,7 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
 
 std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, RoutingDirection forwarding_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::vector<chan_id_t> forwarding_channels;
     const auto& active_channels =
         this->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction);
@@ -1290,6 +1306,7 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
 
 stl::Span<const ChipId> ControlPlane::get_intra_chip_neighbors(
     FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     for (const auto& [_, routing_edge] :
          this->routing_table_generator_->mesh_graph
              ->get_intra_mesh_connectivity()[*src_fabric_node_id.mesh_id][src_fabric_node_id.chip_id]) {
@@ -1302,6 +1319,7 @@ stl::Span<const ChipId> ControlPlane::get_intra_chip_neighbors(
 
 std::unordered_map<MeshId, std::vector<ChipId>> ControlPlane::get_chip_neighbors(
     FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::unordered_map<MeshId, std::vector<ChipId>> neighbors;
     auto intra_neighbors = this->get_intra_chip_neighbors(src_fabric_node_id, routing_direction);
     auto src_mesh_id = src_fabric_node_id.mesh_id;
@@ -1319,6 +1337,7 @@ std::unordered_map<MeshId, std::vector<ChipId>> ControlPlane::get_chip_neighbors
 }
 
 size_t ControlPlane::get_num_active_fabric_routers(FabricNodeId fabric_node_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     // Return the number of active fabric routers on the chip
     // Not always all the available FABRIC_ROUTER cores given by Cluster, since some may be disabled
     size_t num_routers = 0;
@@ -1331,6 +1350,7 @@ size_t ControlPlane::get_num_active_fabric_routers(FabricNodeId fabric_node_id) 
 
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_channels_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     for (const auto& [direction, eth_chans] :
          this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
         if (routing_direction == direction) {
@@ -1613,6 +1633,7 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, Chip
 
 std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto eth_chans = get_active_fabric_eth_channels_in_direction(fabric_node_id, routing_direction);
     size_t num_routing_planes = 0;
     if (this->router_port_directions_to_num_routing_planes_map_.contains(fabric_node_id) &&
@@ -1634,6 +1655,7 @@ std::vector<chan_id_t> ControlPlane::get_active_fabric_eth_routing_planes_in_dir
 
 size_t ControlPlane::get_num_available_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     if (this->router_port_directions_to_num_routing_planes_map_.contains(fabric_node_id) &&
         this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).contains(routing_direction)) {
         return this->router_port_directions_to_num_routing_planes_map_.at(fabric_node_id).at(routing_direction);
@@ -1643,6 +1665,7 @@ size_t ControlPlane::get_num_available_routing_planes_in_direction(
 
 template <>
 void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto host_rank_id = this->get_local_host_rank_id_binding();
     // TODO: Remove mesh graph chip ids once Topology mapper works for multi-mesh systems
     const auto& local_mesh_chip_id_container =
@@ -1707,6 +1730,7 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
 
 template <>
 void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto host_rank_id = this->get_local_host_rank_id_binding();
     // TODO: Remove mesh graph chip ids once Topology mapper works for multi-mesh systems
     const auto& local_mesh_chip_id_container =
@@ -1797,6 +1821,7 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
 }
 
 void ControlPlane::write_routing_tables_to_all_chips() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     // Configure the routing tables on the chips
     TT_ASSERT(
         this->intra_mesh_routing_tables_.size() == this->inter_mesh_routing_tables_.size(),
@@ -1824,6 +1849,7 @@ void ControlPlane::write_routing_tables_to_all_chips() const {
 
 // TODO: remove this after TG is deprecated
 std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::vector<MeshId> physical_mesh_ids;
     const auto user_chips = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     for (const auto& [fabric_node_id, physical_chip_id] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
@@ -1837,6 +1863,7 @@ std::vector<MeshId> ControlPlane::get_user_physical_mesh_ids() const {
 }
 
 MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::optional<MeshHostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
 
@@ -1849,6 +1876,7 @@ MeshShape ControlPlane::get_physical_mesh_shape(MeshId mesh_id, MeshScope scope)
 }
 
 void ControlPlane::print_routing_tables() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     this->print_ethernet_channels();
 
     std::stringstream ss;
@@ -1882,6 +1910,7 @@ void ControlPlane::print_routing_tables() const {
 }
 
 void ControlPlane::print_ethernet_channels() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::stringstream ss;
     ss << "Control Plane: Physical eth channels in each direction" << std::endl;
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
@@ -1898,6 +1927,7 @@ void ControlPlane::print_ethernet_channels() const {
 }
 
 void ControlPlane::set_routing_mode(uint16_t mode) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     if (!(this->routing_mode_ == 0 || this->routing_mode_ == mode)) {
         log_warning(
             tt::LogFabric,
@@ -1908,26 +1938,36 @@ void ControlPlane::set_routing_mode(uint16_t mode) {
     this->routing_mode_ = mode;
 }
 
-uint16_t ControlPlane::get_routing_mode() const { return this->routing_mode_; }
+uint16_t ControlPlane::get_routing_mode() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
+    return this->routing_mode_;
+}
 
 void ControlPlane::initialize_fabric_context(tt_fabric::FabricConfig fabric_config) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     TT_FATAL(this->fabric_context_ == nullptr, "Trying to re-initialize fabric context");
     this->fabric_context_ = std::make_unique<FabricContext>(fabric_config);
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     TT_FATAL(this->fabric_context_ != nullptr, "Trying to get un-initialized fabric context");
     return *this->fabric_context_;
 }
 
-void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+void ControlPlane::clear_fabric_context() {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
+    this->fabric_context_.reset(nullptr);
+}
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
     this->fabric_context_->initialize_tensix_config();
 }
 
 bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto asic_id = tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(chip_id);
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
@@ -2008,6 +2048,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId c
 
 void ControlPlane::assign_direction_to_fabric_eth_chan(
     const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
     auto fabric_router_channels_on_chip =
@@ -2028,6 +2069,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
 
 void ControlPlane::assign_direction_to_fabric_eth_core(
     const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto chan_id = tt::tt_metal::MetalContext::instance()
                        .get_cluster()
@@ -2036,9 +2078,13 @@ void ControlPlane::assign_direction_to_fabric_eth_core(
     this->assign_direction_to_fabric_eth_chan(fabric_node_id, chan_id, direction);
 }
 
-const MeshGraph& ControlPlane::get_mesh_graph() const { return *routing_table_generator_->mesh_graph; }
+const MeshGraph& ControlPlane::get_mesh_graph() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
+    return *routing_table_generator_->mesh_graph;
+}
 
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
     std::vector<MeshId> local_mesh_ids;
@@ -2051,14 +2097,19 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     return local_mesh_ids;
 }
 
-MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const { return this->local_mesh_binding_.host_rank; }
+MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
+    return this->local_mesh_binding_.host_rank;
+}
 
 MeshCoordinate ControlPlane::get_local_mesh_offset() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto coord_range = this->get_coord_range(this->get_local_mesh_id_bindings()[0], MeshScope::LOCAL);
     return coord_range.start_coord();
 }
 
 MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scope) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::optional<MeshHostRankId> local_host_rank_id =
         MeshScope::LOCAL == scope ? std::make_optional(this->get_local_host_rank_id_binding()) : std::nullopt;
 
@@ -2071,12 +2122,14 @@ MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scop
 }
 
 bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& local_mesh_ids = local_mesh_binding_.mesh_ids;
     return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
 }
 
 const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_distributed_context(
     MeshId mesh_id) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     auto distributed_context = distributed_contexts_.find(mesh_id);
     TT_FATAL(distributed_context != distributed_contexts_.end(), "Unknown mesh id: {}", mesh_id);
     return distributed_context->second;
@@ -2084,11 +2137,13 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
 
 const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_host_local_context()
     const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     return host_local_context_;
 }
 
 const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
 ControlPlane::get_global_logical_bindings() const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     return global_logical_bindings_;
 }
 
@@ -2147,6 +2202,7 @@ void ControlPlane::populate_fabric_connection_info(
     ChipId physical_chip_id,
     chan_id_t eth_channel_id,
     eth_chan_directions router_direction) const {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
@@ -2197,6 +2253,7 @@ void ControlPlane::populate_fabric_connection_info(
 }
 
 void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     if (*distributed_context.size() == 1) {
         // No need to collect from other hosts when running a single process
@@ -2278,6 +2335,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
 // Intermesh Connectivity Generation Functions
 
 void ControlPlane::generate_intermesh_connectivity() {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     AnnotatedIntermeshConnections intermesh_connections;
     if (*(tt_metal::MetalContext::instance().global_distributed_context().size()) > 1) {
         // Intermesh Connectivity generation for the multi-host case
@@ -2296,6 +2354,7 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     bool strict_binding,
     const std::unordered_set<FabricNodeId>& requested_exit_nodes,
     std::unordered_set<port_id_t>& assigned_port_ids) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& exit_nodes = physical_system_descriptor_->get_connecting_exit_nodes(my_host, neighbor_host);
     const auto& my_mesh_id = this->local_mesh_binding_.mesh_ids[0];
     const auto& mesh_edge_ports_to_chip_id =
@@ -2341,6 +2400,7 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
 }
 
 PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
     const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
@@ -2393,6 +2453,7 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
     const RequestedIntermeshConnections& requested_intermesh_connections,
     const RequestedIntermeshPorts& requested_intermesh_ports,
     const std::vector<uint64_t>& src_exit_node_chips) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     std::unordered_set<FabricNodeId> requested_exit_nodes;
     if (!requested_intermesh_ports.empty()) {
         for (const auto& port : requested_intermesh_ports.at(*my_mesh_id).at(*neighbor_mesh_id)) {
@@ -2431,6 +2492,7 @@ std::unordered_set<FabricNodeId> ControlPlane::get_requested_exit_nodes(
 
 void ControlPlane::forward_descriptors_to_controller(
     PortDescriptorTable& port_descriptors, uint32_t my_rank, const std::string& my_host) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     using namespace tt::tt_metal::distributed::multihost;
     constexpr uint32_t CONTROLLER_RANK = 0;
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
@@ -2474,6 +2536,7 @@ void ControlPlane::forward_descriptors_to_controller(
 }
 
 void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedIntermeshConnections& intermesh_connections) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     using namespace tt::tt_metal::distributed::multihost;
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     constexpr uint32_t CONTROLLER_RANK = 0;
@@ -2518,6 +2581,7 @@ void ControlPlane::forward_intermesh_connections_from_controller(AnnotatedInterm
 }
 
 AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const PortDescriptorTable& port_descriptors) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     AnnotatedIntermeshConnections intermesh_connections;
 
     const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
@@ -2591,6 +2655,7 @@ AnnotatedIntermeshConnections ControlPlane::pair_logical_intermesh_ports(const P
 
 AnnotatedIntermeshConnections ControlPlane::convert_port_desciptors_to_intermesh_connections(
     PortDescriptorTable& port_descriptors) {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& my_host = physical_system_descriptor_->my_host_name();
     auto my_rank = physical_system_descriptor_->get_rank_for_hostname(my_host);
 
@@ -2622,6 +2687,7 @@ AnnotatedIntermeshConnections ControlPlane::convert_port_desciptors_to_intermesh
 }
 
 AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_local_host() {
+    TT_FATAL(this->is_initialized_, "Control plane has not been initialized");
     const auto& mesh_graph = this->routing_table_generator_->mesh_graph;
     const auto& physical_system_descriptor = this->physical_system_descriptor_;
 

@@ -25,6 +25,7 @@ constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_S
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+    control_plane->initialize();
     control_plane->initialize_fabric_context(kFabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
@@ -36,6 +37,7 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
     const std::map<tt::tt_fabric::FabricNodeId, tt::ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
         graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
+    control_plane->initialize();
     control_plane->initialize_fabric_context(kFabricConfig);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 

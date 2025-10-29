@@ -70,6 +70,7 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
+    control_plane->initialize();
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -138,6 +139,7 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
+    control_plane->initialize();
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -204,6 +206,7 @@ TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(split_2x2_mesh_graph_desc_path.string());
+    control_plane->initialize();
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -267,6 +270,7 @@ TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(big_mesh_2x4_mesh_graph_desc_path.string());
+    control_plane->initialize();
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -287,6 +291,7 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
 
     // Validate control plane apis
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
     const auto& intramesh_connections = get_all_intramesh_connections(control_plane);
     EXPECT_EQ(
         intramesh_connections.size(),
@@ -339,6 +344,7 @@ TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_mesh_graph_descriptor.yaml";
     auto control_plane = std::make_unique<ControlPlane>(quad_galaxy_mesh_graph_desc_path.string());
+    control_plane->initialize();
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -450,6 +456,7 @@ TEST(MultiHost, TestBHQB4x4ControlPlaneInit) {
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/bh_qb_4x4_mesh_graph_descriptor.textproto";
     auto control_plane = std::make_unique<ControlPlane>(bhqb_mesh_graph_desc_path.string());
+    control_plane->initialize();
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,

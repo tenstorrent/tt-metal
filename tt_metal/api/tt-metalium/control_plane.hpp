@@ -75,6 +75,9 @@ public:
 
     ~ControlPlane();
 
+    // Generate routing tables and validate connectivity in control plane
+    void initialize();
+
     // Printing functions
     void print_routing_tables() const;
     void print_ethernet_channels() const;
@@ -201,18 +204,18 @@ public:
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
 
+    bool is_initialized() const { return is_initialized_; }
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 
-    void init_control_plane(
-        const std::string& mesh_graph_desc_file,
-        std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
-            logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
-
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
+    bool is_initialized_ = false;
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
+
+    std::string mesh_graph_desc_file_;
 
     std::map<FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
 
@@ -253,8 +256,6 @@ private:
 
     ChipId get_physical_chip_id_from_eth_coord(const EthCoord& eth_coord) const;
 
-    void load_physical_chip_mapping(
-        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
     void initialize_dynamic_routing_plane_counts(
         const IntraMeshConnectivity& intra_mesh_connectivity,
