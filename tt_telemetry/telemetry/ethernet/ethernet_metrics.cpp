@@ -105,8 +105,9 @@ void create_ethernet_metrics(
             uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(
                 tray_id, asic_location, chip_id, channel, cluster, hal));
         }
-        uint_metrics.push_back(
-            std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
+        //TODO: this does not appear to be working as expected, needs more debugging and development work
+        // uint_metrics.push_back(
+        //     std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
     }
 
     log_info(tt::LogAlways, "Created Ethernet metrics");
