@@ -80,6 +80,7 @@ def test_device_perf_one_iter(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
+    df = df[df["DEVICE ID"] == 0]  # only keep the first device
 
     # Split compile and trace
     (
@@ -308,19 +309,11 @@ def test_device_perf_one_iter(
             firstlast_agg_trace=None,  # align with decoder tail export (no first_to_last)
         )
 
-    # Estimate e2e time
-    # e2e_estimate_80l = 0
-    # e2e_estimate_80l += kernel_agg_first_layer_trace["avg"].get("tt_dnn_device") * num_layers
-    # e2e_estimate_80l += kernel_agg_mid_layers_trace["avg"].get("tt_dnn_device") * (num_layers - 1)
-    # e2e_estimate_80l += kernel_agg_model_tail_trace["avg"].get("tt_dnn_device")
-
-    # tsu_estimate = 1000000 / (e2e_estimate_80l / 1000 + 300)
-
     # Save partial run
     benchmark_data.save_partial_run_json(
         profiler,
         run_type="ttnn_decoder_unit",
-        ml_model_name=f"{model_name}-{mode}-{data_parallel}dp-{num_layers}layers-{max_seq_len}seq",
+        ml_model_name=f"ttt-{mode}-{data_parallel}dp-{num_layers}layers-{max_seq_len}seq",
     )
 
     # No strict assertions on perf; test succeeds if profiling and export ran

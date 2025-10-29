@@ -221,57 +221,35 @@ def aggregate_per_instance_dict(input_dict, agg_fn, default=0):
     return result
 
 
-def find_head_tail(ops, num_layers):
-    """
-    Finds the head and tail of a repeating region in a list of ops.
-    """
+def find_repeated_block(ops, min_repeat=2):
     n = len(ops)
-    left = 0
-    right = n - 1
+    for block_size in range(10, n // min_repeat):  # ignore tiny blocks
+        for start in range(n - 2 * block_size):
+            block = ops[start : start + block_size]
+            next_block = ops[start + block_size : start + 2 * block_size]
 
-    # We move 'left' forward until we find a candidate start of repeating region.
-    #    'right' will move backward to skip the tail.
-    while left < right:
-        # Try each possible length of repeating block (must divide middle section evenly)
-        for block_len in range(1, (right - left + 1) // num_layers + 1):
-            middle_len = block_len * num_layers
-            if left + middle_len > right + 1:
-                break
-            # Extract the middle region
-            mid = ops[left : left + middle_len]
+            if block == next_block:
+                # Found a repeating pattern
+                # Extend it as far as it repeats
+                i = start
+                while i + block_size <= n and ops[i : i + block_size] == block:
+                    i += block_size
+                repeat_count = (i - start) // block_size
 
-            # Split into num_layers segments
-            chunks = [mid[i * block_len : (i + 1) * block_len] for i in range(num_layers)]
-
-            # Check if all segments are equal
-            if all(chunks[i] == chunks[0] for i in range(1, num_layers)):
-                # Found a valid repeating middle region
-                head_ops = ops[:left]
-                repeated_block = chunks[0]
-                tail_ops = ops[left + middle_len :]
+                head = ops[:start]
+                tail = ops[i:]
                 return {
-                    "num_head_ops": len(head_ops),
-                    "num_repeated_ops": len(repeated_block),
-                    "num_tail_ops": len(tail_ops),
-                    "num_layers_detected": num_layers,
-                    "head_ops": head_ops,
-                    "repeated_block": repeated_block,
-                    "tail_ops": tail_ops,
+                    "num_head_ops": len(head),
+                    "num_layer_block_ops": len(block),
+                    "num_layers": repeat_count,
+                    "num_tail_ops": len(tail),
                 }
-
-        # If no match found, move the pointers inward
-        left += 1
-        right -= 1
-
-    # If we reach here, no repeating structure found
+    # No repetition found
     return {
-        "num_head_ops": len(ops),
-        "num_repeated_ops": 0,
-        "num_tail_ops": 0,
-        "num_layers_detected": 0,
-        "head_ops": ops,
-        "repeated_block": [],
-        "tail_ops": [],
+        "head": ops,
+        "layer_block": [],
+        "num_layers": 0,
+        "tail": [],
     }
 
 
@@ -313,7 +291,7 @@ def split_compile_and_trace(
     df_model_trace = df[last_run_start:]
 
     # Find the head and tail of the repeating region in the model compilation
-    head_tail_ops = find_head_tail(df_model_compilation["OP CODE"].tolist(), num_layers)
+    head_tail_ops = find_repeated_block(df_model_compilation["OP CODE"].tolist(), num_layers)
 
     # [op_start_index:op_end_index] = all core layers region
     op_start_index = head_tail_ops["num_head_ops"]
