@@ -16,7 +16,7 @@ void GraphUtils::dfs_visit(
     visitor(node);
 
     // Visit all input nodes
-    for (const auto& input : node.inputs()) {
+    for (const auto& input : node.op_inputs()) {
         dfs_visit(input, visited, visitor);
     }
 }
@@ -40,7 +40,7 @@ std::vector<LazyTensor> GraphUtils::get_ancestors(const LazyTensor& root) {
     std::vector<LazyTensor> ancestors;
 
     dfs_visit(root, visited, [&](const LazyTensor& node) {
-        for (const auto& input : node.inputs()) {
+        for (const auto& input : node.op_inputs()) {
             ancestors.push_back(input);
         }
     });
@@ -53,7 +53,7 @@ std::vector<LazyTensor> GraphUtils::get_descendants(const LazyTensor& root) {
     std::vector<LazyTensor> descendants;
 
     dfs_visit(root, visited, [&](const LazyTensor& node) {
-        for (const auto& output : node.outputs()) {
+        for (const auto& output : node.siblings()) {
             descendants.push_back(output);
         }
     });
@@ -74,7 +74,7 @@ std::vector<LazyTensor> GraphUtils::topological_sort(const LazyTensor& root) {
         temp_visited.insert(id);
 
         // Visit all input nodes first
-        for (const auto& input : node.inputs()) {
+        for (const auto& input : node.op_inputs()) {
             dfs(input);
         }
 

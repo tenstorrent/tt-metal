@@ -5,24 +5,78 @@
 #include "ttnn/experimental/jit/lazy_tensor.hpp"
 #include "ttnn/experimental/jit/graph_utils.hpp"
 #include "ttnn/experimental/jit/lazy_operation.hpp"
+#include "ttnn/experimental/jit/lazy_mode.hpp"
 
 namespace ttnn::experimental::jit {
 
-LazyTensor::LazyTensor(std::vector<LazyTensor> inputs, ttnn::experimental::jit::LazyOperation* Args) :
-    inputs_(std::move(inputs)), args_(std::move(Args)) {
-    state_ = LazyTensorState::LAZY;
-    id_ = GraphUtils::get_available_lazy_tensor_id();
+// Lazy Tensor
+LazyTensor::LazyTensor(const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, ttnn::TensorSpec tensor_spec) :
+    op_inputs_(op_inputs),
+    op_(std::move(op)),
+    tensor_spec_(std::move(tensor_spec)),
+    id_(GraphUtils::get_available_lazy_tensor_id()) {}
 
-    if (jit_operation_type == JitOperationType::LAZY_JIT) {
-        output_tensors_ = args_->invoke(inputs_);
-        state_ = LazyTensorState::MATERIALIZED;
+LazyTensor LazyTensor::make_lazy_tensor(
+    const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, TensorSpec tensor_spec) {
+    return LazyTensor(op_inputs, std::move(op), std::move(tensor_spec));
+}
+
+LazyTensor LazyTensor::make_materialized_tensor(const Tensor& metal_tensor) { return LazyTensor(metal_tensor); }
+
+std::vector<LazyTensor> LazyTensor::make_lazy_tensors(
+    const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, const std::vector<TensorSpec>& tensor_specs) {
+    std::vector<LazyTensor> lazy_tensors;
+    lazy_tensors.reserve(tensor_specs.size());
+    for (const auto& tensor_spec : tensor_specs) {
+        lazy_tensors.push_back(make_lazy_tensor(op_inputs, op, tensor_spec));
+    }
+    for (size_t i = 0; i < lazy_tensors.size(); i++) {
+        auto siblings = lazy_tensors;
+        siblings.erase(siblings.begin() + i);
+        lazy_tensors[i].set_siblings(siblings);
+        lazy_tensors[i].set_materialized_output_idx(i);
+    }
+    return lazy_tensors;
+}
+
+LazyTensor::LazyTensor(const tt::tt_metal::Tensor& metal_tensor) :
+    op_inputs_({}),
+    op_(nullptr),
+    tensor_spec_(metal_tensor.tensor_spec()),
+    siblings_({}),
+    materialized_outputs_({metal_tensor}),
+    materialized_output_idx_(0),
+    state_(LazyTensorState::MATERIALIZED),
+    id_(GraphUtils::get_available_lazy_tensor_id()) {}
+
+void LazyTensor::materialize() {
+    if (state_ == LazyTensorState::MATERIALIZED || state_ == LazyTensorState::SCHEDULED) {
+        return;
+    }
+
+    state_ = LazyTensorState::SCHEDULED;
+
+    // Verify that all inputs are materialized
+    std::vector<Tensor> input_tensors;
+    for (const auto& input : op_inputs_) {
+        auto op_name = input.op() ? input.op()->name() : "Unknown";
+        TT_FATAL(
+            input.is_materialized(),
+            "Input tensor {} produced by operation {} is not materialized",
+            input.id(),
+            op_name);
+        input_tensors.push_back(input.materialized_tensor());
+    }
+
+    materialized_outputs_ = op_->invoke(input_tensors);
+    state_ = LazyTensorState::MATERIALIZED;
+    // Now update siblings' materialized tensors
+    for (auto& sibling : siblings_) {
+        // TODO: Make sure that this is not expensive copy
+        sibling.materialized_outputs_ = materialized_outputs_;
+        sibling.state_ = LazyTensorState::MATERIALIZED;
     }
 }
 
-LazyTensor::~LazyTensor() {}
-
-void LazyTensor::execute() {
-    output_tensors_ = args_->invoke(inputs_);
-    state_ = LazyTensorState::MATERIALIZED;
-}
+//
 }  // namespace ttnn::experimental::jit
