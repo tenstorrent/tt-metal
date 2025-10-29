@@ -601,7 +601,7 @@ ALWI void max_reduce_with_indices_init() {
  * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t  | Must be less than the size of the DST register buffer | True     |
- * | pool_type       | The type of reduction operation (SUM or AVG)                             | PoolType  | SUM, AVG                                              | True     |
+ * | pool_type       | The type of reduction operation, SUM or AVG (MAX not supported)          | PoolType  | SUM, AVG                                              | True     |
  * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt16, UInt32                        | True     |
  * | reduce_dim      | The reduction dimension, set to column for column reduce                 | ReduceDim | REDUCE_COL                                            | False    |
  * | is_32x32_tile   | The tile dimensions to perform the reduction on                          | bool      | true                                                  | False    |
@@ -612,9 +612,10 @@ template <
     DataFormat format = DataFormat::Int32,
     ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
     bool is_32x32_tile = true>
-ALWI void sfpu_reduce_sum_avg(uint32_t idst) {
+ALWI void sfpu_reduce(uint32_t idst) {
     static_assert(is_32x32_tile, "Only 32x32 tile dimensions are supported for reduce operations");
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
+    static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
 
     MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst)));
 }
@@ -622,9 +623,9 @@ ALWI void sfpu_reduce_sum_avg(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-template <DataFormat format>
-ALWI void sfpu_reduce_sum_avg_init() {
-    MATH((llk_math_eltwise_unary_sfpu_reduce_sum_avg_init<true, format>()));
+template <DataFormat format = DataFormat::Int32>
+ALWI void sfpu_reduce_init() {
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
 }
 
 /**
