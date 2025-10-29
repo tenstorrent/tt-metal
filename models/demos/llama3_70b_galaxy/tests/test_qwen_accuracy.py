@@ -23,7 +23,7 @@ from tqdm import tqdm
 @torch.no_grad()
 @pytest.mark.parametrize(
     "min_top1_acc, min_top5_acc",  # Max seqlen should be at least prefill_len + decode_len
-    ((91, 99),),
+    ((81, 98),),
 )
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len

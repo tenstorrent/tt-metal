@@ -218,7 +218,7 @@ def test_qwen_attention_inference_prefill_ttt(
             force_replicated=False if model_args.is_galaxy else True,
         )
 
-        tt_out, tt_x_qkv = tt_model(
+        tt_out = tt_model(
             attention_input,
             current_pos=None,
             rot_mats=rot_mats,
@@ -234,12 +234,6 @@ def test_qwen_attention_inference_prefill_ttt(
             batch_size, max_seq_len, -1
         )  # [ batch, seq, hidden_dim]
 
-        tt_x_qkv = ttnn.to_torch(
-            tt_x_qkv,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
-        )  # [1, 1, seq_len, 8 * 1280 = 10240]
-        tt_x_qkv_torch = tt_x_qkv[:, 0, :, :]  # [ batch, seq, hidden_dim]
-
         positions = torch.LongTensor(range(max_seq_len))
         freqs_cis_i_ref = precompute_freqs_cis(
             model_args_ref.head_dim,
@@ -250,16 +244,14 @@ def test_qwen_attention_inference_prefill_ttt(
         attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
 
-        breakpoint()
-
         # Use tt_transformers reference model
         reference_output = reference_model(
             pt_attention_input.to(torch.bfloat16), positions[0], freqs_cis_i_ref, mask=attn_mask_torch
         )
 
         # Use custom reference model for comparison
-        reference_output_custom, x_qkv = reference_model_custom(
-            pt_attention_input, positions[0], freqs_cis_i_ref, mask=attn_mask_torch
+        reference_output_custom = reference_model_custom(
+            pt_attention_input.float(), positions[0], freqs_cis_i_ref, mask=attn_mask_torch
         )
 
         # Verify both reference models match
@@ -268,13 +260,6 @@ def test_qwen_attention_inference_prefill_ttt(
 
         # Compare TT output with tt_transformers reference
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
-
-        # Process QKV outputs for comparison
-        xq = x_qkv[0].permute(0, 2, 1, 3).view(max_seq_len, 64 * 128)
-        xk = x_qkv[1].view(max_seq_len, 8 * 128)
-        xv = x_qkv[2].view(max_seq_len, 8 * 128)
-
-        concat_x_qkv = torch.cat([xq, xk, xv], dim=1).view(1, max_seq_len, 10240)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
