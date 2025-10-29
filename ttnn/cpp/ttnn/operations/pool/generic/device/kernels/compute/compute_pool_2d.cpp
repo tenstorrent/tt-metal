@@ -238,6 +238,11 @@ void MAIN {
                 }
                 cb_pop_front(curr_in_cb_id, 1);
             }
+
+            reconfig_data_format_srca(out_cb_id);
+            pack_reconfig_data_format(out_cb_id);
+            dprint_tensix_dest_reg(0);
+
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
@@ -308,10 +313,10 @@ void MAIN {
                 cb_reserve_back(out_idx_cb_id, output_faces);
 
                 pack_reconfig_data_format(out_cb_id);
-                pack_tile<true>(data_dst_idx, out_cb_id, mpwi_cb_tile_idx);
+                pack_tile<false>(data_dst_idx, out_cb_id, mpwi_cb_tile_idx);
 
                 pack_reconfig_data_format(out_idx_cb_id);
-                pack_tile<true>(index_dst_idx, out_idx_cb_id, mpwi_cb_tile_idx);
+                pack_tile<false>(index_dst_idx, out_idx_cb_id, mpwi_cb_tile_idx);
 
                 // PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
                 // PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
