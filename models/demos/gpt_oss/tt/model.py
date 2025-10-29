@@ -60,6 +60,8 @@ class Model:
         self.core_grid = mesh_device.compute_with_storage_grid_size()
         self.head_dim = hf_config.head_dim
 
+        self.ccl_manager = ccl_manager
+
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
@@ -119,8 +121,9 @@ class Model:
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head.weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, "lm_head_sharded.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_config.column_parallel(mesh_device),
         )
 
     @classmethod
@@ -166,28 +169,42 @@ class Model:
 
         return instance
 
-    def __call__(
-        self,
-        input_ids,
-        attention_masks,
-        position_embeddings,
-        position_idx=None,
-    ):
-        input_embeds = ttnn.embedding(input_ids, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
+    def _forward_layers_and_head(self, hidden_states, rope_mats, current_pos, attention_masks, page_table, kv_cache):
+        """
+        Shared forward pass through decoder layers and final projection.
 
-        hidden_states = input_embeds
-        for decoder_layer in self.layers:
-            mask = attention_masks[decoder_layer.attention_type]
+        Args:
+            hidden_states: Input tensor
+            rope_mats: RoPE rotation matrices [cos, sin]
+            current_pos: Current position (for decode) or None (for prefill)
+            attention_masks: Dict of attention masks by layer type (or None for decode)
+            page_table: Page table for paged attention
+            kv_cache: KV cache list per layer
+
+        Returns:
+            logits: Output logits
+        """
+        # Process through decoder layers
+        for i, decoder_layer in enumerate(self.layers):
+            # Get layer-specific mask for prefill, None for decode
+            layer_mask = attention_masks.get(decoder_layer.attention_type) if attention_masks else None
+            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
+
             hidden_states = decoder_layer(
                 hidden_states,
-                attention_mask=mask,
-                position_embeddings=position_embeddings,
-                position_idx=position_idx,
+                attention_mask=layer_mask,
+                position_embeddings=rope_mats,
+                position_idx=current_pos,
+                page_table=page_table,
+                kv_cache=layer_kv_cache,
             )
 
+        # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        hidden_states = ttnn.matmul(hidden_states, self.lm_head_weight)
-        return hidden_states
+        logits = ttnn.matmul(hidden_states, self.lm_head_weight)
+        if self.mesh_config.tp > 1:
+            logits = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=2)
+        return logits
 
     def ttnn_decode_forward(
         self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, argmax_on_device=False
@@ -208,23 +225,15 @@ class Model:
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
         rope_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
 
-        # Process through decoder layers
-        for i, decoder_layer in enumerate(self.layers):
-            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-
-            hidden_states = decoder_layer(
-                hidden_states,
-                attention_mask=None,
-                position_embeddings=rope_mats,
-                position_idx=current_pos,
-                page_table=page_table,
-                kv_cache=layer_kv_cache,
-            )
-
-        # Final norm and lm_head
-        hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight)
-        return logits
+        # Forward through layers and head (shared with prefill)
+        return self._forward_layers_and_head(
+            hidden_states=hidden_states,
+            rope_mats=rope_mats,
+            current_pos=current_pos,
+            attention_masks=None,  # No masks in decode mode
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
 
     def ttnn_prefill_forward(
         self,
@@ -268,34 +277,25 @@ class Model:
         )
         attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_sliding_mask}
 
-        # Process through decoder layers
-        for i, decoder_layer in enumerate(self.layers):
-            layer_mask = attention_masks[decoder_layer.attention_type]
+        # Forward through layers and head (shared with decode)
+        logits = self._forward_layers_and_head(
+            hidden_states=hidden_states,
+            rope_mats=rope_mats,
+            current_pos=None,  # No current_pos for prefill
+            attention_masks=attention_masks,
+            page_table=page_table,
+            kv_cache=kv_cache,
+        )
 
-            layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-
-            hidden_states = decoder_layer(
-                hidden_states,
-                attention_mask=layer_mask,
-                position_embeddings=rope_mats,
-                position_idx=None,
-                page_table=page_table,
-                kv_cache=layer_kv_cache,
-            )
-
-        # Handle last token slicing for efficiency
+        # Handle last token slicing for efficiency (prefill-specific)
         if get_last_token != -1:
-            if len(hidden_states.shape) == 3:
-                hidden_states = ttnn.unsqueeze(hidden_states, dim=1)
-            hidden_states = ttnn.slice(
-                hidden_states, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, hidden_states.shape[-1])
-            )
-            if len(hidden_states.shape) == 4 and hidden_states.shape[1] == 1:
-                hidden_states = ttnn.squeeze(hidden_states, dim=1)
+            # The logits come from the shared method, slice them
+            if len(logits.shape) == 3:
+                logits = ttnn.unsqueeze(logits, dim=1)
+            logits = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
+            if len(logits.shape) == 4 and logits.shape[1] == 1:
+                logits = ttnn.squeeze(logits, dim=1)
 
-        # Final norm and lm_head
-        hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight)
         return logits
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
