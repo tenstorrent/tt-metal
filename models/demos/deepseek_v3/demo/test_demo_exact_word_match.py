@@ -40,7 +40,7 @@ def load_reference_map(path: Path) -> dict[str, str]:
 )
 @pytest.mark.parametrize(
     "repeat_batches",
-    [1],
+    [2],
 )
 def test_multi_prompt_generation_matches_reference(max_new_tokens, repeat_batches):
     """
