@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_polyval.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 using namespace sfpi;
 
@@ -49,14 +49,15 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(x) = -tanh(x)
     sfpi::vFloat val = sfpi::setsgn(x, 0);  // set positive
 
-    // Polynomial approximation (rank 6)
-    // Found using Sollya
-    sfpi::vFloat result =
-        val * (0.999004364013671875 +
-               val * (3.0897438526153564453125e-2 +
-                      val * (-0.4890659749507904052734375 +
-                             val * (sfpi::vConstFloatPrgm2 +
-                                    val * (sfpi::vConstFloatPrgm1 + val * (sfpi::vConstFloatPrgm0))))));
+    sfpi::vFloat result = POLYVAL7<sfpi::vFloat>(
+        0.999004364013671875,
+        3.0897438526153564453125e-2,
+        -0.4890659749507904052734375,
+        sfpi::vConstFloatPrgm2,
+        sfpi::vConstFloatPrgm1,
+        sfpi::vConstFloatPrgm0,
+        sfpi::vConst0,
+        val);
 
     // The limits of the polynomai approximation is +inf.
     // Since tanh(x) -> +inf, we clamp output to 1.0
