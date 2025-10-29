@@ -73,16 +73,13 @@ void kernel_main() {
     uint64_t receiver_noc_coord_addr =
         get_noc_addr_from_bank_id<is_dram>(bank_id, 0, tt::tt_fabric::connection_interface::edm_fabric_write_noc_index);
 
-    // Calculate the base memory offset for this core based on its page start offset
-    uint64_t core_memory_offset = page_start_offset * socket_page_size;
-
     if constexpr (num_pages_per_packet > 0) {
         constexpr uint32_t full_packet_size = num_pages_per_packet * socket_page_size;
         const uint32_t remainder_packet_size = num_pages_remainder * socket_page_size;
 
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + core_memory_offset + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
             write_data_to_remote_core<full_packet_size, data_cb_id, is_dram>(
                 fabric_connection, dst_addr, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
@@ -91,7 +88,7 @@ void kernel_main() {
 
         if (num_pages_remainder > 0) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + core_memory_offset + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
             // For remainder packet, we need to handle variable size at runtime
             // This is more complex and may require a different approach
             // For now, let's handle this case by reading the exact remainder size
@@ -113,7 +110,7 @@ void kernel_main() {
     else {
         for (uint32_t i = 0; i < num_pages; ++i) {
             socket_reserve_pages(sender_socket, 1);
-            uint64_t dst_addr = receiver_noc_coord_addr + core_memory_offset + sender_socket.write_ptr;
+            uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
                 write_data_to_remote_core<whole_packet_size, data_cb_id, is_dram>(
                     fabric_connection, dst_addr, data_packet_header_addr);

@@ -66,7 +66,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
 
-    // Distribute workload across cores
     uint32_t pages_per_core = total_num_pages / num_cores;
     uint32_t remainder_pages = total_num_pages % num_cores;
 
@@ -77,7 +76,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         socket_block_size = socket_aligned_page_size;
     }
 
-    // Create CoreRangeSet for all receiver cores
+    // Use all cores for consistent CoreRangeSet across devices
     auto receiver_core_range_set = CoreRangeSet(std::set<CoreRange>());
     for (const auto& core : receiver_core_coords) {
         receiver_core_range_set = receiver_core_range_set.merge(CoreRangeSet({CoreRange(core, core)}));
@@ -150,9 +149,22 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
             const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
 
-            // Calculate pages for this core (distribute remainder across first cores)
+            // Calculate pages for this core using local core index within device
             uint32_t pages_for_this_core = pages_per_core + (core_idx < remainder_pages ? 1 : 0);
-            uint32_t page_start_offset = core_idx * pages_per_core + std::min(core_idx, remainder_pages);
+
+            // Calculate cumulative start offset: sum of pages assigned to all previous cores within this device
+            uint32_t page_start_offset = 0;
+            for (uint32_t prev_idx = 0; prev_idx < core_idx; ++prev_idx) {
+                uint32_t prev_pages = pages_per_core + (prev_idx < remainder_pages ? 1 : 0);
+                page_start_offset += prev_pages;
+            }
+
+            printf(
+                "RECV CORE %u: pages=%u, start_offset=%u, local_core_idx=%u\n",
+                core_idx,
+                pages_for_this_core,
+                page_start_offset,
+                core_idx);
 
             // Calculate per-core packet parameters
             uint32_t num_whole_packets = 0, num_pages_remainder = 0;
@@ -174,7 +186,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
                 tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
-            // Use different link index for each core to distribute across multiple links
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
             tt::tt_fabric::append_fabric_connection_rt_args(
                 receiver_fabric_node_id,
@@ -222,9 +233,15 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
             const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
 
-            // Calculate pages for this core
+            // Calculate pages for this core using local core index within device
             uint32_t pages_for_this_core = pages_per_core + (core_idx < remainder_pages ? 1 : 0);
-            uint32_t page_start_offset = core_idx * pages_per_core + std::min(core_idx, remainder_pages);
+
+            // Calculate cumulative start offset: sum of pages assigned to all previous cores within this device
+            uint32_t page_start_offset = 0;
+            for (uint32_t prev_idx = 0; prev_idx < core_idx; ++prev_idx) {
+                uint32_t prev_pages = pages_per_core + (prev_idx < remainder_pages ? 1 : 0);
+                page_start_offset += prev_pages;
+            }
 
             // Calculate per-core packet parameters
             uint32_t num_whole_packets = 0, num_pages_remainder_core = 0;
@@ -247,6 +264,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
             // TODO #24995: This should be derived from the expected tensor/socket configuration
             uint32_t bank_id = 0;
+
             std::vector<uint32_t> reader_rt_args = {
                 mesh_socket.get_config_buffer()->address(),  // socket_config_addr
                 bank_id,                                     // bank_id
@@ -260,6 +278,17 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             TT_FATAL(!link_indices.empty(), "No link indices found for receiver core");
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
+
+            printf(
+                "RECV CORE %u: pages=%u, start_offset=%u, link=%u, blocks=%u, pages_per_block=%u, block_remainder=%u\n",
+                core_idx,
+                pages_for_this_core,
+                page_start_offset,
+                selected_link_index,
+                num_blocks,
+                num_pages_per_block,
+                block_remainder_pages);
+
             tt::tt_fabric::append_fabric_connection_rt_args(
                 receiver_fabric_node_id,
                 sender_fabric_node_id,

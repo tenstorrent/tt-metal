@@ -55,22 +55,25 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     TT_FATAL(!sender_core_coords.empty(), "No sender cores found for target device {}", target_device->id());
     uint32_t num_cores = sender_core_coords.size();
     printf("Found %u sender cores for device %d\n", num_cores, target_device->id());
+
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
         input_tensor.buffer()->alignment());
     auto input_page_size = input_tensor.buffer()->aligned_page_size();
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
     auto total_num_pages = input_tensor.buffer()->num_pages();
+
+    // Divide workload per device: same work per device, different work per core within device
+    // Each device processes the full tensor, but cores within device divide the work
+    uint32_t pages_per_core = total_num_pages / num_cores;
+    uint32_t remainder_pages = total_num_pages % num_cores;
+
     auto fabric_max_payload_size = tt::round_down(
         std::min(
             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
-
-    // Divide workload across cores
-    uint32_t pages_per_core = total_num_pages / num_cores;
-    uint32_t remainder_pages = total_num_pages % num_cores;
 
     // Calculate per-core parameters that will be used for each core
     uint32_t num_whole_packets_per_page = 0, partial_packet_size = 0, aligned_partial_packet_size = 0,
@@ -162,9 +165,15 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         const auto& sender_core_coord = sender_core_coords[core_idx];
         const auto& receiver_core_coord = receiver_core_coords[core_idx];
 
-        // Calculate pages for this core (distribute remainder across first cores)
+        // Calculate pages for this core using local core index within device
         uint32_t pages_for_this_core = pages_per_core + (core_idx < remainder_pages ? 1 : 0);
-        uint32_t page_start_offset = core_idx * pages_per_core + std::min(core_idx, remainder_pages);
+
+        // Calculate cumulative start offset: sum of pages assigned to all previous cores within this device
+        uint32_t page_start_offset = 0;
+        for (uint32_t prev_idx = 0; prev_idx < core_idx; ++prev_idx) {
+            uint32_t prev_pages = pages_per_core + (prev_idx < remainder_pages ? 1 : 0);
+            page_start_offset += prev_pages;
+        }
 
         // Calculate per-core packet parameters
         uint32_t num_whole_packets = 0, num_pages_remainder = 0;
@@ -214,9 +223,15 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
             receiver_fabric_node_id.mesh_id,
             receiver_fabric_node_id.chip_id);
 
-        // Use a different link index for each core to distribute across multiple links
-        // For now, cycle through available links. TODO: Implement more sophisticated link selection
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
+        printf(
+            "SEND CORE %u: pages=%u, start_offset=%u, link=%u, whole_packets=%u, remainder=%u\n",
+            core_idx,
+            pages_for_this_core,
+            page_start_offset,
+            selected_link_index,
+            num_whole_packets,
+            num_pages_remainder);
         tt::tt_fabric::append_fabric_connection_rt_args(
             sender_fabric_node_id,
             receiver_fabric_node_id,
