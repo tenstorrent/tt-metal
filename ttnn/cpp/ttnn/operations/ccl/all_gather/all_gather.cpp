@@ -34,10 +34,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
         auto mesh_shape = input_tensor.device()->get_view().shape();
         // Check if flat mesh (1x...M...x1) where M = total mesh volume
         // if it is not flat, then we need to call all-gather on dim=-1 to dim=0
-        uint32_t num_devices = mesh_shape.mesh_size();
-        bool is_not_flat_mesh = std::none_of(
-            mesh_shape.cbegin(), mesh_shape.cend(), [num_devices](uint32_t dim) { return dim == num_devices; });
-        if (is_not_flat_mesh) {
+        if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
             for (int i = mesh_shape.dims() - 1; i >= 0; --i) {
                 tensor = ttnn::all_gather(
@@ -51,6 +48,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
     tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
 

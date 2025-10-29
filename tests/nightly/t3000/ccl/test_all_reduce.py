@@ -206,7 +206,12 @@ def test_nd(mesh_device, input_shape, cluster_axis, dtype, memory_config, topolo
         assert eq, mess
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    indirect=True,
+    ids=["fabric_linear", "fabric_2d_dynamic"],
+)
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
 def test_all_reduce_2x4_non_flat_mesh(mesh_device, input_shape):

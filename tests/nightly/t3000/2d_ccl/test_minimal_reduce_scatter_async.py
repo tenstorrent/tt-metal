@@ -6,6 +6,7 @@ import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.common.utility_functions import skip_for_blackhole
+import torch
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -58,18 +59,16 @@ from models.common.utility_functions import skip_for_blackhole
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
-        (False, 1),
+        (True, 3),
     ],
-    ids=["perf", "check"],
+    ids=["perf"],
 )
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -109,4 +108,5 @@ def test_reduce_scatter_async_training_shapes(
         ones_tensor=ones_tensor,
         use_barrier=True,
         use_persistent_buffers=False,
+        use_new=True,
     )

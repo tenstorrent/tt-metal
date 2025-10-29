@@ -25,10 +25,7 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
         // if it is not flat, then we need to call all-broadcast on dim=-1 to dim=0
         // first all broadcast will be on the last dimension, producing a vector of tensors
         // we then recursively call all broadcast on each of the tensors in the vector
-        uint32_t num_devices = mesh_shape.mesh_size();
-        bool is_not_flat_mesh = std::none_of(
-            mesh_shape.cbegin(), mesh_shape.cend(), [num_devices](uint32_t dim) { return dim == num_devices; });
-        if (is_not_flat_mesh) {
+        if (!mesh_shape.is_line_topology()) {
             std::deque<ttnn::Tensor> tensors;
             tensors.push_back(input_tensor);
             for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
@@ -48,6 +45,7 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_broadcast operation");
     tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, cluster_axis));
 
     return ttnn::operations::ccl::all_broadcast(
