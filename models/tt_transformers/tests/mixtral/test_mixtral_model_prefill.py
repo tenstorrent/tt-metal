@@ -80,9 +80,7 @@ def convert2ref(state_dict):
     (1, None),
     ids=["1layer", "all_layers"],
 )
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     paged_attention,
     page_params,
