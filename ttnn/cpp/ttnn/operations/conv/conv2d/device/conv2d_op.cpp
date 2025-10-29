@@ -205,7 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
         std::vector<uint32_t> op_trace_metadata =
             ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
         std::vector<sliding_window::ShardBoundary> shard_boundaries =
-            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
 
         program_with_cbs = multi_core_conv2d_width_sharded(
             program,
@@ -241,7 +241,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
         std::vector<uint32_t> op_trace_metadata =
             ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
         std::vector<sliding_window::ShardBoundary> shard_boundaries =
-            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
 
         program_with_cbs = multi_core_conv2d_sharded(
             program,

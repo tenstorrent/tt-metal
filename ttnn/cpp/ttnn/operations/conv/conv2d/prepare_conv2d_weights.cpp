@@ -997,6 +997,7 @@ static Conv2dBlockConfig get_opt_block_config(
         output_dtype,
         input_memory_config,
         kernel_size,
+        stride,
         dilation,
         padding,
         groups,

@@ -4,12 +4,16 @@
 #include "sliding_window.hpp"
 #include <algorithm>
 #include <cstdint>
+#include <mutex>
+#include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <tt_stl/assert.hpp>
+#include <shared_mutex>
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::sliding_window {
+
 std::size_t SlidingWindowConfig::get_hash() const { return std::hash<std::string>{}(to_string()); }
 
 std::array<uint32_t, 4> get_pair_n4_padding(
@@ -261,7 +265,6 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
         return pad_metadata;
     }
 }
-
 std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& config) {
     ttnn::Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
@@ -302,8 +305,8 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     return op_trace_metadata;
 }
 
-std::vector<ShardBoundary> generate_shard_boundaries(
-    const SlidingWindowConfig& config, const std::vector<uint32_t>& op_trace_metadata) {
+std::vector<ShardBoundary> generate_shard_boundaries(const SlidingWindowConfig& config) {
+    auto op_trace_metadata = generate_op_trace_metadata(config);
     std::vector<ShardBoundary> shard_boundaries;
 
     const uint32_t num_cores = config.num_cores_nhw;
@@ -354,7 +357,6 @@ std::vector<ShardBoundary> generate_shard_boundaries(
             boundary,
             boundary.input_range.end - boundary.input_range.start);
     };
-
     return shard_boundaries;
 }
 
@@ -396,6 +398,16 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
         max_out_nsticks_per_core = std::max(max_out_nsticks_per_core, in_end - in_start + 1);
     }
     return max_out_nsticks_per_core;
+}
+
+uint32_t calculate_precise_halo_output_elems(
+    const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape) {
+    // Generate metadata for precise calculation
+    auto shard_boundaries = generate_shard_boundaries(config);
+
+    // Get precise max sticks per core
+    uint32_t max_out_nsticks_per_core = generate_max_out_nsticks_per_core(shard_boundaries);
+    return max_out_nsticks_per_core * shard_shape[1];
 }
 
 struct GatherHeader {
@@ -1301,15 +1313,17 @@ uint32_t align_buffer(uint32_t size) {
 };
 
 std::string SlidingWindowConfig::to_string() const {
-    return std::to_string(batch_size) + "_" + std::to_string(channels) + "_" + std::to_string(std::get<0>(input_hw)) +
-           "_" + std::to_string(std::get<1>(input_hw)) + "_" + std::to_string(std::get<0>(window_hw)) + "_" +
-           std::to_string(std::get<1>(window_hw)) + "_" + std::to_string(std::get<0>(stride_hw)) + "_" +
-           std::to_string(std::get<1>(stride_hw)) + "_" + std::to_string(padding[0]) + "_" +
-           std::to_string(padding[1]) + "_" + std::to_string(padding[2]) + "_" + std::to_string(padding[3]) + "_" +
-           std::to_string(std::get<0>(output_pad_hw)) + "_" + std::to_string(std::get<1>(output_pad_hw)) + "_" +
-           std::to_string(std::get<0>(dilation_hw)) + "_" + std::to_string(std::get<1>(dilation_hw)) + "_" +
-           std::to_string(num_cores_nhw) + "_" + std::to_string(num_cores_c) + "_" + core_range_set.str() +
-           (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
+    return "batch=" + std::to_string(batch_size) + "_ch=" + std::to_string(channels) +
+           "_in_h=" + std::to_string(std::get<0>(input_hw)) + "_in_w=" + std::to_string(std::get<1>(input_hw)) +
+           "_win_h=" + std::to_string(std::get<0>(window_hw)) + "_win_w=" + std::to_string(std::get<1>(window_hw)) +
+           "_stride_h=" + std::to_string(std::get<0>(stride_hw)) +
+           "_stride_w=" + std::to_string(std::get<1>(stride_hw)) + "_pad_t=" + std::to_string(padding[0]) +
+           "_pad_b=" + std::to_string(padding[1]) + "_pad_l=" + std::to_string(padding[2]) +
+           "_pad_r=" + std::to_string(padding[3]) + "_out_pad_h=" + std::to_string(std::get<0>(output_pad_hw)) +
+           "_out_pad_w=" + std::to_string(std::get<1>(output_pad_hw)) +
+           "_dil_h=" + std::to_string(std::get<0>(dilation_hw)) + "_dil_w=" + std::to_string(std::get<1>(dilation_hw)) +
+           "_cores_nhw=" + std::to_string(num_cores_nhw) + "_cores_c=" + std::to_string(num_cores_c) +
+           "_grid=" + core_range_set.str() + (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
            (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") + (is_avg_pool ? "_avg_pool" : "");
 }
 
