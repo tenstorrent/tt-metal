@@ -631,14 +631,7 @@ class LidarCenterNet(nn.Module):
 
         return bbox, brake, confidence
 
-    def forward_ego(self, rgb, lidar_bev, target_point, target_point_image, ego_vel, num_points=None):
-        if self.use_point_pillars == True:
-            lidar_bev = self.point_pillar_net(lidar_bev, num_points)
-            lidar_bev = torch.rot90(lidar_bev, -1, dims=(2, 3))  # For consitency this is also done in voxelization
-
-        if self.use_target_point_image:
-            lidar_bev = torch.cat((lidar_bev, target_point_image), dim=1)
-
+    def forward_ego(self, rgb, lidar_bev, target_point, ego_vel):
         assert self.backbone == "transFuser", "Only Transfuser supported for LidarCenterNet."
         features, _, fused_features = self._model(rgb, lidar_bev, ego_vel)
 
@@ -657,4 +650,5 @@ class LidarCenterNet(nn.Module):
 
         self.i += 1
 
-        return preds, pred_wp, rotated_bboxes, results
+        # return preds, pred_wp, rotated_bboxes, results
+        return features[0], pred_wp, preds, results, rotated_bboxes

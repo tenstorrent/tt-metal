@@ -188,50 +188,12 @@ class LidarCenterNet(nn.Module):
 
         return bbox, brake, confidence
 
-    def forward_ego(self, rgb, lidar_bev, target_point, target_point_image, ego_vel, num_points=None):
-        if self.use_point_pillars == True:
-            lidar_bev = self.point_pillar_net(lidar_bev, num_points)
-            lidar_bev = torch.rot90(lidar_bev, -1, dims=(2, 3))  # For consitency this is also done in voxelization
-
-        if self.use_target_point_image:
-            lidar_bev = torch.cat((lidar_bev, target_point_image), dim=1)
-
-        assert self.backbone == "transFuser", "Only Transfuser supported for LidarCenterNet."
-        # Convert input to TTNN format
-        tt_rgb = ttnn.from_torch(
-            rgb.permute(0, 2, 3, 1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        tt_lidar_bev = ttnn.from_torch(
-            lidar_bev.permute(0, 2, 3, 1),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        tt_ego_vel = ttnn.from_torch(
-            ego_vel,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        features, _, fused_features = self._model(tt_rgb, tt_lidar_bev, tt_ego_vel, self.device)
+    def forward_ego(self, tt_rgb, tt_lidar_bev, tt_velocity, target_point):
+        features, _, fused_features = self._model(tt_rgb, tt_lidar_bev, tt_velocity, self.device)
 
         # Validate output_fused_tensor
         tt_fused_torch = ttnn.to_torch(fused_features, device=self.device, dtype=torch.float32)
 
         pred_wp, _, _, _, _ = self.forward_gru(tt_fused_torch, target_point)
 
-        # import  pdb; pdb.set_trace()
-        batch_size, feat_height, feat_width, in_channels = features[0].shape
-        preds = self.head.forward(
-            [features[0]],
-            batch_size=batch_size,
-            height=feat_height,
-            width=feat_width,
-        )
-        return preds, pred_wp
+        return features, pred_wp
