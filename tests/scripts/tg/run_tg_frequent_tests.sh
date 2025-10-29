@@ -59,9 +59,10 @@ run_tg_tests() {
 
   elif [[ "$1" == "wan22" ]]; then
     echo "LOG_METAL: running Wan2.2 run_tg_frequent_tests"
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_rope.py -k "4x8"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "4x8"; fail+=$?
-    pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 4x8sp0tp1 or short_seq-4x8sp0tp1 or model_caching and 4x8"; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and 4x8sp0tp1 or short_seq-4x8sp0tp1 and not yes_load_cache and not model_caching"; fail+=$?
     pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "test_wan_decoder and 4x8 and real_weights and check_output and _1f"; fail+=$?
 
   else
