@@ -302,25 +302,34 @@ run_t3000_sentence_bert_tests() {
   fi
 }
 
-
-run_t3000_sd35large_tests() {
+run_t3000_dit_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
+  test_name=${FUNCNAME[1]}
+  test_cmd=$1
 
-  echo "LOG_METAL: Running run_t3000_sd35large_tests"
+  echo "LOG_METAL: Running ${test_name}"
 
-  #Cache path
-  NO_PROMPT=1 pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "2x4cfg1sp0tp1" --timeout 600 ; fail+=$?
+  NO_PROMPT=1 pytest -n auto ${test_cmd} --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_sd35large_tests $duration seconds to complete"
+  echo "LOG_METAL: ${test_name} $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
 }
+
+run_t3000_sd35large_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k 2x4cfg1sp0tp1"
+}
+
+run_t3000_flux1_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 2x4sp0tp1-dev"
+}
+
 
 run_t3000_llama3_load_checkpoints_tests() {
   # Record the start time
@@ -426,6 +435,9 @@ run_t3000_tests() {
 
   # Run sd35_large tests
   run_t3000_sd35large_tests
+
+  # Run flux1 tests
+  run_t3000_flux1_tests
 
   # Run gemma3 tests
   run_t3000_gemma3_tests

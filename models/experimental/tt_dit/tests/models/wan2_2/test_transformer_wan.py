@@ -335,6 +335,7 @@ def test_wan_transformer_model(
             model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
         assert os.path.exists(
@@ -445,6 +446,7 @@ def test_wan_transformer_model_caching(
         model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         subfolder=subfolder,
         parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     )
 

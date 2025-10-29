@@ -35,6 +35,7 @@ jobs:
           { name: "t3k_resnet50_tests", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 50, owner_id: U0837MYG788}, # Marko Radosavljevic
           { name: "t3k_sentence_bert_tests", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
           { name: "t3k sd35_large tests", arch: wormhole_b0, cmd: run_t3000_sd35large_tests, timeout: 60, owner_id: U03FJB5TM5Y}, #Colman Glagovich
+          { name: "t3k flux1-dev tests", arch: wormhole_b0, cmd: run_t3000_flux1_tests, timeout: 30, owner_id: U08TED0JM9D}, #Samuel Adesoye
           { name: "t3k_mistral_tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 90, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
           # Temporary: Run Qwen 3 tests last as they update to a newer transformers version.
           # This requirements and comment removed when https://github.com/tenstorrent/tt-metal/pull/22608 merges.
