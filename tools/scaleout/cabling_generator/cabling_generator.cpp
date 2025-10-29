@@ -512,7 +512,7 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
                         << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2_node_type << ",";
 
             output_file << ",";        // Length blank, leaving up to technician
-            output_file << std::endl;  // Type blank leaving up to technician
+            output_file << std::endl;  // Type blank, leaving up to technician
         } else {
             output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1_node_type << ",";
             output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << std::endl;
