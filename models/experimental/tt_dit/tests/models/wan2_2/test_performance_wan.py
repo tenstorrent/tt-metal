@@ -225,17 +225,17 @@ def test_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "text_encoding_time": 15.3,
-            "denoising_time": 1001,
-            "vae_decoding_time": 63.6,
-            "total_time": 1082,
+            "text_encoding_time": 14.8,
+            "denoising_time": 909,
+            "vae_decoding_time": 64.6,
+            "total_time": 990,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "text_encoding_time": 10000,
-            "denoising_time": 10000,
-            "vae_decoding_time": 10000,
-            "total_time": 10000,
+            "text_encoding_time": 9.34,
+            "denoising_time": 163,
+            "vae_decoding_time": 18.2,
+            "total_time": 192,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
