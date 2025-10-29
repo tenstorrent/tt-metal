@@ -292,7 +292,7 @@ inline void TestDeviceResources::initialize_receiver_pool(uint32_t num_partition
     CorePool& receiver_pool = core_pools_[RECEIVER_TYPE_IDX];
     if (!receiver_pool.initialized) {
         // All cores not used for senders are available for receivers.
-        receiver_pool.initialize_with_cores(std::move(pristine_cores_), num_partitions);
+        receiver_pool.initialize_with_cores(pristine_cores_, num_partitions);
         pristine_cores_.clear();
 
         if (num_partitions > 1) {
