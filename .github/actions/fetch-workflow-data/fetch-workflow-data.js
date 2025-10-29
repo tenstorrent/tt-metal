@@ -788,14 +788,24 @@ async function run() {
           continue;
         }
 
-        // Workflow is failing and no success in window - make targeted API call to search all history
+        // Workflow is failing and no success in window
+        // Check if we have a cached timestamp - if so, reuse it instead of making API calls
+        const cachedTimestamp = lastSuccessTimestamps.get(name);
+        if (cachedTimestamp && !cachedTimestamp.never_succeeded) {
+          // We have a cached timestamp and no new success was found, so reuse the cached one
+          core.info(`[LAST_SUCCESS] Workflow '${name}' failing, no new success found, reusing cached timestamp (run ${cachedTimestamp.run_id || 'unknown'}, timestamp: ${cachedTimestamp.timestamp})`);
+          // Keep the cached timestamp (it's already in the map)
+          continue;
+        }
+
+        // No cached timestamp or workflow never succeeded - make targeted API call to search all history
         const workflowPath = runs[0]?.path;
         if (!workflowPath) {
           core.info(`[LAST_SUCCESS] Workflow '${name}' has no path, skipping`);
           continue;
         }
 
-        core.info(`[LAST_SUCCESS] Searching for last success in full history for failing workflow: ${name}`);
+        core.info(`[LAST_SUCCESS] Searching for last success in full history for failing workflow: ${name}${cachedTimestamp ? ' (no cached timestamp found)' : ''}`);
 
         // Search through workflow history to find the last successful run
         let foundSuccess = false;
