@@ -101,8 +101,8 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         if (height_b == 1) {
             if (tensor_args.input_tensor_a.is_sharded()) {
                 if (tensor_args.input_tensor_a.padded_shape()[0] == tensor_args.input_tensor_b->padded_shape()[0] ||
-                    tensor_args.input_tensor_a.padded_shape()[0] > 1 and
-                        tensor_args.input_tensor_b->padded_shape()[0] == 1) {
+                    (tensor_args.input_tensor_a.padded_shape()[0] > 1 &&
+                        tensor_args.input_tensor_b->padded_shape()[0] == 1)) {
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
                 return BroadcastHeightMultiCoreSharded{};
