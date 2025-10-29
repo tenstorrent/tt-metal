@@ -1,3 +1,4 @@
+
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -22,11 +23,6 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-#include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
-#include "debug/dprint_pages.h"
-#include "dprint_tensix.h"
-// read dest reg
-#include "debug/dprint.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -74,12 +70,10 @@ void MAIN {
         cb_times_gamma_out = tt::CBIndex::c_13;
     }
 
-    DPRINT << "pre_bin init " << ENDL();
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
 
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
-    DPRINT << "post_bin init " << ENDL();
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
@@ -153,13 +147,12 @@ void MAIN {
         reconfig_data_format(cb_inp, cb_stats_reduced);
         pack_reconfig_data_format(cb_x_minus_mean);
         sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
-        cb_wait_front(cb_stats_reduced, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_inp, blk);
             cb_reserve_back(cb_x_minus_mean, blk);
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, wtr, 0, wtr);
+                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, wtr, 1, wtr);
                 pack_tile(wtr, cb_x_minus_mean);
             }
             REL();
@@ -173,12 +166,12 @@ void MAIN {
         /*
          * 1/sqrt(var + eps)
          */
-        cb_wait_front(cb_stats_reduced, 2);
+        cb_wait_front(cb_var, 1);
         cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
+        reconfig_data_format(cb_var, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
-        add_tiles_init(cb_stats_reduced, cb_eps);
+        add_tiles_init(cb_var, cb_eps);
         ACQ();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
         rsqrt_tile_init<LEGACY_RSQRT>();
@@ -186,9 +179,7 @@ void MAIN {
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);
-
-        // free up CBs
-        cb_pop_front(cb_stats_reduced, stats_tile_stride);
+        cb_pop_front(cb_var, 1);
 
         /*
          * norm x
