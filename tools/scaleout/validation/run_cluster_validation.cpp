@@ -316,10 +316,6 @@ void print_usage_info() {
 void perform_link_reset(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
     log_output_rank0("Operating in reset mode for specific link");
 
-    TT_FATAL(
-        !input_args.gsd_path.has_value(),
-        "Reset mode requires live physical discovery. Please do not use --global-descriptor-path with reset mode.");
-
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
     TT_FATAL(
         link_retrain_supported,
