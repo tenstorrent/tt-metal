@@ -18,15 +18,13 @@ template <bool is_fp32_acc_to_dest_mode = true>
 sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // Compute sigmoid as:
     // sigmoid(x) = 1 / (1 + exp(-x))
-    sfpi::vFloat value = -x;
-    value = ckernel::sfpu::_sfpu_exp_21f_<true>(value);
-    value = sfpi::vConst1 + value;
 
-    sfpi::vFloat result;
+    sfpi::vFloat denominator = sfpi::vConst1 + ckernel::sfpu::_sfpu_exp_21f_<true>(-x);
+
+    constexpr int recip_mode = is_fp32_acc_to_dest_mode ? 2 : 1;
+    sfpi::vFloat result = ckernel::sfpu::_sfpu_reciprocal_<recip_mode>(denominator);
+
     if constexpr (!is_fp32_acc_to_dest_mode) {
-        result = ckernel::sfpu::_sfpu_reciprocal_<2>(value);
-    } else {
-        result = ckernel::sfpu::_sfpu_reciprocal_<1>(value);
         result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
     }
 
