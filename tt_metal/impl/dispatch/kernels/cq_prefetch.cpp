@@ -1714,24 +1714,13 @@ inline void relay_raw_data_to_downstream(
 
     while (remaining > 0) {
         // Ensure at least one upstream page is available
-        if (data_ptr == h_cmddat_q_reader.cb_fence) {
+        if (h_cmddat_q_reader.available_space(data_ptr) == 0) {
             h_cmddat_q_reader.get_cb_page(data_ptr);
         }
 
-        // Compute contiguous bytes available to read now without wrapping
-        uint32_t contiguous_until_wrap = cmddat_q_end - data_ptr;
-        uint32_t contiguous_until_fence;
-        if (data_ptr < h_cmddat_q_reader.cb_fence) {
-            contiguous_until_fence = h_cmddat_q_reader.cb_fence - data_ptr;
-        } else if (data_ptr > h_cmddat_q_reader.cb_fence) {
-            // Fence wrapped but data_ptr has not; only read until end-of-buffer
-            contiguous_until_fence = contiguous_until_wrap;
-        } else {
-            // Should not happen due to ensure above; treat as no data
-            continue;
-        }
+        uint32_t available_data = h_cmddat_q_reader.availabe_space(data_ptr);
 
-        uint32_t can_read_now = contiguous_until_fence;
+        uint32_t can_read_now = available_data;
         if (can_read_now > remaining) {
             can_read_now = remaining;
         }
