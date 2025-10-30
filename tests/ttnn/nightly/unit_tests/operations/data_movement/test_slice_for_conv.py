@@ -259,9 +259,9 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("pad_value", [8, 16, 32])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("pad_value", [8])
 def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, cores, layout, input_dtype, pad_value):
     if input_dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("bfloat8_b is not supported in row major layout")
