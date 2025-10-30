@@ -31,6 +31,7 @@ target_sources(
             ccl_host_types.hpp
             ccl_op_fusion.hpp
             common/host/ccl_command_stream_builders.hpp
+            common/host/moe_utils.hpp
             common/types/ccl_types.hpp
             common/uops/ccl_command.hpp
             mesh_partition/mesh_partition.hpp
