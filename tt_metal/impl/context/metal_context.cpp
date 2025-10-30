@@ -161,8 +161,7 @@ void MetalContext::initialize(
         // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
         // Uses full 64-bit fw_compile_hash for proper change detection
         uint64_t fw_build_key =
-            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key)) ^
-            fw_compile_hash;
+            BuildEnvManager::get_instance().get_device_build_env(device_id).build_key ^ fw_compile_hash;
 
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);
@@ -1429,5 +1428,15 @@ void MetalContext::erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_co
         cluster_->write_core_immediate(device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
     }
 };
+
+bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
+    ChipId id = *cluster_->all_chip_ids().begin();
+    if (core_type == CoreType::ACTIVE_ETH || core_type == CoreType::IDLE_ETH) {
+        core_type = CoreType::ETH;
+    }
+
+    CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
+    return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
+}
 
 }  // namespace tt::tt_metal
