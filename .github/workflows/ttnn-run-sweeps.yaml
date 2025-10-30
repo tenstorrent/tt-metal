@@ -741,12 +741,7 @@ jobs:
         test-group:
           - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
             arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
-            tt-smi-cmd: ${{ ((github.event.inputs['runner-label'] || 'N150') == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
-            runs-on: >-
-              ${{
-                ((github.event.inputs['runner-label'] || 'N150') == 'topology-6u' || (github.event.inputs['runner-label'] || 'N150') == 'BH-LLMBox' || (github.event.inputs['runner-label'] || 'N150') == 'BH-DeskBox' || (github.event.inputs['runner-label'] || 'N150') == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', github.event.inputs['runner-label'] || 'N150'))
-                || format('tt-ubuntu-2204-{0}-viommu-stable', github.event.inputs['runner-label'] || 'N150')
-              }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -758,7 +753,7 @@ jobs:
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
-        TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -773,7 +768,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 720
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: >-
+      ${{
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
+      }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
