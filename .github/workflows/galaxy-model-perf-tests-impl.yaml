@@ -52,7 +52,6 @@ jobs:
           },
           {
             name: "Llama Galaxy Perf Unit Tests",
-            model-type: "Llama-Unit-Tests",
             model-name: "llama_unit_tests",
             arch: wormhole_b0,
             cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests',
@@ -63,7 +62,7 @@ jobs:
           },
           {
             name: "Galaxy Llama 70B prefill perf tests",
-            model-type: "Llama-70B-Prefill",
+            model-type: "Llama-70B",
             model-name: "llama70b_prefill",
             arch: wormhole_b0,
             save-perf-data: true,
