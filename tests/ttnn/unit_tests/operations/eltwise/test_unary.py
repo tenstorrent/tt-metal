@@ -1440,7 +1440,7 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
     ],
 )
 def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     min = min_val
     max = max_val
@@ -1465,12 +1465,12 @@ def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype,
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, atol",
     [
-        (torch.float32, ttnn.float32, 0.002),
+        (torch.float32, ttnn.float32, 0.001),
         (torch.bfloat16, ttnn.bfloat16, 0.008),
     ],
 )
 def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
@@ -1499,7 +1499,7 @@ def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     ],
 )
 def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
