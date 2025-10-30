@@ -8,6 +8,8 @@ Optimized runner with trace capture and 2-command-queue execution
 for maximum performance on TT-Metal hardware.
 """
 
+from loguru import logger
+
 import ttnn
 from models.demos.yolov11.runner.performant_runner_pose_infra import YOLOv11PosePerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
