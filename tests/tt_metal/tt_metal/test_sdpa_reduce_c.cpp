@@ -9,6 +9,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
 
@@ -96,7 +98,7 @@ static float compare_first_col_mse(
 }
 
 static bool test_sdpa_reduce_c(
-    tt_metal::IDevice* device,
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
     uint32_t head_dim,
@@ -104,8 +106,6 @@ static bool test_sdpa_reduce_c(
     bool do_eltwise_max) {
     bool pass = true;
 
-    auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    TT_FATAL(slow_dispatch_mode, "This test only supports TT_METAL_SLOW_DISPATCH_MODE");
     log_info(
         LogTest,
         "Running sdpa_reduce_c test with q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: {}, "
@@ -117,6 +117,10 @@ static bool test_sdpa_reduce_c(
         do_eltwise_max);
 
     try {
+        // Get device and command queue from mesh
+        tt_metal::IDevice* device = mesh_device->get_devices().at(0);
+        tt_metal::distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue(0);
+
         tt_metal::Program program = tt_metal::CreateProgram();
 
         CoreCoord core = {0, 0};
@@ -252,8 +256,15 @@ static bool test_sdpa_reduce_c(
         auto identity_scale_uint_vec = pack_bfloat16_vec_into_uint32_vec(identity_scale_tile);
         tt_metal::detail::WriteToBuffer(identity_scale_buffer, identity_scale_uint_vec);
 
-        // Execute
-        tt_metal::detail::LaunchProgram(device, program, true);
+        // Execute program using MeshWorkload
+        tt_metal::distributed::MeshWorkload workload;
+        tt_metal::distributed::MeshCoordinate zero_coord =
+            tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+        tt_metal::distributed::MeshCoordinateRange device_range =
+            tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        workload.add_program(device_range, std::move(program));
+        tt_metal::distributed::EnqueueMeshWorkload(cq, workload, false);
+        tt_metal::distributed::Finish(cq);
 
         // Read outputs
         std::vector<uint32_t> out_max_vec;
@@ -276,7 +287,6 @@ static bool test_sdpa_reduce_c(
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());
-        log_error(LogTest, "System error message: {}", std::strerror(errno));
     }
 
     return pass;
@@ -284,13 +294,11 @@ static bool test_sdpa_reduce_c(
 
 int main(int argc, char** argv) {
     bool pass = true;
-    char env[] = "TT_METAL_SLOW_DISPATCH_MODE=1";
-    putenv(env);
 
     std::vector<std::string> input_args(argv, argv + argc);
 
     int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    auto mesh_device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
     /**
      * Parameters to sweep over for correctness.
@@ -316,8 +324,8 @@ int main(int argc, char** argv) {
             for (uint32_t head_dim : head_dims) {
                 for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
                     for (bool do_elt : do_eltwise) {
-                        bool this_passed =
-                            test_sdpa_reduce_c(device, q_chunk_size, k_chunk_size, head_dim, fp32_dest_acc_en, do_elt);
+                        bool this_passed = test_sdpa_reduce_c(
+                            mesh_device, q_chunk_size, k_chunk_size, head_dim, fp32_dest_acc_en, do_elt);
                         if (!this_passed) {
                             log_error(
                                 LogTest,
@@ -336,7 +344,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    pass &= tt_metal::CloseDevice(device);
+    mesh_device.reset();
 
     if (pass) {
         log_info(LogTest, "Test Passed");
