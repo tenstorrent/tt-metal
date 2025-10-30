@@ -148,7 +148,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
-    uint32_t tile_row_size_bytes = (a.dtype() == DataType::BFLOAT16) ? 64 : 128;
+    uint32_t tile_row_size_bytes = a.element_size() * TILE_HEIGHT;
 
     const std::array reader_kernel_args = {
         src0_buffer->address(),
@@ -202,7 +202,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
     tt::tt_metal::SetRuntimeArgs(
         program, unary_writer_kernel_id, core, {dst_buffer->address(), (uint32_t)num_tiles, 0});
-
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
                                            writer_kernel_id = unary_writer_kernel_id](
                                               const void* operation,
@@ -565,7 +564,11 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
      */
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
     // log2(TILE_WIDTH * data_format_size_in_bytes)
-    uint32_t shift_bits = (a.dtype() == DataType::BFLOAT16) ? 6 : 7;
+    uint32_t shift_bits = std::log2(
+        a.element_size() *
+        TILE_HEIGHT);  // This gives log2 of bytes per tile row, so in the kernel we
+                       // can shift right by this to get number of tiles.
+                       // ex: bf16/uint16 -> log2(2 * 32) = 6, float32/int32/uint32 -> log2(4 * 32) = 7, etc.
 
     std::vector<uint32_t> reader_compile_time_args = {shift_bits, unpadded_row_size_bytes};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
