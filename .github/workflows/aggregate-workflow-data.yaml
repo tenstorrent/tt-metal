@@ -231,20 +231,20 @@ jobs:
 
       # Slack notification moved to handle-failures job
 
-  handle-failures:
-    needs: analyze-data
-    if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
-      - name: Handle failed workflows
-        run: |
-          echo "The following workflows have failed:"
-          echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
-          # Add any additional failure handling steps here
-      - name: Post regressions to Slack
-        uses: ./.github/actions/slack-report-analyze-workflow-data
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
-          regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
-          alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
+  # handle-failures:
+  #   needs: analyze-data
+  #   if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+  #     - name: Handle failed workflows
+  #       run: |
+  #         echo "The following workflows have failed:"
+  #         echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
+  #         # Add any additional failure handling steps here
+  #     - name: Post regressions to Slack
+  #       uses: ./.github/actions/slack-report-analyze-workflow-data
+  #       with:
+  #         slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+  #         regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
+  #         alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
