@@ -35,7 +35,7 @@ static std::vector<bfloat16> make_prev_max_matrix(
         float v = dist(rng);
         prev_max_first_col_out[r] = static_cast<bfloat16>(v);
         for (uint32_t c = 0; c < cols; ++c) {
-            mat[r * cols + c] = static_cast<bfloat16>(v);
+            mat[(r * cols) + c] = static_cast<bfloat16>(v);
         }
     }
     return mat;
@@ -59,7 +59,7 @@ static std::vector<bfloat16> golden_reduce_c(
     for (uint32_t r = 0; r < rows; ++r) {
         float row_max = -std::numeric_limits<float>::infinity();
         for (uint32_t c = 0; c < cols; ++c) {
-            row_max = std::max(row_max, static_cast<float>(qk_im_rm[r * cols + c]));
+            row_max = std::max(row_max, static_cast<float>(qk_im_rm[(r * cols) + c]));
         }
         if (do_eltwise_max) {
             float working_row_max = row_max;
@@ -68,7 +68,7 @@ static std::vector<bfloat16> golden_reduce_c(
                 prev_max_larger = true;
             }
         }
-        out[r * stats_cols + 0] = static_cast<bfloat16>(row_max);
+        out[(r * stats_cols) + 0] = static_cast<bfloat16>(row_max);
     }
 
     // Expand to tiles (each row has a 32x32 tile). Fill only first column; others left as zero and not checked.
@@ -86,8 +86,8 @@ static float compare_first_col_mse(
     const uint32_t rows = golden_first_col_rm.size() / 32;
     float mse = 0.0f;
     for (uint32_t r = 0; r < rows; ++r) {
-        float a = static_cast<float>(result_rm[r * 32 + 0]);
-        float b = static_cast<float>(golden_first_col_rm[r * 32 + 0]);
+        float a = static_cast<float>(result_rm[(r * 32) + 0]);
+        float b = static_cast<float>(golden_first_col_rm[(r * 32) + 0]);
         float d = a - b;
         mse += d * d;
     }
