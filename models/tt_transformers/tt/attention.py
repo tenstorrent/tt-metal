@@ -478,8 +478,12 @@ class Attention(LightweightModule):
             # HACK: In the decoding phase, the API design of ttnn.experimental requires a Sharding layout, while splitting ttnn.tensor requires an Interleaved layout, which requires more complex memory conversion.
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, ttnn.L1_MEMORY_CONFIG)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.L1_MEMORY_CONFIG)
-            q_heads_pre_rot_1BQD, query_pass = ttnn.chunk(q_heads_pre_rot_1BQD, 2, dim=-1)
-            k_heads_pre_rot_1BKD, key_pass = ttnn.chunk(k_heads_pre_rot_1BKD, 2, dim=-1)
+            q_heads_pre_rot_1BQD, query_pass = ttnn.split(
+                q_heads_pre_rot_1BQD, [rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
+            k_heads_pre_rot_1BKD, key_pass = ttnn.split(
+                k_heads_pre_rot_1BKD, [rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
 
             height_sharded_memory_config_half = ttnn.create_sharded_memory_config(
                 shape=q_heads_pre_rot_1BQD.padded_shape,
@@ -787,8 +791,12 @@ class Attention(LightweightModule):
         if self.partial_rotary_factor != 1.0:
             # TODO: ttnn.chunk can only be distributed evenly at present, so it is not possible to split the matrix according to rotary_ndims.
             rotary_ndims = int(self.head_dim * self.partial_rotary_factor)
-            q_heads_1QSD_pre_rot, query_pass = ttnn.chunk(q_heads_1QSD_pre_rot, 2, dim=-1)
-            k_heads_1KSD_pre_rot, key_pass = ttnn.chunk(k_heads_1KSD_pre_rot, 2, dim=-1)
+            q_heads_1QSD_pre_rot, query_pass = ttnn.split(
+                q_heads_1QSD_pre_rot, split_size=[rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
+            k_heads_1KSD_pre_rot, key_pass = ttnn.split(
+                k_heads_1KSD_pre_rot, split_size=[rotary_ndims, self.head_dim - rotary_ndims], dim=3
+            )
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
