@@ -733,6 +733,7 @@ void ControlPlane::order_ethernet_channels() {
             auto neighbor_fabric_node_id =
                 FabricNodeId(fabric_node_id.mesh_id, this->get_intra_chip_neighbors(fabric_node_id, direction)[0]);
             auto neighbor_physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(neighbor_fabric_node_id);
+
             if (phys_chip_id > neighbor_physical_chip_id) {
                 std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
                     auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
@@ -752,8 +753,6 @@ void ControlPlane::order_ethernet_channels() {
                 }
                 auto neighbor_eth_channels =
                     this->router_port_directions_to_physical_eth_chan_map_[neighbor_fabric_node_id][inverted_direction];
-                // need to map current eth channels to neighbor eth channels.
-                //  map is: current eth channel -> neighbor eth channel
                 std::unordered_map<chan_id_t, chan_id_t> eth_chan_map;
                 for (uint32_t i = 0; i < eth_chans.size(); i++) {
                     eth_chan_map[neighbor_eth_channels[i]] = eth_chans[i];
@@ -770,23 +769,6 @@ void ControlPlane::order_ethernet_channels() {
                     eth_chans[i] = eth_chan_map[neighbor_eth_channels[i]];
                 }
             }
-            // get neighbor in the direction
-            // auto neighbor_fabric_node_id = this->get_neighbor_node_id(fabric_node_id, direction);
-            // get neighbors physical chip id.
-
-            // ifmy chip id > neighbors then do the following:
-
-            // assuming neighbor chip > my chip id
-            // neighbor chan - my chan
-            // 1-4, 2-0, 3-5, 6-1, 4-11
-            // neighor sorted channels:1,2,3,4,6
-            // look up my channel connected to the neighbor sorted channels.
-            // my chanels ordered w.r.t my neighbor sorted channels: 4, 0, 5, 11, 1
-
-            // else do the following:
-            // the neighor's eth_chans
-            // sort the neighbor_eth_channels locally. Dont touch the map.
-            // create a list of my eth channels that are connected to the neighbors sorted channels.
         }
     }
 }

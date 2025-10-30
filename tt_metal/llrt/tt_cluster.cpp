@@ -941,18 +941,17 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
 
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {
-    const auto& target_device_ids = this->driver_->get_target_device_ids();
-    for (const auto& chip_id : target_device_ids) {
+    for (const auto& chip_id : this->driver_->get_target_device_ids()) {
         if (this->ethernet_sockets_.find(chip_id) == this->ethernet_sockets_.end()) {
             this->ethernet_sockets_.insert({chip_id, {}});
         }
-        const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-
-        for (const auto& [connected_chip_id, eth_cores] : connected_chips) {
+        for (const auto& [connected_chip_id, eth_cores] :
+             this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
             if (this->ethernet_sockets_.at(chip_id).find(connected_chip_id) ==
                 this->ethernet_sockets_.at(chip_id).end()) {
                 this->ethernet_sockets_.at(chip_id).insert({connected_chip_id, {}});
             }
+        }
             if (this->ethernet_sockets_.find(connected_chip_id) == this->ethernet_sockets_.end()) {
                 this->ethernet_sockets_.insert({connected_chip_id, {}});
             }
@@ -962,7 +961,6 @@ void Cluster::initialize_ethernet_sockets() {
             } else {
                 continue;
             }
-
             for (const auto& eth_core : eth_cores) {
                 if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
                     this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
@@ -972,7 +970,7 @@ void Cluster::initialize_ethernet_sockets() {
                             std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core))));
                 }
             }
-        }
+    }
     }
 }
 

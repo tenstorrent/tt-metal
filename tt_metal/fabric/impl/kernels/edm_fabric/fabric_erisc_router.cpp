@@ -2796,7 +2796,6 @@ void kernel_main() {
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
                 wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
-
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
