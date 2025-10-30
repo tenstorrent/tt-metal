@@ -132,7 +132,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     }
 
     // Get worker cores, assuming 1 worker per link
-    auto [sender_worker_core_range, sender_worker_cores] = llama_specific::get_custom_worker_core_placement(num_links);
+    bool use_optimal_ccl_for_llama = false;
+    CoreRangeSet sender_worker_core_range;
+    std::vector<CoreCoord> sender_worker_cores;
+    if (use_optimal_ccl_for_llama) {
+        std::tie(sender_worker_core_range, sender_worker_cores) =
+            llama_specific::get_custom_worker_core_placement(num_links);
+    } else {
+        if (num_links == 4) {
+            sender_worker_core_range = CoreRangeSet(CoreRange({3, 0}, {3, num_links - 1}));
+        } else {
+            sender_worker_core_range = CoreRangeSet(CoreRange({1, 0}, {num_links, 0}));
+        }
+        sender_worker_cores = corerange_to_cores(sender_worker_core_range, num_links, true);
+    }
 
     // Tensor Info
     const uint32_t logical_dim_2 = std::min(input_tensor.logical_shape()[2], num_heads);
@@ -216,10 +229,20 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     }
     const auto& q_cores_updated = CoreRangeSet(q_cores_vector);
     std::vector<CoreRange> sem_cores_vector;
-    if (num_links == 4) {
-        sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
+    if (use_optimal_ccl_for_llama) {
+        if (num_links == 4) {
+            sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
+        } else {
+            sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
+        }
     } else {
-        sem_cores_vector.push_back(CoreRange(sender_worker_cores[0], sender_worker_cores[0]));
+        CoreRange sem_drain_core_3 = CoreRange({1, 0}, {1, 0});
+        CoreRange sem_drain_core_4 = CoreRange({3, 0}, {3, 0});
+        if (num_links == 4) {
+            sem_cores_vector.push_back(sem_drain_core_4);
+        } else {
+            sem_cores_vector.push_back(sem_drain_core_3);
+        }
     }
     range_count = 0;
     for (auto cr : ring_core_ranges) {

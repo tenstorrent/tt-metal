@@ -122,6 +122,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     uint32_t num_workers_per_link = 1;
     CoreRangeSet sender_worker_core_range;
     std::vector<CoreCoord> sender_worker_cores;
+    // print previous value? (and op name from ttnn exeuction pipeline)
+    use_optimal_ccl_for_llama = false;
     std::tie(sender_worker_core_range, sender_worker_cores) =
         use_optimal_ccl_for_llama ? llama_specific::get_custom_worker_core_placement(num_links)
                                   : ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);

@@ -320,7 +320,9 @@ std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    auto available_cores = llama_specific::get_custom_cores(num_links);
+    bool use_optimal_ccl_for_llama = false;
+    CoreRangeSet ccl_cores_old = CoreRangeSet(std::set{::CoreRange{{1, 6}, {2, 7}}});
+    auto available_cores = use_optimal_ccl_for_llama ? llama_specific::get_custom_cores(num_links) : ccl_cores_old;
 
     auto sender_core_grid = detail::get_worker_cores(
         available_cores, num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);

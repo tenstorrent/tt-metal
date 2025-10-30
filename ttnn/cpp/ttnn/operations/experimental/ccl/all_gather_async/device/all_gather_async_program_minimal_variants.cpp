@@ -870,6 +870,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
+    // print previous value?
+    use_optimal_ccl_for_llama = false;
     const auto [sender_worker_core_range, sender_worker_cores] =
         use_optimal_ccl_for_llama ? llama_specific::get_custom_worker_core_placement(num_links * num_workers_per_link)
                                   : choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
