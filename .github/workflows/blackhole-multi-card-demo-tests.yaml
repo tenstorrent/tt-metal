@@ -16,7 +16,7 @@ on:
         default: false
 
 jobs:
-  build-artifact-profiler:
+  build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -25,10 +25,8 @@ jobs:
       tracy: true
       build-wheel: true
       version: 22.04
-      toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
-
   blackhole-multi-card-demo-tests:
-    needs: build-artifact-profiler
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
     strategy:
@@ -53,9 +51,9 @@ jobs:
             num_devices: 2
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
       regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
