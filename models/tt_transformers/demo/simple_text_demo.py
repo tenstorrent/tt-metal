@@ -270,7 +270,7 @@ def prepare_generator_args(
 # stress_test (bool): Whether to run the demo in stress test mode
 # enable_trace (bool): Whether to enable tracing
 # num_layers (int): Number of layers to use
-# mode (str): Mode to run the demo in (full, prefill, decode)
+# mode (str): Mode to run the demo in (full, prefill, decode), full will run both prefill and decode
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
@@ -640,12 +640,12 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # device-perf-default - Measures device performance of a single user over 500 iterations
+        (  # device-perf-default - Measures device performance of a prefill or decode run
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
-            1,  # batch_size
+            32,  # batch_size
             0,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
@@ -656,7 +656,7 @@ def prepare_generator_args(
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
-            1,  # num_layers, if None -> defaults to all layers
+            10,  # num_layers, if None -> defaults to all layers
             "prefill",  # performs both prefill and decode
         ),
     ],
