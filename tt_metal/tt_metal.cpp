@@ -55,6 +55,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 
 namespace tt {
 
