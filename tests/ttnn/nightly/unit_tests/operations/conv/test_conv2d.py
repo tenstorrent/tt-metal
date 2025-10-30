@@ -212,6 +212,8 @@ def run_conv(
         dilation=(dilation_h, dilation_w),
         groups=groups,
     )
+    ref = torch.permute(ref, (0, 2, 3, 1))
+
     # Handle UnaryWithParam activation type with direct enum mapping
     act_func = get_torch_act_func_from_string(activation)
     if act_func:
@@ -277,32 +279,10 @@ def run_conv(
 
     if not use_dram_slicing:
         slice_config = ttnn.Conv2dL1FullSliceConfig
-
-    [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
-        input_tensor=tt_input_tensor,
-        weight_tensor=tt_weight_tensor,
-        in_channels=input_channels,
-        out_channels=output_channels,
-        device=device,
-        bias_tensor=tt_bias_tensor,
-        kernel_size=(filter_height, filter_width),
-        stride=(stride_h, stride_w),
-        padding=(pad_top, pad_bottom, pad_left, pad_right),
-        dilation=(dilation_h, dilation_w),
-        batch_size=batch_size,
-        input_height=input_height,
-        input_width=input_width,
-        conv_config=conv_config,
-        compute_config=compute_config,
-        groups=groups,
-        memory_config=memory_config,
-        return_output_dim=True,
-        return_weights_and_bias=True,
-        dtype=output_dtype,
-        slice_config=slice_config,
-    )
-
-    if run_twice:
+    d_w = tt_weight_tensor
+    d_b = tt_bias_tensor
+    num_loops = 100 if run_twice else 1
+    for index in range(num_loops):
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
             weight_tensor=d_w,
@@ -327,57 +307,55 @@ def run_conv(
             slice_config=slice_config,
         )
 
-    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
-    out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
-    # out is in row major layout and NHWC shape
-    # NHWC to NCHW
-    out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
-    out = out[:, :, :, :output_channels]
+        tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+        out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
+        # out is in row major layout and NHWC shape
+        # NHWC to NCHW
+        out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
+        out = out[:, :, :, :output_channels]
 
-    ref = torch.permute(ref, (0, 2, 3, 1))
-
-    if custom_pcc is not None:
-        pcc = custom_pcc
-    else:
-        if not fp32_accum:
-            pcc = 0.985
-            if input_channels * filter_height * filter_width > 10000:
-                pcc = 0.97
-        elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
-            pcc = 0.996
+        if custom_pcc is not None:
+            pcc = custom_pcc
         else:
-            pcc = 0.997
+            if not fp32_accum:
+                pcc = 0.985
+                if input_channels * filter_height * filter_width > 10000:
+                    pcc = 0.97
+            elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
+                pcc = 0.996
+            else:
+                pcc = 0.997
 
-        # Check if activation is tanh
-        is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
-        if is_tanh:
-            # Scale down PCC for tanh.
-            # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
-            pcc = pcc * 0.99
+            # Check if activation is tanh
+            is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
+            if is_tanh:
+                # Scale down PCC for tanh.
+                # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
+                pcc = pcc * 0.99
 
-    torch.set_printoptions(precision=3, sci_mode=False)
-    if fast_compare:
-        if (
-            fp32_accum
-            and output_dtype != ttnn.bfloat8_b
-            and input_dtype != ttnn.bfloat8_b
-            and weights_dtype != ttnn.bfloat8_b
-        ):
-            threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
+        torch.set_printoptions(precision=3, sci_mode=False)
+        if fast_compare:
+            if (
+                fp32_accum
+                and output_dtype != ttnn.bfloat8_b
+                and input_dtype != ttnn.bfloat8_b
+                and weights_dtype != ttnn.bfloat8_b
+            ):
+                threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
+            else:
+                threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
+            logger.info(f"Threshold: {threshold}")
+            diff = torch.abs(ref - out) / ref.abs().mean()
+            assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
         else:
-            threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
-        logger.info(f"Threshold: {threshold}")
-        diff = torch.abs(ref - out) / ref.abs().mean()
-        assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
-    else:
-        passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
-        logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
-        assert passing, pcc_msg
-        if pcc_msg == 1:
-            # Conv2d with randomized input and weights can't legitimately return PCC of 1
-            # Edge case can happen rarely if activation function like ReLU zeros out all values
-            # In this case, tensors have to match.
-            assert_equal(out, ref)
+            passing, pcc_msg = check_with_pcc_without_tensor_printout(out, ref, pcc=pcc)
+            logger.info(f"PCC = {pcc_msg}. Threshold = {pcc}")
+            assert passing, pcc_msg
+            if pcc_msg == 1:
+                # Conv2d with randomized input and weights can't legitimately return PCC of 1
+                # Edge case can happen rarely if activation function like ReLU zeros out all values
+                # In this case, tensors have to match.
+                assert_equal(out, ref)
 
     if memory_config:
         output_memory_config = ttnn.get_memory_config(tt_output_tensor_on_device)
