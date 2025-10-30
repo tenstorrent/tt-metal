@@ -635,7 +635,7 @@ void ProfilerSync(ProfilerSyncState state) {
 
                     if (visited.find(receiver_device_id) != visited.end() && !visited[receiver_device_id]) {
                         visited[receiver_device_id] = true;
-                        num_connected_devices[root_device]++;
+                        num_connected_devices[*root_device]++;
                         device_queue.push(receiver_device_id);
 
                         profiler_state_manager->device_device_time_pair.emplace(
