@@ -37,26 +37,6 @@ std::pair<std::string, std::string_view> extract_hostname_from_path(std::string_
     return {hostname, remaining};
 }
 
-// Parse system metric path (simpler format: hostname/system/MetricName)
-// Returns: metric_name with hostname as a label (labels from metric itself merged later)
-ParsedMetric parse_system_metric_path(std::string_view path) {
-    ParsedMetric result;
-    auto [hostname, path_after_hostname] = extract_hostname_from_path(path);
-
-    // Add hostname as a label
-    result.labels["hostname"] = hostname;
-
-    // Expected format: system/MetricName
-    constexpr std::string_view system_prefix = "system/";
-    if (path_after_hostname.starts_with(system_prefix)) {
-        result.metric_name = std::string(path_after_hostname.substr(system_prefix.length()));
-    } else {
-        throw std::runtime_error("System metric path must start with 'system/': " + std::string(path_after_hostname));
-    }
-
-    return result;
-}
-
 // Parse metric path and extract labels
 // Path format: hostname/tray3/chip0/[channel5/]metric_name
 // Returns: metric_name and labels (hostname, tray, chip, channel if present)
@@ -205,48 +185,6 @@ void process_metrics(
     }
 }
 
-// Template helper to process system-level metrics
-template <typename ValueType, typename ValueConverter>
-void process_system_metrics(
-    std::stringstream& output,
-    const std::unordered_map<std::string, ValueType>& metrics,
-    const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>& labels_map,
-    const std::unordered_map<std::string, uint64_t>& timestamps,
-    std::string_view help_text,
-    ValueConverter value_converter) {
-    std::unordered_set<std::string> written_metric_names;
-
-    for (const auto& [path, value] : metrics) {
-        try {
-            // Parse system metric path (hostname/system/MetricName)
-            // Hostname is extracted from path and added as a label
-            ParsedMetric parsed = parse_system_metric_path(path);
-            std::string value_str = value_converter(value);
-
-            // Get timestamp
-            uint64_t timestamp = 0;
-            auto ts_it = timestamps.find(path);
-            if (ts_it != timestamps.end()) {
-                timestamp = ts_it->second;
-            }
-
-            // Merge labels from labels map (these override path-extracted labels if conflicts)
-            auto labels_it = labels_map.find(path);
-            if (labels_it != labels_map.end()) {
-                for (const auto& [label_name, label_value] : labels_it->second) {
-                    parsed.labels[label_name] = label_value;
-                }
-            }
-
-            format_metric(
-                output, parsed.metric_name, parsed.labels, value_str, help_text, "", timestamp, written_metric_names);
-        } catch (const std::exception& e) {
-            // Log warning but continue processing other metrics
-            log_warning(tt::LogAlways, "Failed to format system metric '{}': {}", path, e.what());
-        }
-    }
-}
-
 }  // anonymous namespace
 
 std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
@@ -261,16 +199,7 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
     output << "# Tenstorrent Metal Telemetry Metrics\n";
     output << "# Generated at: " << std::put_time(&tm_buf, "%c") << "\n\n";
 
-    // Process system metrics first (host-level health)
-    process_system_metrics(
-        output,
-        snapshot.system_bool_metrics,
-        snapshot.system_bool_metric_labels,
-        snapshot.system_bool_metric_timestamps,
-        "System-level health metric",
-        [](bool v) { return std::to_string(v ? 1 : 0); });
-
-    // Process bool metrics (no units)
+    // Process bool metrics (includes system-level metrics like TelemetryRunning)
     process_metrics(
         output,
         snapshot.bool_metrics,
