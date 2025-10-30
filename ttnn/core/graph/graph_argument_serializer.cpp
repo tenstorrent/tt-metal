@@ -46,7 +46,7 @@ std::ostream& operator<<(
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const tt::stl::StrongType<unsigned char, tt::tt_metal::QueueIdTag>& h) {
+std::ostream& operator<<(std::ostream& os, const tt::stl::StrongType<uint8_t, tt::tt_metal::QueueIdTag>& h) {
     return os << *h;
 }
 
