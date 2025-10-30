@@ -243,14 +243,11 @@ void MAIN {
     constexpr bool fuse_bias = get_compile_time_arg_val(32);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(33) == 1;
 
-#ifdef ACTIVATION_REUSE
     constexpr uint32_t image_width_in_tiles = get_compile_time_arg_val(34);
     constexpr uint32_t window_reuse_offset = get_compile_time_arg_val(35);
-#ifdef SPLIT_READER
     constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(36);
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(37);
-#endif
-#endif
+    constexpr uint32_t tilized_cb_second_reader_id = get_compile_time_arg_val(38);
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -270,8 +267,7 @@ void MAIN {
 #else
     constexpr bool split_reader = false;
 #endif
-    constexpr uint32_t in0_num_subblocks_read_last =
-        (split_reader && !split_reader_cb_shared) ? reader_num_h_subblocks / 2 : 0;
+    constexpr uint32_t in0_num_subblocks_read_last = (split_reader) ? reader_num_h_subblocks / 2 : 0;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
 
     // For block sharded conv2d, compute kernels may be scheduled on cores that only need tilize
@@ -327,13 +323,21 @@ void MAIN {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        tilize_in<true, !split_reader || split_reader_cb_shared>(
+                        // tilize_in<true, !split_reader || split_reader_cb_shared>(
+                        //     in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+
+                        // if constexpr (split_reader && !split_reader_cb_shared) {
+                        //     tilize_in<false, true>(
+                        //         in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last,
+                        //         tilized_in0_cb_id);
+                        // }
+                        tilize_in<true, false>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 
-                        if constexpr (split_reader && !split_reader_cb_shared) {
-                            tilize_in<false, true>(
-                                in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
-                        }
+                        // TODO SECOND tilized_in0_cb
+                        tilize_in<false, true>(
+                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read_last, tilized_cb_second_reader_id);
+
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
                             in1_cb_id,

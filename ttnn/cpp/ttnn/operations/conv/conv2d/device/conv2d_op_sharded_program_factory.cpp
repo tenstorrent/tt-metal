@@ -797,7 +797,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(enable_split_reader && !split_reader_cb_shared ? act_block_num_tiles_split : act_block_num_tiles),
+        (uint32_t)(act_block_num_tiles_split),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
@@ -981,7 +981,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             split_reader_args.push_back(act_mcast_reserve_done_semaphore_id);
             split_reader_args.push_back(act_mcast_receiver_second_semaphore_id);
             split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT).index);          // ACT CB
-            split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index);  // ACT_TILIZED CB
+            split_reader_args.push_back(
+                get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED_SECOND).index);  // ACT_TILIZED_SECOND CB
             split_reader_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index);     // L1 array
             split_reader_args.push_back(act_cb_offset);
             split_reader_args.push_back(act_cb_offset_last);
@@ -1061,8 +1062,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 activation_reuse_config.tilized_cb_row_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
             compute_kernel_args.push_back(
                 activation_reuse_config.tilized_cb_second_reader_offset / COMPUTE_KERNEL_ADDRESS_DIVISOR);
+        } else {
+            compute_kernel_args.push_back(0);
+            compute_kernel_args.push_back(0);
         }
+    } else {
+        compute_kernel_args.push_back(0);
+        compute_kernel_args.push_back(0);
+        compute_kernel_args.push_back(0);
+        compute_kernel_args.push_back(0);
     }
+    compute_kernel_args.push_back(get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED_SECOND).index);
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =

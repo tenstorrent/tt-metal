@@ -99,7 +99,7 @@ void kernel_main() {
     constexpr uint32_t act_tilized_offset =
         act_mcast_write_offset;  // This is the offset to the first half of the ACT_TILIZED CB (which will be read by
                                  // the second reader)
-    const uint32_t tilized_act_start_address = get_read_ptr(act_tilized_cb) + act_tilized_offset;
+    const uint32_t tilized_act_start_address = get_read_ptr(act_tilized_cb);
     const uint32_t base_act_address = get_write_ptr(act_cb_id);
 #else
     constexpr bool split_reader_enabled = false;
@@ -264,7 +264,7 @@ void kernel_main() {
                             uint64_t act_multicast_data_addr = act_multicast_noc_addr | act_address;
 
                             wait_reserve_done(act_mcast_reserve_done_semaphore_addr_ptr);
-
+                            cb_wait_front(act_tilized_cb, act_block_num_tiles_split_last);
                             if (is_receiver_core) {
                                 if constexpr (act_mcast_num_cores) {
                                     // num_dests will source, since we are copying to a different local CB as
@@ -323,6 +323,9 @@ void kernel_main() {
                     }
 
                 }  // for weight_block_height_num_outer
+                if constexpr (split_reader_enabled && !skip_mcast) {
+                    cb_pop_front(act_tilized_cb, act_block_num_tiles_split_last);
+                }
             }
 #ifdef SPLIT_READER
             // Update reader index for next iteration (split reader increment)
