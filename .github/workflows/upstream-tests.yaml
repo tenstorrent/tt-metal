@@ -240,7 +240,7 @@ jobs:
         timeout-minutes: 10
         run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
       - name: Run image
-        timeout-minutes: 120
+        timeout-minutes: 60
         env:
           SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
