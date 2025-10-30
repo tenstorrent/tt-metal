@@ -369,6 +369,8 @@ public:
         WAYPOINT("TAPD");
     }
 
+    // Return availabe space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
+    // wrap around.
     uint32_t available_space(uint32_t data_ptr) const {
         return cb_fence_ - data_ptr;
     }
