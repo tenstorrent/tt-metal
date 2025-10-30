@@ -24,7 +24,7 @@ struct ConvConfig {
     vector<uint32_t> dest_core_compile_args;
     vector<uint32_t> dest_core_runtime_args;
     NOC noc_id = NOC::NOC_0;
-    string kernel_name = "";
+    string kernel_name;
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core

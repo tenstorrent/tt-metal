@@ -26,6 +26,7 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            all_broadcast/device/all_broadcast_op.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
             ccl_common.hpp
             ccl_host_datastructures.hpp
             ccl_host_types.hpp
@@ -68,6 +69,9 @@ target_sources(
         common/host/ccl_command_stream_builders.cpp
         common/host/moe_utils.cpp
         # Ops
+        all_broadcast/all_broadcast.cpp
+        all_broadcast/device/all_broadcast_op.cpp
+        all_broadcast/device/all_broadcast_program.cpp
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp
@@ -87,6 +91,9 @@ target_sources(
         barrier/device/host/barrier_full_worker_grid.cpp
         barrier/device/barrier_op.cpp
         barrier/barrier.cpp
+        broadcast/broadcast.cpp
+        broadcast/device/broadcast_op.cpp
+        broadcast/device/broadcast_program.cpp
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})
