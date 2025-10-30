@@ -370,7 +370,7 @@ public:
     }
 
     uint32_t available_space(uint32_t data_ptr) const {
-        return cb_fence__ - data_ptr;
+        return cb_fence_ - data_ptr;
     }
 
 protected:
