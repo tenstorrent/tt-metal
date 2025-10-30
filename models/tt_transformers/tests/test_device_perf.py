@@ -40,11 +40,10 @@ def test_device_perf_one_iter(
     batch_size,
     data_parallel,
     max_seq_len,
-    max_generated_tokens,
     mode,
     num_runs,
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf-{mode} --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size}"
+    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf-{mode} --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --paged_attention 1  --batch_size {batch_size}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
     subdir = f"ttt-device-perf-{mode}"
