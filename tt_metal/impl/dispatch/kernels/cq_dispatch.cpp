@@ -1174,8 +1174,8 @@ re_run_command:
             break;
 
         default:
-            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.cb_fence << " "
-                   << dispatch_cb_base << " " << dispatch_cb_end << " " << dispatch_cb_reader.rd_block_idx << " "
+            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_space(cmd_ptr) << " "
+                   << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
@@ -1216,8 +1216,8 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
             break;
 
         default:
-            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.cb_fence << " "
-                   << " " << dispatch_cb_base << " " << dispatch_cb_end << " " << dispatch_cb_reader.rd_block_idx << " "
+            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_space(cmd_ptr) << " "
+                   << " " << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();

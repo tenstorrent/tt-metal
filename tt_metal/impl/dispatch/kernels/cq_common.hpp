@@ -342,12 +342,12 @@ public:
         }
 
         // Set a fence to limit how much is processed at once
-        uint32_t limit = (block_next_start_addr[rd_block_idx] - cb_fence) >> cb_log_page_size;
+        uint32_t limit = (block_next_start_addr_[rd_block_idx_] - cb_fence_) >> cb_log_page_size;
         uint32_t available = upstream_count_ - local_count_;
         uint32_t usable = (available > limit) ? limit : available;
 
         local_count_ += usable;
-        cb_fence += usable << cb_log_page_size;
+        cb_fence_ += usable << cb_log_page_size;
 
         return usable;
     }
@@ -369,24 +369,36 @@ public:
         WAYPOINT("TAPD");
     }
 
-    // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
-    uint32_t cb_fence{0};
-    // Byte addresses of the start of the next block for each block index; used to cap processing per block and wrap.
-    uint32_t block_next_start_addr[cb_blocks]{};
-    // Current read block index within the circular buffer.
-    uint32_t rd_block_idx{0};
+    uint32_t available_space(uint32_t data_ptr) const {
+        return cb_fence__ - data_ptr;
+    }
 
 protected:
     FORCE_INLINE void init() {
         for (uint32_t i = 0; i < cb_blocks; i++) {
             uint32_t next_block = i + 1;
             uint32_t offset = next_block * cb_pages_per_block * (1 << cb_log_page_size);
-            this->block_next_start_addr[i] = cb_base + offset;
+            this->block_next_start_addr_[i] = cb_base + offset;
         }
 
-        this->cb_fence = cb_base;
-        this->rd_block_idx = 0;
+        this->cb_fence_ = cb_base;
+        this->rd_block_idx_ = 0;
     }
+
+
+    // Advance the block to the next index, wrapping around if necessary.
+    FORCE_INLINE void move_rd_to_next_block() {
+        static_assert((cb_blocks & (cb_blocks - 1)) == 0);
+        rd_block_idx_++;
+        rd_block_idx_ &= cb_blocks - 1;
+    }
+
+    // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
+    uint32_t cb_fence_{0};
+    // Byte addresses of the start of the next block for each block index; used to cap processing per block and wrap.
+    uint32_t block_next_start_addr_[cb_blocks]{};
+    // Current read block index within the circular buffer.
+    uint32_t rd_block_idx_{0};
 
     // Advance the block to the next index, wrapping around if necessary.
     FORCE_INLINE void move_rd_to_next_block() {
@@ -398,7 +410,7 @@ protected:
 private:
     // Last value read from the upstream semaphore (producer credits). Cached snapshot for availability checks.
     uint32_t upstream_count_{0};
-    // Number of pages this reader has already accounted for (consumed) into the cb_fence region.
+    // Number of pages this reader has already accounted for (consumed) into the cb_fence_ region.
     uint32_t local_count_{0};
 };
 
@@ -428,10 +440,10 @@ public:
     // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until
     // the fence. Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr) {
-        if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
-            if (this->rd_block_idx == cb_blocks - 1) {
+        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+            if (this->rd_block_idx_ == cb_blocks - 1) {
                 cmd_ptr = cb_base;
-                this->cb_fence = cb_base;
+                this->cb_fence_ = cb_base;
             }
             move_rd_to_next_block_and_release_pages();
         }
@@ -441,13 +453,13 @@ public:
     // on_boundary is called when we're at the end of a block and need to release the pages and move to the next block.
     template <typename OnBoundaryFn>
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
-        if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
-            const uint32_t orphan_size = this->cb_fence - cmd_ptr;
-            const bool will_wrap = (this->rd_block_idx == cb_blocks - 1);
+        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+            const uint32_t orphan_size = this->cb_fence_ - cmd_ptr;
+            const bool will_wrap = (this->rd_block_idx_ == cb_blocks - 1);
             on_boundary(orphan_size, will_wrap);
             if (will_wrap) {
                 cmd_ptr = cb_base;
-                this->cb_fence = cb_base;
+                this->cb_fence_ = cb_base;
             }
             move_rd_to_next_block_and_release_pages();
         }
@@ -458,7 +470,7 @@ public:
     FORCE_INLINE void release_all_pages(uint32_t curr_ptr) {
         release_block_pages();
         uint32_t pages_to_release =
-            cb_pages_per_block - ((this->block_next_start_addr[this->rd_block_idx] - curr_ptr) >> cb_log_page_size);
+            cb_pages_per_block - ((this->block_next_start_addr_[this->rd_block_idx_] - curr_ptr) >> cb_log_page_size);
         if (pages_to_release != 0) {
             ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(pages_to_release);
         }
@@ -503,10 +515,10 @@ public:
     // pages to writer.
     FORCE_INLINE uint32_t get_cb_page(uint32_t& cmd_ptr) {
         // Strided past the data that has arrived, get the next page
-        if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
-            if (this->rd_block_idx == cb_blocks - 1) {
+        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+            if (this->rd_block_idx_ == cb_blocks - 1) {
                 cmd_ptr = cb_base;
-                this->cb_fence = cb_base;
+                this->cb_fence_ = cb_base;
             }
             this->move_rd_to_next_block();
         }
