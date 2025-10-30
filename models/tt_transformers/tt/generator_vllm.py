@@ -344,6 +344,43 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    def decode_forward(
+        self,
+        start_pos,
+        tokens,
+        prefill_cross_attention_masks,
+        prefill_full_text_row_masked_out_mask,
+        decode_cross_attention_masks,
+        decode_full_text_row_masked_out_mask,
+        xattn_caches=None,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        enable_trace=True,
+        read_from_device=True,
+        sampling_params=None,  # Accept but ignore sampling_params for compatibility
+        **kwargs,  # Accept any other unexpected kwargs
+    ):
+        """
+        Wrapper for decode_forward that handles sampling_params from vLLM.
+        Vision models don't use sampling_params, so we filter it out.
+        """
+        # Call parent's decode_forward without sampling_params
+        return super().decode_forward(
+            start_pos,
+            tokens,
+            prefill_cross_attention_masks,
+            prefill_full_text_row_masked_out_mask,
+            decode_cross_attention_masks,
+            decode_full_text_row_masked_out_mask,
+            xattn_caches=xattn_caches,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            cross_page_table=cross_page_table,
+            enable_trace=enable_trace,
+            read_from_device=read_from_device,
+        )
+
 
 class LlamaForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
