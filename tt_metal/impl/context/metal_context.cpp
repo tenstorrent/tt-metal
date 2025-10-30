@@ -822,7 +822,7 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     }
 }
 
-void MetalContext::generate_logical_to_virtual_map(chip_id_t device_id) {
+void MetalContext::generate_logical_to_virtual_map(ChipId device_id) {
     // Generate logical to virtual map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
@@ -885,7 +885,7 @@ void MetalContext::initialize_device_bank_to_noc_tables(
 }
 
 void MetalContext::initialize_logical_to_virtual_tables(
-    chip_id_t device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
+    ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
     // Generate logical to virtual map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     const uint32_t logical_col_to_virtual_col_sz_in_bytes =
