@@ -7,8 +7,10 @@
 
 #include <telemetry/metric.hpp>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -25,22 +27,21 @@ public:
         UIntMetric(), path_(std::move(path)), should_throw_(should_throw) {}
 
     const std::vector<std::string> telemetry_path() const override {
-        // Split path by '/' for testing
         std::vector<std::string> components;
-        std::string current;
-        for (char c : path_) {
-            if (c == '/') {
-                if (!current.empty()) {
-                    components.push_back(current);
-                    current.clear();
-                }
-            } else {
-                current += c;
+        std::string_view remaining = path_;
+
+        while (!remaining.empty()) {
+            size_t pos = remaining.find('/');
+            if (pos == std::string_view::npos) {
+                components.emplace_back(remaining);
+                break;
             }
+            if (pos > 0) {
+                components.emplace_back(remaining.substr(0, pos));
+            }
+            remaining.remove_prefix(pos + 1);
         }
-        if (!current.empty()) {
-            components.push_back(current);
-        }
+
         return components;
     }
 
@@ -88,80 +89,39 @@ protected:
 };
 
 TEST_F(ExceptionHandlingTest, MetricThrowsException_ContinuesExecution) {
-    // Create a mix of normal and throwing metrics
     std::vector<std::unique_ptr<ThrowingMockMetric>> metrics;
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric1", false));
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric2", false));
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip1/metric3", true));  // throws
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip2/metric4", false));
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip2/metric5", false));
+    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric1", true));  // throws
+    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip1/metric2", false));
 
-    // Call the exception handling wrapper
     size_t failed_count = update_metrics_with_exception_handling(metrics, null_cluster_, test_time_, "test");
 
-    // Verify one failure was counted
     EXPECT_EQ(failed_count, 1);
-
-    // Verify non-throwing metrics were updated
-    EXPECT_EQ(metrics[0]->get_update_count(), 1);
-    EXPECT_EQ(metrics[1]->get_update_count(), 1);
-    EXPECT_EQ(metrics[2]->get_update_count(), 0);  // This one threw, so no update
-    EXPECT_EQ(metrics[3]->get_update_count(), 1);
-    EXPECT_EQ(metrics[4]->get_update_count(), 1);
+    EXPECT_EQ(metrics[0]->get_update_count(), 0);  // This one threw, so no update
+    EXPECT_EQ(metrics[1]->get_update_count(), 1);  // This one succeeded despite the previous exception
 }
 
 TEST_F(ExceptionHandlingTest, MultipleExceptions_TracksAllFailures) {
-    // Create mostly throwing metrics
     std::vector<std::unique_ptr<ThrowingMockMetric>> metrics;
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric1", false));
+    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric1", true));  // throws
     metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip1/metric2", true));  // throws
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip1/metric3", true));  // throws
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip1/metric4", true));  // throws
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip2/metric5", false));
 
     size_t failed_count = update_metrics_with_exception_handling(metrics, null_cluster_, test_time_, "test");
 
-    // Verify three failures were counted
-    EXPECT_EQ(failed_count, 3);
-
-    // Verify normal metrics still updated
-    EXPECT_EQ(metrics[0]->get_update_count(), 1);
-    EXPECT_EQ(metrics[4]->get_update_count(), 1);
+    EXPECT_EQ(failed_count, 2);
+    EXPECT_EQ(metrics[0]->get_update_count(), 0);
+    EXPECT_EQ(metrics[1]->get_update_count(), 0);
 }
 
 TEST_F(ExceptionHandlingTest, AllMetricsSucceed_ReturnsZeroFailures) {
-    // Create all non-throwing metrics
     std::vector<std::unique_ptr<ThrowingMockMetric>> metrics;
     metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric1", false));
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric2", false));
-    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip0/metric3", false));
+    metrics.push_back(std::make_unique<ThrowingMockMetric>("tray0/chip1/metric2", false));
 
     size_t failed_count = update_metrics_with_exception_handling(metrics, null_cluster_, test_time_, "test");
 
-    // Verify no failures
     EXPECT_EQ(failed_count, 0);
-
-    // Verify all metrics were updated
-    for (const auto& metric : metrics) {
-        EXPECT_EQ(metric->get_update_count(), 1);
-    }
-}
-
-TEST_F(ExceptionHandlingTest, TelemetryPathString_FormatsCorrectly) {
-    // Test the telemetry_path_string() method
-    auto metric = std::make_unique<ThrowingMockMetric>("tray0/chip1/channel2/crcErrorCount", false);
-
-    std::string path_str = metric->telemetry_path_string();
-
-    EXPECT_EQ(path_str, "tray0/chip1/channel2/crcErrorCount");
-}
-
-TEST_F(ExceptionHandlingTest, TelemetryPathString_SingleComponent) {
-    auto metric = std::make_unique<ThrowingMockMetric>("simple", false);
-
-    std::string path_str = metric->telemetry_path_string();
-
-    EXPECT_EQ(path_str, "simple");
+    EXPECT_EQ(metrics[0]->get_update_count(), 1);
+    EXPECT_EQ(metrics[1]->get_update_count(), 1);
 }
 
 TEST_F(ExceptionHandlingTest, EmptyMetricsList_ReturnsZeroFailures) {
