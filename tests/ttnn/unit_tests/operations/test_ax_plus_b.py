@@ -14,7 +14,8 @@ def test_ax_plus_b_1D_tensors(device):
     """Test ax + b operation with 1D tensors"""
     torch.manual_seed(0)
 
-    size = 64
+    size = 8192
+
     # Create test tensors
     torch_tensor_a = torch.rand((size,), dtype=torch.bfloat16)  # coefficient 'a'
     torch_tensor_x = torch.rand((size,), dtype=torch.bfloat16)  # input 'x'
