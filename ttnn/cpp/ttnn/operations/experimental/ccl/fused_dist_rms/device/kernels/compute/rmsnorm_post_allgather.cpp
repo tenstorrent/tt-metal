@@ -21,190 +21,102 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
-
 namespace NAMESPACE {
 void MAIN {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(2);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(3);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(4);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(5) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(6) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(7) == 1;
+    constexpr uint32_t input_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t stats_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t reduce_scalar_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t epsilon_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t reduce_result_cb = get_compile_time_arg_val(4);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(6);
+    constexpr uint32_t block_size = get_compile_time_arg_val(7);
+    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(8);
+    constexpr bool use_float32_reduction = get_compile_time_arg_val(9);
+    constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(10);
 
-    constexpr uint32_t onetile = 1;
+    const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
+    binary_op_init_common(input_cb, input_cb, input_cb);
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_stats = tt::CBIndex::c_1;
+    cb_wait_front(reduce_scalar_cb, 1);  // comes from the reader
+    cb_wait_front(epsilon_cb, 1);        // comes from the reader
 
-    constexpr uint32_t cb_eps = tt::CBIndex::c_4;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_5;
-
-    constexpr uint32_t cb_out = tt::CBIndex::c_14;
-
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_6;    // [E(x**2), E(x)]
-    constexpr uint32_t cb_var_eps = tt::CBIndex::c_9;          // var + epsilon (or E(x**2) + epsilon)
-    constexpr uint32_t cb_recip_sqrt_var = tt::CBIndex::c_10;  // 1/sqrt(var+eps)
-    constexpr uint32_t cb_x_normed = tt::CBIndex::c_12;  // (x - E(x)) * 1/sqrt(var+eps) or x * 1/sqrt(E(x**2) + eps)
-
-    constexpr uint32_t cb_var = tt::CBIndex::c_8;  // E(x**2) - E(x)**2 or E(x**2)
-    constexpr uint32_t cb_norm_x_input = cb_inp;
-    constexpr uint32_t stats_tile_stride = 1;
-
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_2;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_3;
-    uint32_t cb_times_gamma_out = cb_out;
-    if constexpr (do_gamma and do_beta) {
-        cb_times_gamma_out = tt::CBIndex::c_13;
-    }
-
-    binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
-
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-    cb_wait_front(cb_eps, 1);     // comes from the reader
-
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
-        constexpr int dst0 = 0;
-
-        reconfig_data_format(cb_stats, cb_reduce);
-        pack_reconfig_data_format(cb_stats_reduced);
+    for (uint32_t tile_row = 0; tile_row < num_tile_rows_to_process; tile_row++) {
+        reconfig_data_format(stats_cb, reduce_scalar_cb);
+        pack_reconfig_data_format(reduce_result_cb);
 
         /*
          * Reduce stats input.
          * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
          * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
          */
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, cb_stats_reduced);
-        cb_wait_front(cb_stats, stats_tiles_cols);
-        cb_reserve_back(cb_stats_reduced, stats_tile_stride);
-        cb_reserve_back(cb_var, 1);
-        ACQ();
+        reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(stats_cb, reduce_scalar_cb, reduce_result_cb);
+
+        cb_wait_front(stats_cb, stats_tiles_cols);
+        cb_reserve_back(reduce_result_cb, 1);
+
+        tile_regs_acquire();
         // Reduce sum(x**2) first
-        for (uint32_t i = 0; i < stats_tiles_cols; i += stats_tile_stride) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_stats, cb_reduce, i, 0, 0);
+        for (uint32_t i = 0; i < stats_tiles_cols; i++) {
+            reduce_tile<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(stats_cb, reduce_scalar_cb, i, 0, 0);
         }
-        pack_tile(0, cb_stats_reduced);
 
-        pack_tile(0, cb_var);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, reduce_result_cb);
+        tile_regs_release();
+        cb_push_back(reduce_result_cb, 1);
+        cb_pop_front(stats_cb, stats_tiles_cols);
 
-        REL();
-        cb_push_back(cb_stats_reduced, stats_tile_stride);
-        cb_pop_front(cb_stats, stats_tiles_cols);
-        cb_push_back(cb_var, 1);
-
-        reduce_uninit();
-
-        // free up CBs
-        cb_pop_front(cb_stats_reduced, stats_tile_stride);
+        reduce_uninit<false>();  // NOTE: cannot pass use_float32_reduction here or outputs are incorrect?
 
         /*
          * 1/sqrt(var + eps)
          */
-        cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
+        cb_wait_front(reduce_result_cb, 1);
+        reconfig_data_format(reduce_result_cb, epsilon_cb);
+        pack_reconfig_data_format(reduce_result_cb);
 
-        add_tiles_init(cb_var, cb_eps);
-        ACQ();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+        add_tiles_init(reduce_result_cb, epsilon_cb);
+        tile_regs_acquire();
+        add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
+        rsqrt_tile_init<use_legacy_rsqrt>();
+        rsqrt_tile<use_legacy_rsqrt>(0);
+        tile_regs_commit();
+        cb_pop_front(reduce_result_cb, 1);
+        cb_reserve_back(reduce_result_cb, 1);
+        tile_regs_wait();
+        pack_tile(0, reduce_result_cb);
+        tile_regs_release();
+        cb_push_back(reduce_result_cb, 1);
 
         /*
          * norm x
          * RMSNorm: X * 1/sqrt(E[X**2] + eps)
          */
+        reconfig_data_format(input_cb, reduce_result_cb);
+        pack_reconfig_data_format(output_cb);
+        mul_bcast_cols_init_short(input_cb, reduce_result_cb);
+        cb_wait_front(reduce_result_cb, 1);
+        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+            cb_wait_front(input_cb, block_size);
+            cb_reserve_back(output_cb, block_size);
 
-        uint32_t normed_output_cb = cb_x_normed;
-        if constexpr (!do_gamma) {
-            normed_output_cb = cb_out;
-        }
-
-        reconfig_data_format(cb_norm_x_input, cb_recip_sqrt_var);
-        pack_reconfig_data_format(normed_output_cb);
-        mul_bcast_cols_init_short(cb_norm_x_input, cb_recip_sqrt_var);
-        cb_wait_front(cb_recip_sqrt_var, 1);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_norm_x_input, blk);
-            cb_reserve_back(normed_output_cb, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles_bcast_cols(cb_norm_x_input, cb_recip_sqrt_var, wtr, 0, wtr);
-                pack_tile(wtr, normed_output_cb);
+            tile_regs_acquire();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                mul_tiles_bcast_cols(input_cb, reduce_result_cb, i, 0, i);
+                pack_tile(i, output_cb);
             }
-            REL();
-            cb_push_back(normed_output_cb, blk);
-            cb_pop_front(cb_norm_x_input, blk);
-        }
-        cb_pop_front(cb_recip_sqrt_var, 1);
+            tile_regs_commit();
+            tile_regs_release();
 
-        if constexpr (do_gamma) {
-            /*
-             * x_normed * gamma
-             */
-            reconfig_data_format(cb_x_normed, cb_gamma);
-            pack_reconfig_data_format(cb_times_gamma_out);
-            cb_wait_front(cb_gamma, Wt);
-            mul_bcast_rows_init_short(cb_x_normed, cb_gamma);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_x_normed, blk);
-                cb_reserve_back(cb_times_gamma_out, blk);
-                ACQ();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    mul_tiles_bcast_rows(cb_x_normed, cb_gamma, wtr, wt + wtr, wtr);
-                    pack_tile(wtr, cb_times_gamma_out);
-                }
-                REL();
-                cb_push_back(cb_times_gamma_out, blk);
-                cb_pop_front(cb_x_normed, blk);
-            }
-
-            if constexpr (do_beta) {
-                /*
-                 * x_normed * gamma + beta
-                 */
-                reconfig_data_format(cb_times_gamma_out, cb_beta);
-                pack_reconfig_data_format(cb_out);
-                cb_wait_front(cb_beta, Wt);
-                add_bcast_rows_init_short(cb_times_gamma_out, cb_beta);
-                for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                    cb_wait_front(cb_times_gamma_out, blk);
-                    cb_reserve_back(cb_out, blk);
-                    ACQ();
-                    for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                        add_tiles_bcast_rows(cb_times_gamma_out, cb_beta, wtr, wt + wtr, wtr);
-                        pack_tile(wtr, cb_out);
-                    }
-                    REL();
-                    cb_push_back(cb_out, blk);
-                    cb_pop_front(cb_times_gamma_out, blk);
-                }
-            }
+            cb_push_back(output_cb, block_size);
+            cb_pop_front(input_cb, block_size);
         }
+        cb_pop_front(reduce_result_cb, 1);
     }
-    cb_pop_front(cb_eps, 1);
-    cb_pop_front(cb_reduce, 1);
-    if constexpr (do_gamma) {
-        cb_pop_front(cb_gamma, Wt);
-    }
-    if constexpr (do_beta) {
-        cb_pop_front(cb_beta, Wt);
-    }
+    cb_pop_front(epsilon_cb, 1);
+    cb_pop_front(reduce_scalar_cb, 1);
 }
 }  // namespace NAMESPACE

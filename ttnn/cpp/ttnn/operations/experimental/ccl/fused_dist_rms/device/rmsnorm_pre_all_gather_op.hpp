@@ -15,7 +15,7 @@
 namespace ttnn::operations::experimental::ccl {
 
 tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
-    const Tensor& a, Tensor& output, DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor& input_tensor, Tensor& output_tensor, DeviceComputeKernelConfig compute_kernel_config);
 
 struct FusedRMSNormPreAllGather {
     const DataType dtype;

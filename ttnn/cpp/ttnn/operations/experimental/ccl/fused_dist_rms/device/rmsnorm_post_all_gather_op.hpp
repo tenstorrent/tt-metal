@@ -15,7 +15,11 @@
 namespace ttnn::operations::experimental::ccl {
 
 tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi_core(
-    const Tensor& a, const Tensor& stats, Tensor& output, float eps, DeviceComputeKernelConfig compute_kernel_config);
+    const Tensor& input_tensor,
+    const Tensor& stats_tensor,
+    Tensor& output_tensor,
+    float eps,
+    DeviceComputeKernelConfig compute_kernel_config);
 
 struct FusedRMSNormPostAllGather {
     float eps;
