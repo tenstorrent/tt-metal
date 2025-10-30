@@ -12,7 +12,6 @@ from models.common.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_n_or_less_dev,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
