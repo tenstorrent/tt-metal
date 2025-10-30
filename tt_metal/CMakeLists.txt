@@ -211,6 +211,7 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
             tools/profiler/noc_event_profiler.hpp
+            tools/profiler/cpp_device_analyses.json
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp
