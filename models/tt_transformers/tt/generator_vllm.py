@@ -308,6 +308,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
         kv_cache,
         prompt_lens,
         cross_page_table: torch.Tensor,
+        empty_slots=None,
     ):
         """
         Replaces prefill_forward from Generator with a version that supports mask creation.
@@ -337,6 +338,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0On
             page_table=page_table,
             kv_cache=kv_cache,
             cross_page_table=cross_page_table,
+            empty_slots=empty_slots,
         )
 
     def allocate_kv_cache(self, *args, **kwargs):
