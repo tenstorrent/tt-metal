@@ -64,7 +64,7 @@ static void run_width_sharded_tensor_slice_indexer_get_page_location_test(
                      x_logical < worker_shard_cores_start_x + shard_grid_width;
                      x_logical++) {
                     for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
+                        if ((px % px_increment == 0 && py % py_increment == 0) ||
                             (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
                             const auto& result = addrgen.get_page_location(page_id);
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
@@ -93,7 +93,7 @@ static void run_width_sharded_tensor_slice_indexer_get_page_location_test(
                      y_logical < worker_shard_cores_start_y + shard_grid_height;
                      y_logical++) {
                     for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
+                        if ((px % px_increment == 0 && py % py_increment == 0) ||
                             (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
                             const auto& result = addrgen.get_page_location(page_id);
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
@@ -242,7 +242,7 @@ static void run_height_sharded_tensor_slice_indexer_get_page_location_test(
                  y_logical++) {
                 for (std::size_t py = 0; py < pages_per_shard_y; py++) {
                     for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
+                        if ((px % px_increment == 0 && py % py_increment == 0) ||
                             (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
                             const auto& result = addrgen.get_page_location(page_id);
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
@@ -264,7 +264,7 @@ static void run_height_sharded_tensor_slice_indexer_get_page_location_test(
                  x_logical++) {
                 for (std::size_t py = 0; py < pages_per_shard_y; py++) {
                     for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
+                        if ((px % px_increment == 0 && py % py_increment == 0) ||
                             (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
                             const auto& result = addrgen.get_page_location(page_id);
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
@@ -404,7 +404,7 @@ static void run_block_sharded_tensor_slice_indexer_get_page_location_test(
                      x_logical < worker_shard_cores_start_x + shard_grid_width;
                      x_logical++) {
                     for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
+                        if ((px % px_increment == 0 && py % py_increment == 0) ||
                             (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
                             const auto& result = addrgen.get_page_location(page_id);
                             ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));

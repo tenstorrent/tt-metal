@@ -21,6 +21,7 @@ from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_wei
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 @dataclass(frozen=True)
@@ -498,25 +499,41 @@ class DeepseekGenerator:
         sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
-    ) -> List[List[int]]:
+    ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
         early_print_first_user: If True, prints generated tokens for the first user
                                 at each step. Better for demo visibility.
 
-        Returns: list of generated token id lists for the provided prompts (order preserved).
+        Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
+        # Initialize profiler
+        profiler = BenchmarkProfiler()
+        profiler.start("run")
+
         prompts = list(prompts)
-        assert 1 <= len(prompts) <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
+        num_of_prompts = len(prompts)
+        assert 1 <= num_of_prompts <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
+
+        logger.info("Creating model run configs...")
+        profiler.start("preparing_prefill_config")
         self._prepare_run_configs("prefill")
+        profiler.end("preparing_prefill_config")
+
+        profiler.start("preparing_decode_config")
         self._prepare_run_configs("decode")
+        profiler.end("preparing_decode_config")
 
         # Tokenize using HF chat template
+        profiler.start("tokenizing")
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
         tokens_batched, lengths = self._pad_batch(encoded)  # [USERS_PER_ROW, seq_len]
+        profiler.end("tokenizing")
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
+
         # Prefill
+        profiler.start("inference_prefill")
         num_of_users = tokens_batched.shape[0]
         last_logits = []
         for user_id in range(num_of_users):
@@ -532,6 +549,7 @@ class DeepseekGenerator:
             user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
             last_logits.append(user_out)
         last_logits = torch.stack(last_logits)
+        profiler.end("inference_prefill")
 
         assert len(last_logits) == num_of_users
 
@@ -549,13 +567,18 @@ class DeepseekGenerator:
             forced = teacher_forcing.collect_predicted_tokens(int(next_tokens[0].item()))
             next_tokens[0] = int(forced)
 
-        generations: List[List[int]] = [[] for _ in range(len(prompts))]
-        logger.info(f"Generating {max_new_tokens} tokens for {len(prompts)} user(s)...")
+        generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+        logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
         if early_print_first_user:
             logger.info("===== Generation for first user =====")
+
+        profiler.start("inference_decode")
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
+            profiler.start(f"decode_time_{gen_idx}")
             logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
+            profiler.end(f"decode_time_{gen_idx}")
+
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
                 forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
@@ -564,16 +587,56 @@ class DeepseekGenerator:
             positions += 1
 
             # Collect only for the original batch size
-            for i in range(len(prompts)):
+            for i in range(num_of_prompts):
                 token_value = int(next_tokens[i].item())
                 generations[i].append(token_value)
                 if early_print_first_user and i == 0:
                     print(self.tokenizer.decode(token_value, skip_special_tokens=True), end="", flush=True)
 
+        profiler.end("inference_decode")
+        profiler.end("run")
+
         if early_print_first_user:
             logger.info("\n===== Done =====")
 
-        return generations
+        # Calculate statistics
+        prefill_time = profiler.get_duration("inference_prefill")
+        decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(max_new_tokens)]
+
+        # Get config preparation times
+        prefill_config_time = profiler.get_duration("preparing_prefill_config")
+        decode_config_time = profiler.get_duration("preparing_decode_config")
+
+        # Average prompt length for prefill calculation
+        avg_prompt_len = float(lengths[0] if len(lengths) > 0 else 0)
+
+        # Calculate statistics
+        prefill_tokens_per_sec = (avg_prompt_len / prefill_time) * num_of_prompts if prefill_time > 0 else 0
+
+        # Calculate decode throughput excluding the first iteration (compile time)
+        # This matches simple_text_demo.py: line 1071-1072 excludes iteration 0 when summing times
+        if len(decode_times) > 1:
+            total_decode_time = sum(decode_times[1:])  # Exclude iteration 0 (compile time)
+            decode_tokens_per_sec_per_user = (max_new_tokens - 1) / total_decode_time if total_decode_time > 0 else 0
+        else:
+            total_decode_time = sum(decode_times)
+            decode_tokens_per_sec_per_user = 0
+        decode_tokens_per_sec = decode_tokens_per_sec_per_user * num_of_prompts
+        avg_time_to_first_token = prefill_time / num_of_prompts if num_of_prompts > 0 else 0
+
+        statistics = {
+            "preparing_prefill_config": prefill_config_time,
+            "preparing_decode_config": decode_config_time,
+            "inference_prefill": prefill_time,
+            "inference_decode": total_decode_time,
+            "prefill_time_to_token": avg_time_to_first_token,
+            "prefill_t/s": prefill_tokens_per_sec,
+            "decode_t/s/u": decode_tokens_per_sec_per_user,
+            "decode_t/s": decode_tokens_per_sec,
+            "Full demo runtime": profiler.get_duration("run"),
+        }
+
+        return generations, statistics
 
     def _encode_prompt(self, prompt: str) -> List[int]:
         # Use HF chat template if a tokenizer is provided; otherwise synthesize simple token ids
