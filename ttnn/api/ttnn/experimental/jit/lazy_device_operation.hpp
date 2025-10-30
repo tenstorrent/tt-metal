@@ -70,9 +70,14 @@ public:
         const std::vector<tt::tt_metal::metal_tensor::Tensor>& input_tensors) override {
         // Construct tensor_args from input_tensors with proper reference binding
         // Pass field_tensor_counts_ and field_vector_sizes_ for proper reconstruction
-        // TODO: fix from_range_pfr to accept const iterators
-        std::vector<tt::tt_metal::metal_tensor::Tensor> mutable_tensors = input_tensors;
+        // TODO: Once Tensor is in metal, we should make all device operations accept metal tensor, not tnn::Tensor
+        std::vector<ttnn::Tensor> mutable_tensors;
+        mutable_tensors.reserve(input_tensors.size());
+        for (const auto& tensor : input_tensors) {
+            mutable_tensors.push_back(ttnn::Tensor(tensor));
+        }
 
+        // TODO: fix from_range_pfr to accept const iterators
         auto tensor_args = from_range_pfr<tensor_args_t>(
             mutable_tensors.begin(), mutable_tensors.end(), field_tensor_counts_, field_vector_sizes_);
 
@@ -122,11 +127,18 @@ private:
     }
 
     // Convert result from device operation to vector of tensors
-    std::vector<Tensor> convert_result_to_vector(const tensor_return_value_t& result) const {
+    std::vector<tt::tt_metal::metal_tensor::Tensor> convert_result_to_vector(
+        const tensor_return_value_t& result) const {
+        // TODO: device operations are supposed to return metal tensors, not tnn::Tensor
         if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
-            return {result};
+            return {result.get_materialized_tensor()};
         } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
-            return result;
+            std::vector<tt::tt_metal::metal_tensor::Tensor> metal_tensors;
+            metal_tensors.reserve(result.size());
+            for (const auto& tensor : result) {
+                metal_tensors.push_back(tensor.get_materialized_tensor());
+            }
+            return metal_tensors;
         } else {
             TT_THROW("Unsupported tensor_return_value_t type");
         }

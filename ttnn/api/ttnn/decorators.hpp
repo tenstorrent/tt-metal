@@ -118,6 +118,8 @@ concept AllFieldsSupported = requires {
 template <typename operation_t>
 concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t> &&
                         AllFieldsSupported<typename operation_t::tensor_args_t>;
+// template <typename operation_t>
+// concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
 
 }  // namespace detail
 
@@ -166,7 +168,6 @@ private:
         //     return invoke_lazy(operation_attributes, tensors_args);
         // }
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
-        return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
     }
 
     template <typename... args_t>
@@ -193,10 +194,7 @@ private:
 
     //         // Get output specs to create placeholder tensors
     //         auto output_specs = lazy_op->compute_output_specs();
-
-    //         // Create placeholder output tensors
-    //         auto first_input_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    //         auto device = first_input_tensor.device();
+    //         // auto output_specs = operation_t::compute_output_specs(operation_attributes, tensor_args);
 
     //         // TODO: Move this if constexprs to a separate function.
     //         // TODO: Add support for all kinds of returns
@@ -205,26 +203,17 @@ private:
     //             ttnn::experimental::jit::object_to_vector<tensor_args_t, Tensor>(tensor_args);
 
     //         if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
+    //             // TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
     //             // Single tensor output
-    //             TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
-    //             return LazyTensor(input_tensors, lazy_op);
-    //             // auto output_tensor = tt::tt_metal::create_device_tensor(output_specs[0], device);
-    //             // output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
-    //             // output_tensor.set_producer_node(node_id);
-    //             // return output_tensor;
+    //             return Tensor::make_lazy_tensor(input_tensors, lazy_op, output_specs[0]);
+    //             // return Tensor::make_lazy_tensor(input_tensors, nullptr, output_specs);
     //         } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
     //             // Multiple tensor outputs (vector)
-    //             std::vector<Tensor> output_tensors;
-    //             for (const auto& spec : output_specs) {
-    //                 auto output_tensor = tt::tt_metal::create_device_tensor(spec, device);
-    //                 output_tensor = tt::tt_metal::set_tensor_id(output_tensor);
-    //                 output_tensor.set_producer_node(node_id);
-    //                 output_tensors.push_back(output_tensor);
-    //             }
-    //             return output_tensors;
+    //             return Tensor::make_lazy_tensors(input_tensors, lazy_op, output_specs);
+    //             // return Tensor::make_lazy_tensors(input_tensors, nullptr, output_specs);
     //         }
     //     } else {
-    //         // Fallback for other return types - execute eagerly
+    //         // TODO: Should fail
     //         log_warning(
     //             tt::LogOp,
     //             "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
