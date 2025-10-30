@@ -215,10 +215,7 @@ const std::optional<tt::tt_metal::NdShardSpec>& Tensor::nd_shard_spec() const {
     return lazy_tensor_->tensor_spec().tensor_layout().get_memory_config().nd_shard_spec();
 }
 
-tt::tt_metal::StorageType Tensor::storage_type() const {
-    // TODO: check if this information is required for non-materialized tensors
-    return get_materialized_tensor().storage_type();
-}
+tt::tt_metal::StorageType Tensor::storage_type() const { return lazy_tensor_->storage_type(); }
 
 ttnn::Shape Tensor::strides() const {
     // TODO: remove duplication with tensor.cpp
@@ -247,9 +244,13 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> Tensor::mesh_buffer() con
     return get_materialized_tensor().mesh_buffer();
 }
 
-tt::tt_metal::distributed::MeshDevice* Tensor::device() const { return get_materialized_tensor().device(); }
+tt::tt_metal::distributed::MeshDevice* Tensor::device() const { return lazy_tensor_->device(); }
 
-bool Tensor::is_sharded() const { return get_materialized_tensor().is_sharded(); }
+bool Tensor::is_sharded() const {
+    // return get_materialized_tensor().is_sharded();
+    // TODO: This should check if tensor is on the device
+    return memory_config().is_sharded();
+}
 
 uint32_t Tensor::element_size() const { return get_materialized_tensor().element_size(); }
 

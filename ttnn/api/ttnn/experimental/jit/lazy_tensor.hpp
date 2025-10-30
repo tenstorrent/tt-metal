@@ -7,6 +7,13 @@
 #include <ttnn/tensor/metal_tensor.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 
+namespace tt::tt_metal {
+enum class StorageType;
+namespace distributed {
+class MeshDevice;
+}
+}  // namespace tt::tt_metal
+
 namespace ttnn::experimental::jit {
 
 struct LazyOperation;
@@ -53,6 +60,8 @@ public:
     LazyTensorId id() const;
     bool is_materialized() const;
     const LazyOperationPtr& op() const;
+    tt::tt_metal::distributed::MeshDevice* device() const;
+    tt::tt_metal::StorageType storage_type() const;
 
     void materialize();
 
@@ -69,6 +78,8 @@ private:
     size_t materialized_output_idx_ = 0;  // In case op produces multiple tensors, we want to know which one is this
     LazyTensorState state_ = LazyTensorState::LAZY;
     LazyTensorId id_ = 0;
+    tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
+    tt::tt_metal::StorageType storage_type_ = tt::tt_metal::StorageType::DEVICE;
 };
 
 }  // namespace ttnn::experimental::jit
