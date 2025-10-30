@@ -202,6 +202,11 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
                 mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
         }
 
+        else {
+            // Assign DRAM banks in round-robin for each receiver core
+            auto num_dram_banks = target_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+            bank_id = core_idx % num_dram_banks;
+        }
         // Runtime arguments for writer (vary per core)
         std::vector<uint32_t> writer_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
