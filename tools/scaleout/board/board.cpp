@@ -81,7 +81,7 @@ Board::Board(
     const std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>& ports,
     const std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>& internal_connections,
     const BoardType& board_type) :
-    ports_(ports), internal_connections_(internal_connections), board_type_(board_type), asic_locations_() {
+    ports_(ports), internal_connections_(internal_connections), board_type_(board_type) {
     switch (board_type_) {
         case BoardType::N150:
         case BoardType::N300:

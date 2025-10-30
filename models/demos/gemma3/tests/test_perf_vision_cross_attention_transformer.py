@@ -55,24 +55,25 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations):
         measurements[k] = profiler.get_duration(k) if k != "model_forward_inference" else inference_mean
         logger.info(f"measurement {k}: {measurements[k]}")
 
-    targets = load_targets(
-        TARGETS_JSON_FILENAME,
-        device_type=determine_device_name(mesh_device),
-    )
+    model_name = get_model_name()
+
+    targets = load_targets(TARGETS_JSON_FILENAME, device_type=determine_device_name(mesh_device), model_name=model_name)
 
     if SAVE_NEW_PERF_TARGETS:
         helper_write_to_json(
             determine_device_name(mesh_device),
             measurements["model_forward_inference"],
             output_filename=TARGETS_JSON_FILENAME,
+            model_name=model_name,
         )
 
     upper_threshold = targets["model_forward_inference"] * (1 + THRESHOLD_PERCENT / 100)
     lower_threshold = targets["model_forward_inference"] * (1 - THRESHOLD_PERCENT / 100)
-    assert lower_threshold < inference_mean < upper_threshold
+    assert lower_threshold < inference_mean, "Failed because it's too fast"
+    assert inference_mean < upper_threshold, "Failed because it's too slow"
 
 
-def helper_write_to_json(device_type, measurements, output_filename):
+def helper_write_to_json(device_type, measurements, output_filename, model_name):
     """
     This function reads the file /output_filename/ and updates it with the new measurements. For example if the file has measurements for N150 it will overwrite them with the new measurements.
     """
@@ -80,7 +81,12 @@ def helper_write_to_json(device_type, measurements, output_filename):
     with open(output_filename, "r") as f:
         file_dict = json.load(f)
 
-    file_dict[device_type] = {"model_forward_inference": measurements}
+    if file_dict.get(model_name) is None:
+        file_dict[model_name] = dict()
+    if file_dict[model_name].get(device_type) is None:
+        file_dict[model_name][device_type] = dict()
+
+    file_dict[model_name][device_type] = {"model_forward_inference": measurements}
 
     with open(output_filename, "w") as f:
         json.dump(file_dict, f, indent=4)
@@ -134,7 +140,7 @@ def run_model(mesh_device, batch_size, profiler, nr_forward_iterations):
     return tt_output_torch
 
 
-def load_targets(filename, device_type):
+def load_targets(filename, device_type, model_name):
     if not os.path.exists(filename):
         logger.warning(f"Expected outputs file {filename} does not exist. Skipping loading targets.")
         return []
@@ -146,6 +152,20 @@ def load_targets(filename, device_type):
             logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
             return []
 
-    dict_targets = targets[device_type]
+    dict_targets = targets[model_name][device_type]
 
     return dict_targets
+
+
+def get_model_name():
+    full_name = os.getenv("HF_MODEL")
+
+    if "gemma" not in full_name:
+        raise ValueError(f"Unsupported model name: {full_name}")
+
+    if "4b" in full_name:
+        return "gemma-3-4b-it"
+    elif "27b" in full_name:
+        return "gemma-3-27b-it"
+    else:
+        raise ValueError(f"Unsupported model name: {full_name}")

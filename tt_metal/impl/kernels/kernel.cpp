@@ -111,12 +111,12 @@ Kernel::Kernel(
     processor_class_(processor_class),
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
+    compile_time_args_(compile_args),
+    named_compile_time_args_(named_compile_args),
     common_runtime_args_count_(0),
     max_runtime_args_per_core_(0),
     core_with_max_runtime_args_({0, 0}),
-    compile_time_args_(compile_args),
-    defines_(defines),
-    named_compile_time_args_(named_compile_args) {
+    defines_(defines) {
     this->register_kernel_with_watcher();
 
     size_t max_x = 0, max_y = 0;
@@ -288,7 +288,7 @@ uint8_t ComputeKernel::expected_num_binaries() const {
     return 3;
 }
 
-const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint32_t build_key) const {
+const std::vector<const ll_api::memory*>& KernelImpl::binaries(uint64_t build_key) const {
     auto iter = binaries_.find(build_key);
     TT_FATAL(iter != binaries_.end(), "binary not found");
     if (iter->second.size() != expected_num_binaries()) {
@@ -576,7 +576,7 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     jit_build_subset(build_states, this);
 }
 
-void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries) {
+void KernelImpl::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries) {
     // Try inserting an empty vector, as that is cheap to construct
     // and avoids an additional move.
     auto pair = binaries_.insert({build_key, {}});

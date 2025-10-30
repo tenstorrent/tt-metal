@@ -18,6 +18,7 @@ class TtAutoencoderKL(LightweightModule):
         device,
         state_dict,
         model_config,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -33,12 +34,14 @@ class TtAutoencoderKL(LightweightModule):
             device,
             state_dict,
             model_config,
+            debug_mode=debug_mode,
         )
 
         self.encoder = TtEncoder(
             device,
             state_dict,
             model_config,
+            debug_mode=debug_mode,
         )
 
         quant_conv_weights = state_dict[f"quant_conv.weight"].squeeze()

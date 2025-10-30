@@ -17,6 +17,21 @@ bool is_fabric_2d() {
         fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
 }
 
+// Map a dimension of an ND tensor to 4D. If dim > than rank difference, subtract rank difference.
+std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_t rank) {
+    constexpr int32_t RANK_4D = 4, RANK_2D = 2;
+
+    // special case for rank 2
+    if (rank == RANK_2D) {
+        return std::make_tuple(RANK_2D + dim, RANK_2D);
+    }
+
+    const auto rank_diff = static_cast<int32_t>(rank) - RANK_4D;
+    const auto normalized_dim = (dim < std::abs(rank_diff)) ? dim : dim - rank_diff;
+
+    return std::make_tuple(normalized_dim, rank_diff);
+}
+
 bool use_composite_reduce_scatter(
     const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
@@ -25,6 +40,8 @@ bool use_composite_reduce_scatter(
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
+    const auto normalized_scatter_dim = std::get<0>(normalize_dim_4d(scatter_dim, rank));
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
@@ -40,15 +57,15 @@ bool use_composite_reduce_scatter(
     }
 
     // Use composite if we don't support scattering on the provided dim
-    if (scatter_dim != 1 && scatter_dim != 2 && scatter_dim != 3) {
+    if (normalized_scatter_dim != 1 && normalized_scatter_dim != 2 && normalized_scatter_dim != 3) {
         return true;
     }
 
     // Use composite if tiled and scattering on padded dim 2 or 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    return (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
-           (scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
+    return (normalized_scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
+           (normalized_scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
 }
 
 ttnn::Tensor composite_reduce_scatter(
@@ -70,7 +87,7 @@ ttnn::Tensor composite_reduce_scatter(
     auto output_shape = input_tensor.logical_shape();
     output_shape[scatter_dim] /= num_devices;
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (output_shape[2] % tile_height != 0 || output_shape[3] % tile_width != 0);
+                                         (output_shape[-2] % tile_height != 0 || output_shape[-1] % tile_width != 0);
 
     auto input_memory_config = input_tensor.memory_config();
     TT_FATAL(
@@ -90,8 +107,8 @@ ttnn::Tensor composite_reduce_scatter(
         input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
     }
 
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, input_tensor.memory_config(), ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
+        input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
 
     // Reduce broadcasted tensors into a single reduced tensor
     ttnn::Tensor all_reduced_tensor = broadcasted_tensors[0];
@@ -223,10 +240,9 @@ bool use_composite_all_gather(
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
-    if (is_fabric_2d()) {
-        return true;
+    if (tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
+        return true;  // 2D dynamic and 1D both work, but 2D standard does not
     }
-
     // Use composite for row-major tensors
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR) {
         return true;
@@ -289,7 +305,7 @@ ttnn::Tensor composite_all_gather(
     // and after re-tilizing
     ttnn::DataType input_dtype = input_tensor.dtype();
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
+                                         (input_shape[-2] % tile_height != 0 || input_shape[-1] % tile_width != 0);
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
 
     auto input_memory_config = input_tensor.memory_config();
@@ -310,29 +326,18 @@ ttnn::Tensor composite_all_gather(
         input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
     }
 
-    // Convert to row major
-    if (is_tiled_and_not_tile_aligned) {
-        // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
-        if (convert_to_bfloat16_for_composite) {
-            input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
-        }
-        input_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
+    if (convert_to_bfloat16_for_composite) {
+        input_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
     }
 
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, input_tensor.memory_config(), ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
+        input_tensor, cluster_axis, subdevice_id, input_tensor.memory_config(), num_links, ttnn::ccl::Topology::Linear);
 
     // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
 
-    // Convert back to tiled
-    if (is_tiled_and_not_tile_aligned) {
-        all_gather_output_tensor = ttnn::to_layout(all_gather_output_tensor, ttnn::Layout::TILE);
-        // If we had to convert the input dtype in order to execute the row-major composite op, convert back to the
-        // input dtype
-        if (convert_to_bfloat16_for_composite) {
-            all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
-        }
+    if (convert_to_bfloat16_for_composite) {
+        all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
     }
 
     if (output_memory_config.is_sharded()) {
@@ -393,7 +398,7 @@ ttnn::Tensor composite_all_to_all(
 
     // Convert to row major
     if (is_tiled_and_not_tile_aligned) {
-        // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
+        // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast + concat
         if (convert_to_bfloat16_for_composite) {
             temp_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
             input_tensor.deallocate();
@@ -414,13 +419,13 @@ ttnn::Tensor composite_all_to_all(
     }
 
     // Step 1: make every device have a copy of every tensor
-    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::ccl::all_broadcast(
         input_tensor,
-        num_links,
-        interim_memory_config,
-        ttnn::ccl::Topology::Linear,
         /* cluster_axis */ std::nullopt,
-        subdevice_id);
+        subdevice_id,
+        interim_memory_config,
+        num_links,
+        ttnn::ccl::Topology::Linear);
     input_tensor.deallocate();
 
     // Step 2: Slice out the index range each device cares about, along out_dim

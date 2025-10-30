@@ -48,7 +48,7 @@ struct address_map {
     static constexpr std::int32_t KERNEL_BASE = 0xA840;
     static constexpr std::int32_t ROUTING_FW_RESERVED_BASE = L1_EPOCH_Q_BASE + APP_FIRMWARE_SIZE;
 
-    static constexpr std::int32_t MAX_L1_LOADING_ADDR = 0x3D000;
+    static constexpr std::int32_t MAX_L1_LOADING_ADDR = 0x3DC00;
 
     // TT Metal Specific
     //     Optional FW reserved space for routing FW
@@ -88,7 +88,7 @@ struct address_map {
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
     static constexpr std::int32_t FABRIC_ROUTER_RESERVED_BASE =
         (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
-    static constexpr std::int32_t FABRIC_ROUTER_RESERVED_SIZE = 6160;
+    static constexpr std::int32_t FABRIC_ROUTER_RESERVED_SIZE = 3088;
 
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE = FABRIC_ROUTER_RESERVED_BASE;
     static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 1296;
