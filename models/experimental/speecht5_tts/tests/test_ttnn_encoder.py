@@ -21,6 +21,7 @@ from tt.ttnn_speecht5_encoder import (
     TtSpeechT5Encoder,
     TtSpeechT5Config,
 )
+from reference.speecht5_model import SpeechT5ModelReference
 
 
 def comp_pcc(golden, calculated, pcc=0.99):
@@ -110,12 +111,10 @@ def test_ttnn_encoder_vs_pytorch(device, batch_size, seq_len):
     """Test TTNN encoder output against PyTorch reference with PCC validation"""
     logger.info(f"\n=== Test TTNN Encoder vs PyTorch (batch={batch_size}, seq_len={seq_len}) ===")
 
-    # Load HuggingFace model
-    logger.info("Loading HuggingFace model...")
-    hf_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
-    hf_model.eval()
-    hf_encoder = hf_model.speecht5.encoder
-    config = TtSpeechT5Config.from_hf_config(hf_model.config)
+    # Load reference model (HuggingFace wrapper with PCC ≈ 1.0)
+    logger.info("Loading reference model...")
+    ref_model = SpeechT5ModelReference("microsoft/speecht5_tts")
+    config = TtSpeechT5Config.from_hf_config(ref_model.config)
 
     # Create test input
     torch.manual_seed(42)
@@ -124,8 +123,7 @@ def test_ttnn_encoder_vs_pytorch(device, batch_size, seq_len):
     # PyTorch reference
     logger.info("Running PyTorch reference...")
     with torch.no_grad():
-        ref_output = hf_encoder(input_ids=input_ids)
-        ref_hidden = ref_output.last_hidden_state
+        ref_hidden = ref_model.forward_encoder(input_ids)
 
     # TTNN implementation
     logger.info("Loading TTNN encoder...")

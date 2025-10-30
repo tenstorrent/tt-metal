@@ -51,10 +51,7 @@ class SpeechT5ModelReference(nn.Module):
         Returns:
             encoder_output: [batch, text_seq_len, hidden_size]
         """
-        encoder_output = self.model.speecht5.encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-        )
+        encoder_output = self.model.speecht5.encoder(input_ids, attention_mask)
         return encoder_output.last_hidden_state
 
     def forward_decoder(

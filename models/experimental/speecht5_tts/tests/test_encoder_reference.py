@@ -61,8 +61,8 @@ def test_encoder_vs_huggingface():
 
     # Run both models
     with torch.no_grad():
-        hf_output = hf_encoder(input_ids=input_ids)
-        our_output = our_encoder(input_ids=input_ids)
+        hf_output = hf_encoder(input_ids)
+        our_output = our_encoder(input_ids)
 
     hf_hidden = hf_output.last_hidden_state
     our_hidden = our_output[0]
