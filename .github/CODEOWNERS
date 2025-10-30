@@ -109,8 +109,8 @@ tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/metalium-codeowners
 
 # metal tests
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @tenstorrent/metalium-codeowners-large-changes
-tests/tt_metal/distributed/ @cfjchu @tt-asaigal @tenstorrent/metalium-codeowners-large-changes
-tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+tests/tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-codeowners-large-changes
+tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-codeowners-large-changes
 tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @tenstorrent/metalium-codeowners-large-changes
 tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
