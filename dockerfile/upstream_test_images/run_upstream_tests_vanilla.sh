@@ -225,18 +225,13 @@ test_suite_bh_glx_metal_unit_tests() {
     # RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
 
     # Dispatch
-    GTEST_FILTER="*-*NIGHTLY_*"
-    ./build/test/tt_metal/unit_tests_eth --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_device --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_api --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_integration --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_llk --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_misc --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_noc --gtest_filter="$GTEST_FILTER"
-    # ./build/test/tt_metal/unit_tests_sfpi --gtest_filter="$GTEST_FILTER"
-    # TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
+    build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=**RandomProgram**
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQMultiDeviceEventFixture.*
+    build/test/tt_metal/unit_tests_device --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1
 }
 
 test_suite_bh_glx_python_unit_tests() {
