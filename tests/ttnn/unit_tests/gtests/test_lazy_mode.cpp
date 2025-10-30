@@ -124,6 +124,11 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     auto exp_output = ttnn::exp(relu_output);
     auto sqrt_output = ttnn::sqrt(exp_output);
 
+    ASSERT_TRUE(input_tensor.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_FALSE(relu_output.lazy()->is_materialized()) << "Lazy tensor should not be materialized";
+    ASSERT_FALSE(exp_output.lazy()->is_materialized()) << "Lazy tensor should not be materialized";
+    ASSERT_FALSE(sqrt_output.lazy()->is_materialized()) << "Lazy tensor should not be materialized";
+
     log_info(
         tt::LogTest,
         "relu_out id: {}, exp_out id: {}, sqrt_out id: {}",
@@ -159,61 +164,60 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     log_info(tt::LogTest, "==== Finished SimpleUnaryOperationsLazy test ====");
 }
 
-// // Test: Binary operations in lazy mode with verification
-// TEST_F(LazyModeFixture, BinaryOperationsLazy) {
-//     auto& device = *device_;
-//     auto& context = ttnn::experimental::jit::Context::instance();
+// Test: Binary operations in lazy mode with verification
+TEST_F(LazyModeFixture, BinaryOperationsLazy) {
+    log_info(tt::LogTest, "==== Starting BinaryOperationsLazy test ====");
 
-//     log_info(tt::LogTest, "==== Starting BinaryOperationsLazy test ====");
+    // Verify lazy mode is enabled
+    ttnn::experimental::jit::enable();
+    ASSERT_TRUE(ttnn::experimental::jit::is_lazy_enabled()) << "Lazy mode should be enabled";
 
-//     // Verify lazy mode is enabled
-//     ttnn::lazy_mode::enable();
-//     ASSERT_TRUE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be enabled";
+    // Create input tensors
+    ttnn::Shape shape({32, 64});
+    const auto input1 = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    const auto input2 = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
 
-//     // Create input tensors
-//     ttnn::Shape shape({32, 64});
-//     const auto input1 = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-//     const auto input2 = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    log_info(tt::LogTest, "Created input tensors with shape [{}, {}]", shape[0], shape[1]);
 
-//     log_info(tt::LogTest, "Created input tensors with shape [{}, {}]", shape[0], shape[1]);
+    // Apply binary operations - these should be captured lazily
+    log_info(tt::LogTest, "Applying binary operations in lazy mode...");
+    auto add_output = ttnn::add(input1, input2);
+    auto mul_output = ttnn::multiply(add_output, input1);
 
-//     // Apply binary operations - these should be captured lazily
-//     log_info(tt::LogTest, "Applying binary operations in lazy mode...");
-//     const auto add_output = ttnn::add(input1, input2);
-//     const auto mul_output = ttnn::multiply(add_output, input1);
+    ASSERT_TRUE(input1.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_TRUE(input2.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_FALSE(add_output.lazy()->is_materialized()) << "Lazy tensor should not be materialized";
+    ASSERT_FALSE(mul_output.lazy()->is_materialized()) << "Lazy tensor should not be materialized";
 
-//     // Check that we have captured 2 operations
-//     ASSERT_EQ(context.size(), 2) << "Expected 2 nodes in lazy graph";
-//     log_info(tt::LogTest, "Lazy graph size: {} nodes", context.size());
+    log_info(tt::LogTest, "add_output id: {}, mul_output id: {}", add_output.lazy()->id(), mul_output.lazy()->id());
 
-//     // Now execute the lazy graph
-//     log_info(tt::LogTest, "Executing lazy graph...");
-//     context.execute_node(mul_output.producer_node());
-//     auto mul_output_materialized = context.get_materialized_tensor(mul_output);
+    mul_output.materialize();
+    auto lazy_result = mul_output.cpu();
 
-//     // Get lazy result to host for comparison
-//     const auto lazy_result = ttnn::from_device(mul_output_materialized);
+    ASSERT_TRUE(mul_output.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_TRUE(add_output.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_TRUE(input1.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_TRUE(input2.lazy()->is_materialized()) << "Lazy tensor should be materialized";
 
-//     // Clear the lazy graph and disable lazy mode
-//     context.clear();
-//     ttnn::lazy_mode::disable();
+    ttnn::experimental::jit::disable();
+    ASSERT_FALSE(ttnn::experimental::jit::is_lazy_enabled()) << "Lazy mode should be disabled";
 
-//     // Run the same operations in eager mode
-//     log_info(tt::LogTest, "Running same operations in eager mode for verification...");
-//     const auto input1_eager = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-//     const auto input2_eager = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
-//     const auto add_eager = ttnn::add(input1_eager, input2_eager);
-//     const auto mul_eager = ttnn::multiply(add_eager, input1_eager);
-//     const auto eager_result = ttnn::from_device(mul_eager);
+    // Run the same operations in eager mode
+    log_info(tt::LogTest, "Running same operations in eager mode for verification...");
+    const auto input1_eager = ttnn::ones(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    const auto input2_eager = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    const auto add_eager = ttnn::add(input1_eager, input2_eager);
+    const auto mul_eager = ttnn::multiply(add_eager, input1_eager);
+    const auto eager_result = mul_eager.cpu();
 
-//     // Compare results
-//     log_info(tt::LogTest, "Comparing lazy and eager results...");
-//     ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
-//         << "Lazy and eager execution results should match";
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
 
-//     log_info(tt::LogTest, "✓ Lazy and eager results match!");
-//     log_info(tt::LogTest, "==== Finished BinaryOperationsLazy test ====");
-// }
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished BinaryOperationsLazy test ====");
+}
 
 // // Test: Mixed unary and binary operations in lazy mode with verification
 // TEST_F(LazyModeFixture, MixedOperationsLazy) {
