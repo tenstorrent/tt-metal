@@ -200,7 +200,8 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
                 self.ag_semaphores,
                 capture_trace=False,
                 use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-                guidance_rescale=self.pipeline_config.guidance_rescale,
+                guidance_rescale=self.guidance_rescale,
+                one_minus_guidance_rescale=self.one_minus_guidance_rescale,
             )
             ttnn.synchronize_device(self.ttnn_device)
             profiler.end("warmup_run")
@@ -263,7 +264,8 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             output_shape=self.output_shape,
             tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         self._reset_num_inference_steps()
         return imgs
@@ -337,8 +339,7 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             )
             tt_time_ids_host = ttnn.squeeze(tt_time_ids_host, dim=0)
 
-            for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
-                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
+            ttnn.copy_host_to_device_tensor(tt_time_ids_host, self.tt_time_ids_device)
 
     def __create_user_tensors(
         self, img_latents, masked_image_latents, mask, all_prompt_embeds_torch, torch_add_text_embeds
@@ -415,7 +416,8 @@ class TtSDXLInpaintingPipeline(TtSDXLImg2ImgPipeline):
             self.ag_semaphores,
             capture_trace=False,
             use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-            guidance_rescale=self.pipeline_config.guidance_rescale,
+            guidance_rescale=self.guidance_rescale,
+            one_minus_guidance_rescale=self.one_minus_guidance_rescale,
         )
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("capture_model_trace")
