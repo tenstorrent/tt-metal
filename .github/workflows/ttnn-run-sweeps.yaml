@@ -568,25 +568,27 @@ on:
         type: boolean
         default: true
       arch:
-        required: false
-        type: string
-        # options:
-        #   - wormhole_b0
-        #   - blackhole
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: "wormhole_b0"
       runner-label:
         description: "Single sweep only"
-        required: false
-        type: string
-        # options:
-        #   - N150
-        #   - N300
-        #   - P100a
-        #   - P150b
-        #   - n300-llmbox
-        #   - topology-6u
-        #   - BH-LLMBox
-        #   - BH-DeskBox
-        #   - BH-LoudBox
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LLMBox
+          - BH-DeskBox
+          - BH-LoudBox
+        default: "N150"
 
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
