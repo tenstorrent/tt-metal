@@ -36,10 +36,12 @@ ttnn::Tensor ExecuteAllGather::invoke(
         // if it is not flat, then we need to call all-gather on dim=-1 to dim=0
         if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
-            // Use signed int for countdown loop to avoid underflow when decrementing from 0.
-            for (int i = mesh_shape.dims() - 1; i >= 0; --i) {
+            // Iterate through mesh dimensions in reverse order using reverse iterator
+            auto mesh_view = mesh_shape.view();
+            for (auto it = mesh_view.rbegin(); it != mesh_view.rend(); ++it) {
+                auto axis = std::distance(mesh_view.begin(), it.base()) - 1;
                 tensor = ttnn::all_gather(
-                    tensor, dim, i, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
+                    tensor, dim, axis, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
             }
             return tensor;
         }

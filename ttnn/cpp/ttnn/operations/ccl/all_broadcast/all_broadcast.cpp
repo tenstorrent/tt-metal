@@ -31,7 +31,7 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
             for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
                 uint32_t num_tensors = tensors.size();
                 for (uint32_t i = 0; i < num_tensors; ++i) {
-                    auto tensor = tensors.front();
+                    auto tensor = std::move(tensors.front());
                     tensors.pop_front();
                     auto curr_tensors =
                         ttnn::all_broadcast(tensor, axis, subdevice_id, memory_config, num_links, topology);

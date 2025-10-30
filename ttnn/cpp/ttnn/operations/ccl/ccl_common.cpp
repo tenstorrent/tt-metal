@@ -28,9 +28,9 @@ bool is_fabric_2d() {
 }
 
 tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
-    if (topology == tt::tt_fabric::Topology::Mesh) {
+    if (topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Linear) {
         return tt::tt_fabric::Topology::Linear;
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
+    } else if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
         return tt::tt_fabric::Topology::Ring;
     }
     return topology;
