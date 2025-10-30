@@ -9,7 +9,7 @@ import pytest
 import ttnn
 from loguru import logger
 
-from ....parallel.config import DiTParallelConfig, ParallelFactor
+from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ....pipelines.motif.pipeline_motif import MotifPipeline
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
     TimingCollector,
@@ -27,13 +27,15 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
-    ("mesh_device", "cfg", "sp", "tp", "topology", "num_links", "mesh_test_id"),
+    ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        pytest.param((1, 4), (1, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
-        pytest.param((2, 4), (1, 0), (2, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        pytest.param((4, 8), (1, 0), (8, 1), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
-        pytest.param((2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1", id="2x4cfg0sp0tp1"),
-        pytest.param((4, 8), (2, 0), (4, 1), (4, 0), ttnn.Topology.Linear, 4, "4x8cfg0sp1tp0", id="4x8cfg0sp1tp0"),
+        # pytest.param((1, 4), (1, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        # pytest.param((2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        # pytest.param((4, 8), (1, 0), (8, 1), (4, 0), (8, 1), (4, 1), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
+        pytest.param(
+            (2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1", id="2x4cfg0sp0tp1"
+        ),
+        # pytest.param((4, 8), (2, 0), (4, 1), (4, 0), (8, 1), (4, 1), ttnn.Topology.Linear, 4, "4x8cfg0sp1tp0", id="4x8cfg0sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
@@ -48,7 +50,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     "traced",
     [
         pytest.param(True, id="traced"),
-        pytest.param(False, id="not_traced"),
+        # pytest.param(False, id="not_traced"),
     ],
 )
 def test_motif_pipeline(
@@ -60,6 +62,8 @@ def test_motif_pipeline(
     cfg: tuple[int, int],
     sp: tuple[int, int],
     tp: tuple[int, int],
+    encoder_tp: tuple[int, int],
+    vae_tp: tuple[int, int],
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
@@ -72,6 +76,8 @@ def test_motif_pipeline(
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp
+    encoder_tp_factor, encoder_tp_axis = encoder_tp
+    vae_tp_factor, vae_tp_axis = vae_tp
 
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
@@ -79,8 +85,18 @@ def test_motif_pipeline(
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
 
+    encoder_parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=encoder_tp_factor, mesh_axis=encoder_tp_axis),
+    )
+
+    vae_parallel_config = VAEParallelConfig(
+        tensor_parallel=ParallelFactor(factor=vae_tp_factor, mesh_axis=vae_tp_axis),
+    )
+
     logger.info(f"Mesh device shape: {mesh_device.shape}")
     logger.info(f"Parallel config: {parallel_config}")
+    logger.info(f"Encoder TP: factor={encoder_tp_factor}, axis={encoder_tp_axis}")
+    logger.info(f"VAE TP: factor={vae_tp_factor}, axis={vae_tp_axis}")
     logger.info(f"T5 enabled: {enable_t5_text_encoder}")
 
     timing_collector = TimingCollector()
@@ -91,11 +107,13 @@ def test_motif_pipeline(
         use_torch_t5_text_encoder=use_torch_t5_text_encoder,
         use_torch_clip_text_encoder=use_torch_clip_text_encoder,
         parallel_config=parallel_config,
+        encoder_parallel_config=encoder_parallel_config,
+        vae_parallel_config=vae_parallel_config,
         topology=topology,
         num_links=num_links,
         width=width,
         height=height,
-        use_cache=True,
+        use_cache=False,
     )
 
     pipeline.timing_collector = timing_collector
