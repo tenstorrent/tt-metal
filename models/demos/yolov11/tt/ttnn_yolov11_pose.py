@@ -185,26 +185,12 @@ class TtnnPoseHead:
         y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
         # Keep batch dimension for proper splitting: y shape is [B, 116, total_anchors]
 
-        # Split into bbox (64), conf (1), keypoints (51) along channel dimension
-        ya = y[:, :64, :]  # Bbox regression (DFL input) - [B, 64, total_anchors]
-        yb = y[:, 64:65, :]  # Person confidence - [B, 1, total_anchors]
-        yc = y[:, 65:116, :]  # Keypoints (51 channels) - [B, 51, total_anchors]
+        # ===== SKIP SPLITTING AND CONCATENATION =====
+        # Return the raw concatenated tensor directly to avoid large tensor slicing
+        # All post-processing (splitting, sigmoid, DFL) done in PyTorch CPU
 
         deallocate_tensors(y1, y2, y3, x1_bbox, x2_bbox, x3_bbox, x1_conf, x2_conf, x3_conf, x1_kpts, x2_kpts, x3_kpts)
 
-        # ===== SKIP DFL PROCESSING =====
-        # Return raw outputs directly like YoloV11PoseRaw does
-        # DFL processing will be done in PyTorch CPU post-processing
-
-        # Process confidence (simple sigmoid)
-        yb = ttnn.sigmoid(yb)  # [B, 1, total_anchors]
-
-        # Keep bbox and keypoints raw - no DFL decoding in TTNN
-
-        # Return raw concatenated output - post-processing done in PyTorch CPU
-        dram_memory_config = ttnn.DRAM_MEMORY_CONFIG
-        out = ttnn.concat((ya, yb, yc), dim=1, memory_config=dram_memory_config)  # [B, 116, total_anchors]
-
-        deallocate_tensors(ya, yb, yc)
-
-        return out
+        # Return raw concatenated tensor: [B, 116, total_anchors]
+        # Format: [bbox_raw(64) + conf_raw(1) + keypoints_raw(51)]
+        return y
