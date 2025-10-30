@@ -189,10 +189,7 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // RM -> OG page layout
     if (tensor.layout() == ttnn::TILE_LAYOUT) {
-        ttnn::Shape padded_shape = working_tensor.logical_shape();
-        padded_shape[-1] = tt::round_up(padded_shape[-1], tt::constants::TILE_WIDTH);
-        padded_shape[-2] = tt::round_up(padded_shape[-2], tt::constants::TILE_HEIGHT);
-        working_tensor = ttnn::tilize_with_val_padding(working_tensor, padded_shape, 0.0f);
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.dtype());
     }
 
     // Interleaved to OG mem layout

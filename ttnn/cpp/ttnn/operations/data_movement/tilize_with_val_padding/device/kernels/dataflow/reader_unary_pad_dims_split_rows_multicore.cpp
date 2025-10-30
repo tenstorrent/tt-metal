@@ -6,7 +6,20 @@
 
 #include "dataflow_api.h"
 
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
+FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n_bytes, uint32_t val) {
+    // Sanitize the address and n_bytes.
+    //
+    // If input is bfloat16, the address will be 2-byte aligned. But we want a
+    // 4-byte pointer (uint32). So safely align the address to 4-bytes.
+    // If address happens to be unaligned, this will write one extra element
+    // at begin_addr-1. To avoid stomping on valid data, call fill_with_val()
+    // *before* writing valid data.
+    //
+    // NOTE: this is still unsafe. For example if we need to write 3 bfloat16
+    // values starting at a 4-byte aligned address, the below loop will end up
+    // writing 2 uint32 values, which exceeds the array bounds by 2-bytes.
+    begin_addr = (begin_addr >> 2) << 2;
+    uint32_t n = (n_bytes + 3) >> 2;  // = divup(n_bytes, sizeof(uint32))
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
     for (uint32_t i = 0; i < n; ++i) {
         ptr[i] = val;
@@ -37,7 +50,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, num_tiles_per_row);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             // pad the tile by reading values from zero buffer in L1
-            fill_with_val(l1_write_addr, padded_X_size << 3, pad_value);
+            fill_with_val(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" is equivalent to "* tile_height"
             cb_push_back(cb_id_in0, num_tiles_per_row);
         }
     };
@@ -51,17 +64,18 @@ void kernel_main() {
         for (uint32_t k = 0; k < num_rows; k++) {
             uint64_t src_noc_addr = get_noc_addr(base_stick_id + k, s);
 
+            // Pad first, before copying valid data
+            fill_with_val(l1_write_addr + unpadded_X_size, padded_X_size - unpadded_X_size, pad_value);
+
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr, l1_write_addr, unpadded_X_size);
-
-            fill_with_val(l1_write_addr + unpadded_X_size, (padded_X_size - unpadded_X_size) >> 2, pad_value);
 
             // Block before copying data from tmp to cb buffer
             noc_async_read_barrier();
             l1_write_addr += padded_X_size;
         }
 
-        fill_with_val(l1_write_addr, padding_rows * (padded_X_size >> 2), pad_value);
+        fill_with_val(l1_write_addr, padding_rows * padded_X_size, pad_value);
         cb_push_back(cb_id_in0, num_tiles_per_row * has_rows);
     };
 
