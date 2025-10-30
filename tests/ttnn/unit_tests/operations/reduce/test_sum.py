@@ -16,7 +16,7 @@ from models.common.utility_functions import torch_random
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
 @pytest.mark.parametrize("dim", [-1, -2, (2, 1)])
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_sum(device, batch_size, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
@@ -36,13 +36,14 @@ def test_sum(device, batch_size, h, w, dim, keepdim, dtype):
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
-def test_sum_global(device, batch_size, h, w):
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+def test_sum_global(device, batch_size, h, w, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
     torch_output_tensor = torch.sum(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
     output_tensor = ttnn.sum(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
