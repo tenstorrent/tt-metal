@@ -633,7 +633,7 @@ void ProfilerSync(ProfilerSyncState state) {
                     std::tie(receiver_device_id, receiver_eth_core) =
                         sender_device->get_connected_ethernet_core(sender_eth_core);
 
-                    if (!visited[receiver_device_id]) {
+                    if (visited.find(receiver_device_id) != visited.end() && !visited[receiver_device_id]) {
                         visited[receiver_device_id] = true;
                         num_connected_devices[root_device]++;
                         device_queue.push(receiver_device_id);
