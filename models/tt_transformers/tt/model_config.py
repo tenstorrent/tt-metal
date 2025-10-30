@@ -1895,7 +1895,10 @@ class ModelArgs:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
                 if self.is_llama_vision():
+                    exempt_vision_keys = [k for k in state_dict.keys() if "vision" in k]
+                    exempt_vision_dict = {k: state_dict.pop(k) for k in exempt_vision_keys}
                     state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+                    state_dict.update(exempt_vision_dict)
                 else:
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
             else:
