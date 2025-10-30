@@ -30,19 +30,18 @@ function getCutoffDate(days) {
  * @param {object} github - Octokit client
  * @param {object} context - GitHub Actions context
  * @param {number} days - Number of days to look back
- * @param {Date} sinceDate - Only fetch runs after this date
  * @param {Set<string>} cachedRunIds - Set of run IDs that are already cached (skip these)
  * @param {string} eventType - Optional event type filter
  * @returns {Promise<Array>} Array of workflow run objects (only new, non-cached runs)
  */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate, cachedRunIds = null, eventType='') {
+async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, eventType='') {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
   const createdDateFilter = `>=${cutoffDate.toISOString()}`;
   const cachedIds = cachedRunIds || new Set();
 
   core.info(`[FETCH] createdDateFilter: ${createdDateFilter}`);
-  core.info(`[FETCH] days: ${days}, sinceDate: ${sinceDate ? sinceDate.toISOString() : 'none'}, cachedRunIds: ${cachedIds.size}, eventType: ${eventType || 'all'}`);
+  core.info(`[FETCH] days: ${days}, cachedRunIds: ${cachedIds.size}, eventType: ${eventType || 'all'}`);
 
   let consecutiveCachedRuns = 0;
   const MAX_CONSECUTIVE_CACHED = 10; // If we see 10 consecutive cached runs, assume we've caught up
@@ -80,14 +79,6 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, cachedRunI
           core.info(`[FETCH] Skipping run ${runIdStr} (older than cutoff: ${runDate.toISOString()} < ${cutoffDate.toISOString()})`);
         }
         continue;
-      }
-
-      // If sinceDate is provided and run is older/equal, stop (all future runs will be older)
-      // Check this BEFORE cached run check to ensure correct early termination
-      if (sinceDate && runDate <= sinceDate) {
-        core.info(`[FETCH] Early exit: found run at ${runDate.toISOString()} <= latest cached date ${sinceDate.toISOString()}`);
-        core.info(`[FETCH] Summary: added ${addedNewRuns} new runs, skipped ${skippedCachedRuns} cached, ${skippedOldRuns} old`);
-        return allRuns;
       }
 
       // If we have cached run IDs, check if this run is already cached
@@ -349,7 +340,6 @@ async function run() {
     let cachedOtherLogsIndex = {};
     let cachedCommits = [];
     let cachedLastSuccessTimestamps = {};
-    let latestCachedDate = null;
 
     // Find and restore artifacts from previous successful run
     const previousRunId = await findPreviousAggregateRun(octokit, github.context);
@@ -421,17 +411,6 @@ async function run() {
 
               core.info(`[CACHE] Summary: ${totalRunsBeforePrune} runs before pruning, ${totalRunsAfterPrune} runs after pruning (removed ${totalRunsBeforePrune - totalRunsAfterPrune})`);
               core.info(`[CACHE] Retained ${totalRunsAfterPrune} runs across ${cachedGrouped.size} workflows`);
-
-              // Extract all run dates to find latest
-              for (const runs of cachedGrouped.values()) {
-                for (const run of runs) {
-                  const runDate = new Date(run.created_at);
-                  if (!latestCachedDate || runDate > latestCachedDate) {
-                    latestCachedDate = runDate;
-                  }
-                }
-              }
-              core.info(`[CACHE] Latest cached run date: ${latestCachedDate}`);
             } else {
               core.warning(`[CACHE] workflow-data.json not found in artifacts`);
             }
@@ -714,10 +693,10 @@ async function run() {
       }
     }
 
-    core.info(`[CACHE] Summary: ${previousRuns.length} runs restored, ${cachedGrouped.size} workflows, latest date: ${latestCachedDate}`);
+    core.info(`[CACHE] Summary: ${previousRuns.length} runs restored, ${cachedGrouped.size} workflows`);
     core.info(`[CACHE] Cached run IDs: ${cachedRunIds.size} unique run IDs`);
 
-    // Fetch new runs from GitHub (for the last N days, only after latest cached run)
+    // Fetch new runs from GitHub (skipping runs that are already cached)
 
     // 1. Fetch runs for each event type separately
 
@@ -725,14 +704,14 @@ async function run() {
 
 
     core.info('Fetching all runs...');
-    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, cachedRunIds);
+    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds);
     core.info(`[FETCH] Fetched ${allRuns.length} new runs (skipped cached runs during fetch)`);
 
     // Wait for 1 second to avoid rate limiting
     await delay(1000);
 
     core.info('[FETCH] Fetching scheduled runs...');
-    const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, cachedRunIds, 'schedule');
+    const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds, 'schedule');
     core.info(`[FETCH] Fetched ${scheduledRuns.length} new scheduled runs (skipped cached runs during fetch)`);
 
     // 2. Combine all the results into a single array (already filtered for new runs only)
