@@ -12,6 +12,7 @@ target_sources(
         fast_reduce_nc/fast_reduce_nc.cpp
         integral_image/device/intimg_device_operation.cpp
         integral_image/device/intimg_program_factory.cpp
+        integral_image/device/intimg_work_split.cpp
         integral_image/intimg.cpp
 )
 

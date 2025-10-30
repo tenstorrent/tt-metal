@@ -4,14 +4,13 @@
 
 #include "intimg_device_operation.hpp"
 #include "intimg_program_factory.hpp"
-#include "intimg_work_shares.hpp"
+#include "intimg_work_split.hpp"
 
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "tt-metalium/kernel_types.hpp"
-#include "ttnn/operations/experimental/reduction/integral_image/device/intimg_work_shares.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -27,6 +26,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    std::cout << "PFPFPFPFPFPFPFPFPF" << std::endl;
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -49,6 +49,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto total_core_range_set =
         generate_max_core_range_set(input_shape);  // expected to be no more than 4 rows and 5 columns!
+    std::cout << "TOTAL_CORE_RANGE_SET::: " << total_core_range_set.str() << std::endl;
     // TT_FATAL(
     //     !total_core_range_set.empty(),
     //     "the total core range set calculated by the input shape {} is empty, cannot proceed further with program
@@ -164,8 +165,9 @@ void IntImgProgramFactory::override_runtime_arguments(
         "creation",
         input_shape);
     const CoreCoord core_mesh_size = total_core_range_set.bounding_box().end_coord;
-    const auto per_core_set_work_split = split_intimg_work_to_cores(input_shape, core_mesh_size);
+    const auto per_core_set_work_split = intimg::common::split_intimg_work_to_cores(input_shape, core_mesh_size);
 
+    std::cout << "CCCCCCCCC" << std::endl;
     set_runtime_args(
         program,
         reader_kernel_id,
