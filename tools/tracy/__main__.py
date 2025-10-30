@@ -24,6 +24,8 @@ def main():
     parser.add_option(
         "-o", "--output-folder", action="store", help="Profiler artifacts folder", type="string", dest="output_folder"
     )
+    # per_core_op2op is by default disabled, add flag to enable it
+    # add flag to use python post processing instead of the default cpp post processing
     parser.add_option(
         "-n",
         "--name-append",
@@ -77,7 +79,7 @@ def main():
         help="Sync host with all devices",
         default=False,
     )
-    parser.add_option(
+    parser.add_option(  # skip cpp post process if this is enabled
         "--device-trace-profiler",
         dest="device_trace_profiler",
         action="store_true",

@@ -303,6 +303,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
 
             setup.timerAnalysis = pickedAnalysis
         setup.deviceInputLog = deviceTimesLog
+        # only do cpp switch in this function here
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
         for device in devicesOps:
@@ -570,6 +571,7 @@ def get_device_data_generate_report(
             for core in allCores:
                 perCoreCSVHeader.add(get_core_str_format(core))
 
+            # op2op should be di
             coreOpToOps = {}
             opToOps = []
             for core in allCores:
@@ -940,9 +942,14 @@ def process_ops(
     logFolder = generate_logs_folder(output_folder)
     reportFolder = generate_reports_folder(output_folder)
 
+    print(f"Log folder: {logFolder}")
     ops, signposts, traceReplays = import_tracy_op_logs(logFolder)
 
+    print(f"Ops: {ops}")
+    print(device_only)
+
     if ops and not device_only:
+        print(f"Ops: {ops}")
         deviceOps, traceOps = append_device_data(
             ops, traceReplays, logFolder, analyze_noc_traces, device_analysis_types
         )

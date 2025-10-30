@@ -89,7 +89,6 @@ def print_stats_outfile(devicesData, setup):
 
 
 def print_stats(devicesData, setup):
-    numberWidth = 17
     for chipID, deviceData in devicesData["devices"].items():
         for analysis in setup.timerAnalysis:
             if "analysis" in deviceData["cores"]["DEVICE"] and analysis in deviceData["cores"]["DEVICE"]["analysis"]:
@@ -665,6 +664,9 @@ def timeseries_analysis(riscData, name, analysis):
             "series": tmpList,
         }
     if tmpDict:
+        # print(f"riscData: {riscData.keys()}")
+        # print(f"name: {name}")
+        # print(f"tmpDict: {tmpDict}")
         if "analysis" not in riscData:
             riscData["analysis"] = {name: tmpDict}
         else:
@@ -714,13 +716,16 @@ def ops_analysis(name, analysis, devicesData, doDispatch=False):
         assert core in deviceData["cores"]
         assert risc in deviceData["cores"][core]["riscs"]
         riscData = deviceData["cores"][core]["riscs"][risc]
+        # print(f"Processing ops: {len(riscData['ops'][0]['timeseries'])}")
         if not doDispatch and "ops" in riscData:
             for op in riscData["ops"]:
+                # print(f"Processing op: {op}")
                 timeseries_analysis(op, name, analysis)
                 timeseries_events(op, name, analysis)
 
         elif doDispatch and "dispatch_ops" in riscData:
             for op in riscData["dispatch_ops"]:
+                # print(f"Processing dispatch op: {op}")
                 timeseries_analysis(op, name, analysis)
 
 
@@ -789,13 +794,40 @@ def validate_setup(ctx, param, setup):
     return getattr(device_post_proc_config, setup)()
 
 
+def print_dict_structure(d, indent=0):
+    """Print the structure of a dictionary with indentation."""
+    for key, value in d.items():
+        print("  " * indent + f"{key}: {type(value).__name__}")
+        if isinstance(value, dict):
+            print_dict_structure(value, indent + 1)
+        elif isinstance(value, list) and value and isinstance(value[0], dict):
+            print("  " * (indent + 1) + f"[0]: dict")
+            print_dict_structure(value[0], indent + 2)
+
+
+# have separate function for cpp post process return data
+def is_cpp_post_processing_enabled():
+    cpp_ops_perf_report_path = os.path.join(PROFILER_LOGS_DIR, PROFILER_CPP_DEVICE_OPS_PERF_REPORT)
+    return os.path.isfile(cpp_ops_perf_report_path)
+
+
+def import_cpp_post_process_data():
+    cpp_ops_perf_report_path = os.path.join(PROFILER_LOGS_DIR, PROFILER_CPP_DEVICE_OPS_PERF_REPORT)
+    return pd.read_csv(cpp_ops_perf_report_path)
+
+
 def import_log_run_stats(setup=device_post_proc_config.default_setup()):
+    # print(f"Importing log run stats from {setup.deviceInputLog}")
     devicesData = import_device_profile_log(setup.deviceInputLog)
+
+    # if cpp post proc was enabled, read in cpp perf report
 
     risc_to_core_timeseries(devicesData, setup.detectOps)
     core_to_device_timeseries(devicesData, setup.detectOps)
 
     for name, analysis in sorted(setup.timerAnalysis.items()):
+        print(f"Processing analysis: {name}")
+        # if cpp post proc was enabled, and the curr analysis is in the cpp perf report, skip the iteration
         if analysis["across"] == "core":
             core_analysis(name, analysis, devicesData)
         elif analysis["across"] == "device":
@@ -806,6 +838,13 @@ def import_log_run_stats(setup=device_post_proc_config.default_setup()):
             ops_analysis(name, analysis, devicesData, doDispatch=True)
 
     generate_device_level_summary(devicesData)
+    # print(f"Generated device level summary")
+    # print(f"Devices data: {devicesData.keys()}")
+
+    # Print key structure
+    print("\n=== devicesData Structure ===")
+    print_dict_structure(devicesData)
+
     return devicesData
 
 

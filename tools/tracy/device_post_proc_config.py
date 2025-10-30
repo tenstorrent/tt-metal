@@ -42,14 +42,14 @@ class default_setup(metaclass=MergeMetaclass):
             "type": "adjacent",
             "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-FW"},
             "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-FW"},
-        },
+        },  # only run this if trace-only profiling is enabled
         "trace2trace - kernel": {
             "across": "device",
             "type": "adjacent",
             "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-KERNEL"},
             "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-KERNEL"},
-        },
-        "op2op": {
+        },  # only run this if trace-only profiling is enabled
+        "op2op": {  # ignore this for now
             "across": "core",
             "type": "adjacent",
             "start": {
@@ -81,7 +81,7 @@ class default_setup(metaclass=MergeMetaclass):
                 "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
             },
         },
-        "device_kernel_duration_per_core": {
+        "device_kernel_duration_per_core": {  # ignore this analysis for now until everything else is working
             "across": "ops",
             "type": "op_core_first_last",
             "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
@@ -93,13 +93,13 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
             "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-FW" for risc in riscTypes]},
         },
-        "device_kernel_duration": {
+        "device_kernel_duration": {  # add start/end columns to cpp post proc
             "across": "ops",
             "type": "op_first_last",
             "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
             "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
         },
-        "device_kernel_duration_dm_start": {
+        "device_kernel_duration_dm_start": {  # add start/end columns to cpp post proc
             "across": "ops",
             "type": "op_first_last",
             "start": {
@@ -145,23 +145,23 @@ class default_setup(metaclass=MergeMetaclass):
             "start": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
             "end": {"core": "ANY", "risc": "ERISC", "zone_name": "ERISC-KERNEL"},
         },
-        "device_compute_cb_wait_front": {
+        "device_compute_cb_wait_front": {  # ignore for now if cpp post process is enabled
             "across": "ops",
             "type": "sum",
             "marker": {"risc": "TRISC_0", "zone_name": "CB-COMPUTE-WAIT-FRONT"},
         },
-        "device_compute_cb_reserve_back": {
+        "device_compute_cb_reserve_back": {  # ignore for now if cpp post process is enabled
             "across": "ops",
             "type": "sum",
             "marker": {"risc": "TRISC_2", "zone_name": "CB-COMPUTE-RESERVE-BACK"},
         },
-        "dispatch_total_cq_cmd_op_time": {
+        "dispatch_total_cq_cmd_op_time": {  # ignore if cpp post process is enabled
             "across": "dispatch_ops",
             "type": "op_first_last",
             "start": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
             "end": {"core": "ANY", "risc": "BRISC", "zone_name": "CQ_DISPATCH_*"},
         },
-        "dispatch_go_send_wait_time": {
+        "dispatch_go_send_wait_time": {  # ignore if cpp post process is enabled
             "across": "dispatch_ops",
             "type": "op_first_last",
             "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "CQ_DISPATCH_CMD_SEND_GO_SIGNAL"},
