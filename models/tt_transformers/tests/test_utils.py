@@ -66,8 +66,6 @@ def get_ref_model_dype(ref_model, model_name):
 
 
 ### UTIL FUNCTIONS FOR DEVICE PERF
-
-
 def build_duration_dict(raw_dict, column_name):
     """Build a dictionary of op codes to list of durations."""
     op_code_dict = {}
@@ -104,6 +102,15 @@ def build_duration_per_instance_dict(input_dict, num_layers):
 
 
 def merge_device_rows(df):
+    """
+    Merges device rows from a DataFrame into a single row per device.
+
+    Args:
+        df: A DataFrame containing measurements.
+
+    Returns:
+        A DataFrame with merged rows.
+    """
     block_by_device = defaultdict(list)
 
     for _, row in df.iterrows():
@@ -142,7 +149,7 @@ def merge_device_rows(df):
         if not blocks:
             break
 
-        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" or "Matmul_RS" in op_name:
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" in op_name or "Matmul_RS" in op_name:
             # For collective ops, take the average duration over all rows within a block
             device_kernel_durations = [
                 d["DEVICE KERNEL DURATION [ns]"]
@@ -168,6 +175,20 @@ def merge_device_rows(df):
 
 
 def process_measurements(df, num_layers):
+    """
+    Given a Dataframe containing op device perf measurements, return the average, min, and max durations per instance on kerne
+    dispatch, and first to last start.
+
+    Args:
+        df: A DataFrame containing measurements.
+        num_layers: The number of layers in the model.
+
+    Returns:
+        A dictionary of aggregated values.
+        - kernel_duration_per_instance_aggregate_dict: A dictionary of aggregated kernel durations per instance.
+        - dispatch_duration_per_instance_aggregate_dict: A dictionary of aggregated dispatch durations per instance.
+        - first_to_last_start_per_instance_aggregate_dict: A dictionary of aggregated first to last start durations per instance.
+    """
     raw_dict = df[
         ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "DEVICE KERNEL FIRST TO LAST START [ns]"]
     ].to_dict(orient="records")
@@ -214,6 +235,17 @@ def print_dict(input_dict, dict_name):
 
 
 def aggregate_per_instance_dict(input_dict, agg_fn, default=0):
+    """
+    Aggregates a dictionary of values by a given function.
+
+    Args:
+        input_dict: A dictionary of values to aggregate.
+        agg_fn: A function to aggregate the values.
+        default: The default value to return if the dictionary is empty.
+
+    Returns:
+        A dictionary of aggregated values.
+    """
     result = {}
     for key, values in input_dict.items():
         clean_values = [v if v is not None else 0 for v in values]
