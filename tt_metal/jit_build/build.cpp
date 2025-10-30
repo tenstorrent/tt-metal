@@ -92,7 +92,7 @@ std::string get_default_root_path() {
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
-    uint32_t build_key,
+    uint64_t build_key,
     size_t fw_compile_hash,
     tt::ARCH arch,
     const std::map<std::string, std::string>& device_kernel_defines) {

@@ -155,12 +155,14 @@ def run_slice_reshard_impl(
 @pytest.mark.parametrize(
     "num_devices, input_shape, dim, layout, input_dtype, output_offset, output_shape, enable_trace, num_iters",
     [
+        (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 0, 88, False, 1),  # (1,8), check
         (8, [96, 120, 212, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 88, True, 10),  # (1,8), perf
         (4, [84, 120, 106, 512], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, 2, 84, False, 1),  # (1,4), check
     ],
     ids=[
-        "8mochi_vae_1-perf",
-        "4mochi_vae_1-check",
+        "8mochi_vae_1_offset0-check",
+        "8mochi_vae_1_offset2-perf",
+        "4mochi_vae_1_offset2-check",
     ],
 )
 @pytest.mark.parametrize(
