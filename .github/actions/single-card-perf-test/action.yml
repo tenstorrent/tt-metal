@@ -14,7 +14,19 @@ inputs:
   summary_pattern:
     required: false
     # PyTest outcomes + perf lines people care about
-    default: '(?i)(^=+ .* summary info|^\[gw[0-9]+\] (PASSED|FAILED)|^(PASSED|FAILED|ERROR|SKIPPED)\b|^All performance checks passed!|Run and measurement data saved|Mean inference time was|Inference time .*completed|Model compil(ed|ation) took|^=+ .* warnings summary|^=+ .* slowest durations)'
+    default: >-
+      (?ix)
+      ( ^=+\s+short\ test\ summary\ info\s+=+$ ) |
+      ( ^\[gw\d+\]\s+(PASSED|FAILED)\b ) |
+      ( ^(PASSED|FAILED|ERROR|SKIPPED)\b ) |
+      ( ^All\ performance\ checks\ passed!$ ) |
+      ( Run\ and\ measurement\ data\ saved ) |
+      ( Mean\ inference\ time ) |
+      ( Model\ compil(ed|ation)\ took|Model\ compiled\ with\ warmup ) |
+      ( ^=+\s+slowest\ durations\s+=+\s*$ ) |
+      ( ^=+\s+warnings\ summary\s+=+\s*$ ) |
+      ( ^==\s*.*\sfailed,.*\spassed,.*==\s*$ ) |
+      ( ^E\s+[A-Z] | Traceback | AssertionError )
     description: "EGREP regex for lines to keep in the compact summary"
   summary_context:
     required: false
@@ -88,7 +100,6 @@ runs:
         set -euo pipefail
         cd docker-job
         : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
-
         if [[ ! -s "$CI_LOG_FILE" ]]; then
           {
             echo "### Compact test summary"
@@ -98,18 +109,31 @@ runs:
           exit 0
         fi
 
-        # strip ANSI color, then filter interesting lines with context
         nolog="${CI_LOG_FILE}.nocolor"
         sed -r 's/\x1B\[[0-9;]*[mK]//g' "$CI_LOG_FILE" > "$nolog"
 
-        # Use -E for extended regex, -C for context
+        # Fail-first extract (short, only on failure):
+        if [[ "${{ job.status }}" != "success" ]]; then
+          grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$nolog" \
+            | head -n 150 > fail-first.txt || true
+        fi
+
+        # Main compact summary:
         grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
           | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
 
         {
           echo "### Compact test summary"
           echo
-          echo "Log file: \`$CI_LOG_FILE\`"
+          if [[ -s fail-first.txt ]]; then
+            echo "**Failure highlights**"
+            echo
+            echo '```text'
+            cat fail-first.txt
+            echo '```'
+            echo
+          fi
+          echo "**Key lines**"
           echo
           if [[ -s compact-summary.txt ]]; then
             echo '```text'
