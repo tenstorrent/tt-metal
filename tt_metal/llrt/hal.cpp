@@ -94,7 +94,7 @@ std::pair<HalProcessorClassType, uint32_t> HalCoreInfoType::get_processor_class_
     return {static_cast<HalProcessorClassType>(processor_class_idx), processor_index};
 }
 
-const std::string HalCoreInfoType::get_processor_classes_names(uint32_t processor_index, bool is_abbreviated) const {
+std::string HalCoreInfoType::get_processor_classes_names(uint32_t processor_index, bool is_abbreviated) const {
     uint32_t processor_class_idx = 0;
     for (; processor_class_idx < this->processor_classes_.size(); processor_class_idx++) {
         auto processor_count = get_processor_types_count(processor_class_idx);
