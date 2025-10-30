@@ -7,10 +7,24 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "circular_buffer.h"
+
+// Push N tiles to stream buffer (increment write pointer)
+inline void llk_push_tiles_bilinear(const std::int32_t operand, const std::int32_t num_tiles) {
+    std::uint32_t output = operand;
+    std::uint32_t num_words = num_tiles * get_local_cb_interface(operand).fifo_page_size;
+
+    get_local_cb_interface(output).fifo_wr_ptr += num_words;
+    get_local_cb_interface(output).fifo_wr_tile_ptr = 0;
+
+    if (get_local_cb_interface(output).fifo_wr_ptr >= get_local_cb_interface(output).fifo_limit) {
+        get_local_cb_interface(output).fifo_wr_ptr -= get_local_cb_interface(output).fifo_size;
+    }
+}
 
 template <uint32_t tiles_per_reduction, uint32_t unpA_face_r_dim>
 inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
-    cb_reserve_back(out_cb_id, tiles_per_reduction);
+    // cb_reserve_back(out_cb_id, tiles_per_reduction);
     tile_regs_acquire();
     cb_wait_front(in_cb_id, 4);
     unpack_tilizeA_B_block<false, true, false, true>(
@@ -30,7 +44,7 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
     pack_untilize_dest<tiles_per_reduction>(out_cb_id, 1, 0, 1, 2); /* pack 1 row (1x32) */
     tile_regs_release();
 
-    cb_push_back(out_cb_id, tiles_per_reduction);
+    PACK(llk_push_tiles_bilinear(out_cb_id, tiles_per_reduction));
 }
 
 namespace NAMESPACE {
@@ -64,11 +78,9 @@ void MAIN {
 
         for (uint32_t j = 0; j < blocks - 1; j++) {
             // Wait for the core to push data in cb
-            cb_wait_front(scalar_cb_id, 1);
             reduce_h_fused<max_tiles_per_iter, window_size_hw>(cb_id, scalar_cb_id, out_cb_id);
             cb_pop_front(scalar_cb_id, 1);
         }
-        cb_wait_front(scalar_cb_id, 1);
         reduce_h_fused<partial_iter_output_tiles, window_size_hw>(cb_id, scalar_cb_id, out_cb_id);
         cb_pop_front(scalar_cb_id, 1);
     }

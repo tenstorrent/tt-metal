@@ -87,6 +87,8 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     uint32_t output_nsticks = output.physical_volume() / output.padded_shape()[-1];
     uint32_t input_nsticks = input.physical_volume() / input.padded_shape()[-1];
 
+    uint32_t batch_size = input.padded_shape()[0];
+    uint32_t in_h = input.padded_shape()[1];
     uint32_t in_w = input.padded_shape()[2];
     uint32_t out_w = output.padded_shape()[2];
 
@@ -217,42 +219,73 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
     // Kernels
     // computation needed for the bilinear kernel. Passing them as an argument.
+    // Convert to fixed-point Q16.16 format on host for better compile-time optimization in kernel
+    constexpr int32_t FIXED_POINT_SHIFT = 16;
+    constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
+
     float scale_h_inv = 1.0f / (float)scale_factor_h;
     float scale_w_inv = 1.0f / (float)scale_factor_w;
     float y_index = ((float)(0.5f) * (float)scale_h_inv) + 0.5f;
     float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) - 0.5f;
 
-    uint32_t scale_h_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_h_inv);
-    uint32_t scale_w_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_w_inv);
-    uint32_t y_index_u32 = *reinterpret_cast<uint32_t*>(&y_index);
-    uint32_t x_index_compute_u32 = *reinterpret_cast<uint32_t*>(&x_index_compute);
+    // Convert to fixed-point Q16.16 format for kernel
+    int32_t scale_h_inv_fixed = (int32_t)(scale_h_inv * FIXED_ONE);
+    int32_t scale_w_inv_fixed = (int32_t)(scale_w_inv * FIXED_ONE);
+    int32_t y_index_fixed = (int32_t)(y_index * FIXED_ONE);
+    int32_t x_index_compute_fixed = (int32_t)(x_index_compute * FIXED_ONE);
+
+    // Cast to uint32_t for passing as compile-time args
+    uint32_t scale_h_inv_u32 = static_cast<uint32_t>(scale_h_inv_fixed);
+    uint32_t scale_w_inv_u32 = static_cast<uint32_t>(scale_w_inv_fixed);
+    uint32_t y_index_u32 = static_cast<uint32_t>(y_index_fixed);
+    uint32_t x_index_compute_u32 = static_cast<uint32_t>(x_index_compute_fixed);
 
     uint32_t num_input_width_blocks =
         std::ceil((float)(input_shape[3]) / (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH));
+
+    // Updated compile-time args: moved runtime args here (except start_input_row_in_image_id)
     std::vector<uint32_t> reader_compile_time_args = {
-        in_cb_id,
-        in_cb_id1,
-        in_scalar_cb_id1,
-        scale_h_inv_u32,
-        scale_w_inv_u32,
-        y_index_u32,
-        x_index_compute_u32,
-        1,
-        num_input_width_blocks,
-        input_block_size_bytes,
+        // Former runtime args (now compile-time)
+        input_stick_nbytes,             // [0] stick_nbytes
+        input_nsticks_per_core / in_w,  // [1] in_image_rows_per_core
+        scale_factor_h,                 // [2] scale_h
+        scale_factor_w,                 // [3] scale_w
+        in_w,                           // [4] in_w
+        out_w,                          // [5] out_w
+        in_h,                           // [6] in_h
+        // Original compile-time args
+        in_cb_id,                // [7] in_cb_id
+        in_cb_id1,               // [8] out_cb_id
+        in_scalar_cb_id1,        // [9] in_scalar_cb_id
+        scale_h_inv_u32,         // [10] scale_h_inv_comp
+        scale_w_inv_u32,         // [11] scale_w_inv_comp
+        y_index_u32,             // [12] y_starting_coordinate_u32
+        x_index_compute_u32,     // [13] x_starting_coordinate_u32
+        1,                       // [14] is_reader
+        num_input_width_blocks,  // [15] blocks
+        input_block_size_bytes,  // [16] input_block_size_bytes
     };
 
     std::vector<uint32_t> writer_compile_time_args = {
-        in_cb_id,
-        in_cb_id2,
-        in_scalar_cb_id2,
-        scale_h_inv_u32,
-        scale_w_inv_u32,
-        y_index_u32,
-        x_index_compute_u32,
-        0,
-        num_input_width_blocks,
-        input_block_size_bytes,
+        // Former runtime args (now compile-time)
+        input_stick_nbytes,             // [0] stick_nbytes
+        input_nsticks_per_core / in_w,  // [1] in_image_rows_per_core
+        scale_factor_h,                 // [2] scale_h
+        scale_factor_w,                 // [3] scale_w
+        in_w,                           // [4] in_w
+        out_w,                          // [5] out_w
+        in_h,                           // [6] in_h
+        // Original compile-time args
+        in_cb_id,                // [7] in_cb_id
+        in_cb_id2,               // [8] out_cb_id
+        in_scalar_cb_id2,        // [9] in_scalar_cb_id
+        scale_h_inv_u32,         // [10] scale_h_inv_comp
+        scale_w_inv_u32,         // [11] scale_w_inv_comp
+        y_index_u32,             // [12] y_starting_coordinate_u32
+        x_index_compute_u32,     // [13] x_starting_coordinate_u32
+        0,                       // [14] is_reader (0 for writer)
+        num_input_width_blocks,  // [15] blocks
+        input_block_size_bytes,  // [16] input_block_size_bytes
     };
 
     std::string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
@@ -294,22 +327,12 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
 
     CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
-    uint32_t batch_size = input.padded_shape()[0];
-    uint32_t in_h = input.padded_shape()[1];
-
-    // runtime args
-    uint32_t reader_nargs = 8;
+    // runtime args - now only start_input_row_in_image_id remains
+    uint32_t reader_nargs = 1;
     std::vector<uint32_t> reader_rt_args(reader_nargs);
-    reader_rt_args[0] = input_stick_nbytes;
-    reader_rt_args[1] = input_nsticks_per_core / in_w;
-    reader_rt_args[2] = scale_factor_h;
-    reader_rt_args[3] = scale_factor_w;
-    reader_rt_args[4] = in_w;
-    reader_rt_args[5] = out_w;
-    reader_rt_args[6] =
-        0;  // denotes the position (index) of the first row of the input shard in its corresponding batch
-            // Note: the first row of the input shard corresponds to the second row (index 1) in the halo shard
-    reader_rt_args[7] = in_h;
+    reader_rt_args[0] = 0;  // start_input_row_in_image_id: denotes the position (index) of the first row of the input
+                            // shard in its corresponding batch Note: the first row of the input shard corresponds to
+                            // the second row (index 1) in the halo shard
 
     uint32_t num_rows_per_core = div_up(batch_size * in_h, ncores_nhw);
 
@@ -318,7 +341,7 @@ UpsampleBilinearProgramFactory::cached_program_t UpsampleBilinearProgramFactory:
     if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         for (int32_t core = 0; core < ncores_nhw; ++core) {
             CoreCoord core_coord(core % ncores_x, core / ncores_x);  // logical
-            reader_rt_args[6] = start_input_row_in_image_id;
+            reader_rt_args[0] = start_input_row_in_image_id;         // Now at index 0 (only runtime arg)
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
             SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
             start_input_row_in_image_id += num_rows_per_core;
