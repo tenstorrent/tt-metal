@@ -459,6 +459,8 @@ public:
     }
 
     // on_boundary is called when we're at the end of a block and need to release the pages and move to the next block.
+    // The first argument is the size of the remaining data in the block. The second argument is whether the next block
+    // is the first block in the circular buffer (in which case cmd_ptr is set to the base address).
     template <typename OnBoundaryFn>
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
