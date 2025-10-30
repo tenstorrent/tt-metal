@@ -7,7 +7,11 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm.hpp"
+#include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm_impl.hpp"
+#include "debug/dprint.h"
+#include <type_traits>
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
@@ -18,6 +22,49 @@ constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_
 constexpr uint16_t packet_payload_size_bytes = static_cast<uint16_t>(get_compile_time_arg_val(5));
 constexpr uint32_t num_packets = get_compile_time_arg_val(6);
 constexpr uint32_t time_seed_init = get_compile_time_arg_val(7);
+
+// Helper function to print UDM control fields from received packet header
+inline void print_udm_control_fields(volatile tt_l1_ptr uint32_t* packet_start_addr, uint32_t packet_index) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* header =
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_start_addr);
+
+    DPRINT << "UDM Control Fields (Packet " << packet_index << "):\n";
+    DPRINT << "  src_chip_id: " << (uint32_t)header->udm_control.write.src_chip_id << "\n";
+    DPRINT << "  src_mesh_id: " << (uint32_t)header->udm_control.write.src_mesh_id << "\n";
+    DPRINT << "  src_noc_xy: 0x" << HEX() << (uint32_t)header->udm_control.write.src_noc_xy << DEC() << "\n";
+    DPRINT << "  risc_id: " << (uint32_t)header->udm_control.write.risc_id << "\n";
+    DPRINT << "  transaction_id: " << (uint32_t)header->udm_control.write.transaction_id << "\n";
+}
+
+// Function to check packet data while skipping header bytes
+inline bool check_packet_data_skip_header(
+    tt_l1_ptr uint32_t* packet_start_addr,
+    uint32_t payload_size_bytes,
+    uint32_t time_seed,
+    uint32_t& mismatch_addr,
+    uint32_t& mismatch_val,
+    uint32_t& expected_val) {
+    // Skip the packet header bytes that were filled with header data
+    constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+
+    // Calculate how many 16-byte words the header occupies
+    constexpr uint32_t header_words = packet_header_size_bytes / PACKET_WORD_SIZE_BYTES;
+
+    // Start checking from after the header bytes
+    tt_l1_ptr uint32_t* check_start_addr = packet_start_addr + (packet_header_size_bytes / sizeof(uint32_t));
+
+    // Adjust the number of words to check (exclude header words)
+    uint32_t num_words_to_check = (payload_size_bytes / PACKET_WORD_SIZE_BYTES) - header_words;
+
+    // Adjust the starting seed value to skip the header words
+    uint32_t adjusted_time_seed = time_seed;
+    for (uint32_t j = 0; j < header_words; j++) {
+        adjusted_time_seed++;
+    }
+
+    return check_packet_data(
+        check_start_addr, num_words_to_check, adjusted_time_seed, mismatch_addr, mismatch_val, expected_val);
+}
 
 void kernel_main() {
     uint32_t time_seed = time_seed_init;
@@ -49,9 +96,15 @@ void kernel_main() {
         }
         WAYPOINT("FPD");
 
-        // check for data correctness
-        match = check_packet_data(
-            start_addr, packet_payload_size_bytes / 16, time_seed, mismatch_addr, mismatch_val, expected_val);
+        // Send write ACK back to the sender
+        // The function will use the risc_id from the packet header as the dm_id
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header =
+            reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(start_addr);
+        tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+
+        // check for data correctness, skipping the header bytes
+        match = check_packet_data_skip_header(
+            start_addr, packet_payload_size_bytes, time_seed, mismatch_addr, mismatch_val, expected_val);
         if (!match) {
             break;
         }
