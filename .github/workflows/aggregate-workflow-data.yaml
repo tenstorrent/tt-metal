@@ -4,7 +4,7 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '*/15 * * * *' # every 15 minutes
+    - cron: '*/5 * * * *' # every 5 minutes
   workflow_dispatch:
     inputs:
       days:
@@ -38,6 +38,21 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           days: ${{ github.event.inputs.days || 15 }}
+          workflow_configs: |
+            [
+              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
+              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
+              {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
+              {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
+              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
+              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
+              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
+              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
+              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
+              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
+              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
+            ]
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -214,7 +229,6 @@ jobs:
           path: ${{ steps.analyze.outputs.status_changes_path }}
           retention-days: 1
 
-      # Slack notification moved to handle-failures job
 
   handle-failures:
     needs: analyze-data

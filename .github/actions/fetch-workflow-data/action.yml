@@ -27,6 +27,9 @@ inputs:
     description: 'Run ID to use for testing (optional)'
     required: false
     default: ''
+  workflow_configs:
+    description: 'JSON array of workflow configurations to filter by (array of objects with wkflw_name or wkflw_prefix)'
+    required: false
 
 outputs:
   total-runs:
