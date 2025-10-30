@@ -159,6 +159,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
     client_interface->wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(packet_header);
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -323,6 +324,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(packet_header);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -493,6 +495,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     populate_unicast_scatter_write_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_unicast_scatter_command_header);
     client_interface->wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(packet_header);
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
