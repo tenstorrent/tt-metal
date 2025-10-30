@@ -197,7 +197,6 @@ static FORCE_INLINE void populate_unicast_atomic_inc_fields(
     if constexpr (std::is_same_v<CommandHeaderT, std::nullptr_t>) {
         static_assert(
             !has_flag(UpdateMask, UnicastAtomicIncUpdateMask::DstAddr) &&
-                !has_flag(UpdateMask, UnicastAtomicIncUpdateMask::Wrap) &&
                 !has_flag(UpdateMask, UnicastAtomicIncUpdateMask::Val) &&
                 !has_flag(UpdateMask, UnicastAtomicIncUpdateMask::Flush),
             "UnicastAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
@@ -248,7 +247,6 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
         static_assert(
             !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::WriteDstAddr) &&
                 !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::SemaphoreAddr) &&
-                !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Wrap) &&
                 !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Val) &&
                 !has_flag(UpdateMask, UnicastFusedAtomicIncUpdateMask::Flush),
             "UnicastFusedAtomicIncUpdateMask requires command_header but std::nullptr_t was provided");
