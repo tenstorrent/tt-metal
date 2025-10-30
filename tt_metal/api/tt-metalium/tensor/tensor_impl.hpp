@@ -245,6 +245,7 @@ struct PrintOptions {
 
 extern PrintOptions TTNN_PRINT_OPTIONS;
 
+template <typename T>
 std::string to_string(const Tensor& tensor);
 
 template <typename T>

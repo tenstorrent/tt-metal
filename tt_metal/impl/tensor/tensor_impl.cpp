@@ -370,12 +370,11 @@ constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_st
 
 constexpr auto TENSOR_TYPE_STRING = "ttnn.Tensor";
 constexpr auto TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH = constexpr_strlen(TENSOR_TYPE_STRING) + 1;
-
 template <typename T>
 void to_string_row_major(
     std::stringstream& ss,
     tt::stl::Span<const T> buffer,
-    const Shape& shape,
+    const tt::tt_metal::Shape& shape,
     const tt::tt_metal::Strides& strides,
     std::size_t outer_index,
     const std::size_t buffer_offset,
@@ -404,7 +403,7 @@ void to_string_row_major(
     if (rank != 0) {
         ss << "[";
     }
-    auto dimension_shortener = detail::get_dimension_shortener(rank != 0 ? shape[-rank] : 1);
+    auto dimension_shortener = get_dimension_shortener(rank != 0 ? shape[-rank] : 1);
     for (std::size_t index = 0;
          dimension_shortener.print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
              ss, index, before, after);
@@ -424,7 +423,7 @@ void to_string_row_major(
         } else {
             print_datum(ss, buffer[buffer_offset + index], use_scientific);
         }
-        detail::print_trailing_comma(ss, index, rank != 0 ? shape[-rank] : 1, after_comma);
+        print_trailing_comma(ss, index, rank != 0 ? shape[-rank] : 1, after_comma);
     }
     if (rank != 0) {
         ss << "]";
@@ -450,30 +449,29 @@ void to_string(
     ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
        << ", layout=" << fmt::format("{}", layout) << ")";
 }
+
 }  // namespace detail
 
 template <typename T>
-std::string write_to_string_impl(const Tensor& tensor) {
+std::string to_string(const Tensor& tensor) {
+    const auto& shape = tensor.logical_shape();
+
+    if (!tensor.is_allocated()) {
+        return fmt::format(
+            "{}(<buffer is not allocated>, shape={}, dtype={}, layout={})",
+            detail::TENSOR_TYPE_STRING,
+            shape,
+            tensor.dtype(),
+            tensor.layout());
+    }
+
     auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return dispatch(
-                tensor.dtype(),
-                []<typename U>(auto&&... args) {
-                    return tensor_impl::to_layout<U>(std::forward<decltype(args)>(args)...);
-                },
-                tensor_impl::to_dtype_metal(tensor, DataType::FLOAT32),
-                Layout::ROW_MAJOR);
-
+            return to_layout<T>(to_dtype_metal(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         } else {
-            return dispatch(
-                tensor.dtype(),
-                []<typename U>(auto&&... args) {
-                    return tensor_impl::to_layout<U>(std::forward<decltype(args)>(args)...);
-                },
-                tensor,
-                Layout::ROW_MAJOR);
+            return to_layout<T>(tensor, Layout::ROW_MAJOR);
         }
     };
 
@@ -483,35 +481,71 @@ std::string write_to_string_impl(const Tensor& tensor) {
         return buffers;
     };
 
-    const auto& shape = tensor.logical_shape();
-    const Tensor row_major_tensor = get_row_major_tensor(tensor);
-    const auto strides = row_major_tensor.tensor_spec().compute_strides();
-    const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
-    std::stringstream ss;
-    for (size_t i = 0; i < buffers.size(); i++) {
-        detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
-        if (i + 1 != buffers.size()) {
-            ss << std::endl;
-        }
-    }
-    return ss.str();
+    return std::visit(
+        tt::stl::overloaded{
+            [&](const HostStorage& storage) -> std::string {
+                const Tensor row_major_tensor = get_row_major_tensor(tensor);
+                const auto strides = row_major_tensor.tensor_spec().compute_strides();
+                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
+                std::stringstream ss;
+                for (size_t i = 0; i < buffers.size(); i++) {
+                    detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+                    if (i + 1 != buffers.size()) {
+                        ss << std::endl;
+                    }
+                }
+                return ss.str();
+            },
+            [&](const DeviceStorage& storage) -> std::string {
+                auto cpu_tensor = tensor.cpu();
+                if (storage.mesh_buffer == nullptr) {
+                    // Use owned buffer path above.
+                    return to_string<T>(cpu_tensor);
+                }
+
+                auto* mesh_device = storage.mesh_buffer->device();
+                if (mesh_device->num_devices() == 1) {
+                    // TODO: How we can move it in metal??? Thorw an exception to catch use cases
+                    throw std::runtime_error("Not supported for single device");
+                    // return to_string<T>(distributed::get_device_tensors(cpu_tensor).at(0));
+                }
+
+                const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
+                const auto strides = row_major_tensor.tensor_spec().compute_strides();
+                const auto& coords = storage.coords;
+                auto coords_it = coords.begin();
+                const std::vector<HostBuffer> buffers = get_device_buffers(row_major_tensor.host_storage());
+                std::stringstream ss;
+                for (size_t i = 0; i < buffers.size(); i++) {
+                    const distributed::MeshCoordinate coord = *coords_it++;
+                    if (mesh_device->is_local(coord)) {
+                        ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+                        detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
+                    }
+                    if (i + 1 != buffers.size()) {
+                        ss << std::endl;
+                    }
+                }
+                return ss.str();
+            }},
+        tensor.storage());
+}
+
+template std::string to_string<bfloat16>(const Tensor& tensor);
+template std::string to_string<float>(const Tensor& tensor);
+template std::string to_string<int32_t>(const Tensor& tensor);
+template std::string to_string<uint32_t>(const Tensor& tensor);
+template std::string to_string<uint16_t>(const Tensor& tensor);
+template std::string to_string<uint8_t>(const Tensor& tensor);
+
+template <>
+std::string to_string<bfloat8_b>(const Tensor& tensor) {
+    return to_string<float>(tensor);
 }
 
 template <>
-std::string write_to_string_impl<bfloat8_b>(const Tensor& tensor) {
-    return write_to_string_impl<float>(tensor);
-}
-
-template <>
-std::string write_to_string_impl<bfloat4_b>(const Tensor& tensor) {
-    return write_to_string_impl<float>(tensor);
-}
-
-std::string to_string(const Tensor& tensor) {
-    return dispatch(
-        tensor.dtype(),
-        []<typename T>(auto&&... args) { return write_to_string_impl<T>(std::forward<decltype(args)>(args)...); },
-        tensor);
+std::string to_string<bfloat4_b>(const Tensor& tensor) {
+    return to_string<float>(tensor);
 }
 
 // ======================================================================================
@@ -1198,7 +1232,7 @@ Tensor pad(const Tensor& tensor, const Shape& output_padded_shape, const Shape& 
         auto output_strides = compute_strides(output_padded_shape);
 
         // Process all coordinates except for the last dimension (it's copied with mempcy)
-        ttnn::SmallVector<size_t> coords(rank - 1, 0);
+        ttsl::SmallVector<size_t> coords(rank - 1, 0);
 
         bool processed_all_coords = false;
         while (!processed_all_coords) {
@@ -1283,7 +1317,7 @@ Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape
     const auto input_strides = tensor.strides();
 
     // Validate inputs and compute output shape
-    ttnn::SmallVector<uint32_t> output_shape;
+    ttsl::SmallVector<uint32_t> output_shape;
     for (auto i = 0; i < input_shape.rank(); i++) {
         // Check if tensor start and end indices are within input tensor shape
         TT_ASSERT(output_tensor_start[i] <= input_shape[i]);
@@ -1297,7 +1331,7 @@ Tensor unpad(const Tensor& tensor, const Shape& output_tensor_start, const Shape
     auto unpad = [&input_shape, &input_strides, &output_shape, &output_tensor_start, &output_tensor_end](
                      const HostBuffer& input_host_buffer) {
         const auto input_buffer = input_host_buffer.view_as<T>();
-        ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
+        ttsl::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         auto flat_output_index = 0;
         auto output_buffer = std::vector<T>(Shape(output_shape).volume());

@@ -395,7 +395,7 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
 
 Tensor Tensor::to_layout(Layout target_layout) const { return tensor_ops::tensor_to_layout(*this, target_layout); }
 
-std::string Tensor::write_to_string() const { return tensor_impl::to_string(*this); }
+std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }
 
 void Tensor::print() const {
     GraphTracker::instance().track_function_start("Tensor::print", *this);

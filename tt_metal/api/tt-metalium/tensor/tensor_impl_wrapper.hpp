@@ -52,7 +52,7 @@ WRAP_FUNCTION(extract_shard)
 WRAP_FUNCTION(to_layout)
 WRAP_FUNCTION(pad)
 WRAP_FUNCTION(unpad)
-// WRAP_FUNCTION(to_string)
+WRAP_FUNCTION(to_string)
 
 #undef WRAP_FUNCTION
 #undef AS_LAMBDA
