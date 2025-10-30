@@ -40,8 +40,6 @@ constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta compon
 constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_13;        // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
-constexpr uint32_t cb_dy_gamma_sum_idx = tt::CBIndex::c_15;         // sum(dy * gamma)
-constexpr uint32_t cb_dy_gamma_xnorm_sum_idx = tt::CBIndex::c_16;   // sum(dy * gamma * x_normalized)
 constexpr uint32_t cb_scaled_dy_gamma_sum_idx = tt::CBIndex::c_17;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr uint32_t cb_scaled_dy_gamma_xnorm_sum_idx =
     tt::CBIndex::c_18;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
@@ -69,6 +67,7 @@ inline void compute_x_hat_preprocessing(uint32_t num_tiles) {
         const uint32_t current_block_size = std::min(block_size, num_tiles - tile_idx);
         tile_regs_acquire();
 
+        reconfig_data_format(cb_input_idx, cb_input_idx);
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
             uint32_t x_hat_reg = block_idx;
             uint32_t temp_reg = x_hat_reg + 1;
@@ -114,6 +113,8 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
 
     tile_regs_acquire();
 
+    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
+
     zero_dst_reg(sum_register);
 
     for (uint32_t col = 0; col < Wt; ++col) {
@@ -142,18 +143,18 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     }
 
     tile_regs_commit();
-    pack_and_push(sum_register, cb_dy_gamma_sum_idx);
+    pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
     tile_regs_acquire();
 
     // Reduce sum across inner dimension and scale by 1/N using matmul
-    cb_wait_front(cb_dy_gamma_sum_idx, onetile);
+    cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
 
     const uint32_t reduced_sum_register = 0U;
 
-    // reconfig_data_format(cb_dy_gamma_sum_idx, cb_mat_mul_reduce);
-    mm_init(cb_dy_gamma_sum_idx, cb_scaler_idx, cb_dy_gamma_sum_idx, 0);
+    reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
+    mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
     matmul_tiles(
-        cb_dy_gamma_sum_idx,
+        cb_scaled_dy_gamma_sum_idx,
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
@@ -161,7 +162,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         /* transpose */ 0);
 
     tile_regs_commit();
-    cb_pop_front(cb_dy_gamma_sum_idx, onetile);
+    cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
     pack_and_push(reduced_sum_register, cb_scaled_dy_gamma_sum_idx);
 }
 
@@ -186,11 +187,13 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         auto target_register = (col == 0) ? sum_register : working_register;
 
         // Compute x_normalized for this tile
+        reconfig_data_format(cb_x_hat_idx, cb_x_hat_idx);
         copy_tile_init(cb_x_hat_idx);
         copy_tile(cb_x_hat_idx, col, x_norm_register);
 
         // Compute dy * gamma for this tile
         zero_dst_reg(target_register);
+        reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
         mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
         mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, col, col, target_register);
 
@@ -220,17 +223,17 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     }
 
     tile_regs_commit();
-    pack_and_push(sum_register, cb_dy_gamma_xnorm_sum_idx);
+    pack_and_push(sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
     tile_regs_acquire();
 
     // Reduce sum across inner dimension and scale by 1/N using matmul
-    cb_wait_front(cb_dy_gamma_xnorm_sum_idx, onetile);
+    cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     const uint32_t reduced_sum_register = 0U;
 
-    // reconfig_data_format(cb_dy_gamma_xnorm_sum_idx, cb_mat_mul_reduce);
-    mm_init(cb_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_dy_gamma_xnorm_sum_idx, 0);
+    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
+    mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
     matmul_tiles(
-        cb_dy_gamma_xnorm_sum_idx,
+        cb_scaled_dy_gamma_xnorm_sum_idx,
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
@@ -238,7 +241,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         /* transpose */ 0);
 
     tile_regs_commit();
-    cb_pop_front(cb_dy_gamma_xnorm_sum_idx, onetile);
+    cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     pack_and_push(reduced_sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
 }
 #else
@@ -256,6 +259,8 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     const uint32_t temp_register = 2U;
 
     tile_regs_acquire();
+
+    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
 
     zero_dst_reg(sum_register);
 
@@ -297,17 +302,17 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     }
 
     tile_regs_commit();
-    pack_and_push(sum_register, cb_dy_gamma_sum_idx);
+    pack_and_push(sum_register, cb_scaled_dy_gamma_sum_idx);
     tile_regs_acquire();
 
     // Reduce using matmul and scale by 1/N
-    cb_wait_front(cb_dy_gamma_sum_idx, onetile);
+    cb_wait_front(cb_scaled_dy_gamma_sum_idx, onetile);
     const uint32_t reduced_sum_register = 0U;
 
-    // reconfig_data_format(cb_dy_gamma_sum_idx, cb_mat_mul_reduce);
-    mm_init(cb_dy_gamma_sum_idx, cb_scaler_idx, cb_dy_gamma_sum_idx, 0);
+    reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx);
+    mm_init(cb_scaled_dy_gamma_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_sum_idx, 0);
     matmul_tiles(
-        cb_dy_gamma_sum_idx,
+        cb_scaled_dy_gamma_sum_idx,
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
@@ -315,7 +320,7 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
         /* transpose */ 0);
 
     tile_regs_commit();
-    cb_pop_front(cb_dy_gamma_sum_idx, onetile);
+    cb_pop_front(cb_scaled_dy_gamma_sum_idx, onetile);
     pack_and_push(reduced_sum_register, cb_scaled_dy_gamma_sum_idx);
 }
 
@@ -354,11 +359,13 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
             auto target_register = (global_col == 0) ? sum_register : working_register;
 
             // Load x_normalized (x_hat)
+            reconfig_data_format(cb_x_hat_idx, cb_x_hat_idx);
             copy_tile_init(cb_x_hat_idx);
             copy_tile(cb_x_hat_idx, block_idx, x_norm_register);
 
             // Compute dy * gamma
             zero_dst_reg(target_register);
+            reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
             mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
             mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, block_idx, block_idx, target_register);
 
@@ -372,6 +379,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
                     // Limitation: mask_tile only works when the mask register is immediately next to the data register.
                     const uint32_t mask_register = target_register + 1U;
 
+                    reconfig_data_format(cb_mask_w_idx, cb_mask_w_idx);
                     copy_tile_init(cb_mask_w_idx);
                     copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -394,17 +402,17 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
     }
 
     tile_regs_commit();
-    pack_and_push(sum_register, cb_dy_gamma_xnorm_sum_idx);
+    pack_and_push(sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
     tile_regs_acquire();
 
     // Reduce using matmul and scale by 1/N
     const uint32_t reduced_sum_register = 0U;
-    cb_wait_front(cb_dy_gamma_xnorm_sum_idx, onetile);
+    cb_wait_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
 
-    // reconfig_data_format(cb_dy_gamma_xnorm_sum_idx, cb_mat_mul_reduce);
-    mm_init(cb_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_dy_gamma_xnorm_sum_idx, 0);
+    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx);
+    mm_init(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaler_idx, cb_scaled_dy_gamma_xnorm_sum_idx, 0);
     matmul_tiles(
-        cb_dy_gamma_xnorm_sum_idx,
+        cb_scaled_dy_gamma_xnorm_sum_idx,
         cb_scaler_idx,
         /* tile_idx */ 0,
         /* tile_idx */ 0,
@@ -412,7 +420,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
         /* transpose */ 0);
 
     tile_regs_commit();
-    cb_pop_front(cb_dy_gamma_xnorm_sum_idx, onetile);
+    cb_pop_front(cb_scaled_dy_gamma_xnorm_sum_idx, onetile);
     pack_and_push(reduced_sum_register, cb_scaled_dy_gamma_xnorm_sum_idx);
 }
 #endif  // EVERYTHING_FITS_IN_L1
@@ -427,10 +435,12 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 
     // Compute dy * gamma
     zero_dst_reg(dx_register);
+    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
     mul_bcast_rows_init_short(cb_dL_out_idx, cb_gamma_idx);
     mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, input_tile_idx, input_tile_idx, dx_register);
 
     // Load pre-scaled sum: (1/N) * sum(dy*gamma)
+    reconfig_data_format(cb_scaled_dy_gamma_sum_idx, cb_scaled_dy_gamma_sum_idx);
     copy_tile_init(cb_scaled_dy_gamma_sum_idx);
     copy_tile(cb_scaled_dy_gamma_sum_idx, 0, temp_register);
 
@@ -439,10 +449,12 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     sub_binary_tile(dx_register, temp_register, dx_register);
 
     // Load x_normalized
+    reconfig_data_format(cb_x_hat_idx, cb_x_hat_idx);
     copy_tile_init(cb_x_hat_idx);
     copy_tile(cb_x_hat_idx, input_tile_idx, x_norm_register);
 
     // Load pre-scaled sum: (1/N) * sum(dy*gamma*x_norm)
+    reconfig_data_format(cb_scaled_dy_gamma_xnorm_sum_idx, cb_scaled_dy_gamma_xnorm_sum_idx);
     copy_tile_init(cb_scaled_dy_gamma_xnorm_sum_idx);
     copy_tile(cb_scaled_dy_gamma_xnorm_sum_idx, 0, temp_register);
 
@@ -455,6 +467,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     sub_binary_tile(dx_register, temp_register, dx_register);
 
     // Multiply by rstd: dx = rstd * (...)
+    reconfig_data_format(cb_rstd_bcast_idx, cb_rstd_bcast_idx);
     copy_tile_init(cb_rstd_bcast_idx);
     copy_tile(cb_rstd_bcast_idx, 0, temp_register);
     mul_binary_tile_init();
@@ -463,6 +476,7 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
     if constexpr (do_mask_w) {
         if (global_col + 1 == Wt) {
             const uint32_t mask_register = dx_register + 1U;
+            reconfig_data_format(cb_mask_w_idx, cb_mask_w_idx);
             copy_tile_init(cb_mask_w_idx);
             copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
             mask_tile_init();
@@ -477,19 +491,10 @@ inline void compute_dx(const uint32_t input_tile_idx, const uint32_t dx_register
 inline void compute_dgamma_components(
     const uint32_t input_tile_idx, const uint32_t dgamma_register, const uint32_t global_col) {
     // Computes dgamma_components = dy * x_normalized
-    const uint32_t x_norm_register = dgamma_register + 1;
-
-    // Load dy
-    copy_tile_init(cb_dL_out_idx);
-    copy_tile(cb_dL_out_idx, input_tile_idx, dgamma_register);
-
     // Load x_normalized
-    copy_tile_init(cb_x_hat_idx);
-    copy_tile(cb_x_hat_idx, input_tile_idx, x_norm_register);
-
-    // Multiply: dy * x_normalized
-    mul_binary_tile_init();
-    mul_binary_tile(dgamma_register, x_norm_register, dgamma_register);
+    reconfig_data_format(cb_dL_out_idx, cb_x_hat_idx);
+    mul_tiles_init(cb_dL_out_idx, cb_x_hat_idx);
+    mul_tiles(cb_dL_out_idx, cb_x_hat_idx, input_tile_idx, input_tile_idx, dgamma_register);
 
     // Mask dgamma_register if needed
     if constexpr (do_mask_w) {
@@ -497,6 +502,7 @@ inline void compute_dgamma_components(
             // Limitation: mask_tile only works when the mask register is immediately next to the data register.
             const uint32_t mask_register = dgamma_register + 1U;
 
+            reconfig_data_format(cb_mask_w_idx, cb_mask_w_idx);
             copy_tile_init(cb_mask_w_idx);
             copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -511,6 +517,7 @@ inline void compute_dgamma_components(
 // acquire in the inner loop, push after block is processed
 inline void compute_dbeta_components(
     const uint32_t dy_tile_idx, const uint32_t dbeta_register, const uint32_t global_col) {
+    reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
 
@@ -519,6 +526,8 @@ inline void compute_dbeta_components(
         if (global_col + 1 == Wt) {
             // Limitation: mask_tile only works when the mask register is immediately next to the data register.
             const uint32_t mask_register = dbeta_register + 1U;
+
+            reconfig_data_format(cb_mask_w_idx, cb_mask_w_idx);
             copy_tile_init(cb_mask_w_idx);
             copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
 
@@ -542,6 +551,7 @@ inline void MAIN {
         // Both are broadcasted across rows: [[value, value, ...], [value, value, ...], ...]
         tile_regs_acquire();
         cb_wait_front(cb_rstd_idx, onetile);
+        reconfig_data_format(cb_rstd_idx, cb_rstd_idx);
         unary_bcast_init<BroadcastType::COL>(cb_rstd_idx, cb_rstd_idx);
         unary_bcast<BroadcastType::COL>(cb_rstd_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();
@@ -551,6 +561,7 @@ inline void MAIN {
 
         tile_regs_acquire();
         cb_wait_front(cb_mean_idx, onetile);
+        reconfig_data_format(cb_mean_idx, cb_mean_idx);
         unary_bcast_init<BroadcastType::COL>(cb_mean_idx, cb_mean_idx);
         unary_bcast<BroadcastType::COL>(cb_mean_idx, /* tile idx */ 0, /* reg tile idx */ 0);
         tile_regs_commit();

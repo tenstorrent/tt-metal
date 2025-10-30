@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "compute_kernel_api/eltwise_unary/relu.h"
+#include "compute_kernel_api/eltwise_unary/sqrt.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -309,6 +312,11 @@ void MAIN {
         reduce_init_delta_with_dt(cb_var, cb_xmm2sum, cb_scaler);
         reduce_tile(cb_xmm2sum, cb_scaler, first_tile, first_tile, dst0);
         reduce_uninit();
+
+        // Clamp variance to be >= 0 (handles FP precision errors where variance could be slightly negative)
+        relu_tile_init();
+        relu_tile(dst0);
+
         tile_regs_commit();
 
         tile_regs_wait();
@@ -326,11 +334,23 @@ void MAIN {
         cb_reserve_back(cb_recip_std, onetile);
 
         tile_regs_acquire();
+        // Compute variance + eps
+        // Variance is already clamped to >= 0 above
         add_tiles_init_with_dt(cb_var, cb_eps);
         add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
 
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
+        // Compute sqrt(variance + eps)
+        sqrt_tile_init();
+        sqrt_tile(dst0);
+
+        // Ensure sqrt result is >= 1e-5 to prevent recip from producing inf
+        // relu_max_tile computes max(x, limit), setting a floor value
+        // 0x37800000 = 1.52587890625e-05 in fp32 (between 1e-5 and 2e-5)
+
+        // Compute reciprocal: 1 / sqrt(variance + eps)
+        recip_tile_init();
+        recip_tile(dst0);
+
         tile_regs_commit();
 
         tile_regs_wait();

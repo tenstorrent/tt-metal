@@ -161,7 +161,7 @@ ttsl::hash::hash_t LayerNormBackwardDeviceOperation::compute_program_hash(
     const auto& input_logical_shape = input_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<LayerNormBackwardDeviceOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        program_factory.index(), input_tensor.dtype(), input_logical_shape);
 
     return hash;
 }
@@ -178,9 +178,7 @@ LayerNormBackwardDeviceOperation::invoke(
     const std::optional<ttnn::Tensor>& preallocated_dgamma_components,
     const std::optional<ttnn::Tensor>& preallocated_dbeta_components) {
     return {
-        operation_attributes_t{
-            .epsilon = epsilon,
-        },
+        operation_attributes_t{},
         tensor_args_t{
             .input = input_tensor,
             .gamma = gamma_tensor,

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "compute_kernel_api/eltwise_unary/relu.h"
+#include "compute_kernel_api/eltwise_unary/sqrt.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -328,6 +331,11 @@ void MAIN {
         reduce_init_delta_with_dt(cb_var, cb_xmm2sum, cb_scaler);
         reduce_tile(cb_xmm2sum, cb_scaler, first_tile, first_tile, dst0);
         reduce_uninit();
+
+        // Clamp variance to be >= 0 (handles FP precision errors where variance could be slightly negative)
+        relu_tile_init();
+        relu_tile(dst0);
+
         tile_regs_commit();
 
         tile_regs_wait();
@@ -345,11 +353,18 @@ void MAIN {
         cb_wait_front(cb_var, onetile);
         cb_reserve_back(cb_recip_std, onetile);
 
+        // Compute variance + eps
+        // Variance is already clamped to >= 0 above
         add_tiles_init_with_dt(cb_var, cb_eps);
         add_tiles(cb_var, cb_eps, first_tile, first_tile, dst0);
 
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
+        // Compute 1/sqrt(x) as recip(sqrt(x)) instead of direct rsqrt
+        // This two-step approach is more numerically stable
+        sqrt_tile_init();
+        sqrt_tile(dst0);
+
+        recip_tile_init();
+        recip_tile(dst0);
         tile_regs_commit();
 
         tile_regs_wait();

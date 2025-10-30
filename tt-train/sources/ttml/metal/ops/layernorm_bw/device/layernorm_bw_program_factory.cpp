@@ -55,8 +55,6 @@ constexpr auto kDbetaComponentsCbIndex = tt::CBIndex::c_12;   // dbeta component
 constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_13;         // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
-constexpr auto kDyGammaSumCbIndex = tt::CBIndex::c_15;        // sum(dy * gamma)
-constexpr auto kDyGammaXnormSumCbIndex = tt::CBIndex::c_16;   // sum(dy * gamma * x_normalized)
 constexpr auto kScaledDyGammaSumCbIndex = tt::CBIndex::c_17;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr auto kScaledDyGammaXnormSumCbIndex =
     tt::CBIndex::c_18;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
@@ -246,7 +244,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
-    uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm backward
+    // uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm backward
+    uint32_t block_size = 1;
 
     std::cout << "Block total_rows_to_process: " << total_rows_to_process << std::endl;
 
@@ -270,7 +269,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const uint32_t num_mean_tiles = kNumRstdTiles;  // same as rstd
 
     auto data_format = input_data_format;
-    // auto precise_data_format = tt::DataFormat::Float32;
+    auto precise_data_format = tt::DataFormat::Float32;
 
     // Input data CBs
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
@@ -280,7 +279,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     [[maybe_unused]] auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_x_hat = create_circular_buffer(
-        program, all_cores, kXHatCbIndex, data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
+        program, all_cores, kXHatCbIndex, precise_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
     [[maybe_unused]] auto cb_rstd = create_circular_buffer(
         program, all_cores, kRstdCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdTiles);
     [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
@@ -304,23 +303,18 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     [[maybe_unused]] auto cb_dbeta_components = create_circular_buffer(
         program, all_cores, kDbetaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    // Intermediate computation CBs
-    [[maybe_unused]] auto cb_dy_gamma_sum = create_circular_buffer(
-        program, all_cores, kDyGammaSumCbIndex, data_format, float32_single_tile_size_bytes, kNumDyGammaSumTiles);
-    [[maybe_unused]] auto cb_dy_gamma_xnorm_sum = create_circular_buffer(
+    [[maybe_unused]] auto cb_scaled_dy_gamma_sum = create_circular_buffer(
         program,
         all_cores,
-        kDyGammaXnormSumCbIndex,
-        data_format,
+        kScaledDyGammaSumCbIndex,
+        precise_data_format,
         float32_single_tile_size_bytes,
-        kNumDyGammaXnormSumTiles);
-    [[maybe_unused]] auto cb_scaled_dy_gamma_sum = create_circular_buffer(
-        program, all_cores, kScaledDyGammaSumCbIndex, data_format, float32_single_tile_size_bytes, kNumDyGammaSumTiles);
+        kNumDyGammaSumTiles);
     [[maybe_unused]] auto cb_scaled_dy_gamma_xnorm_sum = create_circular_buffer(
         program,
         all_cores,
         kScaledDyGammaXnormSumCbIndex,
-        data_format,
+        precise_data_format,
         float32_single_tile_size_bytes,
         kNumDyGammaXnormSumTiles);
     // -------------------------------------------------------------------------

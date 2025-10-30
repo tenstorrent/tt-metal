@@ -66,6 +66,7 @@ autograd::TensorPtr layernorm(
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ std::nullopt);
 
+
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
@@ -87,28 +88,55 @@ autograd::TensorPtr layernorm_bw_fused(
     auto rstd = ttnn::empty_like(mean);
     auto output = ttnn::empty_like(tensor->get_value());
 
-    auto out_tensors = ttnn::moreh_layer_norm(
-        tensor->get_value(),
-        1,
-        1e-6F,
-        /* gamma */ gamma->get_value(),
-        /* beta */ beta->get_value(),
-        output,
-        mean,
-        rstd,
-        /* memory_config */ std::nullopt,
-        /* compute_kernel_config */ std::nullopt);
+    auto out_tensors =
+        ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta->get_value(), 1e-6F, true);
 
     auto out = autograd::create_tensor();
     out->set_value(out_tensors[0].value());
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
-
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
+        // auto host_tensor = ttml::core::to_vector(tensor->get_value());
+        // std::cout << "tensor->get_value() shape: " << tensor->get_value().logical_shape() << std::endl;
+        // std::cout << "tensor->get_value() elements: ";
+        // for(int j = 0; j < host_tensor.size(); j++) {
+        //     std::cout << host_tensor[j] << " ";
+        // }
+        // std::cout << std::endl;
+        // host_tensor = ttml::core::to_vector(mean);
+        // std::cout << "mean elements: ";
+        // for(int j = 0; j < host_tensor.size(); j++) {
+        //     std::cout << host_tensor[j] << " ";
+        // }
+        // std::cout << std::endl;
+        // host_tensor = ttml::core::to_vector(rstd);
+        // std::cout << "rstd elements: ";
+        // for(int j = 0; j < host_tensor.size(); j++) {
+        //     std::cout << host_tensor[j] << " ";
+        // }
         auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
+
+        // host_tensor = ttml::core::to_vector(res[0].value());
+        // std::cout << "res[0] elements: ";
+        // for(int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+        //     std::cout << host_tensor[j] << " ";
+        // }
+        // std::cout << std::endl;
+        // host_tensor = ttml::core::to_vector(res[1].value());
+        // std::cout << "res[1] elements: ";
+        // for(int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+        //     std::cout << host_tensor[j] << " ";
+        // }
+        // std::cout << std::endl;
+        // host_tensor = ttml::core::to_vector(res[2].value());
+        // std::cout << "res[2] elements: ";
+        // for(int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+        //     std::cout << host_tensor[j] << " ";
+        // }
+        // std::cout << std::endl;
     };
 
     auto links = autograd::get_links(tensor);
@@ -207,6 +235,24 @@ autograd::TensorPtr composite_layernorm(
         auto dtensor = ttnn::subtract(ttnn::subtract(dtensor_normalized, dnorm_mean), norm_dnorm_norm_mean);
         dtensor = ttnn::multiply(dtensor, rstd);
 
+        auto host_tensor = ttml::core::to_vector(dtensor);
+        std::cout << "res[0] elements: ";
+        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+            std::cout << host_tensor[j] << " ";
+        }
+        std::cout << std::endl;
+        host_tensor = ttml::core::to_vector(dgamma);
+        std::cout << "res[1] elements: ";
+        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+            std::cout << host_tensor[j] << " ";
+        }
+        std::cout << std::endl;
+        host_tensor = ttml::core::to_vector(dbeta);
+        std::cout << "res[2] elements: ";
+        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+            std::cout << host_tensor[j] << " ";
+        }
+        std::cout << std::endl;
         tensor->add_grad(dtensor);
         gamma->add_grad(dgamma);
         beta->add_grad(dbeta);
