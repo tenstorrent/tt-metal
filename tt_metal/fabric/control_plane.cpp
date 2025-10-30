@@ -2769,6 +2769,9 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     return intermesh_connections;
 }
 
+// TODO: stub implementation until we have a proper one
+bool ControlPlane::is_mesh_configured_as_switch(MeshId mesh_id) const { return false; }
+
 ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric

@@ -201,6 +201,9 @@ public:
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
 
+    // stub API until we have a proper implementation
+    bool is_mesh_configured_as_switch(MeshId mesh_id) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
