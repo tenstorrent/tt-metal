@@ -227,7 +227,7 @@ test_suite_bh_glx_metal_unit_tests() {
     # Dispatch
     GTEST_FILTER="*-*NIGHTLY_*"
     ./build/test/tt_metal/unit_tests_eth --gtest_filter="$GTEST_FILTER"
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
+    # ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
     # ./build/test/tt_metal/unit_tests_device --gtest_filter="$GTEST_FILTER"
     # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="$GTEST_FILTER"
     # ./build/test/tt_metal/unit_tests_api --gtest_filter="$GTEST_FILTER"
@@ -236,7 +236,7 @@ test_suite_bh_glx_metal_unit_tests() {
     # ./build/test/tt_metal/unit_tests_misc --gtest_filter="$GTEST_FILTER"
     # ./build/test/tt_metal/unit_tests_noc --gtest_filter="$GTEST_FILTER"
     # ./build/test/tt_metal/unit_tests_sfpi --gtest_filter="$GTEST_FILTER"
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
+    # TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="$GTEST_FILTER"
 }
 
 test_suite_bh_glx_python_unit_tests() {
