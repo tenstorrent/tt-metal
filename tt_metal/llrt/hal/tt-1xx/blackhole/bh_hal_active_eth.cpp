@@ -157,10 +157,10 @@ HalCoreInfoType create_active_eth_mem_map() {
     // rtoptions not included in here due to circular dependency
     if (is_2_erisc_mode()) {
         processor_classes = configure_for_2erisc();
-        processor_classes_names = {{{"DM", "DM"}, {"COMPUTE", "COMPUTE"}}};
+        processor_classes_names = {{{"ER0", "ERISC0"}, {"ER1", "ERISC1"}}};
     } else {
         processor_classes = configure_for_1erisc();
-        processor_classes_names = {{{"DM", "DM"}, {"COMPUTE", "COMPUTE"}}};
+        processor_classes_names = {{{"ER", "ERISC"}}};
     }
 
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
