@@ -281,7 +281,7 @@ public:
     }
 
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
-    // unless release_all_pages is called to return partially-consumed blocks.
+    // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
