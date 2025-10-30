@@ -6,6 +6,8 @@
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <gtest/gtest.h>
+#include <thread>
+#include <chrono>
 
 namespace tt::scaleout_tools {
 
@@ -49,35 +51,11 @@ struct TestFixture {
 
     ~TestFixture() {
         try {
-            auto cluster_desc = driver->get_cluster_description();
-            // Attempt to restore all MMIO-accessible ethernet links to trained state
-            for (const auto& [asic_id, asic_connections] :
-                 physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name())) {
-                for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
-                    auto src_chip_id = asic_id_to_chip_id.at(*asic_id);
-                    auto dst_chip_id = asic_id_to_chip_id.at(*dst_asic_id);
-                    
-                    if (cluster_desc->is_chip_mmio_capable(src_chip_id) && 
-                        cluster_desc->is_chip_mmio_capable(dst_chip_id)) {
-                        for (const auto& eth_connection : eth_connections) {
-                            try {
-                                auto src_coord = get_eth_core_coord(cluster, src_chip_id, eth_connection.src_chan);
-                                auto dst_coord = get_eth_core_coord(cluster, dst_chip_id, eth_connection.dst_chan);
-                                set_link_training_status(cluster, src_chip_id, src_coord, 1);
-                                set_link_training_status(cluster, dst_chip_id, dst_coord, 1);
-                            } catch (...) {
-                                // Skip links that can't be accessed, we did all we could to recover them
-                            }
-                        }
-                    }
-                }
-            }
-
             physical_system_descriptor.run_discovery(false);
         } catch (const std::exception& e) {
-            log_error(tt::LogTest, "Device cleanup failed: {}. Reset with using tt-smi command", e.what());
+            log_error(tt::LogTest, "Device cleanup failed: {}. Reset device using tt-smi command", e.what());
         } catch (...) {
-            log_error(tt::LogTest, "Device cleanup failed. Reset with using tt-smi command");
+            log_error(tt::LogTest, "Device cleanup failed. Reset device using tt-smi command");
         }
     }
 };
@@ -189,44 +167,68 @@ TEST(DirectedRetraining, TestOnDemandCableRestart) {
         fixture.physical_system_descriptor.my_host_name());
     ASSERT_FALSE(asic_topology.empty()) << "No links available for testing";
 
-    tt::tt_metal::AsicID src_asic_id, dst_asic_id;
-    uint8_t src_channel = 0, dst_channel = 0;
-    bool is_local = false;
+    auto cluster_desc = fixture.driver->get_cluster_description();
+    tt::tt_metal::AsicID src_asic_id;
+    uint8_t src_channel = 0;
     bool found = false;
 
+    // Select a link where both chips are MMIO-capable or both are non-MMIO-capable
+    // This ensures we can actually access and verify the link status
     for (const auto& [asic_id, asic_connections] : asic_topology) {
+        auto src_chip_id = fixture.asic_id_to_chip_id.at(*asic_id);
+        
         for (const auto& [dst_id, eth_connections] : asic_connections) {
-            if (!eth_connections.empty()) {
-                src_asic_id = asic_id;
-                dst_asic_id = dst_id;
-                src_channel = eth_connections[0].src_chan;
-                dst_channel = eth_connections[0].dst_chan;
-                is_local = eth_connections[0].is_local;
-                found = true;
-                break;
+            auto dst_chip_id = fixture.asic_id_to_chip_id.at(*dst_id);
+            
+            // Check if both chips are MMIO-capable or both are non-MMIO-capable
+            if ((cluster_desc->is_chip_mmio_capable(src_chip_id) && cluster_desc->is_chip_mmio_capable(dst_chip_id)) ||
+                (!cluster_desc->is_chip_mmio_capable(src_chip_id) && !cluster_desc->is_chip_mmio_capable(dst_chip_id))) {
+                if (!eth_connections.empty()) {
+                    src_asic_id = asic_id;
+                    src_channel = eth_connections[0].src_chan;
+                    found = true;
+                    break;
+                }
             }
         }
         if (found) break;
     }
-    ASSERT_TRUE(found) << "No ethernet connections found";
+    ASSERT_TRUE(found) << "No accessible ethernet connections found for testing";
 
     auto src_chip_id = fixture.asic_id_to_chip_id.at(*src_asic_id);
     auto src_coord = get_eth_core_coord(fixture.cluster, src_chip_id, src_channel);
 
+    // Take down the link
     set_link_training_status(fixture.cluster, src_chip_id, src_coord, 0);
     EXPECT_EQ(get_link_training_status(fixture.cluster, src_chip_id, src_coord), 0) << "Link should be down before reset";
 
-    // Build reset topology for just this specific link (mimics CLI --reset-* args)
-    tt::tt_metal::AsicTopology reset_topology;
-    tt::tt_metal::EthConnection src_to_dst{src_channel, dst_channel, is_local};
-    tt::tt_metal::EthConnection dst_to_src{dst_channel, src_channel, is_local};
-    reset_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst}});
-    reset_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src}});
+    // Build reset topology manually
+    auto [dst_asic_id, dst_channel] = fixture.physical_system_descriptor.get_connected_asic_and_channel(
+        src_asic_id, src_channel);
 
+    const auto& src_asic_desc = fixture.physical_system_descriptor.get_asic_descriptors().at(src_asic_id);
+    const auto& dst_asic_desc = fixture.physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
+    bool is_local = (src_asic_desc.host_name == dst_asic_desc.host_name);
+
+    tt::tt_metal::AsicTopology reset_topology;
+    tt::tt_metal::EthConnection src_to_dst_conn;
+    src_to_dst_conn.src_chan = src_channel;
+    src_to_dst_conn.dst_chan = dst_channel;
+    src_to_dst_conn.is_local = is_local;
+
+    tt::tt_metal::EthConnection dst_to_src_conn;
+    dst_to_src_conn.src_chan = dst_channel;
+    dst_to_src_conn.dst_chan = src_channel;
+    dst_to_src_conn.is_local = is_local;
+
+    reset_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst_conn}});
+    reset_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src_conn}});
+
+    // Reset the link
     reset_ethernet_links(fixture.physical_system_descriptor, reset_topology);
 
+    // Verify link is back up
     EXPECT_EQ(get_link_training_status(fixture.cluster, src_chip_id, src_coord), 1) << "Link should be up after reset";
-    fixture.physical_system_descriptor.run_discovery(true);
 }
 
 }  // namespace tt::scaleout_tools

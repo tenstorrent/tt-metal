@@ -213,33 +213,23 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
 }
 
 tt::tt_metal::AsicTopology build_reset_topology(
-    const InputArgs& input_args,
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
     PhysicalSystemDescriptor& physical_system_descriptor) {
 
-    TT_FATAL(
-        input_args.reset_host.has_value(),
-        "For link reset, --reset_host must be specified");
-    TT_FATAL(
-        input_args.reset_tray_id.has_value(),
-        "For link reset, --reset_tray_id must be specified");
-    TT_FATAL(
-        input_args.reset_asic_location.has_value(),
-        "For link reset, --reset_asic_location must be specified");
-    TT_FATAL(
-        input_args.reset_channel.has_value(),
-        "For link reset, --reset_channel must be specified");
-
     log_output_rank0("Building reset topology for specific link:");
-    log_output_rank0("  Host: " + input_args.reset_host.value());
-    log_output_rank0("  Tray ID: " + std::to_string(input_args.reset_tray_id.value()));
-    log_output_rank0("  ASIC Location: " + std::to_string(input_args.reset_asic_location.value()));
-    log_output_rank0("  Channel: " + std::to_string(input_args.reset_channel.value()));
+    log_output_rank0("  Host: " + reset_host);
+    log_output_rank0("  Tray ID: " + std::to_string(reset_tray_id));
+    log_output_rank0("  ASIC Location: " + std::to_string(reset_asic_location));
+    log_output_rank0("  Channel: " + std::to_string(reset_channel));
 
     tt::tt_metal::AsicID src_asic_id = physical_system_descriptor.get_asic_id(
-        input_args.reset_host.value(),
-        tt::tt_metal::TrayID(input_args.reset_tray_id.value()),
-        tt::tt_metal::ASICLocation(input_args.reset_asic_location.value()));
-    uint8_t src_channel = static_cast<uint8_t>(input_args.reset_channel.value());
+        reset_host,
+        tt::tt_metal::TrayID(reset_tray_id),
+        tt::tt_metal::ASICLocation(reset_asic_location));
+    uint8_t src_channel = static_cast<uint8_t>(reset_channel);
 
     log_output_rank0("  Resolved Source ASIC ID: " + std::to_string(*src_asic_id));
 
@@ -249,7 +239,7 @@ tt::tt_metal::AsicTopology build_reset_topology(
     log_output_rank0("  Discovered Destination ASIC ID: " + std::to_string(*dst_asic_id));
     log_output_rank0("  Discovered Destination Channel: " + std::to_string(dst_channel));
 
-    std::string src_host = input_args.reset_host.value();
+    std::string src_host = reset_host;
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
     TT_FATAL(
         asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
@@ -313,7 +303,13 @@ void print_usage_info() {
     std::cout << "To run on a multi-node cluster, use mpirun with a --hostfile option" << std::endl;
 }
 
-void perform_link_reset(const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
+void perform_link_reset(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    
     log_output_rank0("Operating in reset mode for specific link");
 
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
@@ -321,7 +317,8 @@ void perform_link_reset(const InputArgs& input_args, PhysicalSystemDescriptor& p
         link_retrain_supported,
         "Link reset is only supported on WORMHOLE_B0 architecture");
 
-    AsicTopology reset_topology = build_reset_topology(input_args, physical_system_descriptor);
+    AsicTopology reset_topology = build_reset_topology(
+        reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);
 
     reset_ethernet_links(physical_system_descriptor, reset_topology);
 
@@ -368,7 +365,19 @@ int main(int argc, char* argv[]) {
                          input_args.reset_channel.has_value();
 
     if (is_reset_mode) {
-        perform_link_reset(input_args, physical_system_descriptor);
+        TT_FATAL(
+            input_args.reset_host.has_value() && 
+            input_args.reset_tray_id.has_value() &&
+            input_args.reset_asic_location.has_value() &&
+            input_args.reset_channel.has_value(),
+            "All reset parameters must be specified: --reset_host, --reset_tray_id, --reset_asic_location, --reset_channel");
+        
+        perform_link_reset(
+            input_args.reset_host.value(),
+            input_args.reset_tray_id.value(),
+            input_args.reset_asic_location.value(),
+            input_args.reset_channel.value(),
+            physical_system_descriptor);
         return 0;
     }
 
