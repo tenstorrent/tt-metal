@@ -284,7 +284,6 @@ jobs:
           ls -hal $PERF_REPORT_FILENAME
           FULL_REPORT_PATH="$(pwd)/$PERF_REPORT_FILENAME"
           echo "Full report location: $FULL_REPORT_PATH"
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
           echo "perf_report_full_path=$FULL_REPORT_PATH" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
