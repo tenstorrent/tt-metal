@@ -282,14 +282,17 @@ jobs:
           ls -hal
           export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
           ls -hal $PERF_REPORT_FILENAME
+          FULL_REPORT_PATH="$(pwd)/$PERF_REPORT_FILENAME"
+          echo "Full report location: $FULL_REPORT_PATH"
           echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          echo "perf_report_full_path=$FULL_REPORT_PATH" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
-          path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+          path: "${{ steps.check-perf-report.outputs.perf_report_full_path }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
