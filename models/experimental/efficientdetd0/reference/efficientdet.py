@@ -7,8 +7,8 @@
 import torch
 from torch import nn
 
-from modules import BiFPN, Regressor, Classifier, EfficientNet
-from utils import Anchors
+from .modules import BiFPN, Regressor, Classifier, EfficientNet
+from .utils import Anchors
 
 
 class EfficientDetBackbone(nn.Module):

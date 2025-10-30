@@ -7,7 +7,7 @@ import torch
 from torchvision.ops.boxes import nms as nms_torch
 
 from models.experimental.efficientnetb0.reference.efficientnetb0 import Efficientnetb0 as EffNet
-from utils import (
+from .utils import (
     MemoryEfficientSwish,
     Swish,
     Conv2dStaticSamePadding,
@@ -363,7 +363,7 @@ class Regressor(nn.Module):
         self.num_layers = num_layers
 
         self.conv_list = nn.ModuleList(
-            [SeparableConvBlock(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)]
+            [SeparableConvBlck(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)]
         )
         self.bn_list = nn.ModuleList(
             [
