@@ -673,7 +673,7 @@ constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(Core
         case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
         case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
         case CoreType::ETH:
-            return HalProgrammableCoreType::ACTIVE_ETH;  // We neeed this becasue translations only support ETH
+            return HalProgrammableCoreType::ACTIVE_ETH;  // We need this because translations only support ETH
         default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
