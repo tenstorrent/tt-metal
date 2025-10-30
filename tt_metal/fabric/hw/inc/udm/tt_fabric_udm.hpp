@@ -285,10 +285,9 @@ inline __attribute__((always_inline)) void fabric_fast_write_ack(
 
     uint8_t src_chip_id = received_header->udm_control.write.src_chip_id;
     uint16_t src_mesh_id = received_header->udm_control.write.src_mesh_id;
-    uint16_t src_noc_xy = received_header->udm_control.write.src_noc_xy;
+    uint8_t src_noc_x = received_header->udm_control.write.src_noc_x;
+    uint8_t src_noc_y = received_header->udm_control.write.src_noc_y;
     uint8_t src_risc_id = received_header->udm_control.write.risc_id;
-    uint8_t src_noc_x = src_noc_xy & 0xFF;
-    uint8_t src_noc_y = (src_noc_xy >> 8) & 0xFF;
 
     uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::NONPOSTED_WRITES_ACKED>(src_risc_id);
 

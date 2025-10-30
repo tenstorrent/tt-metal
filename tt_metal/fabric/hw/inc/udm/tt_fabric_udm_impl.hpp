@@ -21,12 +21,14 @@ namespace tt::tt_fabric::udm {
  * @brief UDM (Unified Data Movement) fields for fabric write operations
  *
  * Contains the source information needed for UDM write operations:
- * - src_noc_xy: Source NOC coordinates (X in lower byte, Y in upper byte)
+ * - src_noc_x: Source NOC X coordinate
+ * - src_noc_y: Source NOC Y coordinate
  * - risc_id: Processor ID (BRISC, NCRISC, etc.)
  * - trid: Transaction ID for tracking operations
  */
 struct udm_write_fields {
-    uint16_t src_noc_xy;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
     uint8_t risc_id;
     uint16_t trid;
 };
@@ -55,7 +57,8 @@ inline bool fabric_write_set_unicast_route(
     // Set UDM control fields for write operations using routing table info
     packet_header->udm_control.write.src_chip_id = routing_table->my_device_id;
     packet_header->udm_control.write.src_mesh_id = routing_table->my_mesh_id;
-    packet_header->udm_control.write.src_noc_xy = udm.src_noc_xy;
+    packet_header->udm_control.write.src_noc_x = udm.src_noc_x;
+    packet_header->udm_control.write.src_noc_y = udm.src_noc_y;
     packet_header->udm_control.write.risc_id = udm.risc_id;
     packet_header->udm_control.write.transaction_id = udm.trid;
 
@@ -89,7 +92,8 @@ inline bool fabric_write_set_unicast_route(
     // Set UDM control fields for write operations using routing table info
     packet_header->udm_control.write.src_chip_id = routing_table->my_device_id;
     packet_header->udm_control.write.src_mesh_id = routing_table->my_mesh_id;
-    packet_header->udm_control.write.src_noc_xy = udm.src_noc_xy;
+    packet_header->udm_control.write.src_noc_x = udm.src_noc_x;
+    packet_header->udm_control.write.src_noc_y = udm.src_noc_y;
     packet_header->udm_control.write.risc_id = udm.risc_id;
     packet_header->udm_control.write.transaction_id = udm.trid;
     return result;
@@ -110,9 +114,7 @@ inline bool fabric_write_set_unicast_route(
 template <typename T>
 FORCE_INLINE void fabric_write_set_unicast_route_impl(
     volatile tt_l1_ptr T* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t trid) {
-    uint16_t my_noc_xy = my_x[edm_to_local_chip_noc] | my_y[edm_to_local_chip_noc] << 8;
-
-    udm_write_fields udm = {my_noc_xy, proc_type, trid};
+    udm_write_fields udm = {my_x[edm_to_local_chip_noc], my_y[edm_to_local_chip_noc], proc_type, trid};
 
     if constexpr (std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
         fabric_write_set_unicast_route(packet_header, udm, dst_dev_id, dst_mesh_id);

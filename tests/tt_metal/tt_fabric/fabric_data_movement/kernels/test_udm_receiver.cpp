@@ -31,7 +31,8 @@ inline void print_udm_control_fields(volatile tt_l1_ptr uint32_t* packet_start_a
     DPRINT << "UDM Control Fields (Packet " << packet_index << "):\n";
     DPRINT << "  src_chip_id: " << (uint32_t)header->udm_control.write.src_chip_id << "\n";
     DPRINT << "  src_mesh_id: " << (uint32_t)header->udm_control.write.src_mesh_id << "\n";
-    DPRINT << "  src_noc_xy: 0x" << HEX() << (uint32_t)header->udm_control.write.src_noc_xy << DEC() << "\n";
+    DPRINT << "  src_noc_x: " << (uint32_t)header->udm_control.write.src_noc_x << "\n";
+    DPRINT << "  src_noc_y: " << (uint32_t)header->udm_control.write.src_noc_y << "\n";
     DPRINT << "  risc_id: " << (uint32_t)header->udm_control.write.risc_id << "\n";
     DPRINT << "  transaction_id: " << (uint32_t)header->udm_control.write.transaction_id << "\n";
 }
