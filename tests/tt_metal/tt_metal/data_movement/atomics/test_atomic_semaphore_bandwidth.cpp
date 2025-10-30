@@ -212,8 +212,7 @@ void increment_value_sweep_test(
                     .num_of_transactions = num_transactions,
                     .semaphore_addr_offset = 4096,
                     .atomic_inc_value = atomic_inc_value,
-                    .noc_id = noc_id,
-                    .l1_data_format = DataFormat::Float16_b};
+                    .noc_id = noc_id};
 
                 log_info(
                     LogTest,
@@ -246,8 +245,7 @@ void directed_performance_test(
         .num_of_transactions = num_transactions,
         .semaphore_addr_offset = 4096,
         .atomic_inc_value = atomic_inc_value,
-        .noc_id = NOC::NOC_0,
-        .l1_data_format = DataFormat::Float16_b};
+        .noc_id = NOC::NOC_0};
 
     log_info(
         LogTest,
