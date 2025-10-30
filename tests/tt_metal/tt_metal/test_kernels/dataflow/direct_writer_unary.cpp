@@ -11,25 +11,27 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
 #if INTERFACE_WITH_L1 == 1
-    constexpr bool write_to_dram = false;
+    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::L1;
 #else
-    constexpr bool write_to_dram = true;
+    constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
 #endif
 
+    experimental::Noc noc(noc_index);
+    experimental::CircularBuffer cb(cb_id);
     // single-tile ublocks
-    uint32_t ublock_size_bytes = get_tile_size(cb_id);
+    uint32_t ublock_size_bytes = cb.get_tile_size();
     uint32_t ublock_size_tiles = 1;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t dst_buffer_noc_addr = get_noc_addr_from_bank_id<write_to_dram>(bank_id, dst_addr);
-
-        cb_wait_front(cb_id, ublock_size_tiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id);
-
-        noc_async_write(l1_read_addr, dst_buffer_noc_addr, ublock_size_bytes);
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_id, ublock_size_tiles);
+        cb.wait_front(ublock_size_tiles);
+        noc.async_write(
+            cb,
+            experimental::AllocatorBank<bank_type>(),
+            ublock_size_bytes,
+            {},
+            {.bank_id = bank_id, .addr = dst_addr});
+        noc.async_write_barrier();
+        cb.pop_front(ublock_size_tiles);
         dst_addr += ublock_size_bytes;
     }
 }
