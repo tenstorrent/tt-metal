@@ -18,6 +18,9 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
+// FIXME: Remove after testing
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+
 namespace tt::tt_fabric {
 namespace multi_host_tests {
 
@@ -515,6 +518,16 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
     }
+}
+
+TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
+    auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
+    // Just try physical system descriptor for now
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
 }
 
 }  // namespace multi_host_tests
