@@ -54,9 +54,9 @@ private:
     LazyTensor(const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, TensorSpec tensor_spec);
     LazyTensor(const MaterializedTensor& metal_tensor);
 
-    void set_siblings(const std::vector<LazyTensor>& siblings) { siblings_ = siblings; }
-    void set_materialized_output_idx(size_t idx) { materialized_output_idx_ = idx; }
-    void set_state(LazyTensorState state) { state_ = state; }
+    void set_siblings(const std::vector<LazyTensor>& siblings);
+    void set_materialized_output_idx(size_t idx);
+    void set_state(LazyTensorState state);
 
     std::vector<LazyTensor> op_inputs_;
     LazyOperationPtr op_;

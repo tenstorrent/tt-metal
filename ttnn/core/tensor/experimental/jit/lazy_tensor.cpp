@@ -100,5 +100,9 @@ void LazyTensor::materialize() {
     }
 }
 
+void LazyTensor::set_siblings(const std::vector<LazyTensor>& siblings) { siblings_ = siblings; }
+void LazyTensor::set_materialized_output_idx(size_t idx) { materialized_output_idx_ = idx; }
+void LazyTensor::set_state(LazyTensorState state) { state_ = state; }
+
 //
 }  // namespace ttnn::experimental::jit

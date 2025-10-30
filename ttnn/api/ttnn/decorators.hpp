@@ -164,9 +164,9 @@ private:
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        // if (ttnn::experimental::jit::is_lazy_enabled()) {
-        //     return invoke_lazy(operation_attributes, tensors_args);
-        // }
+        if (ttnn::experimental::jit::is_lazy_enabled()) {
+            return invoke_lazy(operation_attributes, tensors_args);
+        }
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
     }
 
@@ -181,47 +181,47 @@ private:
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
 
-    // template <typename operation_attributes_t, typename tensor_args_t>
-    // auto invoke_lazy(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
-    //     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
+    template <typename operation_attributes_t, typename tensor_args_t>
+    auto invoke_lazy(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
+        using tensor_return_value_t = typename operation_t::tensor_return_value_t;
 
-    //     if constexpr (detail::CanBeMadeLazy<operation_t>) {
-    //         // Create lazy operation wrapper
-    //         auto lazy_op = ttnn::experimental::jit::make_lazy_device_operation<operation_t>(
-    //             operation_attributes,
-    //             tensor_args,
-    //             std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
+        if constexpr (detail::CanBeMadeLazy<operation_t>) {
+            // Create lazy operation wrapper
+            auto lazy_op = ttnn::experimental::jit::make_lazy_device_operation<operation_t>(
+                operation_attributes,
+                tensor_args,
+                std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
 
-    //         // Get output specs to create placeholder tensors
-    //         auto output_specs = lazy_op->compute_output_specs();
-    //         // auto output_specs = operation_t::compute_output_specs(operation_attributes, tensor_args);
+            // Get output specs to create placeholder tensors
+            auto output_specs = lazy_op->compute_output_specs();
+            // auto output_specs = operation_t::compute_output_specs(operation_attributes, tensor_args);
 
-    //         // TODO: Move this if constexprs to a separate function.
-    //         // TODO: Add support for all kinds of returns
-    //         // Extract input tensors from tensor_args
-    //         std::vector<Tensor> input_tensors =
-    //             ttnn::experimental::jit::object_to_vector<tensor_args_t, Tensor>(tensor_args);
+            // TODO: Move this if constexprs to a separate function.
+            // TODO: Add support for all kinds of returns
+            // Extract input tensors from tensor_args
+            std::vector<Tensor> input_tensors =
+                ttnn::experimental::jit::object_to_vector<tensor_args_t, Tensor>(tensor_args);
 
-    //         if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
-    //             // TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
-    //             // Single tensor output
-    //             return Tensor::make_lazy_tensor(input_tensors, lazy_op, output_specs[0]);
-    //             // return Tensor::make_lazy_tensor(input_tensors, nullptr, output_specs);
-    //         } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
-    //             // Multiple tensor outputs (vector)
-    //             return Tensor::make_lazy_tensors(input_tensors, lazy_op, output_specs);
-    //             // return Tensor::make_lazy_tensors(input_tensors, nullptr, output_specs);
-    //         }
-    //     } else {
-    //         // TODO: Should fail
-    //         log_warning(
-    //             tt::LogOp,
-    //             "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
-    //             std::string{cpp_fully_qualified_name},
-    //             tt::stl::get_type_name<tensor_return_value_t>());
-    //         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensor_args);
-    //     }
-    // }
+            if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
+                // TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
+                // Single tensor output
+                return Tensor::make_lazy_tensor(input_tensors, lazy_op, output_specs[0]);
+                // return Tensor::make_lazy_tensor(input_tensors, nullptr, output_specs);
+            } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
+                // Multiple tensor outputs (vector)
+                return Tensor::make_lazy_tensors(input_tensors, lazy_op, output_specs);
+                // return Tensor::make_lazy_tensors(input_tensors, nullptr, output_specs);
+            }
+        } else {
+            // TODO: Should fail
+            log_warning(
+                tt::LogOp,
+                "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
+                std::string{cpp_fully_qualified_name},
+                tt::stl::get_type_name<tensor_return_value_t>());
+            return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensor_args);
+        }
+    }
 };
 
 template <reflect::fixed_string cpp_fully_qualified_name>

@@ -34,6 +34,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/experimental/jit/evaluation_manager.hpp"
 
 using LazyTensor = ttnn::experimental::jit::LazyTensor;
 
@@ -297,10 +298,7 @@ std::vector<Tensor> Tensor::make_lazy_tensors(
 
 const LazyTensor& Tensor::lazy() const { return lazy_tensor_; }
 
-void Tensor::materialize() {
-    // TODO: this should go through dependency graph and materialize all dependencies first
-    lazy_tensor_.materialize();
-}
+void Tensor::materialize() { ttnn::experimental::jit::evaluate(lazy_tensor_); }
 
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,

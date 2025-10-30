@@ -120,43 +120,31 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
 
     // Apply unary operations - these should be captured lazily
     log_info(tt::LogTest, "Applying unary operations in lazy mode...");
-    const auto relu_output = ttnn::relu(input_tensor);
-    const auto exp_output = ttnn::exp(relu_output);
-    const auto sqrt_output = ttnn::sqrt(exp_output);
+    auto relu_output = ttnn::relu(input_tensor);
+    auto exp_output = ttnn::exp(relu_output);
+    auto sqrt_output = ttnn::sqrt(exp_output);
 
-    // // Check that we have captured 3 operations
-    // ASSERT_EQ(context.size(), 3) << "Expected 3 nodes in lazy graph";
-    // log_info(tt::LogTest, "Lazy graph size: {} nodes", context.size());
+    sqrt_output.materialize();
+    auto lazy_result = sqrt_output.cpu();
 
-    // // Now execute the lazy graph
-    // log_info(tt::LogTest, "Executing lazy graph...");
-    // context.execute_node(sqrt_output.producer_node());
+    ttnn::experimental::jit::disable();
+    ASSERT_FALSE(ttnn::experimental::jit::is_lazy_enabled()) << "Lazy mode should be disabled";
 
-    // // Get the materialized tensor and bring it to host for comparison
-    // const auto materialized_output = context.get_materialized_tensor(sqrt_output);
-    // const auto lazy_result = ttnn::from_device(materialized_output);
+    // Run the same operations in eager mode
+    log_info(tt::LogTest, "Running same operations in eager mode for verification...");
+    auto input_tensor_eager = Tensor::from_vector(data, spec, device_);
+    auto relu_eager = ttnn::relu(input_tensor_eager);
+    auto exp_eager = ttnn::exp(relu_eager);
+    auto sqrt_eager = ttnn::sqrt(exp_eager);
+    auto eager_result = sqrt_eager.cpu();
 
-    // // Clear the lazy graph and disable lazy mode
-    // context.clear();
-    // ttnn::lazy_mode::disable();
-    // ASSERT_FALSE(ttnn::lazy_mode::is_lazy_enabled()) << "Lazy mode should be disabled";
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
 
-    // // Run the same operations in eager mode
-    // log_info(tt::LogTest, "Running same operations in eager mode for verification...");
-    // // Create the same input data for eager mode
-    // const auto input_tensor_eager = Tensor::from_vector(data, spec, device_);
-    // const auto relu_eager = ttnn::relu(input_tensor_eager);
-    // const auto exp_eager = ttnn::exp(relu_eager);
-    // const auto sqrt_eager = ttnn::sqrt(exp_eager);
-    // const auto eager_result = ttnn::from_device(sqrt_eager);
-
-    // // Compare results
-    // log_info(tt::LogTest, "Comparing lazy and eager results...");
-    // ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
-    //     << "Lazy and eager execution results should match";
-
-    // log_info(tt::LogTest, "✓ Lazy and eager results match!");
-    // log_info(tt::LogTest, "==== Finished SimpleUnaryOperationsLazy test ====");
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished SimpleUnaryOperationsLazy test ====");
 }
 
 // // Test: Binary operations in lazy mode with verification

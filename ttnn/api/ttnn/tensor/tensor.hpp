@@ -4,10 +4,7 @@
 
 #pragma once
 
-#include <array>
-#include <random>
 #include <tuple>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -31,12 +28,15 @@
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
-#include "ttnn/tensor/metal_tensor.hpp"
 #include "ttnn/experimental/jit/lazy_tensor.hpp"
 
 namespace tt {
 
 namespace tt_metal {
+
+namespace metal_tensor {
+class Tensor;
+}
 
 class Tensor {
 public:
