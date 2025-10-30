@@ -279,8 +279,8 @@ void JitBuildEnv::init(
     // Firmware build path is a combination of build_key and fw_compile_hash
     // If either change, the firmware build path will change and FW will be rebuilt
     // if it's not already in MetalContext::firmware_built_keys_
-    this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key, fw_compile_hash);
-    this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key);
+    this->out_firmware_root_ = fmt::format("{}{}/firmware/{}/", this->out_root_, build_key_, fw_compile_hash);
+    this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
