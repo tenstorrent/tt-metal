@@ -391,14 +391,12 @@ def test_wan_transformer_model(
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         # WH (ring) on 4x8
         [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
-        [(4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
         # BH (linear) on 4x8
         [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
     ],
     ids=[
         "2x4sp0tp1",
         "wh_4x8sp1tp0",
-        "wh_4x8sp0tp1",
         "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],

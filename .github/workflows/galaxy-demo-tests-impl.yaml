@@ -38,6 +38,7 @@ jobs:
           { name: "Galaxy Flux.1-dev demo tests", arch: wormhole_b0, model: flux1, timeout: 30, owner_id: U08TED0JM9D}, # Samuel Adesoye
           { name: "Galaxy GPT-OSS demo tests", arch: wormhole_b0, model: gpt-oss, timeout: 30, owner_id: U06F3ER8X9A}, # Stuti Raizada
           { name: "Galaxy Wan2.2 demo tests", arch: wormhole_b0, model: wan22, timeout: 30, owner_id: U03FJB5TM5Y}, # Colman Glagovich
+          { name: "Galaxy Mochi demo tests", arch: wormhole_b0, model: mochi, timeout: 30, owner_id: U09ELB03XRU}, # Stephen Osborne
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
