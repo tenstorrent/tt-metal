@@ -10,6 +10,100 @@
 
 namespace ttnn::operations::ternary {
 
+static ttnn::Shape compute_broadcasted_output_ternary(
+    const ttnn::Shape& a_shape, const ttnn::Shape& b_shape, const ttnn::Shape& c_shape) {
+    const int rank_a = a_shape.rank();
+    const int rank_b = b_shape.rank();
+    const int rank_c = c_shape.rank();
+    const int largest_rank = std::max({rank_a, rank_b, rank_c});
+
+    SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+    for (int i = -1; i >= -largest_rank; --i) {
+        auto dim_a = (i >= -rank_a) ? a_shape[i] : 1;
+        auto dim_b = (i >= -rank_b) ? b_shape[i] : 1;
+        auto dim_c = (i >= -rank_c) ? c_shape[i] : 1;
+
+        uint32_t max_dim = 1;
+        if (dim_a != 1) {
+            max_dim = std::max(max_dim, dim_a);
+        }
+        if (dim_b != 1) {
+            max_dim = std::max(max_dim, dim_b);
+        }
+        if (dim_c != 1) {
+            max_dim = std::max(max_dim, dim_c);
+        }
+
+        bool compatible = true;
+        if (dim_a != 1 && dim_a != max_dim) {
+            compatible = false;
+        }
+        if (dim_b != 1 && dim_b != max_dim) {
+            compatible = false;
+        }
+        if (dim_c != 1 && dim_c != max_dim) {
+            compatible = false;
+        }
+
+        TT_FATAL(
+            compatible,
+            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}, dim c: {}",
+            i,
+            dim_a,
+            dim_b,
+            dim_c);
+
+        if (i <= -6) {
+            TT_FATAL(
+                dim_a == dim_b && dim_b == dim_c,
+                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
+                "dim a: {}, dim b: {}, dim c: {}",
+                i,
+                dim_a,
+                dim_b,
+                dim_c);
+        }
+
+        output_shape[i + largest_rank] = max_dim;
+    }
+    return ttnn::Shape(output_shape);
+}
+
+static ttnn::Shape compute_broadcasted_output_binary(const ttnn::Shape& a_shape, const ttnn::Shape& b_shape) {
+    const int rank_a = a_shape.rank();
+    const int rank_b = b_shape.rank();
+    const int largest_rank = std::max(rank_a, rank_b);
+    SmallVector<uint32_t> output_shape(largest_rank, 1);
+
+    for (int i = -1; i >= -largest_rank; --i) {
+        auto a_dim = (i >= -rank_a) ? a_shape[i] : 1;
+        auto b_dim = (i >= -rank_b) ? b_shape[i] : 1;
+
+        TT_FATAL(
+            a_dim == b_dim || a_dim == 1 || b_dim == 1,
+            "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
+            i,
+            a_dim,
+            b_dim);
+
+        if (i <= -6) {
+            TT_FATAL(
+                a_dim == b_dim,
+                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: "
+                "{}, "
+                "dim b: {}",
+                i,
+                a_dim,
+                b_dim);
+        }
+
+        uint32_t out_dim = std::max<uint32_t>(a_dim, b_dim);
+        output_shape[i + largest_rank] = out_dim;
+    }
+    return ttnn::Shape(output_shape);
+}
+
 DataType TernaryDeviceOperation::operation_attributes_t::get_dtype() const { return dtype.value_or(input_dtype); }
 
 TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program_factory(
@@ -139,99 +233,6 @@ TensorSpec TernaryDeviceOperation::compute_output_specs(
         return TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
-
-    const auto compute_broadcasted_output_ternary = [&](const auto& a_shape, const auto& b_shape, const auto& c_shape) {
-        const int rank_a = a_shape.rank();
-        const int rank_b = b_shape.rank();
-        const int rank_c = c_shape.rank();
-        const int largest_rank = std::max({rank_a, rank_b, rank_c});
-
-        SmallVector<uint32_t> output_shape(largest_rank, 1);
-
-        for (int i = -1; i >= -largest_rank; --i) {
-            auto dim_a = (i >= -rank_a) ? a_shape[i] : 1;
-            auto dim_b = (i >= -rank_b) ? b_shape[i] : 1;
-            auto dim_c = (i >= -rank_c) ? c_shape[i] : 1;
-
-            uint32_t max_dim = 1;
-            if (dim_a != 1) {
-                max_dim = std::max(max_dim, dim_a);
-            }
-            if (dim_b != 1) {
-                max_dim = std::max(max_dim, dim_b);
-            }
-            if (dim_c != 1) {
-                max_dim = std::max(max_dim, dim_c);
-            }
-
-            bool compatible = true;
-            if (dim_a != 1 && dim_a != max_dim) {
-                compatible = false;
-            }
-            if (dim_b != 1 && dim_b != max_dim) {
-                compatible = false;
-            }
-            if (dim_c != 1 && dim_c != max_dim) {
-                compatible = false;
-            }
-
-            TT_FATAL(
-                compatible,
-                "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}, dim c: {}",
-                i,
-                dim_a,
-                dim_b,
-                dim_c);
-
-            if (i <= -6) {
-                TT_FATAL(
-                    dim_a == dim_b && dim_b == dim_c,
-                    "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, "
-                    "dim a: {}, dim b: {}, dim c: {}",
-                    i,
-                    dim_a,
-                    dim_b,
-                    dim_c);
-            }
-
-            output_shape[i + largest_rank] = max_dim;
-        }
-        return ttnn::Shape(output_shape);
-    };
-
-    const auto compute_broadcasted_output_binary = [&](const auto& a_shape, const auto& b_shape) {
-        const int rank_a = a_shape.rank();
-        const int rank_b = b_shape.rank();
-        const int largest_rank = std::max(rank_a, rank_b);
-        SmallVector<uint32_t> output_shape(largest_rank, 1);
-
-        for (int i = -1; i >= -largest_rank; --i) {
-            auto a_dim = (i >= -rank_a) ? a_shape[i] : 1;
-            auto b_dim = (i >= -rank_b) ? b_shape[i] : 1;
-
-            TT_FATAL(
-                a_dim == b_dim || a_dim == 1 || b_dim == 1,
-                "Broadcasting rule violation for rank {}, dim a: {}, dim b: {}",
-                i,
-                a_dim,
-                b_dim);
-
-            if (i <= -6) {
-                TT_FATAL(
-                    a_dim == b_dim,
-                    "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: "
-                    "{}, "
-                    "dim b: {}",
-                    i,
-                    a_dim,
-                    b_dim);
-            }
-
-            uint32_t out_dim = std::max<uint32_t>(a_dim, b_dim);
-            output_shape[i + largest_rank] = out_dim;
-        }
-        return ttnn::Shape(output_shape);
-    };
 
     if (args.ternary_variant == TernaryVariant::TTT) {
         auto a_shape = tensor_args.input_tensor_a.logical_shape();
