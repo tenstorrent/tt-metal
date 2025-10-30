@@ -68,6 +68,7 @@ class HostValidatedRMSNorm:
             Metric.MEAN_ABS_ERROR: 1e-3,
             "pcc": 0.99,  # can use enum or their string values
         },
+        enabled=True,
     )
     def __call__(self, x):
         # x shape: [1, seq_len, hidden_size]
