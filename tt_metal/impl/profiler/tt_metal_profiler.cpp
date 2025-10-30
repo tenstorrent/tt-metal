@@ -564,7 +564,7 @@ void syncAllDevices(ChipId host_connected_device) {
     setSyncInfo(host_connected_device, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
 }
 
-std::optional<ChipId> get_unvisited_device(std::map<ChipId, bool>& visited_map) {
+std::optional<ChipId> GetUnvisitedDevice(std::map<ChipId, bool>& visited_map) {
     for (auto [device, visited] : visited_map) {
         if (!visited) {
             return device;
@@ -603,7 +603,7 @@ void ProfilerSync(ProfilerSyncState state) {
         }
         std::queue<ChipId> device_queue;
         while (true) {
-            auto root_device = get_unvisited_device(visited);
+            auto root_device = GetUnvisitedDevice(visited);
             if (!root_device.has_value()) {
                 break;
             }
