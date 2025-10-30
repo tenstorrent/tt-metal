@@ -46,7 +46,13 @@ public:
 
     Metric(MetricUnit metric_units = MetricUnit::UNITLESS) : units(metric_units) {}
 
+    Metric(std::vector<std::string> path, MetricUnit metric_units = MetricUnit::UNITLESS) :
+        units(metric_units), custom_path_(std::move(path)) {}
+
     virtual const std::vector<std::string> telemetry_path() const {
+        if (!custom_path_.empty()) {
+            return custom_path_;
+        }
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
 
@@ -73,51 +79,38 @@ public:
     }
 
 protected:
+    void set_timestamp_now() {
+        timestamp_ =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+    }
+
     bool changed_since_transmission_ = false;
     uint64_t timestamp_ = 0;  // Unix timestamp in milliseconds, 0 = never set
+
+private:
+    std::vector<std::string> custom_path_;
 };
 
 class BoolMetric: public Metric {
 public:
     BoolMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
+    BoolMetric(std::vector<std::string> path, MetricUnit metric_units = MetricUnit::UNITLESS) :
+        Metric(std::move(path), metric_units) {}
+
     bool value() const {
         return value_;
     }
 
-protected:
-    bool value_ = false;
-};
-
-// System-level boolean metric with labels (for host health, not device metrics)
-class SystemBoolMetric : public BoolMetric {
-public:
-    SystemBoolMetric(
-        std::string_view name,
-        const std::unordered_map<std::string, std::string>& labels = {},
-        MetricUnit metric_units = MetricUnit::UNITLESS) :
-        BoolMetric(metric_units), name_(name), labels_(labels) {}
-
     void set_value(bool value) {
         value_ = value;
         changed_since_transmission_ = true;
-        timestamp_ =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-                .count();
+        set_timestamp_now();
     }
 
-    void set_labels(const std::unordered_map<std::string, std::string>& labels) {
-        labels_ = labels;
-        changed_since_transmission_ = true;
-    }
-
-    std::string_view name() const { return name_; }
-
-    const std::unordered_map<std::string, std::string>& labels() const { return labels_; }
-
-private:
-    std::string name_;
-    std::unordered_map<std::string, std::string> labels_;
+protected:
+    bool value_ = false;
 };
 
 class UIntMetric: public Metric {
@@ -126,6 +119,12 @@ public:
 
     uint64_t value() const {
         return value_;
+    }
+
+    void set_value(uint64_t value) {
+        value_ = value;
+        changed_since_transmission_ = true;
+        set_timestamp_now();
     }
 
 protected:
@@ -137,6 +136,12 @@ public:
     DoubleMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     double value() const { return value_; }
+
+    void set_value(double value) {
+        value_ = value;
+        changed_since_transmission_ = true;
+        set_timestamp_now();
+    }
 
 protected:
     double value_ = 0.0;

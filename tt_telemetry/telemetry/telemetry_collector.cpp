@@ -11,6 +11,7 @@
 
 #include <functional>
 #include <future>
+#include <optional>
 #include <queue>
 #include <unistd.h>
 
@@ -32,6 +33,17 @@
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 
+// Helper function to format a future time point as a readable string
+static std::string format_end_time(std::chrono::seconds duration_from_now) {
+    auto end_time_system = std::chrono::system_clock::now() + duration_from_now;
+    auto end_time_t = std::chrono::system_clock::to_time_t(end_time_system);
+    std::tm tm_buf;
+    localtime_r(&end_time_t, &tm_buf);
+    char time_str[32];
+    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
+    return std::string(time_str);
+}
+
 static std::mutex mtx_;
 static std::queue<TelemetrySnapshot*> available_buffers_;
 
@@ -43,8 +55,8 @@ static std::vector<std::unique_ptr<BoolMetric>> bool_metrics_;
 static std::vector<std::unique_ptr<UIntMetric>> uint_metrics_;
 static std::vector<std::unique_ptr<DoubleMetric>> double_metrics_;
 
-// System-level metrics (host health, not device telemetry)
-static std::vector<std::unique_ptr<SystemBoolMetric>> system_bool_metrics_;
+// System-level metrics (host health, not device telemetry) - stored separately for initialization control
+static std::vector<std::unique_ptr<BoolMetric>> system_bool_metrics_;
 
 // Unbounded queue for storing received telemetry snapshots from aggregate endpoints
 static SimpleConcurrentQueue<std::pair<std::string, TelemetrySnapshot>> received_snapshots_;
@@ -187,6 +199,13 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
 static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
 
+    // Include system metrics in initial snapshot
+    for (size_t i = 0; i < system_bool_metrics_.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*system_bool_metrics_[i]);
+        snapshot->bool_metrics[path] = system_bool_metrics_[i]->value();
+        snapshot->bool_metric_timestamps[path] = system_bool_metrics_[i]->timestamp();
+    }
+
     for (size_t i = 0; i < bool_metrics_.size(); i++) {
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
         snapshot->bool_metrics[path] = bool_metrics_[i]->value();
@@ -216,23 +235,15 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     }
 }
 
-// Helper to build system metric path with labels embedded
-static std::string get_system_metric_path_with_labels(const SystemBoolMetric& metric) {
-    // Format: hostname/system/MetricName
-    // Labels will be added by prom_formatter from the metric's label map
-    return std::string(hostname_) + "/system/" + metric.name();
-}
-
 static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<TelemetrySnapshot> snapshot) {
     // Update system metrics
     for (size_t i = 0; i < system_bool_metrics_.size(); i++) {
         if (!system_bool_metrics_[i]->changed_since_transmission()) {
             continue;
         }
-        std::string path = get_system_metric_path_with_labels(*system_bool_metrics_[i]);
-        snapshot->system_bool_metrics[path] = system_bool_metrics_[i]->value();
-        snapshot->system_bool_metric_labels[path] = system_bool_metrics_[i]->labels();
-        snapshot->system_bool_metric_timestamps[path] = system_bool_metrics_[i]->timestamp();
+        std::string path = get_cluster_wide_telemetry_path(*system_bool_metrics_[i]);
+        snapshot->bool_metrics[path] = system_bool_metrics_[i]->value();
+        snapshot->bool_metric_timestamps[path] = system_bool_metrics_[i]->timestamp();
         system_bool_metrics_[i]->mark_transmitted();
     }
 
@@ -294,7 +305,8 @@ static void telemetry_thread(
             MONITOR_INTERVAL_SECONDS.count());
 
         // Create TelemetryRunning system metric BEFORE UMD initialization
-        system_bool_metrics_.push_back(std::make_unique<SystemBoolMetric>("TelemetryRunning"));
+        system_bool_metrics_.push_back(
+            std::make_unique<BoolMetric>(std::vector<std::string>{"system", "TelemetryRunning"}));
         system_bool_metrics_.back()->set_value(false);  // Initially not running
 
         // Keep reference for updates (safe since vector never removes elements)
@@ -304,6 +316,9 @@ static void telemetry_thread(
         std::unique_ptr<tt::tt_metal::Hal> hal;
         std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
         std::unique_ptr<TopologyHelper> topology_translation;
+
+        // End time for main loop (std::nullopt means run forever)
+        std::optional<std::chrono::steady_clock::time_point> loop_end_time;
 
         if (telemetry_enabled) {
             try {
@@ -328,52 +343,18 @@ static void telemetry_thread(
             } catch (const std::exception& e) {
                 log_fatal(tt::LogAlways, "UMD initialization failed: {}", e.what());
 
-                // Update TelemetryRunning metric to failure state
-                // Error details are logged above and available in application logs
+                // Mark telemetry as failed
                 telemetry_running.set_value(false);
 
-                // Run failure exposure loop to allow Prometheus to scrape the failure state
-                auto failure_start = std::chrono::steady_clock::now();
+                // Set end time for failure exposure period
                 auto failure_duration = std::chrono::seconds(failure_exposure_duration_seconds);
-                auto failure_end = failure_start + failure_duration;
-
-                // Calculate end time as system_clock time for display
-                auto now_system = std::chrono::system_clock::now();
-                auto end_time_system = now_system + failure_duration;
-                auto end_time_t = std::chrono::system_clock::to_time_t(end_time_system);
-                std::tm tm_buf;
-                localtime_r(&end_time_t, &tm_buf);
-                char time_str[32];
-                std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
+                loop_end_time = std::chrono::steady_clock::now() + failure_duration;
 
                 log_info(
                     tt::LogAlways,
                     "Exposing failure metric for {} seconds (until approximately {})",
                     failure_exposure_duration_seconds,
-                    time_str);
-
-                // Create collection clients so aggregators can still connect
-                CollectionClients collection_clients(aggregate_endpoints, on_snapshot_received);
-
-                int iteration = 0;
-
-                while (std::chrono::steady_clock::now() < failure_end) {
-                    std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
-
-                    // Send failure metric to subscribers
-                    std::shared_ptr<TelemetrySnapshot> failure_snapshot = get_writeable_buffer();
-                    update_delta_snapshot_with_local_telemetry(failure_snapshot);
-
-                    for (auto& subscriber : subscribers) {
-                        subscriber->on_telemetry_ready(failure_snapshot);
-                    }
-
-                    log_debug(tt::LogAlways, "Sent failure metric snapshot (iteration {})", ++iteration);
-                    watchdog.heartbeat();
-                }
-
-                log_fatal(tt::LogAlways, "Failure exposure period complete, exiting to allow orchestrator restart");
-                throw std::runtime_error("UMD initialization failed - telemetry unavailable");
+                    format_end_time(failure_duration));
             }
         } else {
             // Telemetry disabled - metric remains false (not running)
@@ -395,7 +376,12 @@ static void telemetry_thread(
         watchdog.heartbeat();
 
         // Main telemetry monitoring loop
-        while (!stopped_.load()) {
+        // Continue until stopped or end time reached (if set)
+        auto should_continue = [&]() {
+            return !stopped_.load() &&
+                   (!loop_end_time.has_value() || std::chrono::steady_clock::now() < loop_end_time.value());
+        };
+        while (should_continue()) {
             try {
                 std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
 
@@ -422,6 +408,12 @@ static void telemetry_thread(
             } catch (...) {
                 log_fatal(tt::LogAlways, "Unknown exception in telemetry monitoring loop");
             }
+        }
+
+        // If we exited due to end time (failure exposure complete), throw to exit process
+        if (loop_end_time.has_value()) {
+            log_fatal(tt::LogAlways, "Failure exposure period complete, exiting to allow orchestrator restart");
+            throw std::runtime_error("UMD initialization failed - telemetry unavailable");
         }
     } catch (const std::exception& e) {
         log_fatal(tt::LogAlways, "Fatal exception during telemetry thread initialization: {}", e.what());
