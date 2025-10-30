@@ -264,6 +264,15 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
             // TODO #24995: This should be derived from the expected tensor/socket configuration
             uint32_t bank_id = 0;
+            if (socket_storage_in_dram) {
+                // Assign DRAM banks in round-robin for each receiver core
+                auto num_dram_banks = target_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+                bank_id = core_idx % num_dram_banks;
+            } else {
+                // L1 mode: use logical core mapping
+                bank_id = target_device->allocator()->get_bank_ids_from_logical_core(
+                    mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
+            }
 
             std::vector<uint32_t> reader_rt_args = {
                 mesh_socket.get_config_buffer()->address(),  // socket_config_addr
