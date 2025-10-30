@@ -61,10 +61,7 @@ def run_send_recv_test(
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "per_chip_shape",
-    [
-        ([1, 1, 32, 4096]),
-        ([1, 1, 64, 8192]),
-    ],
+    [([1, 1, 32, 4096]), ([1, 1, 64, 8192])],
 )
 @pytest.mark.parametrize(
     "layout",
@@ -89,7 +86,7 @@ def run_send_recv_test(
 @pytest.mark.parametrize(
     "socket_storage_type",
     [
-        # ttnn.BufferType.DRAM,
+        ttnn.BufferType.DRAM,
         ttnn.BufferType.L1,
     ],
 )
