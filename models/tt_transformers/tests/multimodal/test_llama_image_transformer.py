@@ -96,16 +96,36 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     reference_model = model.model.vision_model.eval()
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
+    # the following part is checking if the loaded weights have the same values and arangement in memory
+    # keep in mind that rope is not applied by model definition on the vision branch
+    loaded_hf_weights = model.state_dict()
+    vision_keys = [k for k in loaded_hf_weights.keys() if "vision" and "transformer" in k]
+    replacements = {
+        "layers": "resblocks",
+        "self_attn.q_proj": "attn.wq",
+        "self_attn.k_proj": "attn.wk",
+        "self_attn.v_proj": "attn.wv",
+        "self_attn.o_proj": "attn.wo",
+        "mlp.fc1": "mlp.c_fc",
+        "mlp.fc2": "mlp.c_proj",
+        "input_layernorm": "ln_1",
+        "post_attention_layernorm": "ln_2",
+    }
+    rename_layers = lambda s: [s := s.replace(old, new) for old, new in replacements.items()] and s
+    hf_vision_dict = {rename_layers(k[len("model.vision_model.") :]): loaded_hf_weights.pop(k) for k in vision_keys}
 
-    for id_b, block in enumerate(callable_reference.layers):
-        for l_name, _ in block.named_parameters():
-            print(l_name)
-        callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
-            partial_state_dict["transformer.resblocks.{}.attn.wq.weight".format(id_b)]
-        )
-        callable_reference.layers[id_b].self_attn.k_proj.weight = torch.nn.Parameter(
-            partial_state_dict["transformer.resblocks.{}.attn.wk.weight".format(id_b)]
-        )
+    if len(hf_vision_dict.keys() - partial_state_dict.keys() & partial_state_dict.keys() - hf_vision_dict.keys()):
+        logger.info("Layers do not match")
+
+    value_differences = {
+        k: torch.max(torch.abs(hf_vision_dict[k] - partial_state_dict[k]))
+        for k in hf_vision_dict.keys() & partial_state_dict.keys()
+        if torch.max(torch.abs(hf_vision_dict[k] - partial_state_dict[k])) > 0
+    }
+    if len(value_differences) > 0:
+        logger.info("weight deviations found")
+        for k, v in value_differences.items():
+            logger.info(f"found in layer {k} and absolute difference {v}")
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageTransformer(
@@ -167,7 +187,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tt_out = tt_out.reshape(batch, num_chunks, ntok + npadtt, dim)
         tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
-
+        # below the same input to tt model is inputed to reference HF model
         tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             :, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
