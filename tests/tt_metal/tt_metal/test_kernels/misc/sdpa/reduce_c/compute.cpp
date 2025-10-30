@@ -17,7 +17,7 @@ void MAIN {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t do_eltwise = get_compile_time_arg_val(6);
 
-    // Init compute?
+    // Init compute
     mm_init(qk_im_cb, qk_im_cb, qk_im_cb);
 
     // Inputs: qk_im (rows * cols tiles), prev_max (rows tiles if used), scale (1 tile)
