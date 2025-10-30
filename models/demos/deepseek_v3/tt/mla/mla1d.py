@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -783,6 +784,7 @@ class MLA1D(AbstractModule):
             Output tensor after MLA computation
 
         """
+        logger.info("calling MLA1D forward decode")
         _, mla_tp_factor = mesh_shape = cfg["mesh_shape"]
 
         num_heads = cfg["num_heads"]
@@ -939,6 +941,7 @@ class MLA1D(AbstractModule):
         v_out = ttnn.linear(attn_out, **cfg["wkv_b2"])  # [1, num_heads_local, bsz, v_head_dim]
 
         # wo
+        logger.info("calling all_gather_async wo_ag_decode")
         v_out = ttnn.experimental.all_gather_async(
             v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
         )  # [1, num_heads, bsz, v_head_dim]
@@ -951,6 +954,7 @@ class MLA1D(AbstractModule):
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
 
+        logger.info(f"returning MLA1D out forward decode {out.shape}")
         return out
 
     @classmethod

@@ -5,6 +5,7 @@ from abc import abstractmethod
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -102,6 +103,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
     @classmethod
     @abstractmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        logger.info("calling MoE forward decode")
         mlp_out = MoE.forward_decode(x, cfg["moe"])
         mlp_out += SharedExpert.forward_decode(x, cfg["shared_expert"])
         return mlp_out

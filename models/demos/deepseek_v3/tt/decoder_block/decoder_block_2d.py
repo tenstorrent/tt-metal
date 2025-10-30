@@ -4,6 +4,7 @@
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -70,4 +71,5 @@ class DecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        logger.info("calling NonExpert forward decode")
         return NonExpert.forward_decode(x, cfg)

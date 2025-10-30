@@ -73,6 +73,11 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Print generated tokens for the first user token as they are produced, instead of waiting until the end.",
     )
+    p.add_argument(
+        "--enable-trace",
+        action="store_true",
+        help=("Enable tracing for decode. No separate code path; tracing is passed to the generator."),
+    )
     return p
 
 
@@ -127,6 +132,7 @@ def run_demo(
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
+    enable_trace: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -149,7 +155,12 @@ def run_demo(
     logger.info("Setting fabric config to FABRIC_1D for demo run")
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     logger.info(f"Opening mesh device with shape {mesh_shape}")
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    if enable_trace:
+        trace_region_size = 30000000
+        logger.info(f"Enabling trace for demo run with trace region size = {trace_region_size}")
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+    else:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
@@ -192,6 +203,7 @@ def run_demo(
             dense_layers=(1 if random_weights and single_layer else None),
             override_num_layers=(1 if random_weights else None),
             single_layer=(single_layer if random_weights else None),
+            enable_trace=enable_trace,
         )
         # Build the prompt list
         if random_weights:
@@ -253,6 +265,7 @@ def main() -> None:
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
+        enable_trace=args.enable_trace,
     )
 
     print("\n===== Generated =====\n")
@@ -291,6 +304,7 @@ def main() -> None:
         logger.info(f"Decode tokens/sec/user: {statistics['decode_t/s/u']:.2f}")
         logger.info(f"Decode tokens/sec (total): {statistics['decode_t/s']:.2f}")
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
+        logger.info(f"Throughput: {statistics['throughput']:.2f} tokens/s")
 
 
 if __name__ == "__main__":

@@ -69,6 +69,7 @@ class DeepseekGenerator:
         dense_layers: int | None = None,
         override_num_layers: int | None = None,
         single_layer: str | None = None,
+        enable_trace: bool = False,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
@@ -80,6 +81,10 @@ class DeepseekGenerator:
         )
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
+        self.hf_config.num_hidden_layers = 5
+        logger.info("================================================")
+        logger.info(f"hf_config.num_hidden_layers: {self.hf_config.num_hidden_layers}")
+        logger.info("================================================")
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -112,10 +117,16 @@ class DeepseekGenerator:
             )
             for _ in range(self.hf_config.num_hidden_layers)
         )
-        for page_table in self.page_tables_tt:
-            logger.info(f"page_table shape: {page_table.shape}")
         self.random_weights = random_weights
         self.single_layer = single_layer
+
+        # Trace state (decode)
+        self._trace_id: int | None = None
+        self._trace_tokens: ttnn.Tensor | None = None
+        self._trace_positions: ttnn.Tensor | None = None
+        self._trace_output: ttnn.Tensor | None = None
+        self.enable_trace = enable_trace
+        logger.info(f"Enable trace: {self.enable_trace}")
         self._prepare_weight_configs(cache_dir)
 
     @staticmethod
@@ -536,17 +547,15 @@ class DeepseekGenerator:
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
 
         # Prefill via repeated decode steps over prompt tokens
-        profiler.start("inference_prefill")
+        profiler.start("inference_run")
+        profiler.start("time_to_token")
         positions = torch.zeros(self.batch_size, dtype=torch.int32)
         last_logits = None
 
         for step in range(tokens_batched.shape[1]):
             step_tokens = tokens_batched[:, step]  # [B]
-            last_logits = (
-                self._decode_step(step_tokens, positions, batch_size_per_row=self.batch_size_per_row)
-                .squeeze(0)
-                .squeeze(0)
-            )
+            # TODO: Remove tracing from the prefill
+            last_logits = self.decode_forward(step_tokens, positions, self.batch_size_per_row, enable_trace=False)
             positions += 1
 
         assert last_logits is not None
@@ -576,7 +585,9 @@ class DeepseekGenerator:
             # Decode one step with previous next_tokens
             logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
             profiler.start(f"decode_time_{gen_idx}")
-            logits = self._decode_step(next_tokens, positions, self.batch_size_per_row).squeeze(0).squeeze(0)
+            logits = self.decode_forward(
+                next_tokens, positions, self.batch_size_per_row, enable_trace=self.enable_trace
+            )
             profiler.end(f"decode_time_{gen_idx}")
 
             pred_tokens = self._sample_greedy(logits)
@@ -595,6 +606,7 @@ class DeepseekGenerator:
 
         profiler.end("inference_decode")
         profiler.end("run")
+        profiler.end("inference_run")
 
         if early_print_first_user:
             logger.info("\n===== Done =====")
@@ -606,7 +618,7 @@ class DeepseekGenerator:
         # Get config preparation times
         prefill_config_time = profiler.get_duration("preparing_prefill_config")
         decode_config_time = profiler.get_duration("preparing_decode_config")
-
+        inference_run_time = profiler.get_duration("inference_run")
         # Average prompt length for prefill calculation
         avg_prompt_len = float(lengths[0] if len(lengths) > 0 else 0)
 
@@ -634,6 +646,7 @@ class DeepseekGenerator:
             "decode_t/s/u": decode_tokens_per_sec_per_user,
             "decode_t/s": decode_tokens_per_sec,
             "Full demo runtime": profiler.get_duration("run"),
+            "throughput": max_new_tokens * USERS_PER_ROW * self.dp_factor / inference_run_time,
         }
 
         return generations, statistics
@@ -657,6 +670,100 @@ class DeepseekGenerator:
         if vocab > 1:
             out.append(1)
         return out
+
+    def _capture_decode_trace(
+        self, init_tokens: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int
+    ) -> None:
+        """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
+        assert self._trace_id is None, "Trace already captured"
+
+        # 1) Warm-up compile run (no trace) to keep compilation out of capture
+        logger.info("Running warm-up decode step (no trace)...")
+        _ = self._decode_step(init_tokens, positions, batch_size_per_row=batch_size_per_row)
+
+        # 2) Allocate persistent device inputs
+        self._trace_tokens = self._tt_from_tokens_step(init_tokens)
+
+        # Positions buffer shape
+        self._trace_positions = ttnn.from_torch(
+            positions,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            dtype=ttnn.int32,
+        )
+
+        # 3) Capture decode graph
+        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
+
+        logger.info("========================Begin capturing decode trace... ================================")
+        self.ccl.reset_ccl_counters()
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        logger.info(
+            "========================Begin capturing decode trace...returned from ttnn api ================================"
+        )
+        # breakpoint()
+        logger.info("calling model1d forward decode")
+        self._trace_output = RowBatchedModel.forward_decode(
+            x=self._trace_tokens,
+            position_idxs=self._trace_positions,
+            rope_tensors=rope_tensors,
+            page_tables=self.page_tables_tt,
+            cfg=self.model_run_config_decode,
+        )
+        logger.info("========================calling end_trace_capture ================================")
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("========================Decode trace capture complete. ================================")
+        self._trace_id = trace_id
+
+    def decode_forward(
+        self, tokens: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int, enable_trace: bool = False
+    ) -> torch.Tensor:
+        if not enable_trace:
+            return self._decode_step(tokens, positions, batch_size_per_row).squeeze(0).squeeze(0)
+        else:
+            # Capture trace and return trace output
+            if self._trace_id is None:
+                logger.info(f"Capturing decode trace...")
+                self._capture_decode_trace(tokens, positions, batch_size_per_row)
+                logger.info(f"Capturing decode trace...done")
+                # First call: return the captured run's output
+                assert self._trace_output is not None
+                logger.info(f"captured trace output shape: {self._trace_output.shape}")
+                logits = ttnn.to_torch(
+                    self._trace_output,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
+                    ),
+                )
+                logger.info(f"captured trace returning logits shape: {logits.shape}")
+                return logits
+
+            logger.info(f"decode trace already captured, updating persistent inputs and executing")
+            # Update persistent inputs and execute
+            assert self._trace_tokens is not None and self._trace_positions is not None and self._trace_id is not None
+            # Update tokens [1, 1, B]
+            logger.info(f"updating tokens")
+            torch_input = tokens.view(1, 1, -1).to(torch.int32)
+            ttnn.copy_host_to_device_tensor(torch_input, self._trace_tokens)
+            logger.info(f"updating positions")
+            # Update positions [B]
+            ttnn.copy_host_to_device_tensor(positions.to(torch.int32), self._trace_positions)
+            logger.info(f"resetting ccl counters")
+            self.ccl.reset_ccl_counters()
+            logger.info(f"ccl counters reset done")
+            logger.info(f"executing trace")
+            ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+            logger.info(f"trace executed")
+            assert self._trace_output is not None
+            logger.info(f"trace output shape: {self._trace_output.shape}")
+            logits = ttnn.to_torch(
+                self._trace_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
+                ),
+            )
+            logger.info(f"returning logits shape: {logits.shape}")
+            return logits
 
 
 __all__ = ["DeepseekGenerator", "SamplingParams"]

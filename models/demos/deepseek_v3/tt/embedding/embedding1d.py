@@ -4,6 +4,7 @@
 from pathlib import Path
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -176,12 +177,19 @@ class Embedding1D(AbstractModule):
 
         # TODO: remove this padding once all gather async supports subtile gathering
         # Add padding so that the batch dimension is divisible by TILE_SIZE
+        logger.info(f"forward_decode x shape: {x.shape}")
         _, _, original_seq_len = x.shape
         if original_seq_len % ttnn.TILE_SIZE == 0:
             embeddings = ttnn.embedding(x, **cfg["embedding"])
+            logger.info(
+                f"tile size is divisible by original_seq_len, forward_decode embeddings shape: {embeddings.shape}"
+            )
         else:
             x_padded = ttnn.pad(x, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - original_seq_len % ttnn.TILE_SIZE)], 0)
             embeddings = ttnn.embedding(x_padded, **cfg["embedding"])
+            logger.info(
+                f"tile size is not divisible by original_seq_len, forward_decode embeddings shape: {embeddings.shape}"
+            )
             ttnn.deallocate(x_padded)
 
         embeddings = ttnn.unsqueeze(embeddings, 0)
@@ -192,9 +200,21 @@ class Embedding1D(AbstractModule):
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
-        embeddings_ag = ttnn.experimental.all_gather_async(
-            embeddings_tc, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
+        logger.info(f"forward_decode embeddings_tc shape: {embeddings_tc.shape}")
+        all_gather_args = ccl.populate_all_gather_runtime_args(cfg["all_gather"])
+        # embeddings_ag = ttnn.all_gather_async(
+        #     embeddings_tc, **all_gather_args
+        # )
+        #
+        embeddings_ag = ttnn.all_gather(
+            input_tensor=embeddings_tc,
+            dim=all_gather_args["dim"],
+            cluster_axis=all_gather_args["cluster_axis"],
+            topology=all_gather_args["topology"],
+            num_links=all_gather_args["num_links"],
         )
+
+        logger.info(f"forward_decode embeddings_ag shape: {embeddings_ag.shape}")
         ttnn.deallocate(embeddings_tc)
 
         assert len(embeddings_ag.shape) == 4
@@ -206,4 +226,5 @@ class Embedding1D(AbstractModule):
         embeddings_ag_slice = embeddings_ag[:, :, :original_seq_len, :]
         ttnn.deallocate(embeddings_ag)
 
+        logger.info(f"forward_decode embeddings_ag_slice shape: {embeddings_ag_slice.shape}")
         return embeddings_ag_slice
