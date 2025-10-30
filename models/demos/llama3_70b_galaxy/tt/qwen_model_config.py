@@ -157,7 +157,7 @@ class TtQwenModelArgs(TtModelArgs):
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
-        max_seq_len=40960,
+        max_seq_len=128 * 1024,
         optimizations=LlamaOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
