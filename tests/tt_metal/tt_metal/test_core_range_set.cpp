@@ -43,6 +43,7 @@
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels, get_kernel
 #include "impl/program/program_impl.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -68,7 +69,7 @@ void check_program_is_mapped_to_correct_cores(
                         TT_FATAL(kernel_compile_time_args == compute_kernel_args, "Error");
                     }
                 }
-                for (const auto& cb : program.circular_buffers()) {
+                for (const auto& cb : program.impl().circular_buffers()) {
                     TT_FATAL(cb->is_on_logical_core(logical_core), "Error");
                 }
                 for (const auto& semaphore : program.impl().semaphores()) {

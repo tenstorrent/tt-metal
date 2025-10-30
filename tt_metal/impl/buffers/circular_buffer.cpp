@@ -9,6 +9,7 @@
 #include <string>
 
 #include <tt_stl/assert.hpp>
+#include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
 
@@ -177,6 +178,19 @@ void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCi
 }
 
 DeviceAddr CircularBufferImpl::config_address() const { return this->global_circular_buffer_config_address_; }
+
+// CircularBuffer wrapper implementations
+CircularBuffer::CircularBuffer(const CircularBufferImpl* impl) : impl_(impl) {}
+
+CBHandle CircularBuffer::id() const { return impl_->id(); }
+
+const CoreRangeSet& CircularBuffer::core_ranges() const { return impl_->core_ranges(); }
+
+std::size_t CircularBuffer::size() const { return impl_->size(); }
+
+bool CircularBuffer::globally_allocated() const { return impl_->globally_allocated(); }
+
+const std::unordered_set<uint8_t>& CircularBuffer::buffer_indices() const { return impl_->buffer_indices(); }
 
 }  // namespace tt_metal
 
