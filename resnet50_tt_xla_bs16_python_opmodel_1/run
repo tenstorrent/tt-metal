@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Check if TT_MLIR_HOME is set
+if [[ -z "${TT_MLIR_HOME}" ]]; then
+    echo "Error: TT_MLIR_HOME environment variable is not set"
+    exit 1
+fi
+
+# Check if TT_METAL_HOME is set
+if [[ -z "${TT_METAL_HOME}" ]]; then
+    export TT_METAL_HOME="${TT_MLIR_HOME}/third_party/tt-metal/src/tt-metal"
+    echo "TT_METAL_HOME is not set. Setting it to ${TT_METAL_HOME}"
+fi
+
+# Confirm python3 exists
+if ! command -v python3 &> /dev/null; then
+    echo "Error: python3 could not be found"
+    exit 1
+fi
+
+# Check if VIRTUAL_ENV is set
+if [[ -z "${VIRTUAL_ENV}" ]]; then
+    echo "Error: VIRTUAL_ENV environment variable is not set. Please activate your virtual environment."
+    exit 1
+fi
+
+export PYTHONPATH="${PYTHONPATH}:${TT_METAL_HOME}/ttnn"
+
+# Run main.py
+echo "Running main.py..."
+python3 main.py
