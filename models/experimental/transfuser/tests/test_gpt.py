@@ -162,7 +162,7 @@ def post_process_output_tt(
     return image_tensor_out, lidar_tensor_out
 
 
-def create_gpt_preprocessor(device, n_layer, weight_dtype=ttnn.bfloat16):
+def create_gpt_preprocessor(device, n_layer, weight_dtype=ttnn.bfloat16, use_optimized_self_attn=False):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
 
@@ -185,7 +185,7 @@ def create_gpt_preprocessor(device, n_layer, weight_dtype=ttnn.bfloat16):
             for i in range(n_layer):
                 parameters[f"blocks_{i}"] = preprocess_model_parameters(
                     initialize_model=lambda i=i: torch_model.blocks[i],  # Capture i in closure
-                    custom_preprocessor=create_gpt_block_preprocessor(device, weight_dtype),
+                    custom_preprocessor=create_gpt_block_preprocessor(device, weight_dtype, use_optimized_self_attn),
                     device=device,
                 )
 
@@ -201,6 +201,7 @@ def create_gpt_preprocessor(device, n_layer, weight_dtype=ttnn.bfloat16):
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_optimized_self_attn", [False, True])
 def test_gpt(
     device,
     n_embed,
@@ -220,6 +221,7 @@ def test_gpt(
     lidar_input_shape,
     input_dtype,
     weight_dtype,
+    use_optimized_self_attn,
 ):
     image_input = torch.randn(img_input_shape)
     lidar_input = torch.randn(lidar_input_shape)
@@ -249,7 +251,7 @@ def test_gpt(
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: ref_layer,
-        custom_preprocessor=create_gpt_preprocessor(device, n_layer, weight_dtype),
+        custom_preprocessor=create_gpt_preprocessor(device, n_layer, weight_dtype, use_optimized_self_attn),
         device=device,
     )
 

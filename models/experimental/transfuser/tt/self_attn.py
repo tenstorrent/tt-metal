@@ -16,7 +16,6 @@ class TTSelfAttention(LightweightModule):
         dtype=ttnn.bfloat16,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         compute_kernel_config=None,
-        use_optimized=True,
     ):
         self.parameters = parameters
         self.device = device
@@ -25,7 +24,7 @@ class TTSelfAttention(LightweightModule):
         self.dtype = dtype
         self.memory_config = memory_config
         self.compute_kernel_config = compute_kernel_config
-        self.use_optimized = use_optimized
+        self.use_optimized = parameters["use_optimized"]
 
     def forward(self, x):
         B, T, C = x.shape

@@ -19,7 +19,7 @@ from models.common.utility_functions import (
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
-def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16):
+def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimized_self_attn=False):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
         if hasattr(torch_model, "ln1") and hasattr(torch_model, "ln2"):
@@ -30,7 +30,7 @@ def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16):
         if hasattr(torch_model, "attn"):
             self_attn_params = preprocess_model_parameters(
                 initialize_model=lambda: torch_model.attn,
-                custom_preprocessor=create_self_attn_preprocessor(device, weight_dtype),
+                custom_preprocessor=create_self_attn_preprocessor(device, weight_dtype, use_optimized_self_attn),
                 device=device,
             )
             parameters["attn"] = self_attn_params
@@ -51,7 +51,19 @@ def create_gpt_block_preprocessor(device, weight_dtype=ttnn.bfloat16):
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
-def test_gpt_block(device, n_embed, n_head, block_exp, attn_pdrop, resid_pdrop, input_shape, input_dtype, weight_dtype):
+@pytest.mark.parametrize("use_optimized_self_attn", [False, True])  # False uses old implementation, True uses optimized
+def test_gpt_block(
+    device,
+    n_embed,
+    n_head,
+    block_exp,
+    attn_pdrop,
+    resid_pdrop,
+    input_shape,
+    input_dtype,
+    weight_dtype,
+    use_optimized_self_attn,
+):
     x = torch.randn(input_shape)
 
     ref_layer = Block(
@@ -65,7 +77,7 @@ def test_gpt_block(device, n_embed, n_head, block_exp, attn_pdrop, resid_pdrop, 
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: ref_layer,
-        custom_preprocessor=create_gpt_block_preprocessor(device, weight_dtype),
+        custom_preprocessor=create_gpt_block_preprocessor(device, weight_dtype, use_optimized_self_attn),
         device=device,
     )
     tt_layer = TTGptBlock(device, parameters, n_embed, n_head, dtype=weight_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)

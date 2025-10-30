@@ -303,6 +303,7 @@ def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[st
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_fallback", [True])
+@pytest.mark.parametrize("use_optimized_self_attn", [False, True])
 def test_lidar_center_net(
     device,
     image_architecture,
@@ -315,6 +316,7 @@ def test_lidar_center_net(
     input_dtype,
     weight_dtype,
     use_fallback,
+    use_optimized_self_attn,
 ):
     # Load the saved demo inputs
     inputs = torch.load("models/experimental/transfuser/tests/transfuser_inputs_final.pt")
@@ -406,25 +408,25 @@ def test_lidar_center_net(
     )
     gpt1_parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model.transformer1,
-        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
         device=device,
     )
     parameters["transformer1"] = gpt1_parameters
     gpt2_parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model.transformer2,
-        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
         device=device,
     )
     parameters["transformer2"] = gpt2_parameters
     gpt3_parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model.transformer3,
-        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
         device=device,
     )
     parameters["transformer3"] = gpt3_parameters
     gpt4_parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model.transformer4,
-        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+        custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
         device=device,
     )
     parameters["transformer4"] = gpt4_parameters

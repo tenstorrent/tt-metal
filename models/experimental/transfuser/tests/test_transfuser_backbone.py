@@ -100,6 +100,7 @@ class TransfuserBackboneInfra:
         lidar_input_shape,
         model_config,
         use_fallback,
+        use_optimized_self_attn,
     ):
         super().__init__()
         # self._init_seeds()
@@ -146,25 +147,25 @@ class TransfuserBackboneInfra:
         )
         gpt1_parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model.transformer1,
-            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
             device=device,
         )
         parameters["transformer1"] = gpt1_parameters
         gpt2_parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model.transformer2,
-            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
             device=device,
         )
         parameters["transformer2"] = gpt2_parameters
         gpt3_parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model.transformer3,
-            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
             device=device,
         )
         parameters["transformer3"] = gpt3_parameters
         gpt4_parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model.transformer4,
-            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16),
+            custom_preprocessor=create_gpt_preprocessor(device, n_layer, ttnn.bfloat16, use_optimized_self_attn),
             device=device,
         )
         parameters["transformer4"] = gpt4_parameters
@@ -320,6 +321,7 @@ model_config = {
     [("regnety_032", "regnety_032", 4, False, True, (1, 3, 160, 704), (1, 3, 256, 256))],
 )
 @pytest.mark.parametrize("use_fallback", [True])
+@pytest.mark.parametrize("use_optimized_self_attn", [False, True])
 def test_stem(
     device,
     image_architecture,
@@ -330,6 +332,7 @@ def test_stem(
     img_input_shape,
     lidar_input_shape,
     use_fallback,
+    use_optimized_self_attn,
 ):
     TransfuserBackboneInfra(
         device,
@@ -342,4 +345,5 @@ def test_stem(
         lidar_input_shape,
         model_config,
         use_fallback,
+        use_optimized_self_attn,
     )

@@ -18,7 +18,7 @@ from models.common.utility_functions import (
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 
-def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimized=True):
+def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimized=False):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
         if (
@@ -27,6 +27,7 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimi
             and hasattr(torch_model, "value")
             and hasattr(torch_model, "proj")
         ):
+            parameters["use_optimized"] = use_optimized
             if use_optimized:
                 # Optimized version: Fused QKV
                 n_head = torch_model.n_head
@@ -104,6 +105,7 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimi
 def test_self_attn(
     device, n_embed, n_head, attn_pdrop, resid_pdrop, input_shape, input_dtype, weight_dtype, use_optimized
 ):
+    torch.manual_seed(2)
     x = torch.randn(input_shape)
 
     ref_layer = SelfAttention(
@@ -126,14 +128,13 @@ def test_self_attn(
         n_head,
         dtype=weight_dtype,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        use_optimized=use_optimized,
     )
     tt_input = ttnn.from_torch(
         x, device=device, layout=ttnn.TILE_LAYOUT, dtype=input_dtype, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     tt_output = tt_layer(tt_input)
     tt_torch_output = tt2torch_tensor(tt_output)
-    does_pass, pcc_message = check_with_pcc(ref_output, tt_torch_output, 0.95)
+    does_pass, pcc_message = check_with_pcc(ref_output, tt_torch_output, 0.99)
 
     logger.info(f"PCC: {pcc_message}")
 
