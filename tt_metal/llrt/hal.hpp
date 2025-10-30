@@ -20,6 +20,7 @@
 #include <ostream>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_types.hpp>
+#include <umd/device/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -255,7 +256,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
-    using VerifyFwVersionFunc = std::function<void(tt::umd::tt_version)>;
+    using VerifyFwVersionFunc = std::function<void(tt::umd::semver_t)>;
 
 private:
     tt::ARCH arch_;
@@ -481,7 +482,7 @@ public:
 
     // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
     // not compatible.
-    void verify_eth_fw_version(tt::umd::tt_version eth_fw_version) const {
+    void verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
         this->verify_eth_fw_version_func_(eth_fw_version);
     }
 };
