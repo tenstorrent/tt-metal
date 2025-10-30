@@ -727,15 +727,66 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 // order ethernet channels using translated coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
-        for (auto& [_, eth_chans] : eth_chans_by_dir) {
+        for (auto& [direction, eth_chans] : eth_chans_by_dir) {
             auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
+            auto neighbor_fabric_node_id =
+                FabricNodeId(fabric_node_id.mesh_id, this->get_intra_chip_neighbors(fabric_node_id, direction)[0]);
+            auto neighbor_physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(neighbor_fabric_node_id);
+            if (phys_chip_id > neighbor_physical_chip_id) {
+                std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
+                    auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
+                    auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
+                    return translated_coords_a.x < translated_coords_b.x;
+                });
+            } else {
+                auto inverted_direction = direction;
+                if (inverted_direction == RoutingDirection::N) {
+                    inverted_direction = RoutingDirection::S;
+                } else if (inverted_direction == RoutingDirection::S) {
+                    inverted_direction = RoutingDirection::N;
+                } else if (inverted_direction == RoutingDirection::E) {
+                    inverted_direction = RoutingDirection::W;
+                } else if (inverted_direction == RoutingDirection::W) {
+                    inverted_direction = RoutingDirection::E;
+                }
+                auto neighbor_eth_channels =
+                    this->router_port_directions_to_physical_eth_chan_map_[neighbor_fabric_node_id][inverted_direction];
+                // need to map current eth channels to neighbor eth channels.
+                //  map is: current eth channel -> neighbor eth channel
+                std::unordered_map<chan_id_t, chan_id_t> eth_chan_map;
+                for (uint32_t i = 0; i < eth_chans.size(); i++) {
+                    eth_chan_map[neighbor_eth_channels[i]] = eth_chans[i];
+                }
+                std::sort(
+                    neighbor_eth_channels.begin(),
+                    neighbor_eth_channels.end(),
+                    [&soc_desc](const auto& a, const auto& b) {
+                        auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
+                        auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
+                        return translated_coords_a.x < translated_coords_b.x;
+                    });
+                for (uint32_t i = 0; i < neighbor_eth_channels.size(); i++) {
+                    eth_chans[i] = eth_chan_map[neighbor_eth_channels[i]];
+                }
+            }
+            // get neighbor in the direction
+            // auto neighbor_fabric_node_id = this->get_neighbor_node_id(fabric_node_id, direction);
+            // get neighbors physical chip id.
 
-            std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
-                auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
-                auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
-                return translated_coords_a.x < translated_coords_b.x;
-            });
+            // ifmy chip id > neighbors then do the following:
+
+            // assuming neighbor chip > my chip id
+            // neighbor chan - my chan
+            // 1-4, 2-0, 3-5, 6-1, 4-11
+            // neighor sorted channels:1,2,3,4,6
+            // look up my channel connected to the neighbor sorted channels.
+            // my chanels ordered w.r.t my neighbor sorted channels: 4, 0, 5, 11, 1
+
+            // else do the following:
+            // the neighor's eth_chans
+            // sort the neighbor_eth_channels locally. Dont touch the map.
+            // create a list of my eth channels that are connected to the neighbors sorted channels.
         }
     }
 }
@@ -940,7 +991,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
-    // this->order_ethernet_channels();
+    this->order_ethernet_channels();
 
     // Trim the ethernet channels that don't map to live fabric routing planes.
     // NOTE: This MUST be called after ordering ethernet channels

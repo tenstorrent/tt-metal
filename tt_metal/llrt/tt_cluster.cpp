@@ -917,9 +917,7 @@ const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device
 std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_grouped_by_connected_chips(
     ChipId chip_id) const {
     std::unordered_map<ChipId, std::vector<CoreCoord>> connected_chips;
-    log_info(tt::LogTest, "From get_ethernet_cores_grouped_by_connected_chips");
-    const auto &all_eth_connections = this->cluster_desc_->get_ethernet_connections();
-    log_info(tt::LogTest, "All ethernet connections: {}", all_eth_connections.size());
+    const auto& all_eth_connections = this->cluster_desc_->get_ethernet_connections();
     if (all_eth_connections.find(chip_id) == all_eth_connections.end()) {
         return {};
     }
@@ -927,20 +925,11 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
         const auto &other_chip_id = std::get<0>(connected_chip_chan);
         if (connected_chips.find(other_chip_id) == connected_chips.end()) {
             std::vector<CoreCoord> active_ethernet_cores;
-            log_info(tt::LogTest, "Chip id {} -> Other chip id: {}", chip_id, other_chip_id);
-            for (const auto &channel_pair :
+            for (const auto& channel_pair :
                  this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
-                log_info(
-                    tt::LogTest,
-                    "Local chip channel: {}, Other chip channel: {}",
-                    std::get<0>(channel_pair),
-                    std::get<1>(channel_pair));
                 EthernetChannel local_chip_chan = std::get<0>(channel_pair);
                 active_ethernet_cores.emplace_back(
                     get_soc_desc(chip_id).get_eth_core_for_channel(local_chip_chan, CoordSystem::LOGICAL));
-            }
-            for (const auto& eth_core : active_ethernet_cores) {
-                log_info(tt::LogTest, "Eth core: {}", eth_core.str());
             }
             connected_chips.insert({other_chip_id, active_ethernet_cores});
         } else {
@@ -952,25 +941,14 @@ std::unordered_map<ChipId, std::vector<CoreCoord>> Cluster::get_ethernet_cores_g
 
 // Ethernet cluster api
 void Cluster::initialize_ethernet_sockets() {
-    log_info(tt::LogTest, "=== initialize_ethernet_sockets START ===");
     const auto& target_device_ids = this->driver_->get_target_device_ids();
-    log_info(tt::LogTest, "Target device IDs from driver: {} devices", target_device_ids.size());
     for (const auto& chip_id : target_device_ids) {
-        log_info(tt::LogTest, "Processing chip_id={}", chip_id);
         if (this->ethernet_sockets_.find(chip_id) == this->ethernet_sockets_.end()) {
             this->ethernet_sockets_.insert({chip_id, {}});
         }
         const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-        log_info(tt::LogTest, "  Chip {} has {} connected chips", chip_id, connected_chips.size());
 
         for (const auto& [connected_chip_id, eth_cores] : connected_chips) {
-            log_info(
-                tt::LogTest,
-                "  Chip {} -> Connected chip {}: {} ethernet cores",
-                chip_id,
-                connected_chip_id,
-                eth_cores.size());
-
             if (this->ethernet_sockets_.at(chip_id).find(connected_chip_id) ==
                 this->ethernet_sockets_.at(chip_id).end()) {
                 this->ethernet_sockets_.at(chip_id).insert({connected_chip_id, {}});
@@ -985,52 +963,17 @@ void Cluster::initialize_ethernet_sockets() {
                 continue;
             }
 
-            for (const auto &eth_core : eth_cores) {
-                log_info(tt::LogTest, "    Checking eth_core {} on chip {}", eth_core.str(), chip_id);
-
-                // Check if chip_id exists in device_eth_routing_info_
-                if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
-                    log_error(tt::LogTest, "    ERROR: chip_id={} NOT FOUND in device_eth_routing_info_", chip_id);
-                    log_error(tt::LogTest, "    Available chips in device_eth_routing_info_:");
-                    for (const auto& [avail_chip_id, _] : this->device_eth_routing_info_) {
-                        log_error(tt::LogTest, "      - chip_id={}", avail_chip_id);
-                    }
-                    TT_THROW("Chip {} not found in device_eth_routing_info_", chip_id);
-                }
-
-                // Check if eth_core exists for this chip
-                const auto& routing_info = this->device_eth_routing_info_.at(chip_id);
-                if (routing_info.find(eth_core) == routing_info.end()) {
-                    log_error(
-                        tt::LogTest,
-                        "    ERROR: eth_core {} NOT FOUND in device_eth_routing_info_[{}]",
-                        eth_core.str(),
-                        chip_id);
-                    log_error(tt::LogTest, "    Available cores for chip {}:", chip_id);
-                    for (const auto& [avail_core, mode] : routing_info) {
-                        log_error(tt::LogTest, "      - core={} mode={}", avail_core.str(), static_cast<int>(mode));
-                    }
-                    TT_THROW("Eth core {} not found in device_eth_routing_info_[{}]", eth_core.str(), chip_id);
-                }
-
+            for (const auto& eth_core : eth_cores) {
                 if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::IDLE) {
-                    log_info(tt::LogTest, "    Core {} is IDLE, adding to socket", eth_core.str());
                     this->ethernet_sockets_.at(chip_id).at(connected_chip_id).emplace_back(eth_core);
                     this->ethernet_sockets_.at(connected_chip_id)
                         .at(chip_id)
                         .emplace_back(
                             std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core))));
-                } else {
-                    log_info(
-                        tt::LogTest,
-                        "    Core {} is NOT IDLE (mode={}), skipping",
-                        eth_core.str(),
-                        static_cast<int>(this->device_eth_routing_info_.at(chip_id).at(eth_core)));
                 }
             }
         }
     }
-    log_info(tt::LogTest, "=== initialize_ethernet_sockets END ===");
 }
 
 void Cluster::disable_ethernet_cores_with_retrain() {
@@ -1066,13 +1009,10 @@ void Cluster::disable_ethernet_cores_with_retrain() {
 }
 
 void Cluster::initialize_ethernet_cores_router_mode() {
-    log_info(tt::LogTest, "=== initialize_ethernet_cores_router_mode START ===");
     for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
-        log_info(tt::LogTest, "Processing MMIO device {}, controlling {} devices", assoc_mmio_device, devices.size());
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
                 this->device_eth_routing_info_.insert({chip_id, {}});
-                log_info(tt::LogTest, "  Initialized device_eth_routing_info_ for chip_id={}", chip_id);
             }
         }
         std::map<std::tuple<ChipId, ChipId>, bool> reserved_chip_connections = {};
@@ -1085,25 +1025,10 @@ void Cluster::initialize_ethernet_cores_router_mode() {
                     auto& routing_info = this->device_eth_routing_info_[chip_id];
                     if (routing_info.find(eth_core) == routing_info.end()) {
                         routing_info.insert({eth_core, EthRouterMode::IDLE});
-                        log_info(tt::LogTest, "    Chip {}: Added eth_core {} as IDLE", chip_id, eth_core.str());
                     }
                 }
             }
-            // const auto& eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
-            // log_info(tt::LogTest, "  Chip {} has {} active ethernet channels", chip_id, eth_channels.size());
-            // for (const auto& eth_channel : eth_channels) {
-            //     log_info(tt::LogTest, "  Chip {} has active ethernet channel: {}", chip_id, eth_channel);
-            //     auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-            //     // Chip ID is guaranteed to be present in device_eth_routing_info_, since it was populated above
-
-            // }
         }
-    }
-    log_info(tt::LogTest, "=== initialize_ethernet_cores_router_mode END ===");
-    log_info(
-        tt::LogTest, "Total chips initialized in device_eth_routing_info_: {}", this->device_eth_routing_info_.size());
-    for (const auto& entry : this->device_eth_routing_info_) {
-        log_info(tt::LogTest, "  Chip {}: {} ethernet cores configured", entry.first, entry.second.size());
     }
 }
 
@@ -1208,9 +1133,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
 
     // re-init sockets to reflect fabric routing
     this->ethernet_sockets_.clear();
-    log_info(tt::LogTest, "From Reserve Ethernet Cores for Fabric Routers");
     this->initialize_ethernet_sockets();
-    log_info(tt::LogTest, "After Reserve Ethernet Cores for Fabric Routers");
 }
 
 void Cluster::release_ethernet_cores_for_fabric_routers() {
@@ -1222,9 +1145,7 @@ void Cluster::release_ethernet_cores_for_fabric_routers() {
         }
     }
     // TODO: We should just cache restore
-    log_info(tt::LogTest, "From Release Ethernet Cores for Fabric Routers");
     this->initialize_ethernet_sockets();
-    log_info(tt::LogTest, "After Release Ethernet Cores for Fabric Routers");
 }
 
 std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(ChipId chip_id) const {
