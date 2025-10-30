@@ -56,6 +56,7 @@
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "impl/buffers/circular_buffer.hpp"
 
 namespace tt {
 
