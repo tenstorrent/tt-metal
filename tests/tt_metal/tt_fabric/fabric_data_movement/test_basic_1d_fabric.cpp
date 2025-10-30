@@ -2362,12 +2362,17 @@ void UDMFabric1DUnicastCommon(
         dest_fabric_node_id.mesh_id.get()};
 
     // Set up fabric connection runtime args
-    auto available_links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dest_fabric_node_id);
-    uint32_t link_idx = available_links.empty() ? 0 : available_links[0];
+    auto sender_available_links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dest_fabric_node_id);
+    uint32_t sender_link_idx = sender_available_links.empty() ? 0 : sender_available_links[0];
 
     std::vector<uint32_t> sender_runtime_args;
     append_fabric_connection_rt_args(
-        src_fabric_node_id, dest_fabric_node_id, link_idx, sender_program, sender_logical_core, sender_runtime_args);
+        src_fabric_node_id,
+        dest_fabric_node_id,
+        sender_link_idx,
+        sender_program,
+        sender_logical_core,
+        sender_runtime_args);
 
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -2403,7 +2408,18 @@ void UDMFabric1DUnicastCommon(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = receiver_compile_time_args});
 
+    // Set up fabric connection runtime args for receiver to send ACKs back to sender
     std::vector<uint32_t> receiver_runtime_args;
+    auto receiver_available_links = tt::tt_fabric::get_forwarding_link_indices(dest_fabric_node_id, src_fabric_node_id);
+    uint32_t receiver_link_idx = receiver_available_links.empty() ? 0 : receiver_available_links[0];
+    append_fabric_connection_rt_args(
+        dest_fabric_node_id,
+        src_fabric_node_id,
+        receiver_link_idx,
+        receiver_program,
+        receiver_logical_core,
+        receiver_runtime_args);
+
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Run programs
