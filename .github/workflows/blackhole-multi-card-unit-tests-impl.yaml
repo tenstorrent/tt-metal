@@ -24,14 +24,16 @@ jobs:
       fail-fast: false
       matrix:
         runner-group:
-          - name: LLMBox unit tests
-            runner-label: BH-LLMBox
-          - name: DeskBox unit tests
-            runner-label: BH-DeskBox
-          - name: LoudBox unit tests
-            runner-label: BH-LoudBox
-          - name: P300 unit tests
-            runner-label: P300-viommu
+          # - name: LLMBox unit tests
+          #   runner-label: BH-LLMBox
+          # - name: DeskBox unit tests
+          #   runner-label: BH-DeskBox
+          # - name: LoudBox unit tests
+          #   runner-label: BH-LoudBox
+          # - name: P300 unit tests
+          #   runner-label: P300-viommu
+          - name: QuietBox Global Edition unit tests
+            runner-label: BH-QB-GE
         test-group:
           - name: fabric 1D unit tests
             cmd: |
@@ -99,7 +101,7 @@ jobs:
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        timeout-minutes: 10
+        timeout-minutes: 30
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

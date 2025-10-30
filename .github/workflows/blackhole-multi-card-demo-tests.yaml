@@ -32,22 +32,26 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: LLMBox Demo tests
-            runner-label: BH-LLMBox
+          # - name: LLMBox Demo tests
+          #   runner-label: BH-LLMBox
+          #   extra-tag: pipeline-perf
+          #   num_devices: 4
+          # - name: DeskBox Demo tests
+          #   runner-label: BH-DeskBox
+          #   extra-tag: pipeline-perf
+          #   num_devices: 2
+          # - name: LoudBox Demo tests
+          #   runner-label: BH-LoudBox
+          #   extra-tag: pipeline-perf
+          #   num_devices: 8
+          # - name: P300 Demo tests
+          #   runner-label: P300-viommu
+          #   extra-tag: pipeline-yyz2-lfc
+          #   num_devices: 2
+          - name: QuietBox Global Edition tests
+            runner-label: BH-QB-GE
             extra-tag: pipeline-perf
             num_devices: 4
-          - name: DeskBox Demo tests
-            runner-label: BH-DeskBox
-            extra-tag: pipeline-perf
-            num_devices: 2
-          - name: LoudBox Demo tests
-            runner-label: BH-LoudBox
-            extra-tag: pipeline-perf
-            num_devices: 8
-          - name: P300 Demo tests
-            runner-label: P300-viommu
-            extra-tag: pipeline-yyz2-lfc
-            num_devices: 2
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
