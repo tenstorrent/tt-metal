@@ -100,7 +100,6 @@ class Conv2d(Module):
         padding: Sequence[int] | int = 0,
         dilation: Sequence[int] | int = 1,
         mesh_device: ttnn.MeshDevice,
-        sp_axis: int | None = None,
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
         ccl_manager: CCLManager | None = None,
@@ -117,10 +116,13 @@ class Conv2d(Module):
             padding: Padding of the convolution.
             dilation: Dilation of the convolution.
             mesh_device: Mesh device to use.
-            mesh_axis: Axis to use for mesh parallelism.
-            sp_axis: Axis to use for sequence parallelism. Currently only used for gather before computation
+            in_mesh_axis: Axis to shard input channels across mesh devices.
+            out_mesh_axis: Axis to shard output channels across mesh devices.
             ccl_manager: CCL manager to use.
             torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
+
+        The arguments in_mesh_axis and out_mesh_axis control how weights and biases are sharded
+        across the mesh devices and how the input and output tensors are sharded.
         """
         super().__init__()
 
@@ -134,6 +136,7 @@ class Conv2d(Module):
                 raise ValueError(msg)
 
         in_mesh_axis_size = mesh_device.shape[in_mesh_axis] if in_mesh_axis is not None else 1
+        out_mesh_axis_size = mesh_device.shape[out_mesh_axis] if out_mesh_axis is not None else 1
 
         if torch_ref is not None:
             assert not isinstance(torch_ref.padding, str)
@@ -179,10 +182,10 @@ class Conv2d(Module):
         self.padding = padding
         self.dilation = dilation
         self.mesh_device = mesh_device
-        self.sp_axis = sp_axis
         self.out_mesh_axis = out_mesh_axis
         self.in_mesh_axis = in_mesh_axis
         self.in_mesh_axis_size = in_mesh_axis_size
+        self.out_mesh_axis_size = out_mesh_axis_size
         self.ccl_manager = ccl_manager
 
         if torch_ref is not None:
@@ -196,7 +199,6 @@ class Conv2d(Module):
         mesh_device: ttnn.MeshDevice,
         in_mesh_axis: int | None = None,
         out_mesh_axis: int | None = None,
-        sp_axis: int | None = None,
         ccl_manager: CCLManager | None,
     ) -> Self:
         assert not isinstance(torch_ref.padding, str)
@@ -211,7 +213,6 @@ class Conv2d(Module):
             mesh_device=mesh_device,
             out_mesh_axis=out_mesh_axis,
             in_mesh_axis=in_mesh_axis,
-            sp_axis=sp_axis,
             ccl_manager=ccl_manager,
         )
 
@@ -227,23 +228,46 @@ class Conv2d(Module):
             bias_zeros = torch.zeros([self.in_mesh_axis_size - 1, 1, 1, out_dim])
             state["bias"] = torch.cat([bias, bias_zeros])
 
-    def is_sharded_tensor(self, x):
-        """
-        Check if the tensor is sharded.
-        Simple heuristic to check if the tensor is sharded.
-        """
-        return x.shape[3] < self.in_channels
-
     def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
-        """
-        Gather the tensor if it is sharded, since we only support TP. Will be extended to support DP and SP as needed.
-        Data is left in the state of the final compute. The burden is on the next layer to prepare its input as needed.
-        TODO: Add support for DP and SP
-        """
-        if self.sp_axis is not None and self.is_sharded_tensor(x):
-            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.sp_axis)
+        """Forward pass of the Conv2d layer with support for tensor parallelism.
 
+        Args:
+            x: Input tensor with shape (batch, height, width, channels).
+
+        Returns:
+            Output tensor with shape (batch, out_height, out_width, out_channels).
+
+        Tensor sharding behavior:
+
+        **No parallelism (in_mesh_axis=None, out_mesh_axis=None):**
+            - Input is replicated
+            - Output is replicated
+
+        **Input channel parallelism (in_mesh_axis is set, out_mesh_axis=None):**
+            - Input: sharded on channel dimension along in_mesh_axis
+            - Output: sharded on channel dimension along in_mesh_axis
+
+        **Output channel parallelism (in_mesh_axis=None, out_mesh_axis is set):**
+            - Input can be either:
+                - replicated, or
+                - sharded on channel dimension along out_mesh_axis
+            - Output: sharded on channel dimension along out_mesh_axis
+        """
         b, h, w, c = x.shape
+
+        # allow sharded input for output parallelism
+        if (
+            self.in_mesh_axis is None
+            and self.out_mesh_axis_size != 1
+            and c == self.in_channels // self.out_mesh_axis_size
+        ):
+            x = vae_all_gather(self.ccl_manager, x, cluster_axis=self.out_mesh_axis)
+        else:
+            expected_c = self.in_channels // self.in_mesh_axis_size
+            if c != expected_c:
+                msg = f"expected input channel dimension to be {expected_c}, but got {c}"
+                raise ValueError(msg)
+
         slice_config = ttnn.Conv2dSliceConfig(
             num_slices=self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)[
                 (h, w, self.in_channels, self.out_channels)
@@ -256,7 +280,7 @@ class Conv2d(Module):
                 input_tensor=x,
                 weight_tensor=self.weight.data,
                 bias_tensor=self.bias.data if self.bias is not None else None,
-                in_channels=c,
+                in_channels=self.in_channels // self.in_mesh_axis_size,
                 out_channels=self.weight.data.shape[0],
                 device=self.mesh_device,
                 kernel_size=self.kernel_size,
