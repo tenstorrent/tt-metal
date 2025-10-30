@@ -58,6 +58,7 @@
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
+#include "impl/buffers/circular_buffer.hpp"
 
 namespace tt::tt_metal {
 enum class FabricConfig : uint32_t;
