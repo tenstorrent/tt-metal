@@ -33,7 +33,7 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
         (0, "prefill", 2),
         (2, "decode", 4),
     ],
-    ids=["llama3.1-8b-prefill-dp", "llama3.1-8b-decode-dp"],
+    ids=["prefill-dp", "decode-dp"],
 )
 def test_device_perf_one_iter(
     num_layers,
