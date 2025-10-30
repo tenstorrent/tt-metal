@@ -246,7 +246,9 @@ nb::object make_numpy_tensor(
                 // View as bfloat16 - just changes dtype metadata, no copy
                 return array.attr("view")(ml_dtypes_bfloat16_dtype);
             } else {
-                NB_THROW(nb::exception_type::type_error, "ml_dtypes package required for bfloat16 NumPy arrays");
+                NB_THROW(
+                    nb::exception_type::type_error,
+                    "ml_dtypes package required for bfloat16 NumPy arrays (try pip install ml_dtypes)");
             }
         }
 
