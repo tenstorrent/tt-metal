@@ -6,7 +6,7 @@
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
@@ -21,9 +21,9 @@ def test_perf_device_bare_metal_yolov11(batch_size, expected_perf):
     subdir = "ttnn_yolov11"
     num_iterations = 1
     margin = 0.03
-    expected_perf = expected_perf if is_wormhole_b0() else 0
+    expected_perf = expected_perf if is_blackhole() else 0
 
-    command = f"pytest models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::test_yolov11"
+    command = f"pytest models/demos/blackhole/yolov11/tests/pcc/test_ttnn_yolov11.py::test_yolov11"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

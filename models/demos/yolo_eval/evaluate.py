@@ -641,7 +641,12 @@ def test_yolov11n(device, model_type, res, reset_seeds, model_location_generator
         model = YOLOv11PerformantRunner(device, act_dtype=ttnn.bfloat8_b, weight_dtype=ttnn.bfloat8_b)
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/demos/yolov11/demo/runs"
+    if is_blackhole():
+        save_dir = "models/demos/blackhole/yolov11/demo/runs"
+    elif is_wormhole_b0():
+        save_dir = "models/demos/wormhole/yolov11/demo/runs"
+    else:
+        save_dir = "models/demos/yolov11/demo/runs"
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT
