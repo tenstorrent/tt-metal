@@ -74,6 +74,14 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+
+    // Check host ranks are right
+    auto& mesh_graph = control_plane->get_mesh_graph();
+    for (const auto& [coord, host_rank] : mesh_graph.get_host_ranks(MeshId{0})) {
+        auto coord_range = mesh_graph.get_coord_range(MeshId{0}, host_rank);
+
+        log_critical(tt::LogTest, "Coord range: {}, , Mesh Host Ranks: {}", coord_range, host_rank);
+    }
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
