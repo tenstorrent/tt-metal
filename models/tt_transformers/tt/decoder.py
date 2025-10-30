@@ -114,7 +114,6 @@ class TransformerBlock(LightweightModule):
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
-                base_model_name=args.base_model_name,
             ),
             args,
             tt_ccl=self.tt_ccl,

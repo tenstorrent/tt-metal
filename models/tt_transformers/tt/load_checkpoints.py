@@ -466,7 +466,7 @@ def convert_meta_to_hf(
     name_final_layernorm=False,
     config=None,
 ):
-    state_dict = reindex_layers_to_cross_attn(state_dict, config)
+    state_dict = reindex_layers(state_dict, config)
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
     if fuse_qkv:
         state_dict = fuse_qkv_meta(state_dict)

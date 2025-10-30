@@ -1934,6 +1934,7 @@ class ModelArgs:
                 self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
                 self.name_dense = any(["dense" in layer_name for layer_name in state_dict.keys()])
                 self.name_ffn2 = any(["fc2" in layer_name for layer_name in state_dict.keys()])
+                self.layernorm = any(["final_layernorm" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
@@ -2964,7 +2965,7 @@ class HfModelWrapper:
                 name_dense=name_dense,
                 name_ffn2=name_ffn2,
                 name_final_layernorm=name_final_layernorm,
-                self.config,
+                config=self.config,
             )
         )
 
