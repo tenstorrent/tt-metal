@@ -386,11 +386,12 @@ void compute_grad_scores(
     uint32_t cb_grad_attn_weights,
     uint32_t cb_attention_weights,
     uint32_t cb_u_scalar_row,
+    uint32_t scaler_bits,
     /* output */ uint32_t cb_grad_scores) {
     cb_wait_front(cb_grad_attn_weights, onetile);
     cb_wait_front(cb_u_scalar_row, onetile);
 
-    const uint32_t grad_reg = 0U;
+    const uint32_t grad_reg = 0;
     const uint32_t attn_weights_reg = 1U;
     const uint32_t u_scalar_reg = 2U;
 
@@ -410,6 +411,10 @@ void compute_grad_scores(
 
     mul_binary_tile_init();
     mul_binary_tile(grad_reg, attn_weights_reg, grad_reg);  // result in grad_reg
+
+    // try to apply scaler here to improve accuracy
+    binop_with_scalar_tile_init();
+    mul_unary_tile(/* dst_reg_idx*/ grad_reg, scaler_bits);  // multiply by scaler factor
     tile_regs_commit();
 
     tile_regs_wait();
@@ -448,8 +453,10 @@ void update_grad_key(
             /* dst_reg_idx*/ 0,
             /* transpose */ 0);
 
-        binop_with_scalar_tile_init();
-        mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
+        // apply scaler factor to the result before matmul accumulation
+        // maybe will achive better accuracy
+        // binop_with_scalar_tile_init();
+        // mul_unary_tile(/* dst_reg_idx*/ 0, scaler_bits);  // multiply by scaler factor
 
         if (do_accumulate) {
             copy_tile_init(cb_prev_grad_key);

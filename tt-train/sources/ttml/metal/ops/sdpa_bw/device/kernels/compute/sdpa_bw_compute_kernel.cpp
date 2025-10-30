@@ -177,7 +177,8 @@ void MAIN {
 
                 compute_grad_attn_weights(cb_grad_output, cb_value, tiles_per_row, cb_grad_attn_weights);
 
-                compute_grad_scores(cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, cb_grad_scores);
+                compute_grad_scores(
+                    cb_grad_attn_weights, cb_attention_weights, cb_u_scalar_row, scaler_bits, cb_grad_scores);
 
                 update_grad_key(
                     cb_grad_scores,
@@ -189,30 +190,17 @@ void MAIN {
                     tiles_per_row,
                     h > 0);  // fix: accumulate after first row of first head
 
-                //[DEBUG]: Put u_scaler in grad_key for debug, need to be removed later
-                // cb_wait_front(cb_u_scalar_row, onetile);
-                // cb_reserve_back(cb_grad_key, onetile);
-                // pack_reconfig_data_format(cb_grad_key);
-
-                // tile_regs_acquire();
-                // copy_tile_init(cb_u_scalar_row);
-                // copy_tile(cb_u_scalar_row, /* tile_idx */ 0, /* register idx */ 0);
-                // tile_regs_commit();
-
-                // tile_regs_wait();
-                // pack_tile(0, cb_grad_key);
-                // tile_regs_release();
-                // cb_push_back(cb_grad_key, onetile);
+                cb_wait_front(alias_cb_cur_grad_key, tiles_per_row);
 
                 // pop intermediates results using for update dK and dQ
                 cb_pop_front(cb_u_scalar_row, onetile);
                 cb_pop_front(cb_grad_attn_weights, onetile);
                 cb_pop_front(cb_grad_scores, onetile);
+                cb_pop_front(cb_attention_weights, onetile);
 
                 cb_pop_front(cb_query, tiles_per_row);
                 cb_pop_front(cb_grad_output, tiles_per_row);
                 cb_pop_front(cb_attn_output, tiles_per_row);
-                cb_pop_front(cb_attention_weights, onetile);
 
                 std::swap(alias_cb_prev_grad_value, alias_cb_cur_grad_value);
                 std::swap(alias_cb_prev_grad_key, alias_cb_cur_grad_key);
