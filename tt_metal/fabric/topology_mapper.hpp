@@ -269,7 +269,8 @@ private:
      */
     void populate_fabric_node_id_to_asic_id_mappings(
         const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
-        const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical);
+        const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical,
+        const std::unordered_map<MeshHostRankId, HostName>& host_name_to_mesh_rank);
 
     /**
      * @brief Broadcast the mapping to all hosts

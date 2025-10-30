@@ -238,7 +238,8 @@ void TopologyMapper::build_mapping() {
         log_debug(tt::LogFabric, "TopologyMapper: Adjacency map physical: {}", adjacency_map_physical);
 
         // Use sat solver algo to preserve the logical connectivity in the physical topology
-        populate_fabric_node_id_to_asic_id_mappings(adjacency_map_physical, adjacency_map_logical);
+        populate_fabric_node_id_to_asic_id_mappings(
+            adjacency_map_physical, adjacency_map_logical, host_name_to_mesh_rank);
 
         // Broadcast the mapping to all hosts
         broadcast_mapping_to_all_hosts();
