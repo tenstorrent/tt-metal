@@ -538,6 +538,14 @@ public:
 
         return this->acquire_pages();
     }
+
+    // Returns how much data is available. Will block until data is available.
+    FORCE_INLINE uint32_t wait_for_availabe_data(uint32_t& cmd_ptr) {
+        if (available_space(cmd_ptr) == 0) {
+            get_cb_page(cmd_ptr);
+        }
+        return available_space(cmd_ptr);
+    }
 };
 
 constexpr uint32_t l1_to_local_cache_copy_chunk = 6;

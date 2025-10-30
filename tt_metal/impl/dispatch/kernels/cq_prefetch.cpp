@@ -1714,11 +1714,7 @@ inline void relay_raw_data_to_downstream(
 
     while (remaining > 0) {
         // Ensure at least one upstream page is available
-        if (h_cmddat_q_reader.available_space(data_ptr) == 0) {
-            h_cmddat_q_reader.get_cb_page(data_ptr);
-        }
-
-        uint32_t available_data = h_cmddat_q_reader.availabe_space(data_ptr);
+        uint32_t available_data = h_cmddat_q_reader.wait_for_availabe_data(data_ptr);
 
         uint32_t can_read_now = available_data;
         if (can_read_now > remaining) {
@@ -1772,10 +1768,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
     while (true) {
         // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
         // ENDL();
-        if (data_ptr == h_cmddat_q_reader.cb_fence) {
-            // Ensure header is present
-            h_cmddat_q_reader.get_cb_page(data_ptr);
-        }
+        h_cmddat_q_reader.wait_for_availabe_data(data_ptr);
 
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
             (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
