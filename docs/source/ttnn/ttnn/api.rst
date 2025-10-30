@@ -520,6 +520,12 @@ CCL
    ttnn.all_gather
    ttnn.reduce_scatter
    ttnn.all_reduce
+   ttnn.broadcast
+   ttnn.all_broadcast
+   ttnn.mesh_partition
+   ttnn.all_to_all_combine
+   ttnn.all_to_all_dispatch
+   
 
 Embedding
 =========
