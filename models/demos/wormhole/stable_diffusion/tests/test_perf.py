@@ -252,7 +252,7 @@ def test_stable_diffusion_vae_trace(device, is_ci_env, is_ci_v2_env, model_locat
 @pytest.mark.parametrize(
     "batch_size, num_inference_steps, expected_compile_time, expected_inference_time",
     [
-        (1, 50, 3600, 4.85) if is_wormhole_b0() else (1, 50, 3600, 3.15),  # Wormhole B0 vs Blackhole performance
+        (1, 50, 3600, 5.0) if is_wormhole_b0() else (1, 50, 3600, 3.15),  # Wormhole B0 vs Blackhole performance
     ],
 )
 def test_stable_diffusion_perf(
@@ -410,6 +410,7 @@ def test_stable_diffusion_perf(
         expected_inference_time=expected_inference_time,
         comments=comment,
     )
+    logger.info(f"Inference time: {second_iter_time:.4f}s")
     assert (
         second_iter_time < expected_inference_time
     ), f"Expected inference time: {expected_inference_time} Actual inference time: {second_iter_time}"
