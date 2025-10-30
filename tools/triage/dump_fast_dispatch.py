@@ -23,10 +23,9 @@ from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import MemoryAccess
 
-# Dumping dispatch debug information is disabled by default
-# unless explicitly enabled with --run=dump_fast_dispatch
+# Dumping dispatch debug information for triage purposes
+# Shows dispatcher core info and purpose to help with issue diagnosis
 script_config = ScriptConfig(
-    disabled=True,
     depends=["run_checks", "dispatcher_data", "elfs_cache", "inspector_data"],
 )
 
@@ -36,19 +35,19 @@ class DumpWaitGlobalsData:
     location: OnChipCoordinate = triage_field("Loc")
     risc_name: str = triage_field("Proc")
     kernel_name: str = triage_field("Kernel Name")
-    last_wait_count: int | None = triage_field("last_wait_count")
-    last_wait_stream: int | None = triage_field("last_wait_stream")
-    wait_stream_value: int | None = triage_field("wait_stream_value")
-    cb_fence: int | None = triage_field("cb_fence")
-    cmd_ptr: int | None = triage_field("cmd_ptr")
-    # Additional fields for dispatch cores
-    last_event: int | None = triage_field("last_event")
-    x: int | None = triage_field("x")
-    y: int | None = triage_field("y")
     worker_type: str | None = triage_field("worker_type")
     cq_id: int | None = triage_field("cq_id")
     servicing_device_id: int | None = triage_field("servicing_device_id")
-    last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq")
+    # Verbose fields for detailed debugging
+    last_wait_count: int | None = triage_field("last_wait_count", verbose=2)
+    last_wait_stream: int | None = triage_field("last_wait_stream", verbose=2)
+    wait_stream_value: int | None = triage_field("wait_stream_value", verbose=2)
+    cb_fence: int | None = triage_field("cb_fence", verbose=2)
+    cmd_ptr: int | None = triage_field("cmd_ptr", verbose=2)
+    last_event: int | None = triage_field("last_event", verbose=2)
+    x: int | None = triage_field("x", verbose=2)
+    y: int | None = triage_field("y", verbose=2)
+    last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq", verbose=2)
 
 
 def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
@@ -211,13 +210,8 @@ def read_wait_globals(
     multi_info = core_lookup.get((chip_id, x, y))
 
     # Get the appropriate core info for the given kernel name
-    core_info = None
-    if multi_info is not None and multi_info.has_any_info():
-        core_info = multi_info.get_info_for_kernel(dispatcher_core_data.kernel_name)
-
-    # If no values and no core info, return None
-    if not has_values and core_info is None:
-        return None
+    # Note: multi_info should exist since we pre-filtered, but check for chip ID mapping issues
+    core_info = multi_info.get_info_for_kernel(dispatcher_core_data.kernel_name) if multi_info else None
 
     return DumpWaitGlobalsData(
         location=location,
@@ -249,9 +243,50 @@ def run(args, context: Context):
     # Build lookup map for core info for a given kernel name
     core_lookup = build_core_lookup_map(inspector_data)
 
+    # Build dispatch_core_pairs by finding all RISC cores with dispatcher kernels
+    dispatch_core_pairs = []
+    # Relevant dispatcher kernel names
+    dispatcher_kernel_names = {"cq_dispatch", "cq_dispatch_subordinate", "cq_prefetch"}
+    # Map chip ID to device for lookup
+    chip_to_device = {device._id: device for device in run_checks.devices}
+
+    # Go through all cores in the core_lookup
+    # And check if they have dispatcher kernels loaded
+    for (chip, x, y), info in core_lookup.items():
+        if not info.has_any_info():
+            continue
+
+        # Create OnChipCoordinate for this dispatcher core location
+        device = chip_to_device.get(chip)
+        # TODO: Handle chip ID mapping issues when inspector chip != device._id
+        # due to TT_METAL_VISIBLE_DEVICES. This will be resolved when unique_id
+        # is available instead of device._id
+        location = OnChipCoordinate(x, y, "translated", device)
+
+        # Check all RISC cores at this location for dispatcher kernels
+        noc_block = location._device.get_block(location)
+        for risc_name in noc_block.risc_names:
+            dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+            if (
+                dispatcher_core_data.kernel_name is not None
+                and dispatcher_core_data.kernel_name in dispatcher_kernel_names
+            ):
+                dispatch_core_pairs.append((location, risc_name))
+
+    # Convert to set for fast lookup
+    dispatch_cores_set = set(dispatch_core_pairs)
+
+    # Define a wrapper function that filters to only dispatcher cores
+    # Aim of this is to avoid checking non-dispatcher cores and fasten the process
+    def filtered_read_wait_globals(location: OnChipCoordinate, risc_name: str) -> DumpWaitGlobalsData | None:
+        """Wrapper that only processes dispatcher cores using fast set lookup."""
+        if (location, risc_name) not in dispatch_cores_set:
+            return None
+        return read_wait_globals(location, risc_name, dispatcher_data, elfs_cache, core_lookup)
+
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
     return run_checks.run_per_core_check(
-        lambda location, risc_name: read_wait_globals(location, risc_name, dispatcher_data, elfs_cache, core_lookup),
+        filtered_read_wait_globals,
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
