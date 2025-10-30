@@ -1,8 +1,0 @@
-{
-  "include": [
-    {"model": "falcon7b", "arch": "wormhole_b0", "platform": "N300", "test-path": "models/demos/falcon7b_common/tests", "timeout": 20, "runs-on": ["N300", "pipeline-perf", "bare-metal"], "machine-type": "bare_metal", "extra-args": ""},
-    {"model": "mamba", "arch": "wormhole_b0", "platform": "N300", "test-path": "models/demos/wormhole/mamba/tests", "timeout": 20, "runs-on": ["N300", "pipeline-perf", "bare-metal"], "machine-type": "bare_metal", "extra-args": ""},
-    {"model": "yolov8s", "arch": "wormhole_b0", "platform": "N300", "test-path": "models/demos/yolov8s/tests/perf/", "timeout": 45, "runs-on": ["N300", "pipeline-perf", "bare-metal"], "machine-type": "bare_metal", "extra-args": ""},
-    {"model": "yolov8s", "arch": "blackhole", "platform": "P150", "test-path": "models/demos/yolov8s/tests/perf/", "timeout": 45, "runs-on": ["P150", "pipeline-perf", "bare-metal"], "machine-type": "bare_metal", "extra-args": ""}
-  ]
-}
