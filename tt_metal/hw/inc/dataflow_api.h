@@ -988,6 +988,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_state(
  * | id                           | Page id                              | uint32_t  | Any uint32_t number                            | True     |
  * | addrgen                      | Address generator object             | AddrGen   | N/A                                            | True     |
  * | dst_local_l1_addr            | Address in local L1 memory           | uint32_t  | 0..1MB                                         | True     |
+ * | size                         | Size of data in bytes                | uint32_t  | 0..NOC_MAX_BURST_SIZE MB                       | False    |
  * | offset                       | Custom address offset                | uint32_t  | 0..1MB                                         | False    |
  * | noc                          | Which NOC to use for the transaction | uint8_t   | 0 or 1                                         | False    |
  * | AddrGen (template parameter) | Address generator class              | typename  | Any AddrGen class in \a dataflow_api_addrgen.h | True     |
@@ -998,6 +999,7 @@ FORCE_INLINE void noc_async_read_page(
     const uint32_t id,
     const AddrGen& addrgen,
     uint32_t dst_local_l1_addr,
+    uint32_t size = 0,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     static_assert(
@@ -1011,10 +1013,10 @@ FORCE_INLINE void noc_async_read_page(
         page_size = (1 << addrgen.log_base_2_of_page_size);
     }
     if constexpr (enable_noc_tracing) {
-        RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, page_size, -1);
+        RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, id, addrgen, size ? size : page_size, -1);
     }
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
+        addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, size ? size : page_size, noc);
 }
 
 // clang-format off
