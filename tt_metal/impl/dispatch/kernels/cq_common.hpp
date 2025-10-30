@@ -450,7 +450,7 @@ public:
         return this->acquire_pages();
     }
 
-    // Returns how much data is availble. Will block until data is available. May release old pages to writer.
+    // Returns how much data is available. Will block until data is available. May release old pages to writer.
     FORCE_INLINE uint32_t wait_for_availabe_data_and_return_old_pages(uint32_t& cmd_ptr) {
         if (available_space(cmd_ptr) == 0) {
             get_cb_page_and_release_pages(cmd_ptr);

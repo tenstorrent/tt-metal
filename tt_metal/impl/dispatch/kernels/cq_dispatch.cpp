@@ -531,8 +531,6 @@ void process_write_paged() {
     //        << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
 
     while (write_length != 0) {
-        // TODO #7360: Have more performant handling when page_size > dispatch_cb_page_size by not doing multiple writes
-        // for one buffer page
         // Transfer size is min(remaining_length, data_available_in_cb)
         uint32_t available_data = dispatch_cb_reader.wait_for_availabe_data_and_return_old_pages(data_ptr);
         uint32_t remaining_page_size = page_size - dst_addr_offset;
