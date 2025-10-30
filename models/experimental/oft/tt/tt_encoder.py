@@ -167,7 +167,6 @@ class TTObjectEncoder:
             dilation=[1, 1],
             applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED if not smoothed.is_sharded() else None,
             ceil_mode=False,
-            in_place_halo=False,
             deallocate_input=False,
             reallocate_halo_output=True,
             return_indices=True,
