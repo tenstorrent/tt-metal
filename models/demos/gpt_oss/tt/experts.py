@@ -30,7 +30,7 @@ class Experts:
         self.num_experts_per_tok = hf_config.num_experts_per_tok
 
         # Use MeshConfig for clean parallelization
-        self.mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1], ep=1, sp=4)  # mesh_device.shape[0]
+        self.mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1], ep=1, sp=1)  # mesh_device.shape[0]
         # mesh_config or MeshConfig(
         #     mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0]
         # )
@@ -158,8 +158,11 @@ class Experts:
         )
 
     def __call__(self, hidden_states, routing_weights):
+        # self.mesh_config.sp = 4 if hidden_states.shape[-2] > 32 else 1
+        # self.mesh_config.ep = 1 if hidden_states.shape[-2] > 32 else 4
+        print(f"[TTNN] mesh_config.sp={self.mesh_config.sp}, mesh_config.ep={self.mesh_config.ep}")
+        seq_len_global = hidden_states.shape[1]
         if self.mesh_config.sp > 1:
-            seq_len_global = hidden_states.shape[1]
             seq_len_local = seq_len_global // self.mesh_config.sp
             hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
             routing_weights_torch = ttnn.to_torch(ttnn.get_device_tensors(routing_weights)[0])
@@ -322,12 +325,6 @@ class Experts:
             next_states.deallocate(True)
             next_states = next_states_allreduced
 
-            # SP communication
-        if self.mesh_config.sp > 1:
-            next_states = self.mesh_config.allgather(
-                next_states, self.ccl_manager, axis=self.mesh_config.sp_axis, dim=-2
-            )
-        print(f"[TTNN] next_states shape={next_states.shape}")
         # TP communication
         if next_states.dtype != ttnn.bfloat16:
             next_states_16 = ttnn.typecast(next_states, ttnn.bfloat16)
@@ -342,9 +339,16 @@ class Experts:
         )
 
         next_states_16.deallocate(True)
+        # SP communication
+        if self.mesh_config.sp > 1:
+            next_states = self.mesh_config.allgather(
+                next_states, self.ccl_manager, axis=self.mesh_config.sp_axis, dim=-2
+            )
 
         next_states = ttnn.reshape(
-            next_states, (batch_size, *4, self.hidden_size), (batch_size, max(32, seq_len * 4), self.hidden_size)
+            next_states,
+            (batch_size, seq_len_global, self.hidden_size),
+            (batch_size, max(32, seq_len_global), self.hidden_size),
         )
 
         return next_states
