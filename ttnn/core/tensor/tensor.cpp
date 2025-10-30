@@ -113,10 +113,7 @@ Tensor& Tensor::operator=(Tensor&& other) noexcept {
 
 Tensor::Tensor(const Tensor& other) = default;
 
-Tensor::~Tensor() {
-    ZoneScoped;
-    this->deallocate_impl(/*force=*/false);
-}
+Tensor::~Tensor() { this->deallocate_impl(/*force=*/false); }
 
 void Tensor::deallocate(bool force) { deallocate_impl(force); }
 
@@ -127,7 +124,6 @@ void Tensor::deallocate_impl(bool force) {
                (shared_resource.use_count() > 1 && force);
     };
 
-    ZoneScopedN("TensorDeallocate");
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
@@ -151,7 +147,6 @@ Tensor Tensor::from_span(
     distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
     T pad_value) {
-    ZoneScoped;
     return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
 }
 
@@ -174,10 +169,12 @@ Tensor Tensor::from_vector(
     distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
     T pad_value) {
-    ZoneScoped;
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
 
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
@@ -194,7 +191,6 @@ Tensor Tensor::from_vector(
 
 template <>
 std::vector<float> Tensor::to_vector<float>(std::optional<ttnn::QueueId> cq_id) const {
-    ZoneScoped;
     Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     switch (cpu_tensor.dtype()) {
         case DataType::BFLOAT16: {
@@ -231,7 +227,6 @@ std::vector<float> Tensor::to_vector<float>(std::optional<ttnn::QueueId> cq_id) 
 
 template <typename T>
 std::vector<T> Tensor::to_vector(std::optional<ttnn::QueueId> cq_id) const {
-    ZoneScoped;
     TT_FATAL(
         this->dtype() == convert_to_data_type<T>(),
         "Unsupported data type for to_vector: got {}, expected: {}",
@@ -247,7 +242,6 @@ std::vector<T> Tensor::to_vector(std::optional<ttnn::QueueId> cq_id) const {
 
 template <typename T>
 T Tensor::item(std::optional<ttnn::QueueId> cq_id) const {
-    ZoneScoped;
     TT_FATAL(
         this->logical_shape().volume() == 1,
         "tensor.item() requires tensor to have exactly one element, but got {} elements",
@@ -431,8 +425,14 @@ Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& 
     return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
 }
 
+Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
+    Tensor result = *this;
+    result.tensor_attributes =
+        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(std::move(tensor_topology)));
+    return result;
+}
+
 bool Tensor::is_allocated() const {
-    ZoneScoped;
     auto output = std::visit(
         tt::stl::overloaded{
             [](const DeviceStorage& storage) { return storage.is_allocated(); },
@@ -465,7 +465,6 @@ bool Tensor::is_scalar() const {
 }
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
-    ZoneScoped;
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::create_device_tensor",
         tensor_spec.logical_shape(),
@@ -620,9 +619,19 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<t
         return;
     }
 
-    TT_FATAL(src.logical_shape() == dst.logical_shape(), "Error");
-    TT_FATAL(src.dtype() == dst.dtype(), "Error");
-    TT_FATAL(src.tensor_spec().page_config() == dst.tensor_spec().page_config(), "Error");
+    TT_FATAL(
+        src.logical_shape() == dst.logical_shape(),
+        "Source and destination tensors must have the same logical shape. Source: {}, Destination: {}",
+        src.logical_shape(),
+        dst.logical_shape());
+    TT_FATAL(
+        src.dtype() == dst.dtype(),
+        "Source and destination tensors must have the same data type. Source: {}, Destination: {}",
+        src.dtype(),
+        dst.dtype());
+    TT_FATAL(
+        src.tensor_spec().page_config() == dst.tensor_spec().page_config(),
+        "Source and destination tensors must have the same page configuration");
 
     auto mesh_buffer = dst.device_storage().mesh_buffer;
     TT_FATAL(!blocking, "Blocking is not supported for host to device copy");

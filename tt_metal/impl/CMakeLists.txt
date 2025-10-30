@@ -26,6 +26,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/l1_banking_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program.cpp
@@ -34,6 +35,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/program_device_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/profiler/tt_metal_profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/profiler/profiler_analysis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/cq_shared_state.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command.cpp

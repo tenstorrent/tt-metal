@@ -177,8 +177,8 @@ def run_demo(
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
 
         gen = DeepseekGenerator(
-            mesh_device,
-            Path(model_path),
+            mesh_device=mesh_device,
+            model_path=Path(model_path),
             cache_dir=Path(cache_dir),
             tokenizer=tokenizer,
             random_weights=bool(random_weights),
@@ -201,12 +201,13 @@ def run_demo(
                 prompt_list = prompts
 
         # Multi-prompt generation
-        generations = gen.generate(
+        generations, statistics = gen.generate(
             prompt_list,
             max_new_tokens=max_new_tokens,
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
         )
+
         # Process all generations
         results = []
         for i, generation_tokens in enumerate(generations):
@@ -218,8 +219,13 @@ def run_demo(
                 result.update({"accuracy_top1": acc.get("top1"), "accuracy_top5": acc.get("top5")})
             results.append(result)
 
-        return {"generations": results}
+        return {"generations": results, "statistics": statistics}
     finally:
+        # Clean up generator resources
+        try:
+            gen.cleanup_all()
+        except Exception as e:
+            logger.warning(f"Failed to cleanup generator: {e}")
         # Clean up mesh device(s)
         for submesh in mesh_device.get_submeshes():
             ttnn.close_mesh_device(submesh)
@@ -270,6 +276,19 @@ def main() -> None:
         print("-" * 30)
 
     print("=====================\n")
+
+    # Print performance metrics if available
+    if "statistics" in results and results["statistics"]:
+        statistics = results["statistics"]
+        logger.info("=== Performance Metrics ===")
+        logger.info(f"Config preparation - Prefill: {statistics.get('preparing_prefill_config', 0)*1000:.2f}ms")
+        logger.info(f"Config preparation - Decode: {statistics.get('preparing_decode_config', 0)*1000:.2f}ms")
+        logger.info(f"Prefill time: {statistics['inference_prefill']*1000:.2f}ms")
+        logger.info(f"Average time to first token: {statistics['prefill_time_to_token']*1000:.2f}ms")
+        logger.info(f"Prefill tokens/sec: {statistics['prefill_t/s']:.2f}")
+        logger.info(f"Decode tokens/sec/user: {statistics['decode_t/s/u']:.2f}")
+        logger.info(f"Decode tokens/sec (total): {statistics['decode_t/s']:.2f}")
+        logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
 
 
 if __name__ == "__main__":

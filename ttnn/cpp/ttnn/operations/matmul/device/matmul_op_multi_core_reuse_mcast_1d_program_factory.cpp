@@ -3046,6 +3046,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const Tensor& sparsity,
     const std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
+    bool is_input_b_sparse,
     Tensor& output_tensor,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -3097,10 +3098,22 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     //                      Matmul Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
-    // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B_A = is_input_a_sparse ? 1 : get_batch_size(ashape);
-    const auto B_B = get_batch_size(bshape);
+    const auto batchB = get_batch_size(bshape);
+
+    // When input A and input B are sparse, the batch dims are same.
+    // We pick batchB and set batchA to 1.
+    // When input A is sparse but B is not, both in0 and in1 need to loop over the "additional"
+    // batch dims in A that are not in B. So we divide by batchB and set that.
+    // In the default case (only input B is sparse), we set batchA to the batch dims of A.
+    uint32_t batchA;
+    if (is_input_a_sparse && is_input_b_sparse) {
+        batchA = 1;
+    } else if (is_input_a_sparse) {
+        batchA = get_batch_size(ashape) / batchB;
+    } else {
+        batchA = get_batch_size(ashape);
+    }
+
     const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
     const uint32_t Nt = bshape[-1] / in1_tile_shape[1];
@@ -3150,14 +3163,14 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (B_A * B_B * num_blocks > 1) {
+    if (batchA * batchB * num_blocks > 1) {
         in0_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
-    if (B_A * B_B * num_blocks > 1) {
+    if (batchA * batchB * num_blocks > 1) {
         in1_CB_tiles *= ttnn::operations::matmul::MCAST_INPUT_BUFFERING_DEPTH;
     }
 
@@ -3260,9 +3273,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
         // batch args
         (std::uint32_t)Mt * Kt,  // MtKt
-        (std::uint32_t)B_A,      // batchA
+        (std::uint32_t)batchA,   // batchA
         // sparsity args
-        (std::uint32_t)B_B,                                     // batchB
+        (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
         (std::uint32_t)!is_input_a_sparse,                      // bcast_A
         (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
@@ -3294,10 +3307,10 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)0,  // in1_mcast_num_cores
         // batch args
         (std::uint32_t)Kt * Nt,  // KtNt
-        (std::uint32_t)B_A,      // batchA
+        (std::uint32_t)batchA,   // batchA
         (std::uint32_t)true,     // bcast_B
         // sparsity args
-        (std::uint32_t)B_B,                                     // batchB
+        (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
 
         // WRITER
@@ -3404,7 +3417,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_mcast_sender_cores,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
             .defines = mm_kernel_in0_sender_writer_defines});
@@ -3416,7 +3429,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             in0_mcast_receivers,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in0_noc,
                 .compile_args = in0_receiver_compile_time_args});
     }
@@ -3427,7 +3440,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores_with_work,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_kernel_in1_sender_writer_defines});
@@ -3534,17 +3547,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
     tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
-
-    if (!nnz.has_value()) {
-        // When nnz is not provided, we need to infer this at runtime based on the sparsity tensor.
-        // We create a circular buffer to pass this value to the compute kernel from the reader.
-        uint32_t nnz_cb_index = tt::CBIndex::c_25;
-        const auto nnz_data_format = tt::DataFormat::UInt32;
-        const auto nnz_cb_size = sparsity.logical_volume() * tt::datum_size(nnz_data_format);
-        const auto nnz_cb_config = tt_metal::CircularBufferConfig(nnz_cb_size, {{nnz_cb_index, nnz_data_format}})
-                                       .set_page_size(nnz_cb_index, nnz_cb_size);
-        tt_metal::CreateCircularBuffer(program, all_cores, nnz_cb_config);
-    }
 
     if (interm0_data_format != output_data_format) {
         // output
@@ -3663,8 +3665,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 (std::uint32_t)top_left_core_physical.x,  // in0_mcast_sender_noc_x
                 (std::uint32_t)top_left_core_physical.y   // in0_mcast_sender_noc_y
             };
-            tt_metal::SetRuntimeArgs(
-                program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);  // RISCV_1_default
+            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
         }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {

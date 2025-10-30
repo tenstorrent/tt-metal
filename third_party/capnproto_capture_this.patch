@@ -1,29 +1,3 @@
-diff --git a/c++/src/capnp/dynamic-capability.c++ b/c++/src/capnp/dynamic-capability.c++
-index 81a4ed35..549d1cc2 100644
---- a/c++/src/capnp/dynamic-capability.c++
-+++ b/c++/src/capnp/dynamic-capability.c++
-@@ -87,7 +87,7 @@ RemotePromise<DynamicStruct> Request<DynamicStruct, DynamicStruct>::send() {
-   // Explicitly upcast to kj::Promise to make clear that calling .then() doesn't invalidate the
-   // Pipeline part of the RemotePromise.
-   auto typedPromise = kj::implicitCast<kj::Promise<Response<AnyPointer>>&>(typelessPromise)
--      .then([=](Response<AnyPointer>&& response) -> Response<DynamicStruct> {
-+      .then([=, this](Response<AnyPointer>&& response) -> Response<DynamicStruct> {
-         return Response<DynamicStruct>(response.getAs<DynamicStruct>(resultSchemaCopy),
-                                        kj::mv(response.hook));
-       });
-diff --git a/c++/src/capnp/rpc.c++ b/c++/src/capnp/rpc.c++
-index d66d1a22..2fe58e69 100644
---- a/c++/src/capnp/rpc.c++
-+++ b/c++/src/capnp/rpc.c++
-@@ -1790,7 +1790,7 @@ private:
-         }
-
-         auto appPromise = sendResult.promise.then(
--            [=](kj::Own<RpcResponse>&& response) {
-+            [=, this](kj::Own<RpcResponse>&& response) {
-               auto reader = response->getResults();
-               return Response<AnyPointer>(reader, kj::mv(response));
-             });
 diff --git a/c++/src/kj/async-io-unix.c++ b/c++/src/kj/async-io-unix.c++
 index 7e1c85fc..c05c3966 100644
 --- a/c++/src/kj/async-io-unix.c++
@@ -55,32 +29,6 @@ index 7e1c85fc..c05c3966 100644
          return writeInternal(firstPiece, morePieces, fds);
        });
      } else if (n == 0) {
-diff --git a/c++/src/kj/async-io-win32.c++ b/c++/src/kj/async-io-win32.c++
-index 37bb4e48..67159421 100644
---- a/c++/src/kj/async-io-win32.c++
-+++ b/c++/src/kj/async-io-win32.c++
-@@ -221,7 +221,7 @@ public:
-   virtual ~AsyncStreamFd() noexcept(false) {}
-
-   Promise<size_t> read(void* buffer, size_t minBytes, size_t maxBytes) override {
--    return tryRead(buffer, minBytes, maxBytes).then([=](size_t result) {
-+    return tryRead(buffer, minBytes, maxBytes).then([=, this](size_t result) {
-       KJ_REQUIRE(result >= minBytes, "Premature EOF") {
-         // Pretend we read zeros from the input.
-         memset(reinterpret_cast<byte*>(buffer) + result, 0, minBytes - result);
-diff --git a/c++/src/kj/async-io.c++ b/c++/src/kj/async-io.c++
-index 5fea50d3..fba2794a 100644
---- a/c++/src/kj/async-io.c++
-+++ b/c++/src/kj/async-io.c++
-@@ -57,7 +57,7 @@ Promise<void> AsyncInputStream::read(void* buffer, size_t bytes) {
- }
-
- Promise<size_t> AsyncInputStream::read(void* buffer, size_t minBytes, size_t maxBytes) {
--  return tryRead(buffer, minBytes, maxBytes).then([=](size_t result) {
-+  return tryRead(buffer, minBytes, maxBytes).then([=, this](size_t result) {
-     if (result >= minBytes) {
-       return result;
-     } else {
 diff --git a/c++/src/kj/compat/http.c++ b/c++/src/kj/compat/http.c++
 index 6976335e..7a63bd89 100644
 --- a/c++/src/kj/compat/http.c++

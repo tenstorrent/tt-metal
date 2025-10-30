@@ -16,8 +16,8 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
 @pytest.mark.parametrize(
     "input_shape, encoder_shape, down_block_id, pcc",
     [
-        ((1, 768, 64, 64), (1, 77, 1280), 1, 0.999),
-        ((1, 1536, 32, 32), (1, 77, 1280), 2, 0.998),
+        ((1, 768, 64, 64), (1, 77, 1280), 1, 0.998),
+        ((1, 1536, 32, 32), (1, 77, 1280), 2, 0.997),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)

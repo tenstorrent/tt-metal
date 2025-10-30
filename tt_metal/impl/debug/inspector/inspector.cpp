@@ -91,7 +91,7 @@ void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
 }
 
 void Inspector::program_compile_started(
-    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -107,7 +107,7 @@ void Inspector::program_compile_started(
 }
 
 void Inspector::program_compile_already_exists(
-    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -147,7 +147,7 @@ void Inspector::program_kernel_compile_finished(
 }
 
 void Inspector::program_compile_finished(
-    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -301,6 +301,18 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     }
     static inspector::RpcServer empty_rpc_server;
     return empty_rpc_server;
+}
+
+void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        data->fw_compile_hash.store(fw_compile_hash, std::memory_order_release);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to set FW compile hash: {}", e.what());
+    }
 }
 
 }  // namespace tt::tt_metal

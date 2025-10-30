@@ -67,7 +67,7 @@ class TTObjectEncoder:
         self.nms_thresh = nms_thresh  # is there a typo in refernece code? nms_tresh is passed but heatmaps is called with default value 0.05
         self.nms_conv = Conv(
             parameters.nms_conv,
-            parameters.conv_args,
+            parameters.layer_args,
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat16,
@@ -80,7 +80,6 @@ class TTObjectEncoder:
         dimensions = self._decode_dimensions(device, dim_offsets)
         angles = self._decode_angles(device, ang_offsets)
         peaks_torch, max_inds, scores, smoothed, mp = self._decode_heatmaps(device, heatmaps)
-
         # fallback to torch
         classids = torch.nonzero(peaks_torch)[:, 0]
 
@@ -130,7 +129,7 @@ class TTObjectEncoder:
         # Compute the center of each grid cell
         # perhaps could be moved to init block
         centers = grid[1:, 1:] + grid[:-1, :-1]
-        centers = ttnn.div(centers, 2.0)
+        centers = ttnn.divide(centers, 2.0, fast_and_approximate_mode=True)
         # Un-normalize grid offsets
         pos_offsets = ttnn.permute(pos_offsets, (0, 2, 3, 1))
         positions = pos_offsets * self.pos_std_ttnn + centers
