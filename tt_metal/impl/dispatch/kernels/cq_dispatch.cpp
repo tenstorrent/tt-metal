@@ -491,7 +491,6 @@ void process_write_linear(uint32_t num_mcast_dests) {
     }
 
     while (length != 0) {
-        // More data needs to be written, but we've exhausted the CB. Acquire more pages.
         // Transfer size is min(remaining_length, data_available_in_cb)
         uint32_t available_data = dispatch_cb_reader.wait_for_availabe_data_and_return_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
