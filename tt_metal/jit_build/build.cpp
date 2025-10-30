@@ -218,7 +218,9 @@ void JitBuildEnv::init(
     if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
     }
-
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
+        this->defines_ += "-DENABLE_TTSIM_TENSIX_DUMP ";
+    }
     if (rtoptions.get_record_noc_transfers()) {
         this->defines_ += "-DNOC_LOGGING_ENABLED ";
     }
