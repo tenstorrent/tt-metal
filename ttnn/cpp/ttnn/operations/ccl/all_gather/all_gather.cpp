@@ -36,6 +36,7 @@ ttnn::Tensor ExecuteAllGather::invoke(
         // if it is not flat, then we need to call all-gather on dim=-1 to dim=0
         if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
+            // Use signed int for countdown loop to avoid underflow when decrementing from 0.
             for (int i = mesh_shape.dims() - 1; i >= 0; --i) {
                 tensor = ttnn::all_gather(
                     tensor, dim, i, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
