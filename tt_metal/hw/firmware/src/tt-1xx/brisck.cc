@@ -23,6 +23,21 @@
 #include "remote_circular_buffer_api.h"
 #endif
 
+namespace ckernel {
+volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
+volatile tt_reg_ptr uint* pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
+
+// There are 16 mailboxes within each Tensix tile, one from each of RISCV (B, T0, T1, T2) to each of RISCV (B, T0, T1,
+// T2). Note that there are no mailboxes to or from RISCV NC. The 16 mailboxes are referenced using 4 particular address
+// ranges starting from bases listed below. Which particular mailbox is being referenced depends on the address, the
+// issuing RISCV, and whether the access is a read or a write.
+volatile tt_reg_ptr uint* mailbox_base[4] = {
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX0_BASE),
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX1_BASE),
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX2_BASE),
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX3_BASE)};
+}  // namespace ckernel
+
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
     // Enable GPREL optimizations.
