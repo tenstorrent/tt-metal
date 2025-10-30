@@ -2,20 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
-#include "blackhole/noc_nonblocking_api.h"
-#include "ethernet/tunneling.h"
+#include "noc_nonblocking_api.h"
+#include "hw/inc/ethernet/tunneling.h"
 #include "risc_common.h"
-#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
+#include "lf_dev_mem_map.hpp"
 
 namespace lite_fabric {
 
-// Interface to the connected RISC1 processor via ethernet
-struct ConnectedRisc1Interface {
+// Interface to the connected RISC processor via ethernet
+struct ConnectedRiscInterface {
     static constexpr uint32_t k_Txq = 0;
     static constexpr uint32_t k_SoftResetAddr = 0xFFB121B0;
 
-    // Put the connected RISC1 into reset
+    // Put the connected RISC into reset
     inline static void assert_connected_dm1_reset() {
         constexpr uint32_t k_ResetValue = 0x47000;
         internal_::eth_write_remote_reg(k_Txq, k_SoftResetAddr, k_ResetValue);
@@ -23,7 +25,7 @@ struct ConnectedRisc1Interface {
         }
     }
 
-    // Take the connected RISC1 out of reset
+    // Take the connected RISC out of reset
     inline static void deassert_connected_dm1_reset() {
         constexpr uint32_t k_ResetValue = k_Txq;
         internal_::eth_write_remote_reg(0, k_SoftResetAddr, k_ResetValue);
