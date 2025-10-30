@@ -13,7 +13,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, preprocess
-from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov11.common import load_torch_model
+
+# Increase L1 memory for pose model which has more outputs (bbox + conf + keypoints)
+YOLOV11_POSE_L1_SMALL_SIZE = 32768  # 32KB instead of 24KB
 from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
 from models.demos.yolov11.runner.performant_runner_pose import YOLOv11PosePerformantRunner
 
@@ -465,7 +468,7 @@ def run_yolov11_pose_demo_dataset(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV11_POSE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -506,7 +509,7 @@ def test_pose_demo(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV11_POSE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -553,7 +556,7 @@ def test_pose_demo_dp(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV11_POSE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -582,7 +585,7 @@ def test_pose_demo_dataset(device, model_type, use_weights_from_ultralytics, res
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV11_POSE_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(

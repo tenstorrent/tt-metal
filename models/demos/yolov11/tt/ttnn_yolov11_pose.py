@@ -183,60 +183,28 @@ class TtnnPoseHead:
         # Concatenate all scales (y1, y2, y3 are now interleaved)
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.to_layout(y, layout=ttnn.TILE_LAYOUT)
-        y = ttnn.squeeze(y, dim=0)
+        # Keep batch dimension for proper splitting: y shape is [B, 116, total_anchors]
 
-        # Split into bbox (64), conf (1), keypoints (51)
-        ya = y[:, :, :64]  # Bbox regression (DFL input)
-        yb = y[:, :, 64:65]  # Person confidence
-        yc = y[:, :, 65:116]  # Keypoints (51 channels)
+        # Split into bbox (64), conf (1), keypoints (51) along channel dimension
+        ya = y[:, :64, :]  # Bbox regression (DFL input) - [B, 64, total_anchors]
+        yb = y[:, 64:65, :]  # Person confidence - [B, 1, total_anchors]
+        yc = y[:, 65:116, :]  # Keypoints (51 channels) - [B, 51, total_anchors]
 
         deallocate_tensors(y1, y2, y3, x1_bbox, x2_bbox, x3_bbox, x1_conf, x2_conf, x3_conf, x1_kpts, x2_kpts, x3_kpts)
 
-        # ===== Decode bounding boxes with DFL =====
-        ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))
-        ya = ttnn.softmax_in_place(ya, dim=-1, numeric_stable=False)
-        ya = ttnn.permute(ya, (0, 2, 1, 3))
-        c = self.dfl(ya)
-        ttnn.deallocate(ya)
+        # ===== SKIP DFL PROCESSING =====
+        # Return raw outputs directly like YoloV11PoseRaw does
+        # DFL processing will be done in PyTorch CPU post-processing
 
-        c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
-        c = ttnn.permute(c, (0, 3, 1, 2))
-        c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
-        c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
-        c1, c2 = c[:, :2, :], c[:, 2:4, :]
+        # Process confidence (simple sigmoid)
+        yb = ttnn.sigmoid(yb)  # [B, 1, total_anchors]
 
-        # Get anchors and strides
-        anchor, strides = self.anchors, self.strides
-        anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)
-        strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Keep bbox and keypoints raw - no DFL decoding in TTNN
 
-        # Decode bbox
-        c1 = anchor - c1
-        c2 = anchor + c2
-        z1 = c2 - c1
-        z2 = c1 + c2
-        z2 = ttnn.div(z2, 2)
-        z = ttnn.concat((z2, z1), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        z = ttnn.multiply(z, strides)
+        # Return raw concatenated output - post-processing done in PyTorch CPU
+        dram_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        out = ttnn.concat((ya, yb, yc), dim=1, memory_config=dram_memory_config)  # [B, 116, total_anchors]
 
-        # ===== Process confidence =====
-        yb = ttnn.permute(yb, (0, 2, 1))
-        yb = ttnn.sigmoid(yb)
-
-        # ===== Keep keypoints raw for postprocessing =====
-        # Keypoints will be decoded in CPU postprocessing to match PyTorch
-        # This avoids complex TTNN operations and keeps model simple
-
-        # Convert layouts
-        deallocate_tensors(c, z1, z2, c1, c2)
-        z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
-        yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
-        yc = ttnn.to_layout(yc, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        # Concatenate: bbox + conf + keypoints
-        out = ttnn.concat((z, yb), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        out = ttnn.concat((out, yc), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        deallocate_tensors(yb, z, yc)
+        deallocate_tensors(ya, yb, yc)
 
         return out
