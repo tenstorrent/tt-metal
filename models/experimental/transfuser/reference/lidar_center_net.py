@@ -1,9 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import json
 import torch
 import torch.nn as nn
 import numpy as np
+import cv2
+from PIL import Image
+from models.experimental.transfuser.reference.config import GlobalConfig
+
 
 from models.experimental.transfuser.reference.utils import (
     get_lidar_to_bevimage_transform,
@@ -652,3 +658,184 @@ class LidarCenterNet(nn.Module):
 
         # return preds, pred_wp, rotated_bboxes, results
         return fused_features, features[0], pred_wp, preds, results, rotated_bboxes
+
+
+def process_input(
+    data_root: str,
+    frame: str,
+    *,
+    config: GlobalConfig,
+    save_debug_images: bool = False,
+    debug_output_dir: str = "debug_images",
+    normalize_image: bool = True,
+):
+    """Load and preprocess inputs directly from a dataset folder for Transfuser.
+
+    Returns a dict with keys: 'image', 'lidar', 'velocity', 'target_point', 'target_point_image'.
+    Shapes:
+      image: (1, 3, 160, 704)
+      lidar: (1, 3, 256, 256)  # 2-bin histogram + target point image
+      velocity: (1, 1)
+      target_point: (1, 2)
+      target_point_image: (1, 1, 256, 256)
+    """
+
+    # config = {
+    #     "img_resolution": (160, 704),
+    #     "scale": 1,
+    #     "img_width": 320,
+    #     "lidar_resolution_width": 256,
+    #     "lidar_resolution_height": 256,
+    #     "aug_degrees": [0],
+    #     "use_target_point_image": False,
+    #     "use_point_pillars": False,
+    # }
+    # if config_values:
+    #     config.update(config_values)
+
+    if save_debug_images:
+        os.makedirs(debug_output_dir, exist_ok=True)
+
+    # Use aug_degrees from config if present, otherwise default to [0]
+    aug_degrees = getattr(config, "aug_degrees", [0])
+
+    def normalize_rgb(rgb_tensor: torch.Tensor, use_imagenet_norm: bool = True) -> torch.Tensor:
+        rgb_tensor = rgb_tensor.float() / 255.0
+        if use_imagenet_norm:
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+            rgb_tensor = (rgb_tensor - mean) / std
+        return rgb_tensor
+
+    def lidar_to_histogram_features(lidar: np.ndarray) -> np.ndarray:
+        def splat_points(point_cloud: np.ndarray) -> np.ndarray:
+            pixels_per_meter = 8
+            hist_max_per_pixel = 5
+            x_meters_max = 16
+            y_meters_max = 32
+            xbins = np.linspace(-x_meters_max, x_meters_max, 32 * pixels_per_meter + 1)
+            ybins = np.linspace(-y_meters_max, 0, 32 * pixels_per_meter + 1)
+            hist = np.histogramdd(point_cloud[..., :2], bins=(xbins, ybins))[0]
+            hist[hist > hist_max_per_pixel] = hist_max_per_pixel
+            overhead_splat = hist / hist_max_per_pixel
+            return overhead_splat
+
+        below = lidar[lidar[..., 2] <= -2.3]
+        above = lidar[lidar[..., 2] > -2.3]
+        below_features = splat_points(below)
+        above_features = splat_points(above)
+        features = np.stack([above_features, below_features], axis=-1)
+        features = np.transpose(features, (2, 0, 1)).astype(np.float32)
+        features = np.rot90(features, -1, axes=(1, 2)).copy()
+        return features
+
+    def _scale_crop(image: Image.Image, scale: int, start_x: int, crop_x: int, start_y: int, crop_y: int) -> np.ndarray:
+        width, height = image.width // scale, image.height // scale
+        if scale != 1:
+            image = image.resize((width, height))
+        image_array = np.asarray(image)
+        cropped_image = image_array[start_y : start_y + crop_y, start_x : start_x + crop_x]
+        return cropped_image
+
+    def _shift_x_scale_crop(image: Image.Image, scale: int, crop: tuple[int, int], crop_shift: int = 0) -> np.ndarray:
+        crop_h, crop_w = crop
+        width, height = int(image.width // scale), int(image.height // scale)
+        im_resized = image.resize((width, height))
+        image_array = np.array(im_resized)
+
+        start_y = height // 2 - crop_h // 2
+        start_x = width // 2 - crop_w // 2
+        start_x += int(crop_shift // scale)
+        cropped_image = image_array[start_y : start_y + crop_h, start_x : start_x + crop_w]
+        cropped_image = np.transpose(cropped_image, (2, 0, 1))
+        return cropped_image
+
+    # RGB
+    rgb_path = os.path.join(data_root, "rgb", f"{frame}.png")
+    if not os.path.exists(rgb_path):
+        raise FileNotFoundError(f"RGB image not found: {rgb_path}")
+    rgb_image = Image.open(rgb_path).convert("RGB")
+    rgb_array = np.array(rgb_image)
+    rgb_bgr = cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR)
+
+    rgb_cameras: list[np.ndarray] = []
+    for _ in ("left", "front", "right"):
+        rgb_pos = cv2.cvtColor(rgb_bgr[:, :, :3], cv2.COLOR_BGR2RGB)
+        rgb_pos = _scale_crop(
+            Image.fromarray(rgb_pos),
+            int(config.scale),
+            0,
+            int(config.img_resolution[1]),
+            0,
+            int(config.img_resolution[0]),
+        )
+        rgb_cameras.append(rgb_pos)
+
+    rgb_concatenated = np.concatenate(rgb_cameras, axis=1)
+
+    image_degrees = []
+    for degree in aug_degrees:
+        crop_shift = degree / 60 * float(config.img_width)
+        processed_image = _shift_x_scale_crop(
+            Image.fromarray(rgb_concatenated),
+            scale=int(config.scale),
+            crop=(int(config.img_resolution[0]), int(config.img_resolution[1])),
+            crop_shift=crop_shift,
+        )
+        rgb_tensor = torch.from_numpy(processed_image).unsqueeze(0)
+        image_degrees.append(rgb_tensor.to("cpu", dtype=torch.float32))
+
+    image_tensor = torch.cat(image_degrees, dim=0)
+    if normalize_image:
+        image_tensor = normalize_rgb(image_tensor)
+
+    # LiDAR
+    lidar_path = os.path.join(data_root, "lidar", f"{frame}.npy")
+    if not os.path.exists(lidar_path):
+        raise FileNotFoundError(f"LiDAR data not found: {lidar_path}")
+    lidar_array = np.load(lidar_path, allow_pickle=True)
+    pointcloud = lidar_array[1]
+    pointcloud_xyz = pointcloud[:, :3]
+    lidar_transformed = pointcloud_xyz.copy()
+    lidar_transformed[:, 1] *= -1
+    histogram_features = lidar_to_histogram_features(lidar_transformed)
+    histogram_tensor = torch.from_numpy(histogram_features).unsqueeze(0)
+
+    # Measurements / velocity
+    meas_path = os.path.join(data_root, "measurements", f"{frame}.json")
+    if not os.path.exists(meas_path):
+        raise FileNotFoundError(f"Measurements not found: {meas_path}")
+    with open(meas_path, "r") as f:
+        measurements = json.load(f)
+    speed = measurements.get("speed", 0.0)
+    velocity_tensor = torch.tensor([[speed]], dtype=torch.float32)
+
+    # Target point and target point image
+    target_point = torch.tensor([[0.0, 0.0]], dtype=torch.float32)
+
+    def _draw_target_point(target_point_np: np.ndarray, color: tuple = (255, 255, 255)) -> np.ndarray:
+        image = np.zeros((256, 256), dtype=np.uint8)
+        tp = target_point_np.copy()
+        tp[1] += 1.3
+        point = tp * 8.0
+        point[1] *= -1
+        point[1] = 256 - point[1]
+        point[0] += 128
+        point = point.astype(np.int32)
+        point = np.clip(point, 0, 256)
+        cv2.circle(image, tuple(point), radius=5, color=color, thickness=3)
+        image = image.reshape(1, 256, 256)
+        return image.astype(np.float32) / 255.0
+
+    target_point_image = torch.from_numpy(_draw_target_point(target_point[0].numpy())).unsqueeze(0)
+
+    # LiDAR BEV (3 channels)
+    lidar_bev = torch.cat([histogram_tensor, target_point_image], dim=1)
+
+    return {
+        "image": image_tensor,
+        "lidar": lidar_bev,
+        "velocity": velocity_tensor,
+        "target_point": target_point,
+        "target_point_image": target_point_image,
+    }

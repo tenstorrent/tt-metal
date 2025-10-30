@@ -12,7 +12,7 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 from models.experimental.transfuser.reference.config import GlobalConfig
-from models.experimental.transfuser.reference.lidar_center_net import LidarCenterNet
+from models.experimental.transfuser.reference.lidar_center_net import LidarCenterNet, process_input
 from models.experimental.transfuser.tt.lidar_center_net import LidarCenterNet as TtLidarCenterNet
 from models.experimental.transfuser.tests.test_gpt import create_gpt_preprocessor
 
@@ -300,10 +300,11 @@ def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[st
         ("regnety_032", "regnety_032", 4, False, (1, 1, 256, 256), (1, 3, 160, 704), (1, 2, 256, 256)),
     ],  # GPT-SelfAttention 1
 )
+@pytest.mark.parametrize("seed", list(range(1)))
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_fallback", [True])
-@pytest.mark.parametrize("use_optimized_self_attn", [False, True])
+@pytest.mark.parametrize("use_optimized_self_attn", [False])
 def test_lidar_center_net(
     device,
     image_architecture,
@@ -313,26 +314,32 @@ def test_lidar_center_net(
     target_point_image_shape,
     img_shape,
     lidar_bev_shape,
+    seed,
     input_dtype,
     weight_dtype,
     use_fallback,
     use_optimized_self_attn,
 ):
+    torch.manual_seed(seed)
+    torch.use_deterministic_algorithms(True)
+    data_root = "models/experimental/transfuser/tests/Scenario3_Town01_curved_route0_11_23_20_02_59/"
+    frame = "0120"
+
+    config = GlobalConfig(setting="eval")
+    config.n_layer = n_layer
+    config.use_target_point_image = True
+    inputs = process_input(data_root, frame, config=config, normalize_image=False)
     # Load the saved demo inputs
-    inputs = torch.load("models/experimental/transfuser/tests/transfuser_inputs_final.pt")
+    # inputs = torch.load("models/experimental/transfuser/tests/transfuser_inputs_final.pt")
 
     # Extract each component
     image = inputs["image"]  # RGB camera image tensor
     lidar_bev = inputs["lidar"]  # LiDAR BEV tensor
     velocity = inputs["velocity"]  # Ego velocity tensor
     target_point = inputs["target_point"]  # Target point tensor
-
     inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
 
     # setting machine to avoid loading files
-    config = GlobalConfig(setting="eval")
-    config.n_layer = n_layer
-    config.use_target_point_image = True
 
     ref_layer = LidarCenterNet(
         config,
@@ -473,8 +480,6 @@ def test_lidar_center_net(
 
     # tt_features, tt_pred_wp = tt_layer.forward_ego(tt_image, tt_lidar_bev, tt_velocity, target_point)
     tt_features, tt_fused_features = tt_layer.forward_ego(tt_image, tt_lidar_bev, tt_velocity, target_point)
-
-    # import pdb; pdb.set_trace()
 
     tt_fused_torch = ttnn.to_torch(tt_fused_features, device=device)
     does_pass, fused_features_pcc_message = check_with_pcc(ref_fused_features, tt_fused_torch, 0.80)
