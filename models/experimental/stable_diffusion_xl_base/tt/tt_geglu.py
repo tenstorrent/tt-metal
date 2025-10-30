@@ -29,9 +29,6 @@ class TtGEGLU(LightweightModule):
         self.program_config_gelu = model_config.get_matmul_config(matmul_path=f"{module_path}.proj.split.gelu")
         self.compute_config = model_config.get_mm_compute_config(f"{module_path}.proj")
 
-        # assert self.program_config is not None, "Program config for split weights is None"
-        # assert self.program_config_gelu is not None, "Program config for split weights with GELU is None"
-
     def forward(self, input_tensor):
         if self.program_config is not None:
             if input_tensor.shape[2] == 4096:

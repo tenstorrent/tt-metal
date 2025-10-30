@@ -29,7 +29,6 @@ class TtFeedForward(LightweightModule):
         self.tt_weights, self.tt_bias = prepare_linear_params(device, weights, bias, ff_weights_dtype)
 
         self.ff2_model_config = model_config.get_matmul_config(f"{module_path}.net.2")
-        # assert self.ff2_model_config is not None, "ff2_model_config should not be None"
         self.default_compute_kernel_config = model_config.get_mm_compute_config(module_path)
 
     def forward(self, hidden_states):
