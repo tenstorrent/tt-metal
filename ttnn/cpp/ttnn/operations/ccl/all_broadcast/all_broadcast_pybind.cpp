@@ -20,7 +20,7 @@ void py_bind_all_broadcast(py::module& module) {
     auto doc =
         R"doc(all_broadcast(input_tensor: ttnn.Tensor, *, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, num_links: Optional[int] = 1, topology: Optional[ttnn.Topology] = ttnn.Topology.Linear) -> List[ttnn.Tensor]
 
-            All-broadcast operation across devices. This operation broadcasts data from all devices to all other devices in the mesh, returning a vector of tensors where each tensor contains the data from a corresponding device in the mesh.
+            All-broadcast operation across devices. This operation broadcasts data from all devices to all other devices in the mesh, returning a vector of tensors where each tensor contains the data from a corresponding device in the mesh. The output tensors are identical across all devices along the cluster axis if specified, otherwise they are identical across all devices in the mesh.
 
             Args:
                 input_tensor (ttnn.Tensor): Input tensor to be broadcast.
