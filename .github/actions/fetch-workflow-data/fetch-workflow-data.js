@@ -188,9 +188,9 @@ function pruneOldRuns(grouped, cutoffDate) {
     const removed = beforeCount - filtered.length;
     if (removed > 0) {
       totalRemoved += removed;
-      const oldestRemoved = runs.find(r => new Date(r.created_at) < cutoffDate);
-      if (oldestRemoved) {
-        core.info(`[PRUNE] Workflow '${name}': removed ${removed} runs (oldest removed: ${oldestRemoved.created_at})`);
+      const newestRemoved = runs.find(r => new Date(r.created_at) < cutoffDate);
+      if (newestRemoved) {
+        core.info(`[PRUNE] Workflow '${name}': removed ${removed} runs (newest removed: ${newestRemoved.created_at})`);
       }
     }
     if (filtered.length > 0) {
