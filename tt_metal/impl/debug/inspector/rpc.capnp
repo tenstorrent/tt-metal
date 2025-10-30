@@ -111,7 +111,7 @@ enum CoreCategory {
     prefetch @0;
     dispatch @1;
     dispatchS @2;
-    count @3; # Just for counting
+    count @3; # Sentinel value representing the total count of CoreCategory enum values
 }
 
 # Struct to group core entries by category

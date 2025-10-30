@@ -203,14 +203,12 @@ def read_wait_globals(
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
 
-    has_values = last_wait_count is not None or last_wait_stream is not None
-
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
     # This device._id might mismatch with the tt_cxy_pair::chip_id
     # due to TT_METAL_VISIBLE_DEVICES env variable
     # Avoid using UMD device id in tt-triage because of the mapping problem
-    # TODO: replace device._id with unique_id once its available
+    # TODO: replace device._id with unique_id once it's available
     chip_id = location._device._id
     x, y = virtual_coord
 
