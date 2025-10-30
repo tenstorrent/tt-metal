@@ -45,4 +45,10 @@ inline uint32_t get_downstream_edm_sender_channel(const bool is_2D_routing, cons
     return is_2D_routing ? direction : 1;
 }
 
+/**
+ * Implementation of memory region subtraction for defragmentation.
+ */
+std::vector<MemoryRegion> subtract_memory_regions(
+    const std::vector<MemoryRegion>& available_regions, const std::vector<MemoryRegion>& consumed_regions);
+
 }  // namespace tt::tt_fabric

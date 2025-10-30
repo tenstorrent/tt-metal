@@ -27,6 +27,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_router_elastic_channel_adapter.hpp"
 
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
@@ -259,9 +260,6 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
-template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
-using SenderEthChannel = StaticSizedSenderEthChannel<HEADER_TYPE, NUM_BUFFERS>;
-
 static constexpr bool PERF_TELEMETRY_DISABLED = perf_telemetry_mode == PerfTelemetryRecorderType::NONE;
 static constexpr bool PERF_TELEMETRY_LOW_RESOLUTION_BANDWIDTH =
     perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH;
@@ -282,18 +280,16 @@ constexpr bool ANY_SENDER_CHANNELS_ARE_ELASTIC() {
     return false;
 }
 
-constexpr bool PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC = ANY_SENDER_CHANNELS_ARE_ELASTIC();
-
 // Stubbed out the elastic channel writer adapter until elastic channels implemented
 // Issue: https://github.com/tenstorrent/tt-metal/issues/26311
 template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
 struct RouterElasticChannelWriterAdapter {};
 
-template <uint8_t SENDER_NUM_BUFFERS>
+template <bool DOWNSTREAM_IS_ELASTIC, uint8_t SENDER_NUM_BUFFERS>
 using RouterToRouterSender = std::conditional_t<
-    PERSISTENT_SENDER_CHANNELS_ARE_ELASTIC,
+    DOWNSTREAM_IS_ELASTIC,
     tt::tt_fabric::RouterElasticChannelWriterAdapter<CHUNK_N_PKTS, channel_buffer_size>,
-    tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>>;
+    tt::tt_fabric::RouterStaticSizedChannelWriterAdapter<SENDER_NUM_BUFFERS>>;
 
 constexpr bool is_spine_direction(eth_chan_directions direction) {
     return direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
@@ -1562,6 +1558,10 @@ FORCE_INLINE void run_sender_channel_step_impl(
             outbound_to_receiver_channel_pointers,
             remote_receiver_channel,
             perf_telemetry_recorder);
+        if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
+            // This will grab a new chunk if one is available and notify the producers
+            local_sender_channel.advance_to_next_cached_buffer_slot_addr();
+        }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
 
@@ -1572,27 +1572,47 @@ FORCE_INLINE void run_sender_channel_step_impl(
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
-        if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-            local_sender_channel_worker_interface
-                .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
-                    completions_since_last_check);
-        } else {
-            // Connection liveness checks are only done for connections that are not persistent
-            // For those connections, it's unsafe to use free-slots counters held in stream registers
-            // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
-            // instead because these connections will be read/write counter based instead
-            local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
-            if (channel_connection_established) {
+        if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
+            // <<<<<<< HEAD
+            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+                static_assert(
+                    SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index],
+                    "Only persistent connections are currently supported in elastic channel mode. See issue ___ for "
+                    "more "
+                    "details.");
                 local_sender_channel_worker_interface
-                    .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
+                    .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(
+                        completions_since_last_check, local_sender_channel);
             } else {
-                local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
-                // If not connected, we update the read counter in L1 as well so the next connecting worker
-                // is more likely to see space available as soon as it tries connecting
+                ASSERT(false);  // not implemented properly yet
+                // Connection liveness checks are only done for connections that are not persistent
+                // For those connections, it's unsafe to use free-slots counters held in stream registers
+                // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
+                // instead because these connections will be read/write counter based instead
+                local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
+                if (channel_connection_established) {
+                    local_sender_channel_worker_interface
+                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
+                } else {
+                    local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
+                    // If not connected, we update the read counter in L1 as well so the next connecting worker
+                    // is more likely to see space available as soon as it tries connecting
+                }
             }
         }
     }
-
+    // if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+    //     // send new credits if the chunk is completed
+    //     // CHECKLIST:
+    //     // 1) Where do we advance through the chunk
+    //     //    A: in send_next_data
+    //     // 2) Where do we release the chunk
+    //     //    A: we release the chunk when we get an ack from the receiver and it's the last slot
+    //     // 3) Where do we acquire a new chunk after send (but before ack)
+    //     //    A:
+    //     // 4) Verify that in the path between 2) and 3), we don't possibly lose the last
+    //     //    chunk to another channel (which would cause starvation)
+    // }
     if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
@@ -2600,9 +2620,13 @@ void kernel_main() {
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     // TODO: change to TMP.
-    std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>
+    static constexpr bool DOWNSTREAM_VC0_IS_ELASTIC = DOWNSTREAM_IS_ELASTIC;
+    static constexpr bool DOWNSTREAM_VC1_IS_ELASTIC = DOWNSTREAM_IS_ELASTIC;
+    std::array<
+        RouterToRouterSender<DOWNSTREAM_VC0_IS_ELASTIC, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
+        NUM_USED_RECEIVER_CHANNELS_VC0>
         downstream_edm_noc_interfaces_vc0;
-    RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1> downstream_edm_noc_interface_vc1;
+    RouterToRouterSender<DOWNSTREAM_VC1_IS_ELASTIC, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1> downstream_edm_noc_interface_vc1;
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
         has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids_ordered);
 
@@ -2865,16 +2889,10 @@ void kernel_main() {
             if (has_downstream_edm_vc0_buffer_connection) {
                 downstream_edm_noc_interfaces_vc0[0]
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
-                ASSERT(
-                    get_ptr_val(downstream_edm_noc_interfaces_vc0[0].get_worker_credits_stream_id()) ==
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC0);
             }
             if (has_downstream_edm_vc1_buffer_connection) {
                 downstream_edm_noc_interface_vc1
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
-                ASSERT(
-                    get_ptr_val(downstream_edm_noc_interface_vc1.get_worker_credits_stream_id()) ==
-                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1);
             }
         }
     }

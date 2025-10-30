@@ -26,6 +26,7 @@
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/builder/global_pool_allocator.hpp"
 
 namespace tt::tt_fabric {
 
@@ -368,8 +369,15 @@ struct FabricEriscDatamoverConfig {
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
+    // Receiver channel to downstream adapters
+    std::array<std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter>, builder_config::num_receiver_channels>
+        receiver_channel_to_downstream_adapters = {};
+
 private:
     void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
+
+    void add_receiver_channel_to_downstream_adapters(
+        GlobalPoolAllocator global_pool_allocator, size_t vc_idx, const FabricEriscDatamoverOptions& options);
 
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };

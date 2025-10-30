@@ -28,9 +28,21 @@ struct MemoryRegion {
 
     size_t get_size() const { return size; }
     size_t get_start_address() const { return start_address; }
+
+    // end address is exclusive
     size_t get_end_address() const { return start_address + size; }
     bool contains(size_t address) const { return address >= start_address && address < get_end_address(); }
 };
+
+/**
+ * Subtract consumed memory regions from available regions to get remaining contiguous regions.
+ * This is used for memory defragmentation after removing channels.
+ * @param available_regions The original available memory regions
+ * @param consumed_regions The regions that are consumed/allocated
+ * @return Vector of remaining contiguous memory regions
+ */
+std::vector<MemoryRegion> subtract_memory_regions(
+    const std::vector<MemoryRegion>& available_regions, const std::vector<MemoryRegion>& consumed_regions);
 
 enum class FabricEriscDatamoverType {
     Default = 0,

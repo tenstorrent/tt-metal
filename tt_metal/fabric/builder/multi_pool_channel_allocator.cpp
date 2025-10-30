@@ -38,6 +38,8 @@ void MultiPoolChannelAllocator::emit_ct_args(
     // Step 0: Emit special tag (replaces the tag that was in static allocator)
     ct_args.push_back(0xabcd1234);
 
+    log_info(tt::LogMetal, "MultiPoolChannelAllocator::emit_ct_args");
+
     auto get_static_channel_allocator_num_channels =
         [](FabricChannelAllocator* allocator) -> std::pair<size_t, size_t> {
         size_t num_sender_channels = 0;
@@ -66,6 +68,7 @@ void MultiPoolChannelAllocator::emit_ct_args(
         }
     }
     ct_args.push_back(static_cast<uint32_t>(num_pools));
+    log_info(tt::LogMetal, "\tnum_pools={}", num_pools);
 
     // Step 2: Emit array of pool types
     for (size_t i = 0; i < pool_types_.size(); ++i) {
@@ -81,6 +84,7 @@ void MultiPoolChannelAllocator::emit_ct_args(
             ct_args.push_back(static_cast<uint32_t>(pool_type));
         }
     }
+    log_info(tt::LogMetal, "\tpool_types={}", this->pool_types_);
 
     // Step 3: Emit individual pool CT args
     // Each pool allocator emits its own compile-time arguments (WITHOUT special tags)
@@ -88,25 +92,52 @@ void MultiPoolChannelAllocator::emit_ct_args(
         pool_allocator->emit_ct_args(ct_args, num_fwd_paths, num_used_sender_channels, num_used_receiver_channels);
     }
 
-    // Emit the sender channel to pool index
-    for (size_t i = 0; i < pool_allocators_.size(); ++i) {
-        TT_FATAL(
-            dynamic_cast<FabricStaticSizedChannelsAllocator*>(pool_allocators_[i].get()) ||
-                dynamic_cast<FabricRemoteChannelsAllocator*>(pool_allocators_[i].get()),
-            "Non static sized channel allocators not supported in the code below yet");
-    }
+    // for each pool, index into its channel index map to get the pool index
+    auto build_channel_to_pool_index_map =
+        [&](const std::function<const std::vector<size_t>&(FabricChannelAllocator*)>& get_local_to_global_index_map)
+        -> std::vector<size_t> {
+        std::vector<size_t> channel_to_pool_index = {};
+        bool did_something = false;
+        do {
+            did_something = false;
+            for (size_t pool_idx = 0; pool_idx < pool_allocators_.size(); ++pool_idx) {
+                auto pool_allocator = pool_allocators_[pool_idx];
+                const auto& local_to_global_index_map = get_local_to_global_index_map(pool_allocator.get());
+                for (size_t local = 0; local < local_to_global_index_map.size(); ++local) {
+                    if (channel_to_pool_index.size() == local) {
+                        channel_to_pool_index.push_back(pool_idx);
+                        did_something = true;
+                    }
+                }
+            }
+        } while (did_something);
+        return channel_to_pool_index;
+    };
+
+    auto sender_channel_to_pool_index = build_channel_to_pool_index_map(
+        [](FabricChannelAllocator* allocator) { return allocator->get_sender_local_to_global_index_map(); });
+    auto receiver_channel_to_pool_index = build_channel_to_pool_index_map(
+        [](FabricChannelAllocator* allocator) { return allocator->get_receiver_local_to_global_index_map(); });
+
+    TT_FATAL(
+        sender_channel_to_pool_index.size() == num_used_sender_channels,
+        "Sender channel to pool index size {} does not match num_used_sender_channels {}",
+        sender_channel_to_pool_index.size(),
+        num_used_sender_channels);
     for (size_t i = 0; i < num_used_sender_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(i));
+        ct_args.push_back(static_cast<uint32_t>(sender_channel_to_pool_index[i]));
     }
+    TT_FATAL(
+        receiver_channel_to_pool_index.size() == num_used_receiver_channels,
+        "Receiver channel to pool index size {} does not match num_used_receiver_channels {}",
+        receiver_channel_to_pool_index.size(),
+        num_used_receiver_channels);
     for (size_t i = 0; i < num_used_receiver_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(i + num_used_sender_channels));
+        ct_args.push_back(static_cast<uint32_t>(receiver_channel_to_pool_index[i]));
     }
 
-    // Emit the sender channel to pool type -- NVM
-
-    // Emit the receiver channel to pool index
-
-    // Emit the receiver channel to pool type -- NVM
+    log_info(tt::LogMetal, "\tsender_channel_to_pool_index_map={}", sender_channel_to_pool_index);
+    log_info(tt::LogMetal, "\treceiver_channel_to_pool_index_map={}", receiver_channel_to_pool_index);
 }
 
 std::shared_ptr<FabricChannelAllocator> MultiPoolChannelAllocator::get_pool(size_t pool_index) const {

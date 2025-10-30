@@ -222,6 +222,9 @@ class RunTimeOptions {
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
+    // flag: enable experimental fabric elastic channels feature
+    bool enable_fabric_elastic_channels = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -539,6 +542,9 @@ public:
             ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
         }
     }
+
+    bool get_enable_fabric_elastic_channels() const { return enable_fabric_elastic_channels; }
+    void set_enable_fabric_elastic_channels(bool enable) { enable_fabric_elastic_channels = enable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
