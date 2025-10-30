@@ -19,10 +19,12 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const Tensor& stats_tensor,
     Tensor& output_tensor,
     float eps,
+    uint32_t num_heads,
     DeviceComputeKernelConfig compute_kernel_config);
 
 struct FusedRMSNormPostAllGather {
     float eps;
+    uint32_t num_heads;
     MemoryConfig memory_config;
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;

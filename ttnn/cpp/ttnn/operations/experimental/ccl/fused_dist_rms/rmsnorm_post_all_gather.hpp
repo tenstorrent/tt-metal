@@ -18,6 +18,7 @@ struct ExecuteFusedRMSNormPostAllGather {
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& stats,
         float epsilon = 1e-5,
+        uint32_t num_heads = 1,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const DataType>& dtype = std::nullopt);
