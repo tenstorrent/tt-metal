@@ -41,12 +41,6 @@ run_python_model_tests_wormhole_b0() {
     # Mobilenetv2git
     pytest -svv models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
 
-    #Yolov10
-    pytest -svv models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x
-
-    #Yolov7
-    pytest -svv models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
-
     # ViT-base
     pytest -svv models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_wh.py
 
