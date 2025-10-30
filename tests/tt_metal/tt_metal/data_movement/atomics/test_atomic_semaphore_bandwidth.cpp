@@ -25,7 +25,6 @@ struct AtomicSemaphoreConfig {
     uint32_t semaphore_addr_offset = 4096;  // Place semaphore 4KB from base
     uint32_t atomic_inc_value = 1;
     NOC noc_id = NOC::NOC_0;
-    DataFormat l1_data_format = DataFormat::Float16_b;
 };
 
 /// @brief Runs atomic semaphore bandwidth test with sender and receiver cores
@@ -208,8 +207,7 @@ void increment_value_sweep_test(
                     .num_of_transactions = num_transactions,
                     .semaphore_addr_offset = 4096,
                     .atomic_inc_value = atomic_inc_value,
-                    .noc_id = noc_id,
-                    .l1_data_format = DataFormat::Float16_b};
+                    .noc_id = noc_id};
 
                 log_info(
                     LogTest,
@@ -242,8 +240,7 @@ void directed_performance_test(
         .num_of_transactions = num_transactions,
         .semaphore_addr_offset = 4096,
         .atomic_inc_value = atomic_inc_value,
-        .noc_id = NOC::NOC_0,
-        .l1_data_format = DataFormat::Float16_b};
+        .noc_id = NOC::NOC_0};
 
     log_info(
         LogTest,
