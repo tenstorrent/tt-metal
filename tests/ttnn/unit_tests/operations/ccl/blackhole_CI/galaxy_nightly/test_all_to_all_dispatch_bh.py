@@ -9,7 +9,10 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
+from models.common.utility_functions import (
+    skip_for_wormhole_b0,
+    skip_for_n_or_less_dev,
+)
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
@@ -18,6 +21,8 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
 from tracy import signpost
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -93,6 +98,8 @@ def test_all_to_all_dispatch_no_trace(
     )
 
 
+@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -147,7 +154,6 @@ def test_all_to_all_dispatch_trace(
     output_memory_config,
     device_params,
 ):
-    topology = ttnn.Topology.Linear
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
     else:

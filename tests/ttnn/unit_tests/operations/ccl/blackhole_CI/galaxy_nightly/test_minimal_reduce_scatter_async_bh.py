@@ -9,9 +9,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.common.utility_functions import (
-    skip_for_blackhole,
     skip_for_wormhole_b0,
-    skip_for_n_dev,
     skip_for_n_or_less_dev,
 )
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
@@ -48,8 +46,6 @@ def run_reduce_scatter_impl(
     if rs_topology == ttnn.Topology.Ring:
         pytest.skip("Galaxy is currently mesh only")
     torch.manual_seed(0)
-
-    tile = (32, 32)
 
     # Set the default config
     if mem_config_intermediate is None:
@@ -240,6 +236,7 @@ def run_reduce_scatter_impl(
 
 
 @skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype, is_training_shape",
@@ -342,7 +339,7 @@ def test_reduce_scatter_async_line(
 
 
 @skip_for_wormhole_b0()
-@skip_for_n_or_less_dev(3)
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
@@ -433,7 +430,7 @@ def test_reduce_scatter_async_training_shapes(
 
 
 @skip_for_wormhole_b0()
-@skip_for_n_or_less_dev(3)
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",
@@ -580,7 +577,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
 
 
 @skip_for_wormhole_b0()
-@skip_for_n_or_less_dev(3)
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",
@@ -697,7 +694,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 
 
 @skip_for_wormhole_b0()
-@skip_for_n_or_less_dev(3)
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",

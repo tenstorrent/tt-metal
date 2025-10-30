@@ -9,7 +9,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
 def run_with_trace(
@@ -221,7 +221,6 @@ def run_all_broadcast_impl(
                     eq, output = comp_pcc(tt_output_tensor, output_tensor)
                 if not eq:
                     logger.error(f"output mismatch for tensor {i}")
-                    passed = False
                     assert eq, f"{i} FAILED: {output}"
     assert (
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
@@ -234,6 +233,7 @@ def run_all_broadcast_impl(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
@@ -284,6 +284,7 @@ def test_all_broadcast(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
@@ -334,6 +335,7 @@ def test_all_broadcast_trace(
 
 
 @skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [

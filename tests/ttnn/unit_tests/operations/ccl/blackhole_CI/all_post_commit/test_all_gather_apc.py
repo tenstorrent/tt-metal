@@ -8,9 +8,7 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
 from models.common.utility_functions import (
-    skip_for_blackhole,
     skip_for_wormhole_b0,
-    skip_for_n_dev,
     skip_for_n_or_less_dev,
 )
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
@@ -379,6 +377,7 @@ def test_all_gather_8D_vertical(
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape,dim",

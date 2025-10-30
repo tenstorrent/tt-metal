@@ -15,6 +15,7 @@ def ti_cond_skip(condition, reason):
 
 
 @skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
@@ -120,6 +121,7 @@ def test_all_gather_linear_2D_nightly(
 
 
 @skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",

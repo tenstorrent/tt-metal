@@ -9,7 +9,10 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0, skip_for_n_dev
+from models.common.utility_functions import (
+    skip_for_wormhole_b0,
+    skip_for_n_or_less_dev,
+)
 
 
 def run_with_trace(
@@ -234,6 +237,7 @@ def run_all_broadcast_impl(
 
 # Enumerate the post-commit cases explicitly
 @skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
