@@ -951,7 +951,6 @@ void Cluster::initialize_ethernet_sockets() {
                 this->ethernet_sockets_.at(chip_id).end()) {
                 this->ethernet_sockets_.at(chip_id).insert({connected_chip_id, {}});
             }
-        }
             if (this->ethernet_sockets_.find(connected_chip_id) == this->ethernet_sockets_.end()) {
                 this->ethernet_sockets_.insert({connected_chip_id, {}});
             }
@@ -970,7 +969,7 @@ void Cluster::initialize_ethernet_sockets() {
                             std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core))));
                 }
             }
-    }
+        }
     }
 }
 
