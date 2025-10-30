@@ -182,7 +182,7 @@ protected:
     }
 };
 
-class Fabric1DUDMModeFixture : public BaseFabricFixture {
+class NightlyFabric1DUDMModeFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         BaseFabricFixture::DoSetUpTestSuite(
