@@ -65,9 +65,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
 
     // Circular buffer config
     // ----------------------
-    auto src_cb_index = tt::CBIndex::c_0;
-    auto dst_cb_index = tt::CBIndex::c_1;
-    auto prev_cb_index = tt::CBIndex::c_2;
+    constexpr auto src_cb_index = tt::CBIndex::c_0;
+    constexpr auto dst_cb_index = tt::CBIndex::c_1;
+    constexpr auto prev_cb_index = tt::CBIndex::c_2;
 
     auto src_data_format = datatype_to_dataformat_converter(a.dtype());
     auto dst_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -166,27 +166,27 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
 
     // runtime_args_callback: If only the tensor changes, invoke this callback and skip the rest
     // -----------------------------------------------------------------------------------------
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, all_cores](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, all_cores = std::move(all_cores)](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer()->address();
-        auto dst_buffer = output_tensors.at(0).buffer()->address();
+        auto src_buffer = input_tensors[0].buffer()->address();
+        auto dst_buffer = output_tensors[0].buffer()->address();
 
         // Update buffer addresses for all cores
         for (const auto& range : all_cores.ranges()) {
             for (const auto& core : range) {
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                reader_runtime_args[0] = src_buffer;
-                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                writer_runtime_args[0] = dst_buffer;
+                GetRuntimeArgs(program, reader_kernel_id, core)[0] = src_buffer;
+                GetRuntimeArgs(program, writer_kernel_id, core)[0] = dst_buffer;
             }
         }
     };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+    return {
+        .program = std::move(program),
+        .override_runtime_arguments_callback = std::move(override_runtime_args_callback)};
 }
 
 }  // namespace ttnn::operations::reduction::accumulation

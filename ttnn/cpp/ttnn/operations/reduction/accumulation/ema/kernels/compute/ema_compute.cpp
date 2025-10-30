@@ -85,8 +85,7 @@ void MAIN {
 
     //-------------------------------------------------------------------------
     // Main loop - compute ema for each batch
-    ema_init();
-    ema_load_alpha_beta(alpha_bits, beta_bits);
+    ema_init(alpha_bits, beta_bits);
     transpose_wh_init(src_cb, dst_cb);
 
     for (uint32_t batch_id = 0; batch_id < total_batches_per_core; ++batch_id) {
