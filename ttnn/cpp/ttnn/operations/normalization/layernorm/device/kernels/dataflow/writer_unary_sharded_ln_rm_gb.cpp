@@ -51,7 +51,7 @@ void kernel_main() {
         const uint32_t scalar_w = get_arg_val<uint32_t>(1);
         generate_reduce_scaler(cb_in_2, scalar_w);
 
-        constexpr uint32_t eps_cb_id = 3;
+        constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
         const uint32_t eps = get_arg_val<uint32_t>(2);
         generate_bcast_col_scalar(eps_cb_id, eps);
 
