@@ -36,7 +36,7 @@ void kernel_main() {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 DPRINT << "read in0 on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
                        << ENDL();
-                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                // cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifndef SKIP_IN0
                 uint32_t in0_write_ptr = get_write_ptr(cb_id_in0);
@@ -53,7 +53,7 @@ void kernel_main() {
                 noc_async_read_barrier();
 #endif
 
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                // cb_push_back(cb_id_in0, in0_block_num_tiles);
             }
         }
     }

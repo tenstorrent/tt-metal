@@ -13,6 +13,18 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
+#include "tools/profiler/kernel_profiler.hpp"
+
+// FIXME: this shouldn't be statically allocated
+constexpr uint32_t PERF_INPUT_A = 0x1A000;
+constexpr uint32_t PERF_INPUT_B = PERF_INPUT_A + 16 * 4096;
+constexpr uint32_t PERF_INPUT_C = PERF_INPUT_B + 16 * 4096;
+constexpr uint32_t PERF_OUTPUT = PERF_INPUT_C + 16 * 4096;
+
+constexpr uint32_t PERF_ADDRESS(uint32_t buffer, uint32_t tile) {
+    uint32_t address = buffer + (tile % 16) * 4096;  // Loop every 16 tiles, to prevent escaping memory
+    return address / 16 - 1;                         // Correct the L1 Address for Tensix
+}
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -40,6 +52,7 @@ void matmul_blocks(
     const uint32_t subblock_h,
     const uint32_t subblock_w,
     const bool accumulate_intermediate) {
+#if 0
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -51,15 +64,23 @@ void matmul_blocks(
 
     reconfig_data_format(in1_cb, in0_cb);
     pack_reconfig_data_format(out_cb);
-    if (accumulate_intermediate) {
-        PACK((llk_pack_reconfig_l1_acc(1)));
-    } else {
-        PACK((llk_pack_reconfig_l1_acc(0)));
-    }
+
+    // asm volatile("ebreak");
+    // if (accumulate_intermediate) {
+    //     PACK((llk_pack_reconfig_l1_acc(1)));
+    // } else {
+    //     PACK((llk_pack_reconfig_l1_acc(0)));
+    // }
+
+    DPRINT << "M_num_subblocks: " << M_num_subblocks
+           << ", N_num_subblocks: " << N_num_subblocks
+           << ", K_block_tiles: " << K_block_tiles
+           << ENDL();
 
     for (uint32_t M_subblock = 0; M_subblock < M_num_subblocks; ++M_subblock) {
         uint32_t in1_index_offset = 0;
         for (uint32_t N_subblock = 0; N_subblock < N_num_subblocks; ++N_subblock) {
+            // DeviceZoneScopedN("MATMUL_BLOCK");
             tile_regs_acquire();
 
             uint32_t dst_index = 0;
@@ -67,6 +88,9 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
+                DPRINT << "sublock_w: " << subblock_w << ", subblock_h: " << subblock_h
+                       << ", K_block_tiles: " << K_block_tiles
+                       << ENDL();
                 matmul_block(
                     in0_cb, in1_cb, in0_index, in1_index, dst_index, false, subblock_w, subblock_h, K_block_tiles);
                 in0_index++;
@@ -93,7 +117,14 @@ void matmul_blocks(
         in0_index_offset += subblock_h * K_block_tiles;
     }
 
-    PACK((llk_pack_reconfig_l1_acc(0)));
+    // PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+    for (uint32_t loop = 0; loop < 16; loop++) {
+        for (uint32_t tile = 0; tile < 4; tile++) {
+            // _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(tile, PERF_ADDRESS(PERF_OUTPUT, tile));
+            pack_tile<true>(loop, out_cb, tile);
+        }
+    }
 }
 
 void safe_print_full_tile(uint32_t cb_id) {
@@ -131,40 +162,92 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
-    for (uint32_t m_block = 0; m_block < M_num_blocks; m_block++) {
-        for (uint32_t n_block = 0; n_block < N_num_blocks; n_block++) {
-            // Accumulation buffer
-            cb_reserve_back(intermediate_cb, out_block_num_tiles);
-            for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
-                // safe_print_full_tile(in0_cb);
-                // safe_print_full_tile(in1_cb);
-                DPRINT << "matmul on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
-                       << ENDL();
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    M_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    M_num_subblocks,
-                    N_num_subblocks,
-                    subblock_h,
-                    subblock_w,
-                    k_block > 0);
-                cb_pop_front(in0_cb, in0_block_num_tiles);
-                cb_pop_front(in1_cb, in1_block_num_tiles);
+    // mm_block_init_short(
+    //     in0_cb, in1_cb, false /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, K_block_tiles /*kt_dim*/);
+
+    // reconfig_data_format(in1_cb, in0_cb);
+    // pack_reconfig_data_format(intermediate_cb);
+
+    PACK((_llk_pack_hw_configure_<true>(0, 0, 4)));
+    PACK((_llk_pack_init_<
+          /* untilize */ false,
+          /* zero_output */ false,
+          DstTileFaceLayout::RowMajor,
+          /* write_tile_header */ false>(0)));
+    PACK((_llk_pack_dest_init_<DstSync::SyncHalf, true>()));
+    ckernel::tensix_sync();
+
+    // asm volatile("ebreak");
+    // for(int i = 0; i < 1; i++)
+    {
+        DeviceZoneScopedN("MATMUL_BLOCKS");
+        for (uint32_t loop = 0; loop < 256; loop++) {
+            for (uint32_t tile = 0; tile < 4; tile++) {
+                // Testing Packer API
+                // pack_tile<false>(tile, out_cb, tile);
+
+                // Testing Packer llk
+                PACK((_llk_pack_<DstSync::SyncHalf, true>(tile, PERF_ADDRESS(PERF_OUTPUT, tile))));
+
+                // Testing llk initialization in loop
+                // PACK((_llk_pack_hw_configure_<true>(0, 0, 4)));
+                // PACK((_llk_pack_init_</* untilize */ false,/* zero_output */ false,DstTileFaceLayout::RowMajor,/*
+                // write_tile_header */ false>(0))); PACK((_llk_pack_dest_init_<DstSync::SyncHalf, true>()));
+
+                // Testing RISC counter
+                // volatile uint32_t counter = 0;
+                // for (uint32_t i = 0; i < 1000; i++)
+                // {
+                //     counter++;
+                // }
             }
-            cb_push_back(intermediate_cb, out_block_num_tiles);
-            cb_wait_front(intermediate_cb, out_block_num_tiles);
-            // safe_print_full_tile(intermediate_cb);
-            cb_reserve_back(out_cb, out_block_num_tiles);
-            copy_block(intermediate_cb, out_cb, out_block_num_tiles);
-            cb_push_back(out_cb, out_block_num_tiles);
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
+        ckernel::tensix_sync();
     }
+
+    // for (uint32_t m_block = 0; m_block < M_num_blocks; m_block++) {
+    //     for (uint32_t n_block = 0; n_block < N_num_blocks; n_block++) {
+    //         // Accumulation buffer
+    //         // cb_reserve_back(intermediate_cb, out_block_num_tiles);
+    //         for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+    //             //cb_wait_front(in0_cb, in0_block_num_tiles);
+    //             //cb_wait_front(in1_cb, in1_block_num_tiles);
+    //             {
+    //                 DeviceZoneScopedN("MATMUL_BLOCKS");
+    //                 // // safe_print_full_tile(in0_cb);
+    //                 // // safe_print_full_tile(in1_cb)
+    //                 // DPRINT << "M_num_blocks: " << M_num_blocks
+    //                 //     << ", N_num_blocks: " << N_num_blocks
+    //                 //     << ", K_num_blocks: " << K_num_blocks
+    //                 //     << ENDL();
+    //                 // DPRINT << "matmul on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " <<
+    //                 k_block
+    //                 //     << ENDL();
+    //                 // matmul_blocks(
+    //                 //     in0_cb,
+    //                 //     in1_cb,
+    //                 //     intermediate_cb,
+    //                 //     M_block_tiles,
+    //                 //     N_block_tiles,
+    //                 //     K_block_tiles,
+    //                 //     M_num_subblocks,
+    //                 //     N_num_subblocks,
+    //                 //     subblock_h,
+    //                 //     subblock_w,
+    //                 //     k_block > 0);
+
+    //             }
+    //             //cb_pop_front(in0_cb, in0_block_num_tiles);
+    //             //cb_pop_front(in1_cb, in1_block_num_tiles);
+    //         }
+    //         // cb_push_back(intermediate_cb, out_block_num_tiles);
+    //         // cb_wait_front(intermediate_cb, out_block_num_tiles);
+    //         // safe_print_full_tile(intermediate_cb);
+    //         //cb_reserve_back(out_cb, out_block_num_tiles);
+    //         //copy_block(intermediate_cb, out_cb, out_block_num_tiles);
+    //         //cb_push_back(out_cb, out_block_num_tiles);
+    //         // cb_pop_front(intermediate_cb, out_block_num_tiles);
+    //     }
+    // }
 }
 }  // namespace NAMESPACE

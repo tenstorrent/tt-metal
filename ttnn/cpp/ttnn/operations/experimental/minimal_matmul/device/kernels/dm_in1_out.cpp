@@ -9,9 +9,9 @@
 #include "debug/dprint_pages.h"
 
 void safe_print_bf16_tile(uint32_t cb_id) {
-#if defined(DEBUG_PRINT_ENABLED)
-    tt::data_movement::common::print_bf16_tile(cb_id);
-#endif
+    // #if defined(DEBUG_PRINT_ENABLED)
+    //     tt::data_movement::common::print_bf16_tile(cb_id);
+    // #endif
 }
 
 void kernel_main() {
@@ -48,7 +48,7 @@ void kernel_main() {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 DPRINT << "read in1 on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
                        << ENDL();
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                // cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
 #ifndef SKIP_IN1
                 uint32_t in1_write_ptr = get_write_ptr(cb_id_in1);
@@ -65,10 +65,10 @@ void kernel_main() {
                 noc_async_read_barrier();
 #endif
 
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                // cb_push_back(cb_id_in1, in1_block_num_tiles);
             }
             // We have an output block to write out
-            cb_wait_front(cb_id_out, out_block_num_tiles);
+            // cb_wait_front(cb_id_out, out_block_num_tiles);
 
 #ifndef SKIP_OUT
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
@@ -87,7 +87,7 @@ void kernel_main() {
             noc_async_write_barrier();
 #endif
 
-            cb_pop_front(cb_id_out, out_block_num_tiles);
+            // cb_pop_front(cb_id_out, out_block_num_tiles);
         }
     }
 }
