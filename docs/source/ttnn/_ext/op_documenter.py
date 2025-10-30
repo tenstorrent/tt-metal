@@ -64,8 +64,12 @@ class Param:
         # Parse the default value from the description
         default = None
         if "Defaults to" in description:
-            # Match the default value, stopping at period, comma, or end of sentence
-            default_match = re.search(r"Defaults to [`']?([^`'.,\)]+)[`']?", description)
+            # Match the default value - handles numbers (including floats), strings in backticks/quotes, None, etc.
+            # First try to match values enclosed in backticks or quotes
+            default_match = re.search(r"Defaults to [`']([^`']+)[`']", description)
+            if not default_match:
+                # If no backticks/quotes, match until comma, period followed by space, or closing paren
+                default_match = re.search(r"Defaults to ([^,\)]+?)(?:\.\s|,|\)|\.$|$)", description)
             if default_match:
                 default = default_match.group(1).strip()
 
