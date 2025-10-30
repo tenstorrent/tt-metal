@@ -525,6 +525,7 @@ CCL
    ttnn.mesh_partition
    ttnn.all_to_all_combine
    ttnn.all_to_all_dispatch
+
 Embedding
 =========
 
