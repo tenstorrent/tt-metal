@@ -568,15 +568,14 @@ on:
         type: boolean
         default: true
       arch:
-        required: true
+        required: false
         type: choice
         options:
           - wormhole_b0
           - blackhole
-        default: "wormhole_b0"
       runner-label:
         description: "Single sweep only"
-        required: true
+        required: false
         type: choice
         options:
           - N150
@@ -588,7 +587,6 @@ on:
           - BH-LLMBox
           - BH-DeskBox
           - BH-LoudBox
-        default: "N150"
 
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
@@ -739,13 +737,13 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: ttnn sweep tests ${{ inputs.arch }} ${{ inputs['runner-label'] }}
-            arch: ${{ inputs.arch }}
-            tt-smi-cmd: ${{ (inputs['runner-label'] == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
+          - name: ttnn sweep tests ${{ github.event.inputs.arch || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
+            arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+            tt-smi-cmd: ${{ ((github.event.inputs['runner-label'] || 'N150') == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
             runs-on: >-
               ${{
-                (inputs['runner-label'] == 'topology-6u' || inputs['runner-label'] == 'BH-LLMBox' || inputs['runner-label'] == 'BH-DeskBox' || inputs['runner-label'] == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs['runner-label']))
-                || format('tt-ubuntu-2204-{0}-viommu-stable', inputs['runner-label'])
+                ((github.event.inputs['runner-label'] || 'N150') == 'topology-6u' || (github.event.inputs['runner-label'] || 'N150') == 'BH-LLMBox' || (github.event.inputs['runner-label'] || 'N150') == 'BH-DeskBox' || (github.event.inputs['runner-label'] || 'N150') == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', github.event.inputs['runner-label'] || 'N150'))
+                || format('tt-ubuntu-2204-{0}-viommu-stable', github.event.inputs['runner-label'] || 'N150')
               }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
