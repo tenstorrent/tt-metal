@@ -39,23 +39,11 @@ void kernel_main() {
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
-    constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
     const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
-
-#ifdef FUSE_GAMMA
-    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-#endif
-#ifdef FUSE_BETA
-    const auto addrb = TensorAccessor(beta_args, beta_addr, gamma_stick_size);
-    const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
-#endif
 
     // Generate constant tiles for layernorm compute
     uint32_t scaler = get_arg_val<uint32_t>(5);
@@ -93,44 +81,5 @@ void kernel_main() {
 
         }  // wt loop
 
-#if defined FUSE_GAMMA || defined FUSE_BETA
-        if (ncht == 0) {
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-#ifdef FUSE_GAMMA
-                {
-                    cb_reserve_back(cb_gamma, blk);
-                    uint32_t l1_write_addr = get_write_ptr(cb_gamma);
-                    for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t gamma_noc_addr = get_noc_addr(y_offset + wt + r, addrg);
-                        noc_async_read(gamma_noc_addr, l1_write_addr, 32 * 2);
-                        gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
-                        noc_async_read_barrier();
-                        noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32);
-                        l1_write_addr += gamma_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_gamma, blk);
-                }
-#endif
-
-#ifdef FUSE_BETA
-                {
-                    cb_reserve_back(cb_beta, blk);
-                    uint32_t l1_write_addr = get_write_ptr(cb_beta);
-                    for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
-                        noc_async_read(beta_noc_addr, l1_write_addr, 32 * 2);
-                        beta_noc_addr = get_noc_addr(l1_write_addr + 32);
-                        noc_async_read_barrier();
-                        noc_async_read(beta_noc_addr, l1_write_addr + 512, 32);
-                        l1_write_addr += beta_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_beta, blk);
-                }
-#endif
-            }  // wt loop
-        }
-#endif
     }  // ncht loop
 }
