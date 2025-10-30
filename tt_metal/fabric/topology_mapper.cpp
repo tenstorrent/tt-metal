@@ -215,6 +215,9 @@ void TopologyMapper::build_mapping() {
         auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
         auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
 
+        log_debug(tt::LogFabric, "TopologyMapper: Adjacency map logical: {}", adjacency_map_logical);
+        log_debug(tt::LogFabric, "TopologyMapper: Adjacency map physical: {}", adjacency_map_physical);
+
         // Use sat solver algo to preserve the logical connectivity in the physical topology
         populate_fabric_node_id_to_asic_id_mappings(adjacency_map_physical, adjacency_map_logical);
 
@@ -806,6 +809,10 @@ MeshCoordinateRange TopologyMapper::get_coord_range(MeshId mesh_id, std::optiona
 std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const {
     // Compute coord and check which host range contains it
     MeshCoordinate coord = mesh_graph_.chip_to_coordinate(mesh_id, chip_id);
+    return get_host_rank_for_coord(mesh_id, coord);
+}
+
+std::optional<MeshHostRankId> TopologyMapper::get_host_rank_for_coord(MeshId mesh_id, const MeshCoordinate& coord) const {
     for (const auto& [key, range] : mesh_host_rank_coord_ranges_) {
         if (key.first == mesh_id && range.contains(coord)) {
             return key.second;

@@ -161,8 +161,7 @@ void MetalContext::initialize(
         // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
         // Uses full 64-bit fw_compile_hash for proper change detection
         uint64_t fw_build_key =
-            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key)) ^
-            fw_compile_hash;
+            BuildEnvManager::get_instance().get_device_build_env(device_id).build_key ^ fw_compile_hash;
 
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);
@@ -586,46 +585,20 @@ void MetalContext::initialize_control_plane() {
     }
     log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
 
+    if (!rtoptions_.get_use_mesh_graph_descriptor_1_0()) {
+        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
+    } else {
+        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
+    }
+
     auto cluster_type = cluster_->get_cluster_type();
+    auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
             cluster_type,
             std::filesystem::path(rtoptions_.get_root_dir()),
-            rtoptions_.get_use_mesh_graph_descriptor_1_0());
-
-    std::string suffix;
-    if (!rtoptions_.get_use_mesh_graph_descriptor_1_0()) {
-        suffix = ".textproto";
-        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
-    } else {
-        suffix = ".yaml";
-        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
-    }
-
-    // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
-    if (cluster_->is_ubb_galaxy()) {
-        std::string mesh_graph_descriptor;
-        if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
-            // For Blackhole Galaxy, only use the default descriptor
-            mesh_graph_descriptor = "single_bh_galaxy_mesh_graph_descriptor" + suffix;
-        } else {
-            // For regular Galaxy, handle different fabric types
-            switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
-                case tt::tt_fabric::FabricType::TORUS_XY:
-                    mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor" + suffix;
-                    break;
-                case tt::tt_fabric::FabricType::TORUS_X:
-                    mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor" + suffix;
-                    break;
-                case tt::tt_fabric::FabricType::TORUS_Y:
-                    mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor" + suffix;
-                    break;
-                default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor" + suffix; break;
-            }
-        }
-        mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
-                               "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
-    }
+            !rtoptions_.get_use_mesh_graph_descriptor_1_0(),
+            fabric_type);
 
     log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
@@ -1429,5 +1402,15 @@ void MetalContext::erisc_send_exit_signal(ChipId device_id, CoreCoord virtual_co
         cluster_->write_core_immediate(device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
     }
 };
+
+bool MetalContext::is_coord_in_range(CoreCoord coord, CoreType core_type) {
+    ChipId id = *cluster_->all_chip_ids().begin();
+    if (core_type == CoreType::ACTIVE_ETH || core_type == CoreType::IDLE_ETH) {
+        core_type = CoreType::ETH;
+    }
+
+    CoreCoord virtual_coord = cluster_->get_virtual_coordinate_from_logical_coordinates(id, coord, core_type);
+    return cluster_->is_ethernet_core(virtual_coord, id) || cluster_->is_worker_core(virtual_coord, id);
+}
 
 }  // namespace tt::tt_metal

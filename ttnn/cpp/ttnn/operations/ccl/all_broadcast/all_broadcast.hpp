@@ -17,7 +17,7 @@ struct ExecuteAllBroadcast {
         std::optional<uint32_t> cluster_axis = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        std::optional<uint32_t> num_links = 1,  // change to std::nullopt when we add support for links > 1 #30798
+        std::optional<uint32_t> num_links = 1,  // change to std::nullopt when we add support/test for links > 1 #30798
         std::optional<ttnn::ccl::Topology> topology =
             ttnn::ccl::Topology::Linear);  // change to std::nullopt when we add support/test for non-linear topologies
                                            // #30798
