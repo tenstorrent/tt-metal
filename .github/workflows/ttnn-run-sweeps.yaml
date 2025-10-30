@@ -737,8 +737,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: ttnn sweep tests ${{ github.event.inputs.arch || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
-            arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+          - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
+            arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
             tt-smi-cmd: ${{ ((github.event.inputs['runner-label'] || 'N150') == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
             runs-on: >-
               ${{
