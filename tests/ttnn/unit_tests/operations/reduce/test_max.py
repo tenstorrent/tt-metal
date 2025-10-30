@@ -15,13 +15,14 @@ from models.common.utility_functions import torch_random, is_grayskull
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
 @pytest.mark.parametrize("dim", [-1, -2])
-def test_max(device, batch_size, h, w, dim):
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_max(device, batch_size, h, w, dim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
     output_tensor = ttnn.max(input_tensor, dim=dim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
