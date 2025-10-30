@@ -7,14 +7,13 @@ import ttnn
 import torch
 from diffusers import StableDiffusionXLImg2ImgPipeline, DiffusionPipeline
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTextModel
+from transformers import CLIPTextModelWithProjection
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     MAX_SEQUENCE_LENGTH,
     TEXT_ENCODER_2_PROJECTION_DIM,
-    CONCATENATED_TEXT_EMBEDINGS_SIZE,
 )
 import os
 from models.common.utility_functions import profiler
@@ -26,7 +25,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline im
 
 
 # NOTE: This serves as a temporary example of how to use img2img pipeline for additional denoising
-# TODO: remove this file once we have refiner img2img enabled
+# TODO: remove this file once we have TT base + TT refiner demo enabled
 @torch.no_grad()
 def run_demo_inference(
     ttnn_device,
@@ -68,26 +67,21 @@ def run_demo_inference(
     if isinstance(negative_prompts, list):
         assert len(negative_prompts) == len(prompts), "prompts and negative_prompt lists must be the same length"
 
-    prompts = prompts + [""] * needed_padding
-    if prompt_2 is not None:
-        prompt_2 = prompt_2 + [""] * needed_padding
-    if isinstance(negative_prompts, list):
-        negative_prompts = negative_prompts + [""] * needed_padding
-
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     base = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True
     )
     pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
+        text_encoder_2=base.text_encoder_2,
+        vae=base.vae,
     ).to("cpu")
     profiler.end("diffusion_pipeline_from_pretrained")
 
-    assert isinstance(pipeline.text_encoder, CLIPTextModel), "pipeline.text_encoder is not a CLIPTextModel"
     assert isinstance(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
     ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
@@ -121,6 +115,12 @@ def run_demo_inference(
         ).images
     ]
 
+    prompts = prompts + [""] * needed_padding
+    if prompt_2 is not None:
+        prompt_2 = prompt_2 + [""] * needed_padding
+    if isinstance(negative_prompts, list):
+        negative_prompts = negative_prompts + [""] * needed_padding
+
     images = images + [images[0]] * needed_padding
 
     images = [tt_sdxl.torch_pipeline.image_processor.preprocess(image).to(dtype=torch.float32) for image in images]
@@ -129,7 +129,7 @@ def run_demo_inference(
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         torch_image=torch.randn(batch_size, images.shape[1], images.shape[2], images.shape[3]),
-        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, 1280),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
         timesteps=timesteps,
         sigmas=sigmas,
@@ -318,7 +318,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
 )
 def test_demo(
     validate_fabric_compatibility,
-    device,
+    mesh_device,
     is_ci_env,
     prompt,
     negative_prompt,
@@ -339,7 +339,6 @@ def test_demo(
     timesteps,
     sigmas,
 ):
-    mesh_device = device
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,

@@ -398,6 +398,11 @@ class TtUNet2DConditionModel(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
+
+        # Note: conv output allocates in the middle of L1, we need to move
+        # TODO: figure out if we can avoid this extra move
+        sample = ttnn.move(sample)
+
         if not self.debug_mode:
             self.tt_conv2_weights = tt_conv2_weights
             self.tt_conv2_bias = tt_conv2_bias

@@ -80,8 +80,6 @@ class TtAttention(LightweightModule):
 
             self.k_program_config = model_config.get_matmul_config(f"{module_path}.to_k")
             self.v_program_config = model_config.get_matmul_config(f"{module_path}.to_v")
-            # assert self.k_program_config is not None, "k_program_config should not be None"
-            # assert self.v_program_config is not None, "v_program_config should not be None"
 
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(
             device, out_weights, out_bias, attention_weights_dtype
@@ -92,7 +90,6 @@ class TtAttention(LightweightModule):
 
         self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
-        # assert self.dense_out_program_config is not None, "dense_out_program_config should not be None"
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:

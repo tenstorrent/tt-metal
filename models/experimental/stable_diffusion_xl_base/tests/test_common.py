@@ -33,29 +33,32 @@ CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_enc
 
 
 def create_tt_clip_text_encoders(pipeline, ttnn_device):
-    text_encoder_1 = pipeline.text_encoder
-    config_1 = CLIPConfig(
-        vocab_size=text_encoder_1.config.vocab_size,
-        embed_dim=text_encoder_1.config.hidden_size,
-        ff_dim=text_encoder_1.config.intermediate_size,
-        num_heads=text_encoder_1.config.num_attention_heads,
-        num_hidden_layers=text_encoder_1.config.num_hidden_layers,
-        max_prompt_length=77,
-        layer_norm_eps=text_encoder_1.config.layer_norm_eps,
-        attention_dropout=text_encoder_1.config.attention_dropout,
-        hidden_act=text_encoder_1.config.hidden_act,
-    )
     ccl_manager = None
+    if pipeline.text_encoder is not None:
+        text_encoder_1 = pipeline.text_encoder
+        config_1 = CLIPConfig(
+            vocab_size=text_encoder_1.config.vocab_size,
+            embed_dim=text_encoder_1.config.hidden_size,
+            ff_dim=text_encoder_1.config.intermediate_size,
+            num_heads=text_encoder_1.config.num_attention_heads,
+            num_hidden_layers=text_encoder_1.config.num_hidden_layers,
+            max_prompt_length=77,
+            layer_norm_eps=text_encoder_1.config.layer_norm_eps,
+            attention_dropout=text_encoder_1.config.attention_dropout,
+            hidden_act=text_encoder_1.config.hidden_act,
+        )
 
-    # Note: Factor for SDXL should always be 1; since we don't support TP
-    parallel_config_1 = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
-    )
+        # Note: Factor for SDXL should always be 1; since we don't support TP
+        parallel_config_1 = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
 
-    tt_text_encoder = CLIPEncoder(
-        config_1, ttnn_device, ccl_manager, parallel_config_1, text_encoder_1.config.eos_token_id
-    )
-    tt_text_encoder.load_state_dict(text_encoder_1.state_dict())
+        tt_text_encoder = CLIPEncoder(
+            config_1, ttnn_device, ccl_manager, parallel_config_1, text_encoder_1.config.eos_token_id
+        )
+        tt_text_encoder.load_state_dict(text_encoder_1.state_dict())
+    else:
+        tt_text_encoder = None
 
     text_encoder_2 = pipeline.text_encoder_2
     config_2 = CLIPConfig(
@@ -87,28 +90,30 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
     logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
     batch_size = ttnn_device.get_num_devices()
     dummy_prompt = ["abc"] * batch_size
-    dummy_ids = tokenizer(
-        dummy_prompt,
-        padding="max_length",
-        max_length=tokenizer.model_max_length,
-        truncation=True,
-        return_tensors="pt",
-    ).input_ids
-    dummy_ids_2 = tokenizer(
+    if tt_text_encoder is not None:
+        dummy_ids = tokenizer(
+            dummy_prompt,
+            padding="max_length",
+            max_length=tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        ).input_ids
+        tt_tokens_1 = ttnn.from_torch(
+            dummy_ids,
+            dtype=ttnn.uint32,
+            layout=ttnn.TILE_LAYOUT,
+            device=ttnn_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+        )
+        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, with_projection=False)
+
+    dummy_ids_2 = tokenizer_2(
         dummy_prompt,
         padding="max_length",
         max_length=tokenizer_2.model_max_length,
         truncation=True,
         return_tensors="pt",
     ).input_ids
-
-    tt_tokens_1 = ttnn.from_torch(
-        dummy_ids,
-        dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
-        device=ttnn_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-    )
     tt_tokens_2 = ttnn.from_torch(
         dummy_ids_2,
         dtype=ttnn.uint32,
@@ -116,8 +121,6 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
         device=ttnn_device,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
-
-    _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, with_projection=False)
     _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, with_projection=True)
     ttnn.synchronize_device(ttnn_device)
 
@@ -187,6 +190,8 @@ def batch_encode_prompt_on_device(
             the output of the pre-final layer will be used for computing the prompt embeddings.
     """
     prompt = [prompt] if isinstance(prompt, str) else prompt
+
+    prompt_2 = prompt or prompt_2
     prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
     num_devices = ttnn_device.get_num_devices()
@@ -213,11 +218,10 @@ def batch_encode_prompt_on_device(
     else:
         batch_size = prompt_embeds.shape[0]
 
+    only_with_projection = tt_text_encoder is None
     # Define tokenizers and text encoders
-    tokenizers = (
-        [pipeline.tokenizer, pipeline.tokenizer_2] if pipeline.tokenizer is not None else [pipeline.tokenizer_2]
-    )
-    text_encoders = [tt_text_encoder, tt_text_encoder_2] if tt_text_encoder is not None else [tt_text_encoder_2]
+    tokenizers = [pipeline.tokenizer, pipeline.tokenizer_2] if not only_with_projection else [pipeline.tokenizer_2]
+    text_encoders = [tt_text_encoder, tt_text_encoder_2] if not only_with_projection else [tt_text_encoder_2]
 
     if prompt_embeds is None:
         prompt_2 = prompt_2 or prompt
@@ -255,7 +259,9 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
-            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=(ind > 0))
+            tt_sequence_output, tt_pooled_output = text_encoder(
+                tt_tokens, ttnn_device, with_projection=(ind > 0) or only_with_projection
+            )
 
             tt_sequence_output_torch = ttnn.to_torch(
                 tt_sequence_output[-2],
@@ -270,7 +276,7 @@ def batch_encode_prompt_on_device(
             # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
             # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
             # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)
-            if ind == 0:
+            if ind == 0 and not only_with_projection:
                 tt_pooled_prompt_embeds = ttnn.to_torch(
                     tt_sequence_output[-1],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
@@ -356,7 +362,7 @@ def batch_encode_prompt_on_device(
             # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
             # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
             # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)            # We are only ALWAYS interested in the pooled output of the final text encoder
-            if ind == 0:
+            if ind == 0 and not only_with_projection:
                 tt_pooled_prompt_embeds = (
                     ttnn.to_torch(
                         tt_sequence_output_neg[-1],

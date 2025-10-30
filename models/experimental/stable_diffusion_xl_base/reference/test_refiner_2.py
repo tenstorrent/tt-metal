@@ -33,10 +33,10 @@ prompt = "An astronaut riding a green horse"
 image = torch.randn(1, 4, 128, 128)  # dummy latent for testing
 for k in refiner.unet.state_dict().keys():
     print(k)
-# image = refiner(
-#     prompt=prompt,
-#     num_inference_steps=n_steps,
-#     denoising_start=high_noise_frac,
-#     image=image,
-# ).images[0]
+image = refiner(
+    prompt=prompt,
+    num_inference_steps=n_steps,
+    denoising_start=high_noise_frac,
+    image=image,
+).images[0]
 image.save("refined_output.jpg")
