@@ -41,7 +41,7 @@ from ...parallel.config import vae_all_gather
         (1, 1024, 1024, 256, 256, 3, 1, 1, True, 1),
         (1, 1024, 1024, 256, 128, 3, 1, 1, True, 1),
         (1, 1024, 1024, 128, 128, 3, 1, 1, True, 1),
-        (1, 1024, 1024, 128, 3, 3, 1, 1, True, None),
+        (1, 1024, 1024, 128, 3, 3, 1, 1, False, None),
     ],
 )
 def test_conv2d(
@@ -69,7 +69,7 @@ def test_conv2d(
     torch_model.eval()
 
     tt_model = Conv2d.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, out_mesh_axis=mesh_axis, sp_axis=1, ccl_manager=ccl_manager
+        torch_ref=torch_model, mesh_device=mesh_device, out_mesh_axis=mesh_axis, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)

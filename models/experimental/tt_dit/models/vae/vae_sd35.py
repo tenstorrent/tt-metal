@@ -57,7 +57,6 @@ class ResnetBlock:
             kernel_size=(3, 3),
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            sp_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv1 if torch_ref is not None else None,
         )
@@ -67,7 +66,6 @@ class ResnetBlock:
             kernel_size=(3, 3),
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            sp_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv2 if torch_ref is not None else None,
         )
@@ -80,7 +78,6 @@ class ResnetBlock:
                 padding=(0, 0),
                 mesh_device=mesh_device,
                 out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                sp_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 torch_ref=torch_ref.conv_shortcut,
             )
@@ -146,7 +143,6 @@ class Upsample2D:
             kernel_size=(3, 3),
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            sp_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv if torch_ref is not None else None,
         )
@@ -503,8 +499,6 @@ class VAEDecoder:
                 kernel_size=(3, 3),
                 padding=(1, 1),
                 mesh_device=mesh_device,
-                out_mesh_axis=None,
-                sp_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
 
@@ -513,7 +507,6 @@ class VAEDecoder:
                 torch_ref.conv_in,
                 mesh_device=mesh_device,
                 out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                sp_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
             self.mid_block = UnetMidBlock2D.from_torch(
@@ -542,10 +535,11 @@ class VAEDecoder:
             self.conv_out = Conv2d.from_torch(
                 torch_ref.conv_out,
                 mesh_device=mesh_device,
-                out_mesh_axis=None,
-                sp_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
+
+        self._tp_axis = parallel_config.tensor_parallel.mesh_axis
+        self._ccl_manager = ccl_manager
 
     @classmethod
     def from_torch(cls, torch_ref, mesh_device=None, parallel_config=None, ccl_manager=None):
@@ -569,5 +563,6 @@ class VAEDecoder:
             x = up_block(x)
         x = self.conv_norm_out(x)
         x = ttnn.silu(x)
+        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis)
         x = self.conv_out(x)
         return x
