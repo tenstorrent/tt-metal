@@ -292,6 +292,73 @@ function workflowMatchesConfig(workflowName, workflowConfigs) {
 }
 
 /**
+ * Download and extract an artifact to a temporary directory.
+ * @param {object} octokit - Octokit client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {object} artifact - Artifact object
+ * @param {string} tmpDir - Temporary directory path
+ * @returns {Promise<string>} Path to extracted directory
+ */
+async function downloadAndExtractArtifact(octokit, owner, repo, artifact, tmpDir) {
+  const resp = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: artifact.id, archive_format: 'zip' });
+  const zipPath = path.join(tmpDir, `${artifact.name}.zip`);
+  fs.writeFileSync(zipPath, Buffer.from(resp.data));
+  const extractDir = path.join(tmpDir, `${artifact.name}-extract`);
+  if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+  execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+  return extractDir;
+}
+
+/**
+ * Recursively find a file by name in a directory.
+ * @param {string} rootDir - Root directory to search
+ * @param {string|Set<string>} targetFileName - File name(s) to find
+ * @returns {string|null} Path to found file or null
+ */
+function findFileInDirectory(rootDir, targetFileName) {
+  const targetNames = typeof targetFileName === 'string' ? new Set([targetFileName]) : targetFileName;
+  const stack = [rootDir];
+  while (stack.length) {
+    const dir = stack.pop();
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      const p = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        stack.push(p);
+      } else if (ent.isFile() && targetNames.has(ent.name)) {
+        return p;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Remove directories in a root directory that are not in the kept set.
+ * @param {string} rootDir - Root directory to clean
+ * @param {Set<string>} keptIds - Set of directory names to keep
+ * @param {string} indexFileName - Name of index file to exclude from removal
+ * @returns {number} Number of directories removed
+ */
+function removeUnkeptDirectories(rootDir, keptIds, indexFileName) {
+  if (!fs.existsSync(rootDir)) {
+    return 0;
+  }
+  let removedDirs = 0;
+  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  for (const ent of entries) {
+    if (ent.isDirectory() && ent.name !== indexFileName) {
+      if (!keptIds.has(ent.name)) {
+        fs.rmSync(path.join(rootDir, ent.name), { recursive: true, force: true });
+        removedDirs++;
+      }
+    }
+  }
+  return removedDirs;
+}
+
+/**
  * Main entrypoint for the action.
  * Loads previous cache, fetches new runs, merges/deduplicates, and saves updated cache.
  */
@@ -359,24 +426,8 @@ async function run() {
         const workflowDataArtifact = artifacts.find(a => a && a.name === 'workflow-data');
         if (workflowDataArtifact) {
           try {
-            const resp = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: workflowDataArtifact.id, archive_format: 'zip' });
-            const zipPath = path.join(tmpDir, `${workflowDataArtifact.name}.zip`);
-            fs.writeFileSync(zipPath, Buffer.from(resp.data));
-            const extractDir = path.join(tmpDir, workflowDataArtifact.name);
-            if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-            execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-            const targetNames = new Set(['workflow-data.json', 'workflow.json']);
-            const stack = [extractDir];
-            let foundPath;
-            while (stack.length && !foundPath) {
-              const dir = stack.pop();
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const ent of entries) {
-                const p = path.join(dir, ent.name);
-                if (ent.isDirectory()) stack.push(p);
-                else if (ent.isFile() && targetNames.has(ent.name)) { foundPath = p; break; }
-              }
-            }
+            const extractDir = await downloadAndExtractArtifact(octokit, owner, repo, workflowDataArtifact, tmpDir);
+            const foundPath = findFileInDirectory(extractDir, new Set(['workflow-data.json', 'workflow.json']));
             if (foundPath) {
               core.info(`[CACHE] Found workflow-data.json at ${foundPath}`);
               const groupedArray = JSON.parse(fs.readFileSync(foundPath, 'utf8'));
@@ -426,23 +477,8 @@ async function run() {
         let annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
         if (annotationsArtifact) {
           try {
-            const annZipPath = path.join(tmpDir, `${annotationsArtifact.name}.zip`);
-            const respAnn = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: annotationsArtifact.id, archive_format: 'zip' });
-            fs.writeFileSync(annZipPath, Buffer.from(respAnn.data));
-            const extractAnnDir = path.join(tmpDir, `${annotationsArtifact.name}-extract`);
-            if (!fs.existsSync(extractAnnDir)) fs.mkdirSync(extractAnnDir, { recursive: true });
-            execFileSync('unzip', ['-o', annZipPath, '-d', extractAnnDir], { stdio: 'ignore' });
-            const stack = [extractAnnDir];
-            let foundIndex;
-            while (stack.length && !foundIndex) {
-              const dir = stack.pop();
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const ent of entries) {
-                const p = path.join(dir, ent.name);
-                if (ent.isDirectory()) stack.push(p);
-                else if (ent.isFile() && ent.name === 'annotations-index.json') { foundIndex = p; break; }
-              }
-            }
+            const extractAnnDir = await downloadAndExtractArtifact(octokit, owner, repo, annotationsArtifact, tmpDir);
+            const foundIndex = findFileInDirectory(extractAnnDir, 'annotations-index.json');
             if (foundIndex) {
               core.info(`[CACHE] Found annotations-index.json at ${foundIndex}`);
               const artifactAnnRoot = path.dirname(foundIndex);
@@ -460,18 +496,7 @@ async function run() {
 
               // Also remove annotation directories for runs not in pruned index
               const keptRunIds = new Set(Object.keys(cachedAnnotationsIndex));
-              let removedDirs = 0;
-              if (fs.existsSync(annotationsRoot)) {
-                const annDirs = fs.readdirSync(annotationsRoot, { withFileTypes: true });
-                for (const ent of annDirs) {
-                  if (ent.isDirectory() && ent.name !== 'annotations-index.json') {
-                    if (!keptRunIds.has(ent.name)) {
-                      fs.rmSync(path.join(annotationsRoot, ent.name), { recursive: true, force: true });
-                      removedDirs++;
-                    }
-                  }
-                }
-              }
+              const removedDirs = removeUnkeptDirectories(annotationsRoot, keptRunIds, 'annotations-index.json');
               if (removedDirs > 0) {
                 core.info(`[CACHE] Removed ${removedDirs} annotation directories for pruned runs`);
               }
@@ -492,12 +517,7 @@ async function run() {
         const gtestLogsArtifact = artifacts.find(a => a && a.name === 'workflow-gtest-logs');
         if (gtestLogsArtifact) {
           try {
-            const logsZipPath = path.join(tmpDir, `${gtestLogsArtifact.name}.zip`);
-            const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: gtestLogsArtifact.id, archive_format: 'zip' });
-            fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
-            const extractLogsDir = path.join(tmpDir, `${gtestLogsArtifact.name}-extract`);
-            if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
-            execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
+            const extractLogsDir = await downloadAndExtractArtifact(octokit, owner, repo, gtestLogsArtifact, tmpDir);
             fs.cpSync(extractLogsDir, gtestLogsRoot, { recursive: true });
             const candidateIdx = path.join(gtestLogsRoot, 'gtest-logs-index.json');
             if (fs.existsSync(candidateIdx)) {
@@ -513,18 +533,7 @@ async function run() {
 
               // Also remove log directories for runs not in pruned index
               const keptGtestRunIds = new Set(Object.keys(cachedGtestLogsIndex));
-              let removedDirs = 0;
-              if (fs.existsSync(gtestLogsRoot)) {
-                const logDirs = fs.readdirSync(gtestLogsRoot, { withFileTypes: true });
-                for (const ent of logDirs) {
-                  if (ent.isDirectory() && ent.name !== 'gtest-logs-index.json') {
-                    if (!keptGtestRunIds.has(ent.name)) {
-                      fs.rmSync(path.join(gtestLogsRoot, ent.name), { recursive: true, force: true });
-                      removedDirs++;
-                    }
-                  }
-                }
-              }
+              const removedDirs = removeUnkeptDirectories(gtestLogsRoot, keptGtestRunIds, 'gtest-logs-index.json');
               if (removedDirs > 0) {
                 core.info(`[CACHE] Removed ${removedDirs} gtest log directories for pruned runs`);
               }
@@ -543,12 +552,7 @@ async function run() {
         const otherLogsArtifact = artifacts.find(a => a && a.name === 'workflow-other-logs');
         if (otherLogsArtifact) {
           try {
-            const logsZipPath = path.join(tmpDir, `${otherLogsArtifact.name}.zip`);
-            const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: otherLogsArtifact.id, archive_format: 'zip' });
-            fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
-            const extractLogsDir = path.join(tmpDir, `${otherLogsArtifact.name}-extract`);
-            if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
-            execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
+            const extractLogsDir = await downloadAndExtractArtifact(octokit, owner, repo, otherLogsArtifact, tmpDir);
             fs.cpSync(extractLogsDir, otherLogsRoot, { recursive: true });
             const candidateIdx = path.join(otherLogsRoot, 'other-logs-index.json');
             if (fs.existsSync(candidateIdx)) {
@@ -564,18 +568,7 @@ async function run() {
 
               // Also remove log directories for runs not in pruned index
               const keptOtherRunIds = new Set(Object.keys(cachedOtherLogsIndex));
-              let removedDirs = 0;
-              if (fs.existsSync(otherLogsRoot)) {
-                const logDirs = fs.readdirSync(otherLogsRoot, { withFileTypes: true });
-                for (const ent of logDirs) {
-                  if (ent.isDirectory() && ent.name !== 'other-logs-index.json') {
-                    if (!keptOtherRunIds.has(ent.name)) {
-                      fs.rmSync(path.join(otherLogsRoot, ent.name), { recursive: true, force: true });
-                      removedDirs++;
-                    }
-                  }
-                }
-              }
+              const removedDirs = removeUnkeptDirectories(otherLogsRoot, keptOtherRunIds, 'other-logs-index.json');
               if (removedDirs > 0) {
                 core.info(`[CACHE] Removed ${removedDirs} other log directories for pruned runs`);
               }
@@ -592,23 +585,8 @@ async function run() {
         let commitsPath = path.join(workspace, 'commits-main.json');
         if (commitsArtifact) {
           try {
-            const commitsZipPath = path.join(tmpDir, `${commitsArtifact.name}.zip`);
-            const respCommits = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: commitsArtifact.id, archive_format: 'zip' });
-            fs.writeFileSync(commitsZipPath, Buffer.from(respCommits.data));
-            const extractCommitsDir = path.join(tmpDir, `${commitsArtifact.name}-extract`);
-            if (!fs.existsSync(extractCommitsDir)) fs.mkdirSync(extractCommitsDir, { recursive: true });
-            execFileSync('unzip', ['-o', commitsZipPath, '-d', extractCommitsDir], { stdio: 'ignore' });
-            const stack2 = [extractCommitsDir];
-            let foundCommitsPath;
-            while (stack2.length && !foundCommitsPath) {
-              const dir = stack2.pop();
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const ent of entries) {
-                const p = path.join(dir, ent.name);
-                if (ent.isDirectory()) stack2.push(p);
-                else if (ent.isFile() && ent.name === 'commits-main.json') { foundCommitsPath = p; break; }
-              }
-            }
+            const extractCommitsDir = await downloadAndExtractArtifact(octokit, owner, repo, commitsArtifact, tmpDir);
+            const foundCommitsPath = findFileInDirectory(extractCommitsDir, 'commits-main.json');
             if (foundCommitsPath) {
               core.info(`[CACHE] Found commits-main.json at ${foundCommitsPath}`);
               const beforePrune = JSON.parse(fs.readFileSync(foundCommitsPath, 'utf8'));
@@ -635,23 +613,8 @@ async function run() {
         let lastSuccessPath = path.join(workspace, 'last-success-timestamps.json');
         if (lastSuccessArtifact) {
           try {
-            const timestampsZipPath = path.join(tmpDir, `${lastSuccessArtifact.name}.zip`);
-            const respTimestamps = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: lastSuccessArtifact.id, archive_format: 'zip' });
-            fs.writeFileSync(timestampsZipPath, Buffer.from(respTimestamps.data));
-            const extractTimestampsDir = path.join(tmpDir, `${lastSuccessArtifact.name}-extract`);
-            if (!fs.existsSync(extractTimestampsDir)) fs.mkdirSync(extractTimestampsDir, { recursive: true });
-            execFileSync('unzip', ['-o', timestampsZipPath, '-d', extractTimestampsDir], { stdio: 'ignore' });
-            const stack3 = [extractTimestampsDir];
-            let foundTimestampsPath;
-            while (stack3.length && !foundTimestampsPath) {
-              const dir = stack3.pop();
-              const entries = fs.readdirSync(dir, { withFileTypes: true });
-              for (const ent of entries) {
-                const p = path.join(dir, ent.name);
-                if (ent.isDirectory()) stack3.push(p);
-                else if (ent.isFile() && ent.name === 'last-success-timestamps.json') { foundTimestampsPath = p; break; }
-              }
-            }
+            const extractTimestampsDir = await downloadAndExtractArtifact(octokit, owner, repo, lastSuccessArtifact, tmpDir);
+            const foundTimestampsPath = findFileInDirectory(extractTimestampsDir, 'last-success-timestamps.json');
             if (foundTimestampsPath) {
               core.info(`[CACHE] Found last-success-timestamps.json at ${foundTimestampsPath}`);
               cachedLastSuccessTimestamps = JSON.parse(fs.readFileSync(foundTimestampsPath, 'utf8'));
