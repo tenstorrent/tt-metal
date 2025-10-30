@@ -27,7 +27,7 @@ ttnn::Tensor ExecuteAllReduce::invoke(
         // if it is not flat, then we need to call all-reduce from dim=0 to dim=-1
         if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
-            for (int i = 0; i < mesh_shape.dims(); ++i) {
+            for (size_t i = 0; i < mesh_shape.dims(); ++i) {
                 tensor = ttnn::all_reduce(tensor, i, subdevice_id, memory_config, num_links, topology);
             }
             return tensor;
