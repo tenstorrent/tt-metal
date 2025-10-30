@@ -49,15 +49,7 @@ struct TestFixture {
         }
     }
 
-    ~TestFixture() {
-        try {
-            physical_system_descriptor.run_discovery(false);
-        } catch (const std::exception& e) {
-            log_error(tt::LogTest, "Device cleanup failed: {}. Reset device using tt-smi command", e.what());
-        } catch (...) {
-            log_error(tt::LogTest, "Device cleanup failed. Reset device using tt-smi command");
-        }
-    }
+
 };
 
 uint32_t get_link_training_status(const tt::Cluster& cluster, ChipId chip_id, const tt_xy_pair& coord) {

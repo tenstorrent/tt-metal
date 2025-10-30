@@ -63,8 +63,6 @@ void log_output_rank0(const std::string& message) {
     }
 }
 
-void log_output_all_ranks(const std::string& message) { log_info(tt::LogDistributed, "{}", message); }
-
 std::vector<TrafficConfig> generate_sweep_traffic_configs() {
     std::vector<TrafficConfig> configs;
 
