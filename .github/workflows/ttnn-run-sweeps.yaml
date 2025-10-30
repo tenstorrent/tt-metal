@@ -795,7 +795,7 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
-      - name: Run ttnn sweeps (single sweep)
+      - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
         run: |
           SKIP_ON_TIMEOUT_FLAG=""
           if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
@@ -807,7 +807,13 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
-          python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
+          python3 tests/sweep_framework/sweeps_runner.py \
+          --module-name ${{ github.event.inputs.sweep_name }} \
+          --vector-source vectors_export \
+          --result-dest results_export \
+          --tag ci-main \
+          --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG \
+          --suite-name ${{ github.event.inputs.suite_name }} \
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
