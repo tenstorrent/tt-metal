@@ -24,21 +24,27 @@ class LazyTensor {
 
 public:
     LazyTensor() = default;
+    LazyTensor(
+        const std::vector<std::shared_ptr<LazyTensor>>& op_inputs, const LazyOperationPtr& op, TensorSpec tensor_spec);
+    LazyTensor(const MaterializedTensor& metal_tensor);
+
     // This used for ops that return a single tensor
-    static LazyTensor make_lazy_tensor(
-        const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, TensorSpec tensor_spec);
+    static std::shared_ptr<LazyTensor> make_lazy_tensor(
+        const std::vector<std::shared_ptr<LazyTensor>>& op_inputs, const LazyOperationPtr& op, TensorSpec tensor_spec);
 
     // This used for ops that return multiple tensors
-    static std::vector<LazyTensor> make_lazy_tensors(
-        const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, const std::vector<TensorSpec>& tensor_specs);
+    static std::vector<std::shared_ptr<LazyTensor>> make_lazy_tensors(
+        const std::vector<std::shared_ptr<LazyTensor>>& op_inputs,
+        const LazyOperationPtr& op,
+        const std::vector<TensorSpec>& tensor_specs);
 
-    static LazyTensor make_materialized_tensor(const MaterializedTensor& metal_tensor);
+    static std::shared_ptr<LazyTensor> make_materialized_tensor(const MaterializedTensor& metal_tensor);
 
     // Note: no public setters, LazyTensor is immutable after construction
 
     // Getters
-    const std::vector<LazyTensor>& op_inputs() const;
-    const std::vector<LazyTensor>& siblings() const;
+    const std::vector<std::shared_ptr<LazyTensor>>& op_inputs() const;
+    const std::vector<std::shared_ptr<LazyTensor>>& siblings() const;
     const std::vector<MaterializedTensor>& materialized_tensors() const;
     const MaterializedTensor& materialized_tensor() const;
     MaterializedTensor& materialized_tensor();
@@ -51,17 +57,14 @@ public:
     void materialize();
 
 private:
-    LazyTensor(const std::vector<LazyTensor>& op_inputs, LazyOperationPtr op, TensorSpec tensor_spec);
-    LazyTensor(const MaterializedTensor& metal_tensor);
-
-    void set_siblings(const std::vector<LazyTensor>& siblings);
+    void set_siblings(const std::vector<std::shared_ptr<LazyTensor>>& siblings);
     void set_materialized_output_idx(size_t idx);
     void set_state(LazyTensorState state);
 
-    std::vector<LazyTensor> op_inputs_;
+    std::vector<std::shared_ptr<LazyTensor>> op_inputs_;
     LazyOperationPtr op_;
     std::optional<TensorSpec> tensor_spec_;  // <- Note really optional, but I need to quickly get default ctor working
-    std::vector<LazyTensor> siblings_;
+    std::vector<std::shared_ptr<LazyTensor>> siblings_;
     std::vector<MaterializedTensor> materialized_outputs_;
     size_t materialized_output_idx_ = 0;  // In case op produces multiple tensors, we want to know which one is this
     LazyTensorState state_ = LazyTensorState::LAZY;

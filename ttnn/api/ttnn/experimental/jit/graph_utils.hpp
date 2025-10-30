@@ -14,18 +14,18 @@ namespace ttnn::experimental::jit {
 class GraphUtils {
 public:
     static void dfs_visit(
-        const LazyTensor& node,
+        const std::shared_ptr<LazyTensor>& node,
         std::unordered_set<LazyTensorId>& visited,
-        std::function<void(const LazyTensor&)> visitor);
+        const std::function<void(const std::shared_ptr<LazyTensor>&)>& visitor);
 
     static LazyTensorId get_available_lazy_tensor_id();
 
-    static std::vector<LazyTensor> get_all_lazy_tensors(const LazyTensor& root);
+    static std::vector<std::shared_ptr<LazyTensor>> get_all_lazy_tensors(const std::shared_ptr<LazyTensor>& root);
 
-    static std::vector<LazyTensor> get_ancestors(const LazyTensor& root);
+    static std::vector<std::shared_ptr<LazyTensor>> get_ancestors(const std::shared_ptr<LazyTensor>& root);
 
-    static std::vector<LazyTensor> get_descendants(const LazyTensor& root);
+    static std::vector<std::shared_ptr<LazyTensor>> get_descendants(const std::shared_ptr<LazyTensor>& root);
 
-    static std::vector<LazyTensor> topological_sort(const LazyTensor& root);
+    static std::vector<std::shared_ptr<LazyTensor>> topological_sort(const std::shared_ptr<LazyTensor>& root);
 };
 }  // namespace ttnn::experimental::jit

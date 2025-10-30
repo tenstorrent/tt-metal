@@ -50,7 +50,7 @@ HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const T
 
 }  // namespace
 
-Tensor::Tensor(LazyTensor lazy_tensor) : lazy_tensor_(std::move(lazy_tensor)) {}
+Tensor::Tensor(std::shared_ptr<LazyTensor> lazy_tensor) : lazy_tensor_(std::move(lazy_tensor)) {}
 
 Tensor::Tensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor) :
     lazy_tensor_(LazyTensor::make_materialized_tensor(metal_tensor)) {}
@@ -184,22 +184,22 @@ const tt::tt_metal::Storage& Tensor::storage() const { return get_materialized_t
 
 tt::tt_metal::Storage& Tensor::storage() { return get_materialized_tensor().storage(); }
 
-tt::tt_metal::DataType Tensor::dtype() const { return lazy_tensor_.tensor_spec().tensor_layout().get_data_type(); }
+tt::tt_metal::DataType Tensor::dtype() const { return lazy_tensor_->tensor_spec().tensor_layout().get_data_type(); }
 
-tt::tt_metal::Layout Tensor::layout() const { return lazy_tensor_.tensor_spec().tensor_layout().get_layout(); }
+tt::tt_metal::Layout Tensor::layout() const { return lazy_tensor_->tensor_spec().tensor_layout().get_layout(); }
 
-const ttnn::Shape& Tensor::logical_shape() const { return lazy_tensor_.tensor_spec().logical_shape(); }
+const ttnn::Shape& Tensor::logical_shape() const { return lazy_tensor_->tensor_spec().logical_shape(); }
 
-const ttnn::Shape& Tensor::padded_shape() const { return lazy_tensor_.tensor_spec().padded_shape(); }
+const ttnn::Shape& Tensor::padded_shape() const { return lazy_tensor_->tensor_spec().padded_shape(); }
 
-const TensorSpec& Tensor::tensor_spec() const { return lazy_tensor_.tensor_spec(); }
+const TensorSpec& Tensor::tensor_spec() const { return lazy_tensor_->tensor_spec(); }
 
-uint64_t Tensor::logical_volume() const { return lazy_tensor_.tensor_spec().logical_shape().volume(); }
+uint64_t Tensor::logical_volume() const { return lazy_tensor_->tensor_spec().logical_shape().volume(); }
 
-uint64_t Tensor::physical_volume() const { return lazy_tensor_.tensor_spec().padded_shape().volume(); }
+uint64_t Tensor::physical_volume() const { return lazy_tensor_->tensor_spec().padded_shape().volume(); }
 
 const tt::tt_metal::MemoryConfig& Tensor::memory_config() const {
-    return lazy_tensor_.tensor_spec().tensor_layout().get_memory_config();
+    return lazy_tensor_->tensor_spec().tensor_layout().get_memory_config();
 }
 
 const tt::tt_metal::TensorTopology& Tensor::tensor_topology() const {
@@ -208,11 +208,11 @@ const tt::tt_metal::TensorTopology& Tensor::tensor_topology() const {
 }
 
 const std::optional<tt::tt_metal::ShardSpec>& Tensor::shard_spec() const {
-    return lazy_tensor_.tensor_spec().tensor_layout().get_memory_config().shard_spec();
+    return lazy_tensor_->tensor_spec().tensor_layout().get_memory_config().shard_spec();
 }
 
 const std::optional<tt::tt_metal::NdShardSpec>& Tensor::nd_shard_spec() const {
-    return lazy_tensor_.tensor_spec().tensor_layout().get_memory_config().nd_shard_spec();
+    return lazy_tensor_->tensor_spec().tensor_layout().get_memory_config().nd_shard_spec();
 }
 
 tt::tt_metal::StorageType Tensor::storage_type() const {
@@ -232,7 +232,7 @@ bool Tensor::is_scalar() const {
 }
 
 bool Tensor::is_allocated() const {
-    return lazy_tensor_.is_materialized() ? get_materialized_tensor().is_allocated() : false;
+    return lazy_tensor_->is_materialized() ? get_materialized_tensor().is_allocated() : false;
 }
 
 tt::tt_metal::Buffer* Tensor::buffer() const { return get_materialized_tensor().buffer(); }
@@ -255,13 +255,13 @@ uint32_t Tensor::element_size() const { return get_materialized_tensor().element
 
 // ttnn Tensor-only methods / constructors
 tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() {
-    TT_FATAL(lazy_tensor_.is_materialized(), "Tensor is not materialized");
-    return lazy_tensor_.materialized_tensor();
+    TT_FATAL(lazy_tensor_->is_materialized(), "Tensor is not materialized");
+    return lazy_tensor_->materialized_tensor();
 }
 
 const tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() const {
-    TT_FATAL(lazy_tensor_.is_materialized(), "Tensor is not materialized");
-    return lazy_tensor_.materialized_tensor();
+    TT_FATAL(lazy_tensor_->is_materialized(), "Tensor is not materialized");
+    return lazy_tensor_->materialized_tensor();
 }
 
 std::shared_ptr<TensorAttributes> Tensor::tensor_attributes() const {
@@ -272,7 +272,7 @@ Tensor Tensor::make_lazy_tensor(
     const std::vector<Tensor>& op_inputs,
     const std::shared_ptr<ttnn::experimental::jit::LazyOperation>& op,
     TensorSpec tensor_spec) {
-    std::vector<LazyTensor> lazy_op_inputs;
+    std::vector<std::shared_ptr<LazyTensor>> lazy_op_inputs;
     std::transform(op_inputs.begin(), op_inputs.end(), std::back_inserter(lazy_op_inputs), [](const Tensor& tensor) {
         return tensor.lazy();
     });
@@ -283,7 +283,7 @@ std::vector<Tensor> Tensor::make_lazy_tensors(
     const std::vector<Tensor>& op_inputs,
     const std::shared_ptr<ttnn::experimental::jit::LazyOperation>& op,
     const std::vector<TensorSpec>& tensor_specs) {
-    std::vector<LazyTensor> lazy_op_inputs;
+    std::vector<std::shared_ptr<LazyTensor>> lazy_op_inputs;
     std::transform(op_inputs.begin(), op_inputs.end(), std::back_inserter(lazy_op_inputs), [](const Tensor& tensor) {
         return tensor.lazy();
     });
@@ -296,7 +296,7 @@ std::vector<Tensor> Tensor::make_lazy_tensors(
     return tensors;
 }
 
-const LazyTensor& Tensor::lazy() const { return lazy_tensor_; }
+const std::shared_ptr<LazyTensor>& Tensor::lazy() const { return lazy_tensor_; }
 
 void Tensor::materialize() { ttnn::experimental::jit::evaluate(lazy_tensor_); }
 

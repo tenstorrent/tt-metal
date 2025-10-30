@@ -186,14 +186,14 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("lazy_tensor_id");
-    auto attribute_values() const { return std::forward_as_tuple(lazy_tensor_.id()); }
+    auto attribute_values() const { return std::forward_as_tuple(lazy_tensor_->id()); }
 
     // ttnn Tensor-only methods / constructors
     tt::tt_metal::metal_tensor::Tensor& get_materialized_tensor();
     const tt::tt_metal::metal_tensor::Tensor& get_materialized_tensor() const;
     [[nodiscard]] Tensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor);
     [[nodiscard]] Tensor(tt::tt_metal::metal_tensor::Tensor&& metal_tensor);
-    [[nodiscard]] const ttnn::experimental::jit::LazyTensor& lazy() const;
+    [[nodiscard]] const std::shared_ptr<ttnn::experimental::jit::LazyTensor>& lazy() const;
     std::shared_ptr<TensorAttributes> tensor_attributes() const;
 
     static Tensor make_lazy_tensor(
@@ -208,8 +208,8 @@ public:
     void materialize();
 
 private:
-    Tensor(ttnn::experimental::jit::LazyTensor lazy_tensor);
-    ttnn::experimental::jit::LazyTensor lazy_tensor_;
+    Tensor(std::shared_ptr<ttnn::experimental::jit::LazyTensor> lazy_tensor);
+    std::shared_ptr<ttnn::experimental::jit::LazyTensor> lazy_tensor_;
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);

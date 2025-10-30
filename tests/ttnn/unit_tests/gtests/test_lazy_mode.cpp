@@ -54,31 +54,31 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
     auto random =
         ttnn::rand(ttnn::Shape({32, 32}), *device_, DataType::BFLOAT16, Layout::TILE, ttnn::types::DRAM_MEMORY_CONFIG);
 
-    ASSERT_EQ(random.lazy().materialized_tensor().logical_shape(), ttnn::Shape({32, 32}))
+    ASSERT_EQ(random.lazy()->materialized_tensor().logical_shape(), ttnn::Shape({32, 32}))
         << "Lazy tensor should have the same shape as the materialized tensor";
-    ASSERT_EQ(random.lazy().materialized_tensor().dtype(), DataType::BFLOAT16)
+    ASSERT_EQ(random.lazy()->materialized_tensor().dtype(), DataType::BFLOAT16)
         << "Lazy tensor should have the same dtype as the materialized tensor";
-    ASSERT_EQ(random.lazy().materialized_tensor().layout(), Layout::TILE)
+    ASSERT_EQ(random.lazy()->materialized_tensor().layout(), Layout::TILE)
         << "Lazy tensor should have the same layout as the materialized tensor";
-    ASSERT_EQ(random.lazy().materialized_tensor().memory_config(), ttnn::types::DRAM_MEMORY_CONFIG)
+    ASSERT_EQ(random.lazy()->materialized_tensor().memory_config(), ttnn::types::DRAM_MEMORY_CONFIG)
         << "Lazy tensor should have the same memory config as the materialized tensor";
-    ASSERT_EQ(random.lazy().materialized_tensor().device(), device_)
+    ASSERT_EQ(random.lazy()->materialized_tensor().device(), device_)
         << "Lazy tensor should have the same device as the materialized tensor";
-    ASSERT_EQ(random.lazy().materialized_tensor().mesh_buffer(), random.mesh_buffer())
+    ASSERT_EQ(random.lazy()->materialized_tensor().mesh_buffer(), random.mesh_buffer())
         << "Lazy tensor should have the same mesh buffer as the materialized tensor";
-    ASSERT_EQ(random.lazy().materialized_tensor().mesh_buffer()->device(), device_)
+    ASSERT_EQ(random.lazy()->materialized_tensor().mesh_buffer()->device(), device_)
         << "Lazy tensor should have the same mesh buffer device as the materialized tensor";
 
-    ASSERT_EQ(random.lazy().state(), experimental::jit::LazyTensorState::MATERIALIZED)
+    ASSERT_EQ(random.lazy()->state(), experimental::jit::LazyTensorState::MATERIALIZED)
         << "Lazy tensor should be in materialized state";
-    ASSERT_EQ(random.lazy().tensor_spec(), random.tensor_spec())
+    ASSERT_EQ(random.lazy()->tensor_spec(), random.tensor_spec())
         << "Lazy tensor should have the same tensor spec as the materialized tensor";
-    ASSERT_EQ(random.lazy().op().get(), nullptr)
+    ASSERT_EQ(random.lazy()->op().get(), nullptr)
         << "Lazy tensor created from materialized tensor should have no operation";
-    ASSERT_TRUE(random.lazy().is_materialized()) << "Lazy tensor should be materialized";
-    ASSERT_EQ(random.lazy().op_inputs().size(), 0) << "Lazy tensor should have no op inputs";
-    ASSERT_EQ(random.lazy().siblings().size(), 0) << "Lazy tensor should have no siblings";
-    ASSERT_EQ(random.lazy().materialized_tensors().size(), 1) << "Lazy tensor should have one materialized tensor";
+    ASSERT_TRUE(random.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_EQ(random.lazy()->op_inputs().size(), 0) << "Lazy tensor should have no op inputs";
+    ASSERT_EQ(random.lazy()->siblings().size(), 0) << "Lazy tensor should have no siblings";
+    ASSERT_EQ(random.lazy()->materialized_tensors().size(), 1) << "Lazy tensor should have one materialized tensor";
 
     // Note: you can't create a lazy operation without op and it's inputs because it won't be possible to materialize it
     // later.
@@ -124,8 +124,20 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     auto exp_output = ttnn::exp(relu_output);
     auto sqrt_output = ttnn::sqrt(exp_output);
 
+    log_info(
+        tt::LogTest,
+        "relu_out id: {}, exp_out id: {}, sqrt_out id: {}",
+        relu_output.lazy()->id(),
+        exp_output.lazy()->id(),
+        sqrt_output.lazy()->id());
+
     sqrt_output.materialize();
     auto lazy_result = sqrt_output.cpu();
+
+    ASSERT_TRUE(sqrt_output.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_TRUE(exp_output.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_TRUE(relu_output.lazy()->is_materialized()) << "Lazy tensor should be materialized";
+    ASSERT_TRUE(input_tensor.lazy()->is_materialized()) << "Lazy tensor should be materialized";
 
     ttnn::experimental::jit::disable();
     ASSERT_FALSE(ttnn::experimental::jit::is_lazy_enabled()) << "Lazy mode should be disabled";
