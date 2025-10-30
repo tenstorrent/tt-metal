@@ -33,7 +33,7 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
         auto mesh_shape = input_tensor.device()->get_view().shape();
         if (!mesh_shape.is_line_topology()) {
             Tensor tensor = input_tensor;
-            for (int i = 0; i < mesh_shape.dims(); ++i) {
+            for (size_t i = 0; i < mesh_shape.dims(); ++i) {
                 tensor = ttnn::reduce_scatter(
                     tensor, dim, i, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
             }
