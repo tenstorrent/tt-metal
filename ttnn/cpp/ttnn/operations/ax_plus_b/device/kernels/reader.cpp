@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_b = tt::CBIndex::c_2;
 
     // 3 CB ids => 3 TensorAccessorArgs blocks
-    constexpr auto a_args = TensorAccessorArgs<3>();
+    constexpr auto a_args = TensorAccessorArgs<0>();
     constexpr auto x_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
     constexpr auto b_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 

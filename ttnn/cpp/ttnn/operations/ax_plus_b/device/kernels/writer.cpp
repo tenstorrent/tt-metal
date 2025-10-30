@@ -16,7 +16,7 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_y = tt::CBIndex::c_16;
-    constexpr auto y_args = TensorAccessorArgs<1>();
+    constexpr auto y_args = TensorAccessorArgs<0>();
 
     auto y_accessor = TensorAccessor(y_args, y_addr, get_tile_size(cb_id_y));
 
