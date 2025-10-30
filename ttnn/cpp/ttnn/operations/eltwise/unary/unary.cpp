@@ -301,7 +301,8 @@ Tensor Tanh::invoke(
     UnaryOpType op_type = UnaryOpType::TANH;
 
     // if (approx || input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B) {
-    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    return detail::unary_impl(
+        input_tensor, {UnaryWithParam{op_type, static_cast<float>(approx)}}, memory_config, optional_output_tensor);
 }
 
 Tensor Prelu::invoke(

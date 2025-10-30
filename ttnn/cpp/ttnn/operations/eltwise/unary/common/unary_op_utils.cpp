@@ -189,6 +189,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("log1p_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
+        case UnaryOpType::TANH:
+            op_init_and_name = {
+                fmt::format("tanh_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("tanh_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
         case UnaryOpType::HEAVISIDE:
             op_init_and_name = {
                 "heaviside_tile_init();",
@@ -865,7 +870,7 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "log1p") {
         return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
     } else if (name == "tanh") {
-        return UnaryWithParam(UnaryOpType::TANH);
+        return UnaryWithParam(UnaryOpType::TANH, static_cast<float>(false));
     } else if (name == "log2") {
         return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
     } else if (name == "log10") {
