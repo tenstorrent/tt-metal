@@ -39,30 +39,25 @@ class Experts:
 
         # Build aggregated tensors: gate_up_proj (packed even/odd), optional bias, and down_proj(+bias)
         if all(k in state_dict for k in ["gate_up_proj", "down_proj"]):
+            # Unpack packed tensors; ensure no leading singleton dims on weights
             gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(
-                1, self.num_experts, self.hidden_size, self.expert_dim
+                self.num_experts, self.hidden_size, self.expert_dim
             )
-            up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(
-                1, self.num_experts, self.hidden_size, self.expert_dim
-            )
+            up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(self.num_experts, self.hidden_size, self.expert_dim)
             gate_proj_bias = None
             up_proj_bias = None
             if "gate_up_proj_bias" in state_dict:
-                gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(
-                    1, self.num_experts, 1, self.expert_dim
-                )
-                up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(
-                    1, self.num_experts, 1, self.expert_dim
-                )
-            down_proj = state_dict["down_proj"].reshape(1, self.num_experts, self.expert_dim, self.hidden_size)
+                gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(self.num_experts, 1, self.expert_dim)
+                up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(self.num_experts, 1, self.expert_dim)
+            down_proj = state_dict["down_proj"].reshape(self.num_experts, self.expert_dim, self.hidden_size)
             down_proj_bias = state_dict.get("down_proj_bias")
             if down_proj_bias is not None:
-                down_proj_bias = down_proj_bias.reshape(1, self.num_experts, 1, self.hidden_size)
+                down_proj_bias = down_proj_bias.reshape(self.num_experts, 1, self.hidden_size)
         else:
             # Build stacked tensors from per-expert weights
-            gate_proj = torch.empty(1, self.num_experts, self.hidden_size, self.expert_dim, dtype=torch.bfloat16)
-            up_proj = torch.empty(1, self.num_experts, self.hidden_size, self.expert_dim, dtype=torch.bfloat16)
-            down_proj = torch.empty(1, self.num_experts, self.expert_dim, self.hidden_size, dtype=torch.bfloat16)
+            gate_proj = torch.empty(self.num_experts, self.hidden_size, self.expert_dim, dtype=torch.bfloat16)
+            up_proj = torch.empty(self.num_experts, self.hidden_size, self.expert_dim, dtype=torch.bfloat16)
+            down_proj = torch.empty(self.num_experts, self.expert_dim, self.hidden_size, dtype=torch.bfloat16)
             gate_proj_bias = None
             up_proj_bias = None
             down_proj_bias = None
@@ -75,9 +70,10 @@ class Experts:
                         f"Missing per-expert weights for expert {i}. Required: "
                         f"experts.{i}.gate_proj.weight, experts.{i}.up_proj.weight, experts.{i}.down_proj.weight"
                     )
-                gate_proj[0, i] = gp.transpose(0, 1).to(torch.bfloat16)
-                up_proj[0, i] = up.transpose(0, 1).to(torch.bfloat16)
-                down_proj[0, i] = dp.transpose(0, 1).to(torch.bfloat16)
+                # Load as [E, H, I] for gate/up and [E, I, H] for down
+                gate_proj[i] = gp.transpose(0, 1).to(torch.bfloat16)
+                up_proj[i] = up.transpose(0, 1).to(torch.bfloat16)
+                down_proj[i] = dp.transpose(0, 1).to(torch.bfloat16)
 
         # Mesh mapping using MeshConfig
         col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
@@ -140,6 +136,18 @@ class Experts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        # Ensure there is no leading singleton dimension in weights/biases
+        def _squeeze_leading1(t):
+            if t is None:
+                return None
+            shp_list = list(t.shape)
+            if len(shp_list) > 0 and int(shp_list[0]) == 1:
+                new_shape = tuple(int(x) for x in shp_list[1:])
+                if len(new_shape) == 0:
+                    return t
+                return ttnn.reshape(t, new_shape)
+            return t
+
         # Row-parallel bias must not be replicated. Extend with zeros for TP devices.
         if down_proj_bias is not None:
             down_bias = down_proj_bias
@@ -157,16 +165,24 @@ class Experts:
         else:
             self.down_proj_bias = None
 
+        # Final sanity: ensure no leading singleton dims on weights/biases
+        self.gate_proj = _squeeze_leading1(self.gate_proj)
+        self.up_proj = _squeeze_leading1(self.up_proj)
+        self.down_proj = _squeeze_leading1(self.down_proj)
+        self.gate_proj_bias = _squeeze_leading1(self.gate_proj_bias)
+        self.up_proj_bias = _squeeze_leading1(self.up_proj_bias)
+        self.down_proj_bias = _squeeze_leading1(self.down_proj_bias)
+
     def __call__(self, hidden_states, routing_weights):
         # hidden_states: [B, S, H] in TILE layout (keep 3D)
         # routing_weights: [B*S, E] (from router), TILE or ROW_MAJOR
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
 
-        # Flatten tokens and convert to 3D [S_total, 1, H]
+        # Pack all tokens across batches into tokens_3d[0] with shape [S_total, 1, H]
         tokens_total = batch_size * seq_len
-        tokens_3d = hidden_states
-        print("tokens_3d: ", tokens_3d)
+        tokens_3d = ttnn.reshape(hidden_states, (tokens_total, 1, self.hidden_size))
+        print("tokens_3d packed: ", tokens_3d.shape)
 
         # Convert routing weights to ROW_MAJOR 3D sparsity tensor [1, S_total, E]
         rw_2d = (
@@ -177,8 +193,8 @@ class Experts:
 
         # Program config: mirror smoke3 (1D multicast, in0 multicast)
         output_tile = ttnn.Tile([32, 32])
-        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+        down_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             in0_block_w=1,
             out_subblock_h=1,
             out_subblock_w=1,
@@ -190,7 +206,7 @@ class Experts:
         )
 
         # Gate
-        print("going into gate: ", tokens_3d.shape, self.gate_proj.shape)
+        print("going into gate: ", tokens_3d.shape, self.gate_proj.shape, sparsity.shape)
         gate = ttnn.sparse_matmul(
             tokens_3d,
             self.gate_proj,
@@ -209,7 +225,6 @@ class Experts:
             sparsity=sparsity,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
-            # program_config=pc,
         )
         if self.up_proj_bias is not None:
             up = up + self.up_proj_bias
@@ -231,7 +246,7 @@ class Experts:
             output_tile=output_tile,
             is_input_a_sparse=True,
             is_input_b_sparse=False,
-            program_config=pc,
+            program_config=down_pc,
         )
 
         # Bias and combine experts using routing weights

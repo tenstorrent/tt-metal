@@ -339,7 +339,7 @@ class Attention:
         batch_size, seq_len, hidden_size = x.shape
         apply_rope, tt_cos, tt_sin = rope_mats
 
-        # Decode path with static batch: pad to self.decode_batch
+        # Decode path with static batch: conform to self.decode_batch by padding or slicing
         if seq_len == 1:
             # Use external kv_cache if provided (like tt-transformers), otherwise use internal cache
             if kv_cache:
@@ -347,7 +347,9 @@ class Attention:
             else:
                 k_cache, v_cache = self.kv_cache
 
-            # Pad input batch to static decode_batch
+            # Use pre-created memcfgs and rotary transform for the static decode batch
+
+            # Conform input batch to static decode_batch (pad if smaller, slice if larger)
             if batch_size < self.decode_batch:
                 pad_bs = self.decode_batch - batch_size
                 pad_tensor = ttnn.from_torch(
@@ -357,11 +359,14 @@ class Attention:
                     dtype=ttnn.bfloat16,
                 )
                 x_padded = ttnn.concat([x, pad_tensor], dim=0)
+            elif batch_size > self.decode_batch:
+                # Keep the first decode_batch entries to match static trace
+                x_padded = ttnn.slice(x, (0, 0, 0), (self.decode_batch, 1, self.hidden_size))
             else:
                 x_padded = x
 
             # Fused linear for WQKV on padded hidden states; linear expects [S, 1, B, H]
-            x4d = ttnn.reshape(x_padded, [1, 1, self.decode_batch, self.hidden_size])
+            x4d = ttnn.reshape(x_padded, (1, 1, self.decode_batch, self.hidden_size))
             xqkv_fused = ttnn.linear(
                 x4d,
                 self.wqkv,
@@ -399,21 +404,33 @@ class Attention:
 
             # Pad position idx and page table to static batch if needed
             if position_idx is not None and position_idx.shape[0] != self.decode_batch:
-                pad_bs = self.decode_batch - position_idx.shape[0]
-                if pad_bs > 0:
-                    last_idx = ttnn.slice(position_idx, (position_idx.shape[0] - 1,), (position_idx.shape[0],))
-                    pad_pos = ttnn.concat([last_idx] * pad_bs, dim=0)
-                    position_idx = ttnn.concat([position_idx, pad_pos], dim=0)
+                if position_idx.shape[0] > self.decode_batch:
+                    position_idx = ttnn.slice(position_idx, (0,), (self.decode_batch,))
+                else:
+                    pad_bs = self.decode_batch - position_idx.shape[0]
+                    if pad_bs > 0:
+                        last_idx = ttnn.slice(position_idx, (position_idx.shape[0] - 1,), (position_idx.shape[0],))
+                        pad_pos = ttnn.concat([last_idx] * pad_bs, dim=0)
+                        position_idx = ttnn.concat([position_idx, pad_pos], dim=0)
 
             if page_table is not None and hasattr(page_table, "shape") and page_table.shape[0] != self.decode_batch:
-                pad_bs = self.decode_batch - page_table.shape[0]
-                if pad_bs > 0:
-                    # Duplicate last row 'pad_bs' times along batch dim (dim 0)
-                    start = (page_table.shape[0] - 1,) + tuple([0] * (len(page_table.shape) - 1))
-                    end = tuple(page_table.shape)
-                    last_row = ttnn.slice(page_table, start, end)
-                    pads = [last_row] * pad_bs
-                    page_table = ttnn.concat([page_table] + pads, dim=0)
+                if page_table.shape[0] > self.decode_batch:
+                    _shp = list(page_table.shape)
+                    _dims = len(_shp)
+                    _start = tuple([0] * _dims)
+                    _end = (self.decode_batch,) + tuple(int(x) for x in _shp[1:])
+                    page_table = ttnn.slice(page_table, _start, _end)
+                else:
+                    pad_bs = self.decode_batch - page_table.shape[0]
+                    if pad_bs > 0:
+                        # Duplicate last row 'pad_bs' times along batch dim (dim 0)
+                        _shp = list(page_table.shape)
+                        _dims = len(_shp)
+                        start = (_shp[0] - 1,) + tuple([0] * (_dims - 1))
+                        end = tuple(int(x) for x in _shp)
+                        last_row = ttnn.slice(page_table, start, end)
+                        pads = [last_row] * pad_bs
+                        page_table = ttnn.concat([page_table] + pads, dim=0)
 
             # KV update: v_heads already in proper sharded layout
             try:
