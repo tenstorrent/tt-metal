@@ -35,7 +35,7 @@ void kernel_main() {
         }
         noc_async_read_barrier();
     } else {
-        constexpr uint32_t num_trids = 4;
+        constexpr uint32_t num_trids = 2;
         constexpr uint32_t dram_trid_base = 0;
         constexpr uint32_t scratch_trid_base = dram_trid_base + num_trids;
 
