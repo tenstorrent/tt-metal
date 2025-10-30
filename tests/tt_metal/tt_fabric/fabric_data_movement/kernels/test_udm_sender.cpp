@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/hw/inc/udm/tt_fabric_udm_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
@@ -49,7 +50,8 @@ inline void fill_payload_with_header_and_data(
     // Configure the header (this is what fabric_fast_write will do internally)
     packet_header->to_noc_unicast_write(
         tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x, noc_y, target_addr)}, payload_size_bytes);
-    tt::tt_fabric::udm::fabric_write_set_unicast_route(packet_header, dst_device_id, dst_mesh_id, 0);
+    tt::tt_fabric::udm::fabric_write_set_unicast_route(
+        packet_header, dst_device_id, dst_mesh_id, 0, 0);  // trid=0, posted=0
 
     // Copy the header data to the beginning of our payload
     // Since both source and destination are in local L1, we can use direct memory copy
@@ -92,7 +94,7 @@ void kernel_main() {
 
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE: {
-                tt::tt_fabric::udm::fabric_fast_write(
+                tt::tt_fabric::udm::fabric_fast_write_any_len(
                     dst_dev_id,
                     dst_mesh_id,
                     source_l1_buffer_address,

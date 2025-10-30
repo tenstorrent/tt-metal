@@ -166,6 +166,7 @@ struct UDMWriteControlHeader {
     uint8_t src_noc_y;
     uint8_t risc_id;
     uint8_t transaction_id;
+    uint8_t posted;
 } __attribute__((packed));
 
 struct UDMReadControlHeader {
@@ -179,7 +180,7 @@ struct UDMReadControlHeader {
     uint8_t transaction_id;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMWriteControlHeader) == 7, "UDMWriteControlHeader size is not 7 bytes");
+static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
 static_assert(sizeof(UDMReadControlHeader) == 13, "UDMReadControlHeader size is not 13 bytes");
 
 union UDMControlFields {
