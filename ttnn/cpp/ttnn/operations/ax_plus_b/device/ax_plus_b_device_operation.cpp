@@ -43,7 +43,7 @@ AX_plus_B_DeviceOperation::tensor_return_value_t AX_plus_B_DeviceOperation::crea
 
 std::tuple<AX_plus_B_DeviceOperation::operation_attributes_t, AX_plus_B_DeviceOperation::tensor_args_t>
 AX_plus_B_DeviceOperation::invoke(
-    const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, std::optional<Tensor>& tensor_y) {
+    const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, const std::optional<Tensor>& tensor_y) {
     return {operation_attributes_t{true, 42}, tensor_args_t{tensor_a, tensor_x, tensor_b, tensor_y}};
 }
 

@@ -98,12 +98,7 @@ AX_plus_B_DeviceOperation::SingleCore::cached_program_t AX_plus_B_DeviceOperatio
         num_tiles_written += num_tiles_per_core;
     }
 
-    return {
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .num_cores = num_cores,
-         .num_cores_y = num_cores_y}};
+    return {std::move(program), {.reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id}};
 }
 
 void AX_plus_B_DeviceOperation::SingleCore::override_runtime_arguments(
@@ -114,11 +109,9 @@ void AX_plus_B_DeviceOperation::SingleCore::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
-    // todo: assert num_cores is 1 and num_cores_y is 1, as this is a single-core version.
-    TT_ASSERT(num_cores == 1 && num_cores_y == 1);
+    constexpr uint32_t num_cores = 1;
+    constexpr uint32_t num_cores_y = 1;
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

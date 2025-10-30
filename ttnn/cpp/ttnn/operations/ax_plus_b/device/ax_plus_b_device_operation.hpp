@@ -33,15 +33,12 @@ struct AX_plus_B_DeviceOperation {
 
     using tensor_return_value_t = Tensor;
 
-    // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
-        std::size_t num_cores;
-        std::size_t num_cores_y;
-    };
-
     struct SingleCore {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
+        };
+
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -57,6 +54,13 @@ struct AX_plus_B_DeviceOperation {
     };
 
     struct MultiCore {
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id;
+            std::size_t num_cores;
+            std::size_t num_cores_y;
+        };
+
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
         static cached_program_t create(
@@ -95,7 +99,7 @@ struct AX_plus_B_DeviceOperation {
     // The user will be able to call the operation using `tensor_return_value_t output =
     // ttnn::prim::ax_plus_b(input_tensor)` after the op is registered
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, std::optional<Tensor>& tensor_y);
+        const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, const std::optional<Tensor>& tensor_y);
 
     // Optional methods
 
@@ -117,6 +121,6 @@ struct AX_plus_B_DeviceOperation {
 
 // Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example
 namespace ttnn::prim {
-constexpr auto example =
+constexpr auto ax_plus_b =
     ttnn::register_operation<"ttnn::prim::ax_plus_b", ttnn::operations::ax_plus_b::AX_plus_B_DeviceOperation>();
 }  // namespace ttnn::prim
