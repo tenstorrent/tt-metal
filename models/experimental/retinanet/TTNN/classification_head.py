@@ -16,6 +16,7 @@ def ttnn_retinanet_classification_head(
     num_classes: int = 91,
     batch_size: int = 1,
     input_shapes: List[tuple] = None,
+    model_config: dict = None,
 ) -> ttnn.Tensor:
     """
     TTNN implementation of RetinaNet classification head.
@@ -43,12 +44,18 @@ def ttnn_retinanet_classification_head(
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
+        dtype=model_config["ACTIVATIONS_DTYPE"],  # was ttnn.DataType.BFLOAT8_B
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=model_config.get("MATH_FIDELITY", ttnn.MathFidelity.HiFi4),
+        math_approx_mode=model_config.get("MATH_APPROX_MODE", False),
+        fp32_dest_acc_en=model_config.get("FP32_DEST_ACC_EN", True),
+        packer_l1_acc=model_config.get("PACKER_L1_ACC", False),
+    )
     # Create 4 Conv2dNormActivation blocks
     conv_blocks = []
     for i in range(4):
@@ -63,6 +70,8 @@ def ttnn_retinanet_classification_head(
             num_groups=32,
             grid_size=grid_size,
             input_mask=input_mask_tensor,
+            model_config=model_config,
+            compute_config=compute_config,
         )
         conv_blocks.append(conv_block)
 
@@ -95,6 +104,7 @@ def ttnn_retinanet_classification_head(
             batch_size=batch_size,
             input_height=H,
             input_width=W,
+            compute_config=compute_config,
         )
         logger.info(f"After cls_logits conv: {cls_logits.shape}")
 

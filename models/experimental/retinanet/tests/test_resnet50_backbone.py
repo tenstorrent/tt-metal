@@ -89,12 +89,14 @@ class BackboneTestInfra:
             torch_head=retinanet.head.regression_head,
             device=device,
             mesh_mapper=self.weights_mesh_mapper,
+            model_config=model_config,
         )
         # preprocess classification head parameters
         classification_parameters = preprocess_classification_head_parameters(
             torch_head=retinanet.head.classification_head,
             device=device,
             mesh_mapper=self.weights_mesh_mapper,
+            model_config=model_config,
         )
         # Extract parameters for backbone and regression head
         self.backbone_parameters = parameters.get("backbone", parameters)  # Fallback to full params if no backbone key
@@ -157,6 +159,7 @@ class BackboneTestInfra:
             num_anchors=9,
             batch_size=self.batch_size,
             input_shapes=input_shapes,
+            model_config=model_config,
         )
         # Run classification head
         classification_output = ttnn_retinanet_classification_head(
@@ -167,6 +170,7 @@ class BackboneTestInfra:
             num_anchors=9,
             batch_size=self.batch_size,
             input_shapes=input_shapes,
+            model_config=model_config,
         )
 
         # Combine all outputs

@@ -11,22 +11,25 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
 
 
-def create_classification_head_parameters(torch_model, device):
+def create_classification_head_parameters(torch_head, device, model_config):
     """Convert PyTorch classification head weights to TTNN format."""
     parameters = {}
 
     # Grid size for GroupNorm
     grid_size = ttnn.CoreGrid(y=8, x=8)
-
+    layout = (
+        ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
+    )
+    # layout=ttnn.ROW_MAJOR_LAYOUT
     # Convert 4 conv layers (Conv2d + GroupNorm weights)
     parameters["conv"] = []
     for i in range(4):
         # Conv2d weights
-        conv_weight = torch_model.conv[i][0].weight.detach().to(torch.bfloat16)
+        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
 
         # GroupNorm weights - format using helper function
-        norm_weight = torch_model.conv[i][1].weight.detach()
-        norm_bias = torch_model.conv[i][1].bias.detach()
+        norm_weight = torch_head.conv[i][1].weight.detach()
+        norm_bias = torch_head.conv[i][1].bias.detach()
 
         # Format GroupNorm parameters using helper function
         formatted_norm_weight = ttnn.create_group_norm_weight_bias_rm(
@@ -37,18 +40,18 @@ def create_classification_head_parameters(torch_model, device):
         )
 
         conv_params = {
-            "weight": ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16, device=device),
+            "weight": ttnn.from_torch(conv_weight, dtype=model_config["WEIGHTS_DTYPE"], device=device),
             "norm_weight": ttnn.from_torch(
                 formatted_norm_weight,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=model_config["WEIGHTS_DTYPE"],
+                layout=layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
             "norm_bias": ttnn.from_torch(
                 formatted_norm_bias,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=model_config["WEIGHTS_DTYPE"],
+                layout=layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             ),
@@ -57,19 +60,16 @@ def create_classification_head_parameters(torch_model, device):
         parameters["conv"].append(conv_params)
 
     # Convert cls_logits layer
-    cls_logits_weight = torch_model.cls_logits.weight.detach().to(torch.bfloat16)
-    cls_logits_bias = torch_model.cls_logits.bias.detach().to(torch.bfloat16)
+    cls_logits_weight = torch_head.cls_logits.weight.detach().to(torch.bfloat16)
+    cls_logits_bias = torch_head.cls_logits.bias.detach().to(torch.bfloat16)
 
     # Reshape bias to (1, 1, 1, 819)
     cls_logits_bias = cls_logits_bias.reshape(1, 1, 1, -1)
 
     parameters["cls_logits"] = {
-        "weight": ttnn.from_torch(cls_logits_weight, dtype=ttnn.bfloat16, device=device),
-        "bias": ttnn.from_torch(cls_logits_bias, dtype=ttnn.bfloat16, device=device),
+        "weight": ttnn.from_torch(cls_logits_weight, dtype=model_config["WEIGHTS_DTYPE"], device=device),
+        "bias": ttnn.from_torch(cls_logits_bias, dtype=model_config["WEIGHTS_DTYPE"], device=device),
     }
-
-    logger.info(f"cls_logits weight shape: {cls_logits_weight.shape}")
-    logger.info(f"cls_logits bias shape: {cls_logits_bias.shape}")
 
     return parameters
 
@@ -137,9 +137,13 @@ def test_classification_head_full(device, pcc, reset_seeds):
     ]
 
     logger.info(f"TTNN input shapes: {[f.shape for f in ttnn_features]}")
-
+    model_config = {
+        "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
+        "WEIGHTS_DTYPE": ttnn.bfloat16,
+        "ACTIVATIONS_DTYPE": ttnn.bfloat16,
+    }
     # Create TTNN parameters
-    ttnn_parameters = create_classification_head_parameters(classification_head, device)
+    ttnn_parameters = create_classification_head_parameters(classification_head, device, model_config)
 
     # Import TTNN implementation
     from models.experimental.retinanet.TTNN.classification_head import ttnn_retinanet_classification_head
@@ -156,6 +160,7 @@ def test_classification_head_full(device, pcc, reset_seeds):
         num_classes=num_classes,
         batch_size=batch_size,
         input_shapes=input_shapes,
+        model_config=model_config,
     )
 
     logger.info(f"TTNN output shape: {ttnn_output.shape}")

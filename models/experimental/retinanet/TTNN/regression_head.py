@@ -26,6 +26,8 @@ class Conv2dNormActivation:
         num_groups: int = 32,
         grid_size: Optional[ttnn.CoreGrid] = None,
         input_mask: Optional[ttnn.Tensor] = None,
+        model_config: dict = None,
+        compute_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
     ):
         """
         Args:
@@ -47,7 +49,8 @@ class Conv2dNormActivation:
         self.stride = stride
         self.padding = padding
         self.num_groups = num_groups
-
+        self.model_config = model_config
+        self.compute_config = compute_config
         # Store parameters
         self.conv_weight = parameters["weight"]
         self.norm_weight = parameters["norm_weight"]
@@ -108,6 +111,7 @@ class Conv2dNormActivation:
             input_height=input_height,
             input_width=input_width,
             slice_config=self.slice_config,
+            compute_config=self.compute_config,
         )
 
         # Get output shape after conv
@@ -144,6 +148,7 @@ class Conv2dNormActivation:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             core_grid=self.grid_size,
             inplace=False,
+            compute_kernel_config=self.compute_config,
         )
 
         # Unpad
@@ -173,6 +178,7 @@ def ttnn_retinanet_regression_head(
     num_anchors: int = 9,
     batch_size: int = 1,
     input_shapes: List[tuple] = None,
+    model_config: dict = None,
 ) -> ttnn.Tensor:
     """
     TTNN implementation of RetinaNet regression head with all 4 conv layers + GroupNorm + ReLU.
@@ -196,12 +202,18 @@ def ttnn_retinanet_regression_head(
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
+        dtype=model_config["ACTIVATIONS_DTYPE"],  # Was: ttnn.DataType.BFLOAT8_B
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=model_config.get("MATH_FIDELITY", ttnn.MathFidelity.HiFi4),
+        math_approx_mode=model_config.get("MATH_APPROX_MODE", False),
+        fp32_dest_acc_en=model_config.get("FP32_DEST_ACC_EN", True),
+        packer_l1_acc=model_config.get("PACKER_L1_ACC", False),
+    )
     # Initialize 4 Conv2dNormActivation blocks
     conv_blocks = []
     for conv_idx in range(4):
@@ -216,6 +228,8 @@ def ttnn_retinanet_regression_head(
             num_groups=32,
             grid_size=grid_size,
             input_mask=input_mask_tensor,
+            model_config=model_config,
+            compute_config=compute_config,
         )
         conv_blocks.append(conv_block)
 
@@ -243,6 +257,7 @@ def ttnn_retinanet_regression_head(
             input_height=H,
             input_width=W,
             slice_config=bbox_reg_slice_config,
+            compute_config=compute_config,
         )
 
         # Reshape to (N, H*W*num_anchors, 4)

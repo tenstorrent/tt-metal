@@ -62,18 +62,20 @@ def create_custom_mesh_preprocessor(mesh_mapper):
     return custom_preprocessor
 
 
-def preprocess_regression_head_parameters(torch_head, device, mesh_mapper):
+def preprocess_regression_head_parameters(torch_head, device, mesh_mapper, model_config):
     """Convert PyTorch regression head weights to TTNN format."""
     parameters = {}
 
     # Grid size for GroupNorm
     grid_size = ttnn.CoreGrid(y=8, x=8)
-
+    layout = (
+        ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
+    )
     # Convert 4 conv layers (Conv2d + GroupNorm weights)
     parameters["conv"] = []
     for i in range(4):
         # Conv2d weights
-        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)
+        conv_weight = torch_head.conv[i][0].weight.detach().to(torch.bfloat16)  # Was: torch.bfloat16
 
         # GroupNorm weights - MUST use create_group_norm_weight_bias_rm()
         norm_weight = torch_head.conv[i][1].weight.detach()
@@ -88,19 +90,21 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper):
         )
 
         conv_params = {
-            "weight": ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16, device=device, mesh_mapper=mesh_mapper),
+            "weight": ttnn.from_torch(
+                conv_weight, model_config["WEIGHTS_DTYPE"], device=device, mesh_mapper=mesh_mapper
+            ),  # bfloat16
             "norm_weight": ttnn.from_torch(
                 formatted_norm_weight,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=model_config["WEIGHTS_DTYPE"],
+                layout=layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
             ),
             "norm_bias": ttnn.from_torch(
                 formatted_norm_bias,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=model_config["WEIGHTS_DTYPE"],
+                layout=layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
@@ -114,22 +118,27 @@ def preprocess_regression_head_parameters(torch_head, device, mesh_mapper):
     bbox_bias = torch_head.bbox_reg.bias.detach().to(torch.bfloat16)
 
     parameters["bbox_reg"] = {
-        "weight": ttnn.from_torch(bbox_weight, dtype=ttnn.bfloat16, device=device, mesh_mapper=mesh_mapper),
+        "weight": ttnn.from_torch(
+            bbox_weight, dtype=model_config["WEIGHTS_DTYPE"], device=device, mesh_mapper=mesh_mapper
+        ),
         "bias": ttnn.from_torch(
-            bbox_bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, device=device, mesh_mapper=mesh_mapper
+            bbox_bias.reshape(1, 1, 1, -1), dtype=model_config["WEIGHTS_DTYPE"], device=device, mesh_mapper=mesh_mapper
         ),
     }
 
     return parameters
 
 
-def preprocess_classification_head_parameters(torch_head, device, mesh_mapper):
+def preprocess_classification_head_parameters(torch_head, device, mesh_mapper, model_config):
     """Convert PyTorch classification head weights to TTNN format."""
     parameters = {}
 
     # Grid size for GroupNorm
     grid_size = ttnn.CoreGrid(y=8, x=8)
-
+    layout = (
+        ttnn.TILE_LAYOUT if model_config["WEIGHTS_DTYPE"] in [ttnn.bfloat8_b, ttnn.bfloat4_b] else ttnn.ROW_MAJOR_LAYOUT
+    )
+    # layout=ttnn.ROW_MAJOR_LAYOUT
     # Convert 4 conv layers (Conv2d + GroupNorm weights)
     parameters["conv"] = []
     for i in range(4):
@@ -149,19 +158,21 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper):
         )
 
         conv_params = {
-            "weight": ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16, device=device, mesh_mapper=mesh_mapper),
+            "weight": ttnn.from_torch(
+                conv_weight, dtype=model_config["WEIGHTS_DTYPE"], device=device, mesh_mapper=mesh_mapper
+            ),
             "norm_weight": ttnn.from_torch(
                 formatted_norm_weight,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=model_config["WEIGHTS_DTYPE"],
+                layout=layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
             ),
             "norm_bias": ttnn.from_torch(
                 formatted_norm_bias,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=model_config["WEIGHTS_DTYPE"],
+                layout=layout,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mesh_mapper,
@@ -178,8 +189,12 @@ def preprocess_classification_head_parameters(torch_head, device, mesh_mapper):
     cls_logits_bias = cls_logits_bias.reshape(1, 1, 1, -1)
 
     parameters["cls_logits"] = {
-        "weight": ttnn.from_torch(cls_logits_weight, dtype=ttnn.bfloat16, device=device, mesh_mapper=mesh_mapper),
-        "bias": ttnn.from_torch(cls_logits_bias, dtype=ttnn.bfloat16, device=device, mesh_mapper=mesh_mapper),
+        "weight": ttnn.from_torch(
+            cls_logits_weight, dtype=model_config["WEIGHTS_DTYPE"], device=device, mesh_mapper=mesh_mapper
+        ),
+        "bias": ttnn.from_torch(
+            cls_logits_bias, dtype=model_config["WEIGHTS_DTYPE"], device=device, mesh_mapper=mesh_mapper
+        ),
     }
 
     return parameters
