@@ -692,6 +692,12 @@ void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
 }
 
 void DevicePool::init_firmware_on_active_devices() const {
+    // Skip firmware initialization for mock devices
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        log_info(tt::LogMetal, "Skipping firmware initialization for mock devices");
+        return;
+    }
+
     const auto& active_devices = this->get_all_active_devices();
     for (const auto& dev : active_devices) {
         // For Galaxy init, we only need to loop over mmio devices
