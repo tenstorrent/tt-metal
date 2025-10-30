@@ -202,8 +202,8 @@ class TransformerBlock(Module):
         if not skip_time_embed_activation_fn:
             time_embed = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        spatial_time = self.norm1_linear(time_embed, core_grid=self.core_grid)
-        prompt_time = self.norm1_context_linear(time_embed, core_grid=self.core_grid)
+        spatial_time = self.norm1_linear(time_embed)
+        prompt_time = self.norm1_context_linear(time_embed)
 
         (
             spatial_shift_attn,
@@ -265,7 +265,7 @@ class TransformerBlock(Module):
             spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
 
-        spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0), core_grid=self.core_grid), 0)
+        spatial_ff = ttnn.squeeze(self.ff(ttnn.unsqueeze(spatial_normed, 0)), 0)
         spatial_ff = spatial_ff * spatial_gate_ff
 
         spatial = spatial + spatial_ff
@@ -284,7 +284,7 @@ class TransformerBlock(Module):
             prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
         )
 
-        prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0), core_grid=self.core_grid), 0)
+        prompt_ff = ttnn.squeeze(self.ff_context(ttnn.unsqueeze(prompt_normed, 0)), 0)
         prompt_ff = prompt_ff * prompt_gate_ff
 
         prompt = prompt + prompt_ff
