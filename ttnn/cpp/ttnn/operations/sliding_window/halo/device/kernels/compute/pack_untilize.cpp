@@ -19,6 +19,8 @@ void MAIN {
     constexpr uint32_t tiles_per_row = get_compile_time_arg_val(3);  // number of tiles along width of shard
     constexpr uint32_t block_size = get_compile_time_arg_val(4);  // number of tiles along height that make up a block
 
+    DPRINT << "src_cb_id: " << src_cb_id << ", out_cb_id0: " << out_cb_id0 << ", out_cb_id1: " << out_cb_id1 << ENDL();
+
     const uint32_t total_blocks = get_arg_val<uint32_t>(0);
 
     constexpr bool use_pack_untilize = tiles_per_row <= MAX_PACK_UNTILIZE_WIDTH;
@@ -46,14 +48,14 @@ void MAIN {
 
         UNPACK(tt::compute::common::print_full_tile(src_cb_id, 0, true));
         UNPACK(DPRINT << "src read addr: " << get_local_cb_interface(src_cb_id).fifo_rd_ptr * 16 << ENDL());
-        UNPACK(DPRINT << "out write addr: " << get_local_cb_interface(out_cb_id).fifo_wr_ptr * 16 << ENDL());
+        PACK(DPRINT << "out write addr: " << get_local_cb_interface(out_cb_id).fifo_wr_ptr * 16 << ENDL());
 
         if constexpr (use_pack_untilize) {
             pack_untilize_block<tiles_per_row>(src_cb_id, block_size, out_cb_id);
         } else {
             untilize_block(src_cb_id, block_size * tiles_per_row, out_cb_id);
         }
-        PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+        PACK(tt::compute::common::print_full_tile(out_cb_id, 0, false));
         cb_push_back(out_cb_id, tiles_per_block);
         cb_pop_front(src_cb_id, tiles_per_block);
     }
