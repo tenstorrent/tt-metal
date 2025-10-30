@@ -17,78 +17,88 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
-
-ALWI void ACQ() {
-    tile_regs_acquire();
-    tile_regs_wait();
-}
-ALWI void REL() {
-    tile_regs_commit();
-    tile_regs_release();
-}
+#include "debug/dprint_pages.h"
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(2) == 1;
+    constexpr uint32_t input_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t reduce_scalar_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t intermediate_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t output_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(4);
+    constexpr uint32_t block_size = get_compile_time_arg_val(5);
+    constexpr bool use_float32_reduction = get_compile_time_arg_val(6) == 1;
 
+    uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
     constexpr uint32_t onetile = 1;
 
-    constexpr uint32_t cb_inp = tt::CBIndex::c_0;
-    constexpr uint32_t cb_reduce = tt::CBIndex::c_1;
+    cb_wait_front(reduce_scalar_cb, onetile);  // comes from the reader
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_14;
+    binary_op_init_common(input_cb, input_cb, intermediate_cb);
 
-    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
-
-    cb_wait_front(cb_reduce, 1);  // comes from the reader
-
-    binary_op_init_common(cb_inp, cb_reduce, cb_x2);
-
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        constexpr int onetile = 1;
-        constexpr int dst0 = 0;
-
+    for (uint32_t tile_row_num = 0; tile_row_num < num_tile_rows_to_process; tile_row_num++) {
         /*
          * x**2
          */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
-            cb_reserve_back(cb_x2, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
+        reconfig_data_format(input_cb, input_cb);
+        pack_reconfig_data_format(intermediate_cb);
+
+        // Disable L1 accumulation when starting a new row
+        PACK((llk_pack_reconfig_l1_acc(0)));
+
+        mul_tiles_init(input_cb, input_cb);
+        cb_reserve_back(intermediate_cb, onetile);
+        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+            cb_wait_front(input_cb, block_size);
+
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                mul_tiles(input_cb, input_cb, i, i, i);
             }
-            REL();
-            cb_push_back(cb_x2, blk);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                // Pack tiles onto eachother in the intermediate_cb
+                pack_tile<true>(i /*index into DST*/, intermediate_cb, 0 /*index into intermediate CB*/);
+
+                if (col_tile == 0 && i == 0) {
+                    // After packing the first tile in this row, enable L1 accumulation
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+            }
+            tile_regs_release();
+
+            cb_pop_front(input_cb, block_size);
         }
+        cb_push_back(intermediate_cb, onetile);
+
+        // Disable L1 accumulation
+        PACK((llk_pack_reconfig_l1_acc(0)));
 
         /*
          * sum(x**2)
          */
-        reconfig_data_format(cb_x2, cb_reduce);
-        pack_reconfig_data_format(cb_out);
-        reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, cb_out);
-        cb_wait_front(cb_x2, Wt);
-        cb_reserve_back(cb_out, onetile);
-        ACQ();
-        for (uint32_t wtr = 0; wtr < Wt; wtr++) {
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_x2, cb_reduce, wtr, 0, dst0);
-        }
-        pack_tile(dst0, cb_out, 0);
-        REL();
-        cb_push_back(cb_out, onetile);
-        cb_pop_front(cb_x2, Wt);
+        reconfig_data_format(intermediate_cb, reduce_scalar_cb);
+        pack_reconfig_data_format(output_cb);
+        reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, output_cb);
+        cb_wait_front(intermediate_cb, onetile);
+        cb_reserve_back(output_cb, onetile);
 
-        reduce_uninit();
-        cb_pop_front(cb_inp, Wt);
+        tile_regs_acquire();
+        reduce_tile<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(intermediate_cb, reduce_scalar_cb, 0, 0, 0);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(0, output_cb);
+        tile_regs_release();
+
+        /*NOTE: for some reason, outputs are sometimes incorrect if you uninit with the use_float32_reduction flag!*/
+        reduce_uninit<false>();
+
+        cb_push_back(output_cb, onetile);
+        cb_pop_front(intermediate_cb, onetile);
     }
-    cb_pop_front(cb_reduce, 1);
+    cb_pop_front(reduce_scalar_cb, onetile);
 }
 }  // namespace NAMESPACE
