@@ -235,7 +235,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/dataflow/"
-        "rme_post_allgather_reader.cpp",
+        "rms_post_allgather_reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 

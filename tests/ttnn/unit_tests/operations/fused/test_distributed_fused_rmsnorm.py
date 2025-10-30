@@ -53,6 +53,9 @@ def run_distributed_fused_rmsnorm(mesh_device, tp_mesh_axis, inp_shape, dtype, s
     tt_stats = ttnn.experimental.fused_rmsnorm_pre_allgather(
         tt_inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
     )
+    # tt_stats = ttnn.rms_norm_pre_all_gather(
+    #     tt_inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype, distributed_program_config=prog_cfg,
+    # )
 
     ttnn.synchronize_device(tt_inp.device())
     tt_stats_gathered = ttnn.experimental.all_gather_async(
@@ -69,7 +72,9 @@ def run_distributed_fused_rmsnorm(mesh_device, tp_mesh_axis, inp_shape, dtype, s
     tt_out = ttnn.experimental.fused_rmsnorm_post_allgather(
         tt_inp, tt_stats_gathered, epsilon=epsilon, compute_kernel_config=compute_kernel_config
     )
-
+    # tt_out = ttnn.rms_norm_post_all_gather(
+    #     tt_inp, tt_stats_gathered, epsilon=epsilon, compute_kernel_config=compute_kernel_config, distributed_program_config=prog_cfg,
+    # )
     tt_out = ttnn.to_torch(
         tt_out,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -84,13 +89,16 @@ def run_distributed_fused_rmsnorm(mesh_device, tp_mesh_axis, inp_shape, dtype, s
     assert passing
 
 
-inp_shapes = [(1, 1, 2048, 8192), (1, 1, 128, 8192), (2, 1, 128, 8192), (1, 1, 18944, 5120)]
-inp_shape_ids = ["inp_shape0", "inp_shape1", "inp_shape2", "inp_shape_wan_6u"]
-
-
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
-@pytest.mark.parametrize("inp_shape", inp_shapes, ids=inp_shape_ids)
+@pytest.mark.parametrize(
+    "seqlen",
+    [128, 256, 2048, 8192, 9472, 18944],
+    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen8192", "seqlen9472", "seqlen18944"],
+)
+@pytest.mark.parametrize(
+    "hidden_dim", [256, 2048, 5120, 8192], ids=["hidden_dim256", "hidden_dim2048", "hidden_dim5120", "hidden_dim8192"]
+)
 @pytest.mark.parametrize(
     "mesh_device, tp_mesh_axis",
     [
@@ -109,5 +117,8 @@ inp_shape_ids = ["inp_shape0", "inp_shape1", "inp_shape2", "inp_shape_wan_6u"]
     ids=["fabric_linear"],
     indirect=["device_params"],
 )
-def test_distributed_fused_rmsnorm(mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology):
+def test_distributed_fused_rmsnorm(
+    mesh_device, tp_mesh_axis, seqlen, hidden_dim, dtype, stats_dtype, topology, reset_seeds
+):
+    inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology)
