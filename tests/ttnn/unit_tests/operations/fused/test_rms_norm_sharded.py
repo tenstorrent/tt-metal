@@ -6,20 +6,24 @@ import pytest
 import torch
 import ttnn
 
-import tests.ttnn.unit_tests.operations.fused.sharded_test_utils as stu
-from models.common.utility_functions import is_blackhole
-
-
-@pytest.mark.parametrize(
-    "h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", stu.single_stage_param_sets()
+from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
+    rms_norm_test_main,
+    single_stage_param_sets,
+    simple_size_params,
+    generate_input_tensor,
+    ttnn_rms_norm_sharded,
+    rms_norm_golden,
 )
+
+
+@pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
 @pytest.mark.parametrize("two_stage", [False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_single_stage(
     device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, two_stage, tensor_type, dtype
 ):
-    stu.rms_norm_test_main(
+    rms_norm_test_main(
         device,
         h,
         w,
@@ -44,7 +48,7 @@ def test_rms_norm_sharded_single_stage(
 def test_rms_norm_sharded_two_stage(
     device, h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt, two_stage, tensor_type, dtype
 ):
-    stu.rms_norm_test_main(
+    rms_norm_test_main(
         device,
         h,
         w,
@@ -66,10 +70,10 @@ def test_rms_norm_sharded_with_residual(device, two_stage, tensor_type, dtype):
     if tensor_type == "random" or tensor_type == "random_normal":
         pytest.skip("Low PCC, see #30455")
 
-    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = stu.simple_size_params(two_stage)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
-    residual = stu.generate_input_tensor(h, w, "random_normal", dtype)
-    stu.rms_norm_test_main(
+    residual = generate_input_tensor(h, w, "random_normal", dtype)
+    rms_norm_test_main(
         device,
         h,
         w,
@@ -90,10 +94,10 @@ def test_rms_norm_sharded_with_residual(device, two_stage, tensor_type, dtype):
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random_normal"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, dtype):
-    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = stu.simple_size_params(two_stage)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
-    weight = stu.generate_input_tensor(1, w, "random", dtype)
-    stu.rms_norm_test_main(
+    weight = generate_input_tensor(1, w, "random", dtype)
+    rms_norm_test_main(
         device,
         h,
         w,
@@ -115,10 +119,9 @@ def test_rms_norm_sharded_with_weight_and_bias(device, two_stage, tensor_type, d
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_rms_norm_sharded_with_weight_and_bias_row_major(device, two_stage, tensor_type, dtype):
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = 64, 32, 2, 1, 1, 1, 1
-    # h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = stu.simple_size_params(two_stage)
 
-    weight = stu.generate_input_tensor(1, w, "random", dtype)
-    stu.rms_norm_test_main(
+    weight = generate_input_tensor(1, w, "random", dtype)
+    rms_norm_test_main(
         device,
         h,
         w,
@@ -143,11 +146,11 @@ def test_rms_norm_sharded_with_weight_and_bias_and_residual(device, two_stage, t
     if tensor_type == "random" or tensor_type == "random_normal":
         pytest.skip("Low PCC, see #30455")
 
-    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = stu.simple_size_params(two_stage)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
 
-    residual = stu.generate_input_tensor(h, w, "random_normal", dtype)
-    weight = stu.generate_input_tensor(1, w, "random", dtype)
-    stu.rms_norm_test_main(
+    residual = generate_input_tensor(h, w, "random_normal", dtype)
+    weight = generate_input_tensor(1, w, "random", dtype)
+    rms_norm_test_main(
         device,
         h,
         w,
@@ -212,7 +215,7 @@ def test_rms_norm_sharded_padded(device, h, w):
     )
 
     # Run sharded layer norm
-    output_ttnn = stu.ttnn_rms_norm_sharded(
+    output_ttnn = ttnn_rms_norm_sharded(
         device,
         tt_input_tensor,
         block_ht=1,
@@ -223,7 +226,7 @@ def test_rms_norm_sharded_padded(device, h, w):
     )
     output_ttnn = output_ttnn.to(dtype)
 
-    golden_output = stu.rms_norm_golden(torch_input_tensor, weight=None).to(dtype)
+    golden_output = rms_norm_golden(torch_input_tensor, weight=None).to(dtype)
 
     # Assert that the output is close to the golden output
     rtol = 1.6e-2
