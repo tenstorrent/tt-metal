@@ -1082,6 +1082,15 @@ def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
     return ti_skip(not is_wormhole_b0(), reason=reason_str)
 
 
+def run_for_wormhole_b0_or_blackhole(reason_str="only runs for Wormhole B0 or Blackhole"):
+    """Decorator to run tests on Wormhole B0 or Blackhole architectures.
+
+    Skips when running on any other arch. Keeps existing behavior for other
+    tests while allowing tests to target both meshes explicitly.
+    """
+    return ti_skip(not (is_wormhole_b0() or is_blackhole()), reason=reason_str)
+
+
 def run_for_grayskull(reason_str="only runs for Grayskull"):
     return ti_skip(not is_grayskull(), reason=reason_str)
 

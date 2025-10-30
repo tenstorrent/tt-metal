@@ -1,0 +1,260 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
+
+import torch
+
+import ttnn
+from models.demos.glm_45.config import MeshConfig
+from models.demos.glm_45.utils.general_utils import get_cache_file_name
+
+
+class Experts:
+    def __init__(
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        ccl_manager,
+        dtype=ttnn.bfloat16,
+        tensor_cache_path=None,
+        mesh_config=None,
+        shared_state_dict=None,
+    ):
+        # GLM MoE uses moe_intermediate_size; fall back to intermediate_size if not present
+        moe_dim = getattr(hf_config, "moe_intermediate_size", None)
+        self.intermediate_size = moe_dim if moe_dim is not None else hf_config.intermediate_size
+        self.num_experts = hf_config.n_routed_experts
+        self.hidden_size = hf_config.hidden_size
+        self.expert_dim = self.intermediate_size
+        self.ccl_manager = ccl_manager
+        self.mesh_device = mesh_device
+        self.num_experts_per_tok = hf_config.num_experts_per_tok
+
+        # Use MeshConfig for clean parallelization
+        self.mesh_config = mesh_config or MeshConfig(
+            mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0]
+        )
+        self.intermediate_size_per_device = self.mesh_config.shard_size(self.intermediate_size)
+
+        # Build aggregated tensors: gate_up_proj (packed even/odd), optional bias, and down_proj(+bias)
+        if all(k in state_dict for k in ["gate_up_proj", "down_proj"]):
+            gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(
+                1, self.num_experts, self.hidden_size, self.expert_dim
+            )
+            up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(
+                1, self.num_experts, self.hidden_size, self.expert_dim
+            )
+            gate_proj_bias = None
+            up_proj_bias = None
+            if "gate_up_proj_bias" in state_dict:
+                gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(
+                    1, self.num_experts, 1, self.expert_dim
+                )
+                up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(
+                    1, self.num_experts, 1, self.expert_dim
+                )
+            down_proj = state_dict["down_proj"].reshape(1, self.num_experts, self.expert_dim, self.hidden_size)
+            down_proj_bias = state_dict.get("down_proj_bias")
+            if down_proj_bias is not None:
+                down_proj_bias = down_proj_bias.reshape(1, self.num_experts, 1, self.hidden_size)
+        else:
+            # Build stacked tensors from per-expert weights
+            gate_proj = torch.empty(1, self.num_experts, self.hidden_size, self.expert_dim, dtype=torch.bfloat16)
+            up_proj = torch.empty(1, self.num_experts, self.hidden_size, self.expert_dim, dtype=torch.bfloat16)
+            down_proj = torch.empty(1, self.num_experts, self.expert_dim, self.hidden_size, dtype=torch.bfloat16)
+            gate_proj_bias = None
+            up_proj_bias = None
+            down_proj_bias = None
+            for i in range(self.num_experts):
+                gp = state_dict.get(f"{i}.gate_proj.weight")
+                up = state_dict.get(f"{i}.up_proj.weight")
+                dp = state_dict.get(f"{i}.down_proj.weight")
+                if gp is None or up is None or dp is None:
+                    raise ValueError(
+                        f"Missing per-expert weights for expert {i}. Required: "
+                        f"experts.{i}.gate_proj.weight, experts.{i}.up_proj.weight, experts.{i}.down_proj.weight"
+                    )
+                gate_proj[0, i] = gp.transpose(0, 1).to(torch.bfloat16)
+                up_proj[0, i] = up.transpose(0, 1).to(torch.bfloat16)
+                down_proj[0, i] = dp.transpose(0, 1).to(torch.bfloat16)
+
+        # Mesh mapping using MeshConfig
+        col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
+        row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
+
+        # Match smoke-test dtype and formatting
+        weight_dtype = ttnn.bfloat4_b
+        self.gate_proj = ttnn.as_tensor(
+            gate_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "gate_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.up_proj = ttnn.as_tensor(
+            up_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self.gate_proj_bias = (
+            ttnn.as_tensor(
+                gate_proj_bias,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=weight_dtype,
+                mesh_mapper=col_mesh_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "gate_proj_bias"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if gate_proj_bias is not None
+            else None
+        )
+        self.up_proj_bias = (
+            ttnn.as_tensor(
+                up_proj_bias,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=weight_dtype,
+                mesh_mapper=col_mesh_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "up_proj_bias"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if up_proj_bias is not None
+            else None
+        )
+
+        self.down_proj = ttnn.as_tensor(
+            down_proj,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=row_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "down_proj"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Row-parallel bias must not be replicated. Extend with zeros for TP devices.
+        if down_proj_bias is not None:
+            down_bias = down_proj_bias
+            if self.mesh_config.tp > 1:
+                down_bias = torch.cat([down_bias] + [torch.zeros_like(down_bias)] * (self.mesh_config.tp - 1), dim=-1)
+            self.down_proj_bias = ttnn.as_tensor(
+                down_bias,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=weight_dtype,
+                mesh_mapper=col_mesh_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "down_proj_bias"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            self.down_proj_bias = None
+
+    def __call__(self, hidden_states, routing_weights):
+        # hidden_states: [B, S, H] in TILE layout (keep 3D)
+        # routing_weights: [B*S, E] (from router), TILE or ROW_MAJOR
+        batch_size = hidden_states.shape[0]
+        seq_len = hidden_states.shape[1]
+
+        # Flatten tokens and convert to 3D [S_total, 1, H]
+        tokens_total = batch_size * seq_len
+        tokens_3d = hidden_states
+        print("tokens_3d: ", tokens_3d)
+
+        # Convert routing weights to ROW_MAJOR 3D sparsity tensor [1, S_total, E]
+        rw_2d = (
+            routing_weights if len(routing_weights.shape) == 2 else ttnn.reshape(routing_weights, (tokens_total, -1))
+        )
+        rw_rm = ttnn.to_layout(rw_2d, ttnn.ROW_MAJOR_LAYOUT)
+        sparsity = ttnn.reshape(rw_rm, (1, tokens_total, self.num_experts))
+
+        # Program config: mirror smoke3 (1D multicast, in0 multicast)
+        output_tile = ttnn.Tile([32, 32])
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=4,
+            mcast_in0=True,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+
+        # Gate
+        print("going into gate: ", tokens_3d.shape, self.gate_proj.shape)
+        gate = ttnn.sparse_matmul(
+            tokens_3d,
+            self.gate_proj,
+            sparsity=sparsity,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+            # program_config=pc,
+        )
+        if self.gate_proj_bias is not None:
+            gate = gate + self.gate_proj_bias
+
+        # Up
+        up = ttnn.sparse_matmul(
+            tokens_3d,
+            self.up_proj,
+            sparsity=sparsity,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+            # program_config=pc,
+        )
+        if self.up_proj_bias is not None:
+            up = up + self.up_proj_bias
+
+        # GLU activation (SiLU), following smoke3
+        self.alpha = getattr(self, "alpha", 1.702)
+        glu = gate * ttnn.sigmoid(gate * self.alpha)
+        down_in0 = (up + 1) * glu
+        ttnn.deallocate(glu)
+        ttnn.deallocate(up)
+        ttnn.deallocate(gate)
+
+        # Down: batched sparse matmul with sparse A
+        down = ttnn.sparse_matmul(
+            down_in0,
+            self.down_proj,
+            sparsity=sparsity,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+            is_input_a_sparse=True,
+            is_input_b_sparse=False,
+            program_config=pc,
+        )
+
+        # Bias and combine experts using routing weights
+        # down currently shaped like [S_total, E, 1, H_per_tp]; reshape to [B, E, S, H]
+        next_states = ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size))
+        if self.down_proj_bias is not None:
+            next_states = next_states + self.down_proj_bias
+
+        # routing_weights: [tokens_total, E] -> [B, E, S, 1]
+        rw = ttnn.reshape(rw_2d, (tokens_total, self.num_experts))
+        rw = ttnn.permute(rw, (1, 0))
+        rw = ttnn.reshape(rw, (batch_size, self.num_experts, seq_len, 1))
+        next_states = ttnn.mul(next_states, rw, output_tensor=next_states)
+        next_states = ttnn.sum(next_states, dim=1, keepdim=True)
+
+        # EP allreduce then TP allreduce
+        if self.mesh_config.ep > 1:
+            next_states = self.mesh_config.allreduce(next_states, self.ccl_manager, axis=self.mesh_config.ep_axis)
+        next_states = self.mesh_config.allreduce(
+            next_states,
+            self.ccl_manager,
+            pad_size=192 if self.mesh_config.tp == 8 else 0,
+            axis=self.mesh_config.tp_axis,
+        )
+        next_states = ttnn.reshape(next_states, (batch_size, seq_len, self.hidden_size))
+        return next_states
