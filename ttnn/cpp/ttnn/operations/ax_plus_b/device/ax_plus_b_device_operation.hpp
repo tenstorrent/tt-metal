@@ -26,7 +26,7 @@ struct AX_plus_B_DeviceOperation {
         const Tensor& tensor_a;
         const Tensor& tensor_x;
         const Tensor& tensor_b;
-        Tensor& tensor_y;
+        std::optional<Tensor> tensor_y;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;
@@ -93,9 +93,9 @@ struct AX_plus_B_DeviceOperation {
     // API call to map user arguments to operation attributes and tensor args.
     // This is the only method that is called by the user
     // The user will be able to call the operation using `tensor_return_value_t output =
-    // ttnn::prim::example(input_tensor)` after the op is registered
+    // ttnn::prim::ax_plus_b(input_tensor)` after the op is registered
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, Tensor& tensor_y);
+        const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, std::optional<Tensor>& tensor_y);
 
     // Optional methods
 

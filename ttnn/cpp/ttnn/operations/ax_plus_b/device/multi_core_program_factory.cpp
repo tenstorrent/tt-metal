@@ -16,12 +16,12 @@ AX_plus_B_DeviceOperation::MultiCore::cached_program_t AX_plus_B_DeviceOperation
 
     tt::tt_metal::Program program{};
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.tensor_a.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.tensor_x.dtype());
 
     const uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    const uint32_t num_tiles = tensor_args.tensor_a.physical_volume() / tt::constants::TILE_HW;
+    const uint32_t num_tiles = tensor_args.tensor_x.physical_volume() / tt::constants::TILE_HW;
 
-    tt::tt_metal::IDevice* device = tensor_args.tensor_a.device();
+    tt::tt_metal::IDevice* device = tensor_args.tensor_x.device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 

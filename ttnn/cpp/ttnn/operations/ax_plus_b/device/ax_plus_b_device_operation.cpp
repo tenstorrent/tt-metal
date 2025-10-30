@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ax_plus_b_device_operation.hpp"
+#include <optional>
 
 namespace ttnn::operations::ax_plus_b {
 
@@ -23,7 +24,7 @@ void AX_plus_B_DeviceOperation::validate_on_program_cache_hit(
 
 AX_plus_B_DeviceOperation::spec_return_value_t AX_plus_B_DeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.tensor_a;
+    const auto& input_tensor = tensor_args.tensor_x;
     return TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
@@ -32,13 +33,17 @@ AX_plus_B_DeviceOperation::spec_return_value_t AX_plus_B_DeviceOperation::comput
 
 AX_plus_B_DeviceOperation::tensor_return_value_t AX_plus_B_DeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.tensor_a.device());
+    const auto& output_tensor = tensor_args.tensor_y;
+    if (output_tensor.has_value()) {
+        return output_tensor.value();
+    }
+
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.tensor_x.device());
 }
 
 std::tuple<AX_plus_B_DeviceOperation::operation_attributes_t, AX_plus_B_DeviceOperation::tensor_args_t>
 AX_plus_B_DeviceOperation::invoke(
-    const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, Tensor& tensor_y) {
+    const Tensor& tensor_a, const Tensor& tensor_x, const Tensor& tensor_b, std::optional<Tensor>& tensor_y) {
     return {operation_attributes_t{true, 42}, tensor_args_t{tensor_a, tensor_x, tensor_b, tensor_y}};
 }
 
