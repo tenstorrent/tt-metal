@@ -13,7 +13,6 @@ const { execFileSync } = require('child_process');
 const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
 const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
-
 /**
  * Get the cutoff date for filtering runs.
  * @param {number} days - Number of days to look back
@@ -75,7 +74,7 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
       // Skip runs older than cutoff date
       if (runDate < cutoffDate) {
         skippedOldRuns++;
-        if (skippedOldRuns <= 5) {
+        if (skippedOldRuns <= MAX_CONSECUTIVE_CACHED) {
           core.info(`[FETCH] Skipping run ${runIdStr} (older than cutoff: ${runDate.toISOString()} < ${cutoffDate.toISOString()})`);
         }
         continue;
@@ -85,7 +84,7 @@ async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, 
       if (cachedIds.size > 0 && cachedIds.has(runIdStr)) {
         consecutiveCachedRuns++;
         skippedCachedRuns++;
-        if (consecutiveCachedRuns <= 5) {
+        if (consecutiveCachedRuns <= MAX_CONSECUTIVE_CACHED) {
           core.info(`[FETCH] Skipping cached run ${runIdStr} (consecutive cached: ${consecutiveCachedRuns})`);
         }
         // If we've seen many consecutive cached runs, we've likely reached the boundary
