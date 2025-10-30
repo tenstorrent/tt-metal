@@ -111,6 +111,7 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
             data[i] = 0.0f;
         }
     }
+    // TODO: creation ops should add op to lazy tensor
     auto input_tensor = Tensor::from_vector(data, spec, device_);
 
     log_info(tt::LogTest, "Created input tensor with shape [{}, {}]", shape[0], shape[1]);
@@ -134,6 +135,7 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
         sqrt_output.lazy()->id());
 
     sqrt_output.materialize();
+    // TODO: materialize should be implicit in cpu() / to_string() / etc.
     auto lazy_result = sqrt_output.cpu();
 
     ASSERT_TRUE(sqrt_output.lazy()->is_materialized()) << "Lazy tensor should be materialized";
@@ -392,20 +394,6 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
     auto final_eager = ttnn::multiply(exp_result_eager, matmul_input1_eager);
     auto eager_result = final_eager.cpu();
 
-    // Print eager mode intermediate results for debugging
-    std::cout << "matmul_result_eager: \n";
-    std::cout << matmul_result_eager.cpu().write_to_string() << std::endl;
-    std::cout << "add_result_eager: \n";
-    std::cout << add_result_eager.cpu().write_to_string() << std::endl;
-    std::cout << "relu_result_eager: \n";
-    std::cout << relu_result_eager.cpu().write_to_string() << std::endl;
-    std::cout << "matmul_result2_eager: \n";
-    std::cout << matmul_result2_eager.cpu().write_to_string() << std::endl;
-    std::cout << "exp_result_eager: \n";
-    std::cout << exp_result_eager.cpu().write_to_string() << std::endl;
-    std::cout << "final_eager: \n";
-    std::cout << eager_result.write_to_string() << std::endl;
-
     // Clean up eager tensors to free device memory before running lazy mode
     log_info(tt::LogTest, "Cleaning up eager tensors...");
     // TODO:: Test fails without this, why???
@@ -473,20 +461,6 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
     ASSERT_TRUE(add_input.lazy()->is_materialized()) << "Lazy tensor should be materialized";
 
     auto lazy_result = final_result.cpu();
-
-    // Print lazy mode intermediate results for debugging
-    std::cout << "matmul_result: \n";
-    std::cout << matmul_result.cpu().write_to_string() << std::endl;
-    std::cout << "add_result: \n";
-    std::cout << add_result.cpu().write_to_string() << std::endl;
-    std::cout << "relu_result: \n";
-    std::cout << relu_result.cpu().write_to_string() << std::endl;
-    std::cout << "matmul_result2: \n";
-    std::cout << matmul_result2.cpu().write_to_string() << std::endl;
-    std::cout << "exp_result: \n";
-    std::cout << exp_result.cpu().write_to_string() << std::endl;
-    std::cout << "final_result: \n";
-    std::cout << lazy_result.write_to_string() << std::endl;
 
     // Compare results
     log_info(tt::LogTest, "Comparing lazy and eager results...");

@@ -28,7 +28,6 @@
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/experimental/jit/to_organize.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -42,9 +41,9 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
+
 #include <tracy/Tracy.hpp>
 
-#pragma optimize("", off)
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
@@ -365,7 +364,6 @@ Tensor convert_python_tensor_to_tt_tensor(
         mesh_mapper);
 
     output = tt::tt_metal::set_tensor_id(output);
-
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -1448,10 +1446,6 @@ void pytensor_module(py::module& m_tensor) {
             "to_torch",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> py::object {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-
-                // if (self.producer_node() != 0) {
-                //     ttnn::experimental::jit::Context::instance().execute_node(self.producer_node());
-                // }
 
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);

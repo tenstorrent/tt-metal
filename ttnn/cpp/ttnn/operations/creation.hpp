@@ -18,10 +18,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/core.hpp"
-// #include "ttnn/experimental/jit/lazy_tensor.hpp"
-// #include "ttnn/experimental/jit/lazy_operation.hpp"
 
-#pragma optimize("", off)
 namespace ttnn {
 namespace operations {
 namespace creation {
@@ -252,8 +249,8 @@ struct Empty {
         const Layout& layout,
         MeshDevice* device,
         const MemoryConfig& memory_config) {
-        return {allocate_tensor_on_device(
-            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device)};
+        return allocate_tensor_on_device(
+            TensorSpec(shape, TensorLayout(dtype, PageConfig(layout), memory_config)), device);
     }
 };
 

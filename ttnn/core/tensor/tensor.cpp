@@ -299,6 +299,7 @@ std::vector<Tensor> Tensor::make_lazy_tensors(
 
 const std::shared_ptr<LazyTensor>& Tensor::lazy() const { return lazy_tensor_; }
 
+// TODO: Rename to eval
 void Tensor::materialize() { ttnn::experimental::jit::evaluate(lazy_tensor_); }
 
 template Tensor Tensor::from_span<bfloat16>(
