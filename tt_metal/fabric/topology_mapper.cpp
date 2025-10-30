@@ -226,6 +226,7 @@ void TopologyMapper::build_mapping() {
 
     // Build host-to-mesh mapping via distributed all-gather of local bindings.
     auto mesh_id_host_names = build_host_mesh_mapping();
+    auto host_name_to_mesh_rank = build_host_name_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
@@ -318,6 +319,46 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_h
     }
 
     return mesh_id_to_hosts;
+}
+
+std::unordered_map<MeshHostRankId, HostName> TopologyMapper::build_host_name_to_mesh_rank_mapping() {
+    std::unordered_map<MeshHostRankId, HostName> mapping;
+    auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const std::size_t world_size = *global_context->size();
+    if (world_size <= 1) {
+        mapping[local_mesh_binding_.host_rank] = physical_system_descriptor_.my_host_name();
+        return mapping;
+    }
+    auto local_host_name = physical_system_descriptor_.my_host_name();
+    std::size_t local_name_size = local_host_name.size();
+    std::vector<std::size_t> all_name_sizes(world_size);
+    all_gather_with_timeout(
+        global_context,
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_name_size), sizeof(local_name_size)),
+        tt::stl::as_writable_bytes(tt::stl::Span<std::size_t>(all_name_sizes.data(), all_name_sizes.size())),
+        "host_name_size all_gather");
+    std::size_t max_name_size = *std::max_element(all_name_sizes.begin(), all_name_sizes.end());
+    std::vector<char> local_name_padded(max_name_size, '\0');
+    std::copy(local_host_name.begin(), local_host_name.end(), local_name_padded.begin());
+    std::vector<char> all_names_padded(world_size * max_name_size);
+    all_gather_with_timeout(
+        global_context,
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(local_name_padded.data()), max_name_size),
+        tt::stl::as_writable_bytes(tt::stl::Span<char>(all_names_padded.data(), all_names_padded.size())),
+        "host_name all_gather");
+    MeshHostRankId local_mesh_rank = local_mesh_binding_.host_rank;
+    std::vector<MeshHostRankId> all_mesh_ranks(world_size);
+    all_gather_with_timeout(
+        global_context,
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_mesh_rank), sizeof(local_mesh_rank)),
+        tt::stl::as_writable_bytes(tt::stl::Span<MeshHostRankId>(all_mesh_ranks.data(), all_mesh_ranks.size())),
+        "mesh_rank all_gather");
+    for (std::size_t r = 0; r < world_size; ++r) {
+        std::string recv_name(all_names_padded.data() + r * max_name_size, all_name_sizes[r]);
+        MeshHostRankId mesh_rank = all_mesh_ranks[r];
+        mapping[mesh_rank] = recv_name;
+    }
+    return mapping;
 }
 
 std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical(

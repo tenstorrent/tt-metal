@@ -18,7 +18,6 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
 using HostName = std::string;
-using HostRank = std::vector<HostName>;  // HostName is the hostname, the index is the host rank
 
 namespace tt::tt_fabric {
 
@@ -212,6 +211,16 @@ private:
      * to gather the mappings from all ranks.
      */
     HostMeshMapping build_host_mesh_mapping();
+
+    /**
+     * @brief Build the mapping between host ranks and host names
+     *
+     * This method iterates through all hosts in the physical system descriptor and creates mappings
+     * based on the host names and fabric chip IDs from the mesh_container, mapping them
+     * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
+     * to gather the mappings from all ranks.
+     */
+    std::unordered_map<MeshHostRankId, HostName> build_host_name_to_mesh_rank_mapping();
 
     /**
      * @brief Build logical adjacency maps from mesh graph connectivity
