@@ -452,3 +452,8 @@ tests:
     comment: |
       Evaluates the performance impact of stateful versus stateless approaches under scenarios
       involving both identical and differing values and destinations.
+  319:
+    name: "Atomic Semaphore Adjacent Bandwidth Sweep"
+
+  320:
+    name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
