@@ -122,6 +122,15 @@ runs:
         grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
           | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
 
+        echo "Log file:"
+        cat "$CI_LOG_FILE"
+
+        echo "Failed logs:"
+        cat fail-first.txt || true
+
+        echo "Compact summary logs:"
+        cat compact-summary.txt || true
+
         {
           echo "### Compact test summary"
           echo
