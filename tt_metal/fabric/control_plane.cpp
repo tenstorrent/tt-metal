@@ -1682,7 +1682,9 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId c
         physical_chip_id);
     write_to_all_active_eth_cores(
         &tensix_routing_info,
-        sizeof(tensix_routing_info),
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
+        //      Active ETH doesn't have enough space (yet)
+        sizeof(tensix_routing_info) - sizeof(exit_node_table_t),
         tt::tt_metal::HalL1MemAddrType::FABRIC_ROUTING_TABLE,
         physical_chip_id);
 }

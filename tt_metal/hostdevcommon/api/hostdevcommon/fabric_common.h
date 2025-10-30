@@ -195,7 +195,7 @@ struct tensix_routing_l1_info_t {
     compressed_routing_table_t<MAX_NUM_MESHES> inter_mesh_routing_table;  // 384 bytes
     intra_mesh_routing_path_t<1, false> routing_path_table_1d;            // 64 bytes
     intra_mesh_routing_path_t<2, true> routing_path_table_2d;             // 512 bytes
-#ifndef COMPILE_FOR_ERISC
+#if !defined(ARCH_WORMHOLE) || (defined(ARCH_WORMHOLE) && !defined(COMPILE_FOR_ERISC))
     // TODO: enable once hybrid routing is supported.
     //       Currently no enough space on ACTIVE ETH
     //       https://github.com/tenstorrent/tt-metal/issues/27881
