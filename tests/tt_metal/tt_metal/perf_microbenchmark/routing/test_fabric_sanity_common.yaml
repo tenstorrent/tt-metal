@@ -247,7 +247,7 @@ Tests:
   - name: "SimpleUnicastMeshDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     senders:
       - device: [0, 0]
@@ -262,7 +262,7 @@ Tests:
   - name: "TestNocSendTypesMesh"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
@@ -279,7 +279,7 @@ Tests:
   - name: "AllToAllUnicastMeshDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     defaults:
       ftype: unicast
@@ -293,7 +293,7 @@ Tests:
   - name: "AllToAllUnicastTestNocSendTypesMeshDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
@@ -309,7 +309,7 @@ Tests:
   - name: "FullDevicePairingMeshDynamic"
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     defaults:
       ftype: unicast
@@ -356,7 +356,7 @@ Tests:
   - name: TestPacketSizesMeshDynamic
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -373,7 +373,7 @@ Tests:
   - name: AllToAllUnicastTestPacketSizesMeshDynamic
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     parametrization_params:
       size: [1024, 2048, 4096]
@@ -473,7 +473,7 @@ Tests:
     skip: [GALAXY, BLACKHOLE_GALAXY]
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
       fabric_tensix_config: Mux
 
     defaults:

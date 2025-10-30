@@ -293,10 +293,6 @@ void append_routing_plane_connection_manager_rt_args(
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
         kernel->add_defines({{"FABRIC_2D", "1"}});
-        if (fabric_context.is_dynamic_routing_enabled()) {
-            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
-            kernel->add_defines({{"DYNAMIC_ROUTING_ENABLED", "1"}});
-        }
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         worker_args.push_back(mesh_shape[1]);                     // ew_dim
         worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
@@ -361,11 +357,7 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
 }
 
 // TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices, tracked by #27196

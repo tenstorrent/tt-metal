@@ -23,18 +23,14 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
         {{Topology::Linear, RoutingType::LowLatency}, FabricConfig::FABRIC_1D},
         {{Topology::Ring, RoutingType::LowLatency}, FabricConfig::FABRIC_1D_RING},
         {{Topology::Mesh, RoutingType::LowLatency}, FabricConfig::FABRIC_2D},
-        {{Topology::Mesh, RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC},
 };
 
 const std::
     unordered_map<std::tuple<Topology, std::string, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::tuple_hash>
         TestFixture::torus_topology_to_fabric_config_map = {
             {{Topology::Torus, "X", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_X},
-            {{Topology::Torus, "X", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X},
             {{Topology::Torus, "Y", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_Y},
-            {{Topology::Torus, "Y", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y},
             {{Topology::Torus, "XY", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_XY},
-            {{Topology::Torus, "XY", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY},
 };
 
 int main(int argc, char** argv) {

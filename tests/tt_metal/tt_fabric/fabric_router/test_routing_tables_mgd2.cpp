@@ -20,7 +20,7 @@
 
 namespace {
 
-constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto kFabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D;
 constexpr auto kReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
 std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
