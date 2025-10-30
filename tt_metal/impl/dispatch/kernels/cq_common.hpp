@@ -439,19 +439,6 @@ public:
         this->move_rd_to_next_block();
     }
 
-    // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until
-    // the fence. Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
-    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr) {
-        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
-            if (this->rd_block_idx_ == cb_blocks - 1) {
-                cmd_ptr = cb_base;
-                this->cb_fence_ = cb_base;
-            }
-            move_rd_to_next_block_and_release_pages();
-        }
-        return this->acquire_pages();
-    }
-
     // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to writer.
     FORCE_INLINE uint32_t wait_for_availabe_data_and_release_old_pages(uint32_t& cmd_ptr) {
         if (available_space(cmd_ptr) == 0) {
@@ -505,6 +492,19 @@ private:
             released_prev_block_ = true;
         }
         this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
+    }
+
+    // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until
+    // the fence. Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
+    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr) {
+        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+            if (this->rd_block_idx_ == cb_blocks - 1) {
+                cmd_ptr = cb_base;
+                this->cb_fence_ = cb_base;
+            }
+            move_rd_to_next_block_and_release_pages();
+        }
+        return this->acquire_pages();
     }
 
     bool released_prev_block_{false};
