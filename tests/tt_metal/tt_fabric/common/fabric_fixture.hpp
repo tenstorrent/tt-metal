@@ -283,13 +283,16 @@ enum NocSendType : uint8_t {
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 
+enum class AddrLayout { Sequential, InterleavedL1 };
+
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
     FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false,
-    bool use_addrgen = false);
+    bool use_addrgen = false,
+    AddrLayout layout = AddrLayout::Sequential);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,

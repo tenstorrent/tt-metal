@@ -1866,7 +1866,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_unicast_write_with_state(
+    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
         connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
 }
 
@@ -1972,7 +1972,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_multicast_noc_unicast_write_with_state(
+    fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
         connection_manager, route_id, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
 }
 

@@ -2124,7 +2124,8 @@ void FabricUnicastCommon(
     const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs,
     FabricApiType api_type,
     bool with_state,
-    bool use_addrgen) {
+    bool use_addrgen,
+    AddrLayout layout) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     uint32_t num_packets = 10;
@@ -2200,6 +2201,60 @@ void FabricUnicastCommon(
         with_state,
         0  // is_chip_multicast = 0
     };
+
+    // Prepend TensorAccessorArgs when using addrgen with interleaved L1 layout
+    if (use_addrgen) {
+        // For addrgen, we need to allocate an interleaved buffer and pass its TensorAccessorArgs
+        if (layout == AddrLayout::InterleavedL1) {
+            // Allocate interleaved L1 buffer for destination
+            uint32_t dst_size = num_packets * worker_mem_map.packet_payload_size_bytes;
+            tt_metal::InterleavedBufferConfig dst_buffer_config{
+                .device = sender_device.get(),
+                .size = dst_size,
+                .page_size = worker_mem_map.packet_payload_size_bytes,
+                .buffer_type = tt_metal::BufferType::L1};
+            auto dst_buffer = tt_metal::CreateBuffer(dst_buffer_config);
+
+            // Get TensorAccessorArgs from the actual buffer
+            auto ta_args = tt_metal::TensorAccessorArgs(*dst_buffer);
+            auto ta_ct = ta_args.get_compile_time_args();
+
+            // Prepend TA args, then add TOTAL_PAGES and PAGE_SIZE
+            std::vector<uint32_t> ta_ct_args;
+            ta_ct_args.insert(ta_ct_args.end(), ta_ct.begin(), ta_ct.end());
+            ta_ct_args.push_back(num_packets);                               // TOTAL_PAGES
+            ta_ct_args.push_back(worker_mem_map.packet_payload_size_bytes);  // PAGE_SIZE
+            ta_ct_args.insert(ta_ct_args.end(), compile_time_args.begin(), compile_time_args.end());
+            compile_time_args.swap(ta_ct_args);
+
+            // Update target_address to use the interleaved buffer
+            worker_mem_map.target_address = dst_buffer->address();
+        } else {
+            // For sequential, create a regular buffer and get its TensorAccessorArgs
+            uint32_t dst_size = num_packets * worker_mem_map.packet_payload_size_bytes;
+            tt_metal::BufferConfig dst_buffer_config{
+                .device = sender_device.get(),
+                .size = dst_size,
+                .page_size = worker_mem_map.packet_payload_size_bytes,
+                .buffer_type = tt_metal::BufferType::L1};
+            auto dst_buffer = tt_metal::CreateBuffer(dst_buffer_config);
+
+            // Get TensorAccessorArgs from the actual buffer
+            auto ta_args = tt_metal::TensorAccessorArgs(*dst_buffer);
+            auto ta_ct = ta_args.get_compile_time_args();
+
+            // Prepend TA args, then add TOTAL_PAGES and PAGE_SIZE
+            std::vector<uint32_t> ta_ct_args;
+            ta_ct_args.insert(ta_ct_args.end(), ta_ct.begin(), ta_ct.end());
+            ta_ct_args.push_back(num_packets);                               // TOTAL_PAGES
+            ta_ct_args.push_back(worker_mem_map.packet_payload_size_bytes);  // PAGE_SIZE
+            ta_ct_args.insert(ta_ct_args.end(), compile_time_args.begin(), compile_time_args.end());
+            compile_time_args.swap(ta_ct_args);
+
+            // Update target_address to use the buffer
+            worker_mem_map.target_address = dst_buffer->address();
+        }
+    }
 
     if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;

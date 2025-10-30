@@ -1537,7 +1537,13 @@ TEST_F(Fabric2DFixture, TestSetUnicastRouteIdleEth) {
 // Mesh Addrgen Test
 TEST_F(NightlyFabric2DFixture, TestMeshFabricAddrgenUnicastWrite) {
     FabricUnicastCommon(
-        this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)}, FabricApiType::Mesh, false, true);
+        this,
+        NOC_UNICAST_WRITE,
+        {std::make_tuple(RoutingDirection::E, 1)},
+        FabricApiType::Mesh,
+        false,
+        true,
+        AddrLayout::InterleavedL1);
 }
 
 }  // namespace fabric_router_tests
