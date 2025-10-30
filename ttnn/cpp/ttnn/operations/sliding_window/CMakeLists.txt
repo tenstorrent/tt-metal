@@ -28,6 +28,7 @@ target_sources(
         halo/device/untilize_with_halo_program_factory.cpp
         halo/halo.cpp
         sliding_window.cpp
+        op_slicing/op_slicing.cpp
 )
 
 target_include_directories(ttnn_op_sliding_window PRIVATE ${FixmeOpIncDirs})
