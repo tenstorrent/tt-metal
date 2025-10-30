@@ -20,41 +20,35 @@ from models.demos.vanilla_unet.tt.common import (
 )
 from models.demos.vanilla_unet.tt.config import create_unet_configs_from_parameters
 from models.demos.vanilla_unet.tt.model import create_unet_from_configs
-from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import (
     PipelineConfig,
     create_pipeline_from_config,
     get_memory_config_for_persistent_dram_tensor,
 )
-from models.tt_cnn.tt.testing import create_random_input_tensor
+from models.tt_cnn.tt.testing import (
+    DevicePerformanceTestConfiguration,
+    create_random_input_tensor,
+    run_device_perf_test,
+)
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @run_for_wormhole_b0()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
-    "batch, expected_device_perf_fps",
+    "batch, expected_throughput_fps",
     ((1, 201.0) if is_wormhole_b0() else (1, 400.0),),
 )
-def test_vanilla_unet_perf_device(batch: int, expected_device_perf_fps: float):
-    command = f"pytest models/demos/vanilla_unet/tests/test_unet_model.py::test_vanilla_unet_model"
-    cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
-
-    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
-    post_processed_results = run_device_perf(
-        command, subdir="unet_vanilla", num_iterations=1, cols=cols, batch_size=batch
-    )
-    expected_perf_cols = {inference_time_key: expected_device_perf_fps}
-    expected_results = check_device_perf(
-        post_processed_results, margin=0.02, expected_perf_cols=expected_perf_cols, assert_on_fail=True
-    )
-    prep_device_perf_report(
-        model_name=f"ttnn_vanilla_unet{batch}",
-        batch_size=batch,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments="",
+def test_vanilla_unet_perf_device(batch: int, expected_throughput_fps: float):
+    run_device_perf_test(
+        DevicePerformanceTestConfiguration(
+            model_name=f"ttnn_vanilla_unet{batch}",
+            test_command="pytest models/demos/vanilla_unet/tests/test_unet_model.py::test_vanilla_unet_model",
+            batch_size=batch,
+            expected_throughput_fps=expected_throughput_fps,
+            subdir="unet_vanilla",
+        )
     )
 
 
