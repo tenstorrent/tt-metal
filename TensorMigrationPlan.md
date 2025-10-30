@@ -12,9 +12,9 @@
 
 5. **PR5**: Implement tensor host-only `reshape` operation
 
-6. **PR6**: Replace the `ttnn` op with the `tensor_ops` equivalent for the `to_string` tensor operation
+6. **PR6**: Replace the `ttnn` op with the `tensor_ops` equivalent for the `to_string` tensor operation.
 
-5. **PR7**: Move `tensor/` dir to `tt-metal` \+ distributed deps
+5. **PR7**: Move `tensor/` dir to `tt-metal` \+ distributed deps under tt::tt_metal::experimental namespace
 
 
 ---
@@ -108,11 +108,13 @@
 * Use the internal tensor_impl::to_layout and tensor_impl::to_dtype within tensor_impl::to_string (replacing ttnn ops) to allow clean migration to tt-metal.
 Verify that the change does not affect the current expected behavior.
 
+Introduce a ttnn::to_string(tensor) operation for pybind and move the ttnn::distributed::get_device_tensors logic from tensor_impl::to_string<T> into it, since distributed tensors will remain in ttnn for now.
+
 ---
 
 # **Phase 3 — Move Tensor code to tt-metal (minimal behavior change)**
 
-## **PR7 — Move `tensor/` directory to tt-metal (plus dependencies)**
+## **PR7- Move `tensor/` directory to `tt-metal` \+ distributed deps under tt::tt_metal::experimental namespace**
 
 **Scope**
 
