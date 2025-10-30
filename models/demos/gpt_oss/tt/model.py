@@ -4,7 +4,7 @@
 import torch
 
 import ttnn
-from models.demos.gpt_oss.config import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
@@ -62,8 +62,12 @@ class Model:
 
         self.ccl_manager = ccl_manager
 
-        # Use MeshConfig for clean parallelization
-        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        # Use mode-aware MeshConfig (stores separate configs for prefill and decode)
+        # Decode: EP=rows for expert parallelism, SP=1
+        # Prefill: EP=1, SP=rows for sequence parallelism (auto-defaults)
+        self.mesh_config = mesh_config or MeshConfig(
+            mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
+        )
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
@@ -184,6 +188,9 @@ class Model:
         Returns:
             logits: Output logits
         """
+        # Determine mode based on attention_masks presence
+        mode = Mode.DECODE if attention_masks is None else Mode.PREFILL
+
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             # Get layer-specific mask for prefill, None for decode
@@ -201,8 +208,11 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight)
-        if self.mesh_config.tp > 1:
+        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        hidden_states.deallocate(True)
+        # TP all-gather if using tensor parallelism
+        config = self.mesh_config.get_config(mode)
+        if config.tp > 1:
             logits = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=2)
         return logits
 

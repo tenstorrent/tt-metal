@@ -5,7 +5,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import nearest_y
-from models.demos.gpt_oss.config import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
@@ -38,8 +38,8 @@ class Attention:
         self.num_heads = hf_config.num_attention_heads
         self.num_kv_heads = hf_config.num_key_value_heads
 
-        # Use MeshConfig for clean parallelization
-        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+        # Use mode-aware MeshConfig for clean parallelization
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         self.num_local_heads = self.mesh_config.shard_size(self.num_heads)
         self.num_local_kv_heads = self.mesh_config.shard_size(self.num_kv_heads)
 
