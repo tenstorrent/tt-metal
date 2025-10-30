@@ -46,12 +46,13 @@ class TtImageNetNormalization:
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """
         Apply ImageNet normalization to input tensor.
+        Normalizes using device tensors, then converts to torch and back with sharded memory config.
 
         Args:
             input_tensor: Input tensor in NHWC format on device, values in [0,1]
 
         Returns:
-            ImageNet normalized tensor on device
+            ImageNet normalized tensor on device with HEIGHT sharded memory config
         """
         # Verify input tensor size matches initialized size
         batch_size, height, width, channels = input_tensor.shape
@@ -64,4 +65,40 @@ class TtImageNetNormalization:
         normalized = ttnn.subtract(input_tensor, self.mean_tensor)
         normalized = ttnn.divide(normalized, self.std_tensor)
 
-        return normalized
+        # Pull back to host and convert to torch
+        torch_normalized = ttnn.to_torch(normalized)
+
+        # Pad to match preprocess_nchw_input_tensor format (8 channels)
+        SHARD_WIDTH = 8
+        if torch_normalized.shape[-1] == 3:
+            # Pad channels from 3 to 8 (NHWC format)
+            torch_normalized = torch.nn.functional.pad(torch_normalized, (0, SHARD_WIDTH - 3), mode="constant", value=0)
+
+        # Create sharded memory config matching preprocess_nchw_input_tensor
+        HW = height * width
+        core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.device.core_grid.x - 1, self.device.core_grid.y - 1)
+                )
+            }
+        )
+        num_cores = self.device.core_grid.x * self.device.core_grid.y
+        shard_height = (1 * HW + num_cores - 1) // num_cores
+
+        sharded_memory_config = ttnn.create_sharded_memory_config_(
+            shape=(shard_height, SHARD_WIDTH),
+            core_grid=core_range_set,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Convert back to TTNN with sharded memory config
+        return ttnn.from_torch(
+            torch_normalized,
+            device=self.device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=sharded_memory_config,
+        )
