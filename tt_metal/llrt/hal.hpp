@@ -141,6 +141,7 @@ private:
     CoreType core_type_;
     // indices represents processor class and type positions, value is build configuration params
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
+    // indices represents processor class and type positions, values are abbreviated name and full name pairs
     std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
@@ -179,7 +180,7 @@ public:
     uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
-    const std::string get_processor_classes_names(uint32_t processor_index, bool is_abbreviated) const;
+    const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
@@ -438,7 +439,7 @@ public:
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    const std::string get_processor_classes_names(
+    const std::string get_processor_class_name(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const;
 
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
@@ -617,10 +618,10 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
 }
 
-inline const std::string Hal::get_processor_classes_names(
+inline const std::string Hal::get_processor_class_name(
     HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const {
     auto idx = get_programmable_core_type_index(programmable_core_type);
-    return this->core_info_[idx].get_processor_classes_names(processor_index, is_abbreviated);
+    return this->core_info_[idx].get_processor_class_name(processor_index, is_abbreviated);
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig

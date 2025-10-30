@@ -72,7 +72,7 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
 
 string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    return hal.get_processor_classes_names(
+    return hal.get_processor_class_name(
         ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type), risc_id, abbreviated);
 }
 
