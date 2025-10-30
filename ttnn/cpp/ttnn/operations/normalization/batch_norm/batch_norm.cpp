@@ -57,7 +57,9 @@ Tensor BatchNorm::invoke(
         batch_mean = mean_NHW(input, memory_config, compute_kernel_config);
         auto mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config, compute_kernel_config);
         batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
-        Tensor stats = ttnn::prim::running_statistics(
+        // The return Tensor of running_statistics is only for infra purposes.
+        // Just call the op to fill in running_mean and running_var.
+        ttnn::prim::running_statistics(
             batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
     } else {
         TT_FATAL(
