@@ -450,6 +450,14 @@ public:
         return this->acquire_pages();
     }
 
+    // Returns how much data is availble. Will block until data is available. May release old pages to writer.
+    FORCE_INLINE uint32_t wait_for_availabe_data_and_return_old_pages(uint32_t& cmd_ptr) {
+        if (available_space(cmd_ptr) == 0) {
+            get_cb_page_and_release_pages(cmd_ptr);
+        }
+        return available_space(cmd_ptr);
+    }
+
     // on_boundary is called when we're at the end of a block and need to release the pages and move to the next block.
     template <typename OnBoundaryFn>
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {

@@ -293,10 +293,7 @@ void process_write_host_h() {
         wlength -= length;
         while (length != 0) {
             // Get a page if needed
-            if (dispatch_cb_reader.available_space(data_ptr) == 0) {
-                dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr);
-            }
-            uint32_t available_data = dispatch_cb_reader.available_space(data_ptr);
+            uint32_t available_data = dispatch_cb_reader.wait_for_availabe_data_and_return_old_pages(data_ptr);
             uint32_t xfer_size = (length > available_data) ? available_data : length;
             uint32_t npages = (xfer_size + completion_queue_page_size - 1) / completion_queue_page_size;
             completion_queue_reserve_back(npages);
@@ -495,11 +492,8 @@ void process_write_linear(uint32_t num_mcast_dests) {
 
     while (length != 0) {
         // More data needs to be written, but we've exhausted the CB. Acquire more pages.
-        if (dispatch_cb_reader.available_space(data_ptr) == 0) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr);
-        }
         // Transfer size is min(remaining_length, data_available_in_cb)
-        uint32_t available_data = dispatch_cb_reader.available_space(data_ptr);
+        uint32_t available_data = dispatch_cb_reader.wait_for_availabe_data_and_return_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
 
         cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
@@ -540,12 +534,8 @@ void process_write_paged() {
     while (write_length != 0) {
         // TODO #7360: Have more performant handling when page_size > dispatch_cb_page_size by not doing multiple writes
         // for one buffer page
-        // More data needs to be written, but we've exhausted the CB. Acquire more pages.
-        if (dispatch_cb_reader.available_space(data_ptr) == 0) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr);
-        }
         // Transfer size is min(remaining_length, data_available_in_cb)
-        uint32_t available_data = dispatch_cb_reader.available_space(data_ptr);
+        uint32_t available_data = dispatch_cb_reader.wait_for_availabe_data_and_return_old_pages(data_ptr);
         uint32_t remaining_page_size = page_size - dst_addr_offset;
         uint32_t xfer_size = remaining_page_size > available_data ? available_data : remaining_page_size;
         // Cap the transfer size to the NOC packet size - use of One Packet NOC API (better performance
@@ -1300,9 +1290,7 @@ void kernel_main() {
     bool done = false;
     uint32_t heartbeat = 0;
     while (!done) {
-        if (dispatch_cb_reader.available_space(cmd_ptr) == 0) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(cmd_ptr);
-        }
+        dispatch_cb_reader.wait_for_availabe_data_and_return_old_pages(cmd_ptr);
 
         DeviceZoneScopedN("CQ-DISPATCH");
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
