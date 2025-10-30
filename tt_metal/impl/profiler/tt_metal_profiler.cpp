@@ -564,14 +564,14 @@ void syncAllDevices(ChipId host_connected_device) {
     setSyncInfo(host_connected_device, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
 }
 
-ChipId get_unvisited_device(std::map<ChipId, bool>& visited_map) {
+std::optional<ChipId> get_unvisited_device(std::map<ChipId, bool>& visited_map) {
     for (auto [device, visited] : visited_map) {
         if (!visited) {
             return device;
         }
     }
 
-    return -1;
+    return std::nullopt;
 }
 
 void ProfilerSync(ProfilerSyncState state) {
@@ -604,14 +604,14 @@ void ProfilerSync(ProfilerSyncState state) {
         std::queue<ChipId> device_queue;
         while (true) {
             auto root_device = get_unvisited_device(visited);
-            if (root_device == -1) {
+            if (!root_device.has_value()) {
                 break;
             }
-            num_connected_devices[root_device] = 1;
+            num_connected_devices[*root_device] = 1;
 
             // do BFS starting from root_device to find all connected devices and update num_connected_devices
-            device_queue.push(root_device);
-            visited[root_device] = true;
+            device_queue.push(*root_device);
+            visited[*root_device] = true;
             while (!device_queue.empty()) {
                 ChipId sender_device_id = device_queue.front();
                 device_queue.pop();
