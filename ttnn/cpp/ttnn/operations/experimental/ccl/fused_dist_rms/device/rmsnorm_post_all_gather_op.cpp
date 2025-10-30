@@ -44,13 +44,35 @@ void FusedRMSNormPostAllGather::validate(const std::vector<Tensor>& input_tensor
             stats.padded_shape()[i],
             a.padded_shape()[i]);
     }
+
+    TT_FATAL(this->num_heads > 0, "Number of heads must be greater than 0, got: {}", this->num_heads);
+    TT_FATAL(
+        a.padded_shape()[-1] % this->num_heads == 0,
+        "Input last dimension must be divisible by number of heads, got hidden_dim: {} vs num_heads: {}",
+        a.padded_shape()[-1],
+        this->num_heads);
+
+    TT_FATAL(
+        a.logical_shape()[-1] == a.padded_shape()[-1],
+        "Input last dimension must be the same as padded last dimension, got logical_dim: {} vs padded_dim: {}",
+        a.logical_shape()[-1],
+        a.padded_shape()[-1]);
+
+    TT_FATAL(a.logical_shape().rank() == 4, "Input must have rank 4, got: {}", a.logical_shape().rank());
+    // Expected input shape: [batch, 1, sequence_length, hidden_dim]
+    TT_FATAL(a.logical_shape()[1] == 1, "Input dim 1 must be 1, got: {}", a.logical_shape()[1]);
+    TT_FATAL(a.logical_shape()[0] == 1, "Expecting input batch dimension to be 1, got: {}", a.logical_shape()[0]);
 }
 
 std::vector<TensorSpec> FusedRMSNormPostAllGather::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     auto& input_tensor = input_tensors.at(0);
+    auto output_shape = input_tensor.logical_shape();
+    output_shape[1] = this->num_heads;
+    output_shape[3] /= this->num_heads;
+
     return {TensorSpec(
-        input_tensor.logical_shape(),
+        output_shape,
         tt::tt_metal::TensorLayout(
             this->dtype.value_or(input_tensor.dtype()),
             tt::tt_metal::PageConfig(Layout::TILE),
@@ -63,6 +85,7 @@ tt::tt_metal::operation::ProgramWithCallbacks FusedRMSNormPostAllGather::create_
     const auto& stats = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
 
-    return fused_rmsnorm_post_allgather_multi_core(a, stats, output_tensor, this->eps, this->compute_kernel_config);
+    return fused_rmsnorm_post_allgather_multi_core(
+        a, stats, output_tensor, this->eps, this->num_heads, this->compute_kernel_config);
 }
 }  // namespace ttnn::operations::experimental::ccl

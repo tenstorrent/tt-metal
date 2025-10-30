@@ -52,7 +52,7 @@ static void bind_rmsnorm_post_all_gather_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::fused_rmsnorm_post_allgather,
-        R"doc(fused_rmsnorm_post_allgather(input_tensor: ttnn.Tensor, stats: ttnn.Tensor, epsilon: float = 1e-5, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(fused_rmsnorm_post_allgather(input_tensor: ttnn.Tensor, stats: ttnn.Tensor, epsilon: float = 1e-5, num_heads_per_device: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
             Performs the second part of a distributed RMSNorm operation normalizing the input based on the gathered statistics input.
 
             Note:
@@ -93,6 +93,7 @@ static void bind_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("stats"),
             py::kw_only(),
             py::arg("epsilon") = 1e-5,
+            py::arg("num_heads_per_device") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("dtype") = std::nullopt});

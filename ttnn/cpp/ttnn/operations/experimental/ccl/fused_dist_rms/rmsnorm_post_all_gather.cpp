@@ -12,6 +12,7 @@ ttnn::Tensor ExecuteFusedRMSNormPostAllGather::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& stats,
     float epsilon,
+    uint32_t num_heads,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType>& dtype) {
@@ -21,6 +22,7 @@ ttnn::Tensor ExecuteFusedRMSNormPostAllGather::invoke(
     return tt::tt_metal::operation::run(
                FusedRMSNormPostAllGather{
                    .eps = epsilon,
+                   .num_heads = num_heads,
                    .memory_config = memory_config.value_or(input_tensor.memory_config()),
                    .compute_kernel_config = kernel_config_val,
                    .dtype = dtype},

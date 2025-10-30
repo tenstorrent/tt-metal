@@ -53,6 +53,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const Tensor& stats_tensor,
     Tensor& output_tensor,
     float eps,
+    uint32_t num_heads,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
@@ -60,10 +61,11 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t W = input_shape[-1];
-    const uint32_t folded_H = input_tensor.physical_volume() / W;
+    const uint32_t H = input_shape[-2];
 
     const uint32_t num_tile_cols = W / TILE_WIDTH;
-    const uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
+    const uint32_t num_tile_rows = H / TILE_HEIGHT;
+    const uint32_t head_dim_tiles = num_tile_cols / num_heads;
 
     const uint32_t stats_tiles_cols = stats_tensor.padded_shape()[-1] / TILE_WIDTH;
     // AllGather results in a tensor with num_devices columns of tiles
@@ -71,7 +73,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
 
     log_info(tt::LogOp, "W: {}", W);
-    log_info(tt::LogOp, "folded_H: {}", folded_H);
+    log_info(tt::LogOp, "H: {}", H);
     log_info(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
     log_info(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
     log_info(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
@@ -199,6 +201,9 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         output_cb_id,
         num_tile_cols,
         dst_reg_count,
+        head_dim_tiles,
+        num_heads,
+        num_tile_rows,
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
