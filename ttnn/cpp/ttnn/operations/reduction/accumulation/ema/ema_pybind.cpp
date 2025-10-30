@@ -25,7 +25,7 @@ void bind_reduction_ema_operation(py::module& module) {
         For a given `input` of size T along the last dimension, the `output` will also contain T elements and be such that:
 
         .. math::
-            \mathrm{{output}}_t = \alpha \times \mathrm{{input}}_t + (1 - \alpha) \times \mathrm{{output}}_{t-1}
+            \mathrm{{output}}_t = \alpha \times \mathrm{{output}}_{t-1} + (1 - \alpha) \times \mathrm{{input}}_t
 
         with \mathrm{{output}}_0 = \mathrm{{input}}_0
 
@@ -35,8 +35,8 @@ void bind_reduction_ema_operation(py::module& module) {
 
         Keyword Args:
             out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
-            core_grid (ttnn.CoreGrid, optional): core grid for the operation. If not provided, an optimal core grid will be selected.
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            core_grid (ttnn.CoreGrid, optional): core grid for the operation. If not provided, an optimal core grid will be selected based on the input tensor shape.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to input tensor memory config.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): compute kernel configuration for the operation. Defaults to `None`.
 
         Returns:
@@ -52,7 +52,7 @@ void bind_reduction_ema_operation(py::module& module) {
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16, FLOAT32
+               * - BFLOAT16
                  - TILE
                  - 4
 
@@ -66,13 +66,13 @@ void bind_reduction_ema_operation(py::module& module) {
             .. code-block:: python
 
                 # Create tensor
-                tensor_input = ttnn.rand((1, 2, 3, 4), device=device)
+                tensor_input = ttnn.rand((1, 2, 64, 128), device=device, layout=ttnn.TILE_LAYOUT)
 
                 # Apply ttnn.ema() with alpha=0.99
                 tensor_output = ttnn.ema(tensor_input, 0.99)
 
                 # With preallocated output
-                preallocated_output = ttnn.rand([1, 2, 3, 4], dtype=ttnn.bfloat16, device=device)
+                preallocated_output = ttnn.rand([1, 2, 64, 128], dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
                 tensor_output = ttnn.ema(tensor_input, 0.99, out=preallocated_output)
 

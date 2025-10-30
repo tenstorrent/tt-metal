@@ -10,21 +10,24 @@ void kernel_main() {
     // Compile time args
     // -----------------
     constexpr uint32_t total_tiles_per_core = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_tile_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
     // Runtime args
     // ------------
     const uint32_t dst_base_addr = get_arg_val<uint32_t>(0);
     const uint32_t dst_start_tile = get_arg_val<uint32_t>(1);
 
-    // Tensor accessor
-    // ---------------
-    const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr, dst_tile_size);
-
     // CB indices
     // ----------
     constexpr auto dst_cb = tt::CBIndex::c_1;
+
+    // Tile sizes
+    // ----------
+    constexpr uint32_t dst_tile_size = get_tile_size(dst_cb);
+
+    // Tensor accessor
+    // ---------------
+    const auto dst_accessor = TensorAccessor(dst_args, dst_base_addr, dst_tile_size);
 
     //-------------------------------------------------------------------------
     // Main loop - pull pages from dst_cb and push to dst

@@ -14,7 +14,7 @@ ALWI void ema_init() { MATH((llk_math_ema_sfpu_init())); }
 
 ALWI void ema_load_alpha_beta(uint32_t alpha, uint32_t beta) { MATH((llk_math_ema_sfpu_load_alpha_beta(alpha, beta))); }
 
-ALWI void ema_clear_prev_output() { MATH((llk_math_ema_sfpu_clear_prev_output())); }
+ALWI void ema_clear_previous_output() { MATH((llk_math_ema_sfpu_clear_previous_output())); }
 
 ALWI void ema_tile(uint32_t input_dst_index) { MATH((llk_math_ema_sfpu_tile(input_dst_index))); }
 

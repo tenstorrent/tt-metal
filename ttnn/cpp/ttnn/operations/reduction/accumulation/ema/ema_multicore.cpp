@@ -23,7 +23,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     CoreCoord grid_size,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     // Grid sizing
-    // ------------
+    // -----------
     // If empty grid size, use all cores
     if ((grid_size.x == 0) && (grid_size.y == 0)) {
         grid_size = a.device()->compute_with_storage_grid_size();
@@ -39,18 +39,19 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     auto num_channel_tiles = num_channels / a.tensor_spec().tile().get_height();
     auto tiles_per_channel = num_samples_per_channel / a.tensor_spec().tile().get_width();
 
-    auto total_tiles = num_batches * num_channel_tiles * tiles_per_channel;
+    auto total_batch_channel_tiles = num_batches * num_channel_tiles;
 
     // We pick the maximum number of cores (from the available) that divides total_tiles equally
-    auto [num_cores, total_tiles_per_core] = tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(
-        total_tiles, num_cores_available, /*request_even=*/false);
+    auto [num_cores, total_batch_channel_tiles_per_core] =
+        tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(
+            total_batch_channel_tiles, num_cores_available, /*request_even=*/false);
 
     // We now have the number of cores to use, compute per core parameters
     auto all_cores = CoreRangeSet(grid_to_cores(num_cores, grid_size.x, grid_size.y, false));
     log_debug(tt::LogOp, "Provided grid size: y={}, x={}", grid_size.y, grid_size.x);
     log_debug(tt::LogOp, "Using {} cores out of {} available", num_cores, num_cores_available);
 
-    auto total_batches_per_core = total_tiles_per_core / tiles_per_channel;
+    auto total_tiles_per_core = total_batch_channel_tiles_per_core * tiles_per_channel;
 
     // Precompute the alpha and beta bits
     // Used by the EMA SFPU instructions
@@ -92,14 +93,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
 
     // Compile time args for the kernels
     // ---------------------------------
-    std::vector<uint32_t> reader_compile_args = {total_tiles_per_core, src_tile_size};
+    std::vector<uint32_t> reader_compile_args = {total_tiles_per_core};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_args);
 
-    std::vector<uint32_t> writer_compile_args = {total_tiles_per_core, dst_tile_size};
+    std::vector<uint32_t> writer_compile_args = {total_tiles_per_core};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_args);
 
     std::vector<uint32_t> compute_compile_args = {
-        total_batches_per_core,
+        total_batch_channel_tiles_per_core,
         tiles_per_channel,
         alpha_bits,
         beta_bits,
@@ -142,11 +143,11 @@ tt::tt_metal::operation::ProgramWithCallbacks ema_multi_core(
     // ---------------
     std::vector<uint32_t> reader_runtime_args = {
         a.buffer()->address(),
-        0,  // Placeholder for src_start_tile
+        0,  // Placeholder for src_start_tile, populated below
     };
     std::vector<uint32_t> writer_runtime_args = {
         output.buffer()->address(),
-        0,  // Placeholder for dst_start_tile
+        0,  // Placeholder for dst_start_tile, populated below
     };
 
     uint32_t src_start_tile = 0;
