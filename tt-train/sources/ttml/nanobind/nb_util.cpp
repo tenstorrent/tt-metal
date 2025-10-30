@@ -331,14 +331,12 @@ tt::tt_metal::Tensor make_metal_tensor(
 
                 auto row_major_tensor =
                     (mapper != nullptr)
-                        ? ttnn::distributed::create_distributed_tensor(
-                              ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
+                        ? ttnn::to_device(
+                              ttnn::distributed::create_distributed_tensor(
+                                  ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper),
+                              device,
+                              tt::tt_metal::MemoryConfig{})
                         : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
-
-                // Move distributed tensor to device
-                if (mapper != nullptr) {
-                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-                }
 
                 if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
                     return row_major_tensor;
@@ -347,14 +345,12 @@ tt::tt_metal::Tensor make_metal_tensor(
             } else {
                 auto row_major_tensor =
                     (mapper != nullptr)
-                        ? ttnn::distributed::create_distributed_tensor(
-                              ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
+                        ? ttnn::to_device(
+                              ttnn::distributed::create_distributed_tensor(
+                                  ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper),
+                              device,
+                              tt::tt_metal::MemoryConfig{})
                         : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
-
-                // Move distributed tensor to device
-                if (mapper != nullptr) {
-                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
-                }
 
                 if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
                     return row_major_tensor;

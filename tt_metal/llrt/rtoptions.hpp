@@ -132,6 +132,7 @@ class RunTimeOptions {
     bool profiler_mid_run_dump = false;
     bool profiler_trace_profiler = false;
     bool profiler_trace_tracking = false;
+    bool profiler_cpp_post_process = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -153,7 +154,6 @@ class RunTimeOptions {
     bool validate_kernel_binaries = false;
     unsigned num_hw_cqs = 1;
 
-    bool fd_fabric_en = false;
     bool using_slow_dispatch = false;
 
     bool enable_dispatch_data_collection = false;
@@ -417,6 +417,7 @@ public:
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }
     bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
+    bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
