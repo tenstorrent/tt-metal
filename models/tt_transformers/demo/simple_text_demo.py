@@ -645,7 +645,7 @@ def prepare_generator_args(
             False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
-            32,  # batch_size
+            1,  # batch_size
             0,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
@@ -657,14 +657,14 @@ def prepare_generator_args(
             False,  # stress_test
             True,  # enable_trace
             10,  # num_layers, if None -> defaults to all layers
-            "prefill",  # performs both prefill and decode
+            "prefill",  # mode
         ),
         (  # device-perf-decode - Measures device performance of a decode run
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
-            32,  # batch_size
+            1,  # batch_size
             2,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
@@ -676,7 +676,7 @@ def prepare_generator_args(
             False,  # stress_test
             True,  # enable_trace
             10,  # num_layers, if None -> defaults to all layers
-            "decode",  # performs both prefill and decode
+            "decode",  # mode
         ),
     ],
     ids=[
