@@ -220,13 +220,13 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
         const auto& a_shape = a.logical_shape();
         const auto& b_shape = b.logical_shape();
 
-        if (is_block_format(a.dtype()) and
-            (a_shape[-2] == 1 and b_shape[-2] > 1 or a_shape[-1] == 1 and b_shape[-1] > 1)) {
+        if (is_block_format(a.dtype()) &&
+            ((a_shape[-2] == 1 && b_shape[-2] > 1) || (a_shape[-1] == 1 && b_shape[-1] > 1))) {
             return true;
         }
 
-        if (is_block_format(b.dtype()) and
-            (b_shape[-2] == 1 and a_shape[-2] > 1 or b_shape[-1] == 1 and a_shape[-1] > 1)) {
+        if (is_block_format(b.dtype()) &&
+            ((b_shape[-2] == 1 && a_shape[-2] > 1) || (b_shape[-1] == 1 && a_shape[-1] > 1))) {
             return true;
         }
     }
