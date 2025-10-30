@@ -106,10 +106,11 @@ struct KernelDescriptor {
         DataMovementConfigDescriptor,
         ComputeConfigDescriptor,
         EthernetConfigDescriptor>;
-    enum class SourceType { FILE_PATH, SOURCE_CODE };
+    enum class SourceType { FILE_PATH, SOURCE_CODE, EXPERIMENTAL_BINARY_PATH [[deprecated]] };
 
     std::string kernel_source;
     SourceType source_type = SourceType::FILE_PATH;
+    std::variant<std::string, size_t> binary_hash;
 
     CoreRangeSet core_ranges;
     CompileTimeArgs compile_time_args;
