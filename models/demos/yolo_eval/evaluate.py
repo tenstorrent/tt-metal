@@ -250,7 +250,12 @@ def evaluation(
 
             results = post_processing(img, 0.3, 0.4, output)
         elif model_name == "YOLOv10":
-            from models.demos.yolov10x.demo.demo_utils import postprocess as postprocess_yolov10
+            if is_blackhole():
+                from models.demos.blackhole.yolov10x.demo.demo_utils import postprocess as postprocess_yolov10
+            elif is_wormhole_b0():
+                from models.demos.wormhole.yolov10x.demo.demo_utils import postprocess as postprocess_yolov10
+            else:
+                print("Device not supported for YOLOv10 evaluation.")
 
             results = postprocess_yolov10(preds, im, im0s, batch, classes)[0]
         elif model_name == "YOLOv7":
@@ -387,7 +392,12 @@ def test_run_yolov4_eval(
             model_location_generator=model_location_generator,
         )
 
-    save_dir = "models/demos/yolov4/demo/runs"
+    if is_blackhole():
+        save_dir = "models/demos/blackhole/yolov4/demo/runs"
+    elif is_wormhole_b0():
+        save_dir = "models/demos/wormhole/yolov4/demo/runs"
+    else:
+        save_dir = "models/demos/yolov4/demo/runs"
     model_name = "YOLOv4"
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT
@@ -467,7 +477,12 @@ def test_yolov8x(device, model_type, res, reset_seeds, model_location_generator)
         model = YOLOv8xPerformantRunner(device, device_batch_size=1)
         logger.info("Inferencing using ttnn Model")
 
-    save_dir = "models/demos/yolov8x/demo/runs"
+    if is_blackhole():
+        save_dir = "models/demos/blackhole/yolov8x/demo/runs"
+    elif is_wormhole_b0():
+        save_dir = "models/demos/wormhole/yolov8x/demo/runs"
+    else:
+        save_dir = "models/demos/yolov8x/demo/runs"
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT
@@ -506,8 +521,12 @@ def test_yolov10x(device, model_type, res, reset_seeds, model_location_generator
             weight_dtype=ttnn.bfloat8_b,
         )
         logger.info("Inferencing using ttnn Model")
-
-    save_dir = "models/demos/yolov10x/demo/runs"
+    if is_blackhole():
+        save_dir = "models/demos/blackhole/yolov10x/demo/runs"
+    elif is_wormhole_b0():
+        save_dir = "models/demos/wormhole/yolov10x/demo/runs"
+    else:
+        save_dir = "models/demos/yolov10x/demo/runs"
 
     input_dtype = ttnn.bfloat8_b
     input_layout = ttnn.ROW_MAJOR_LAYOUT

@@ -13,7 +13,7 @@ YOLOV6L_L1_SMALL_SIZE = 24576
 
 def load_torch_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights = "models/demos/yolov6l/tests/pcc/yolov6l.pt"
+        weights = "models/demos/yolov6l/yolov6l.pt"
         if not os.path.exists(weights):
             os.system("bash models/demos/yolov6l/weights_download.sh")
     else:
