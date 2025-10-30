@@ -61,25 +61,25 @@ public:
     static void set_dispatch_core_info(
         const tt_cxy_pair& virtual_core,
         const tt::tt_metal::DispatchWorkerType& type,
-        const uint8_t cq_id,
-        const ChipId device_id,
-        const ChipId servicing_device_id);
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
 
     // static method for logging dispatch_s core info
     static void set_dispatch_s_core_info(
         const tt_cxy_pair& virtual_core,
         const tt::tt_metal::DispatchWorkerType& type,
-        const uint8_t cq_id,
-        const ChipId device_id,
-        const ChipId servicing_device_id);
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
 
     // static method for logging prefetcher core info
     static void set_prefetcher_core_info(
         const tt_cxy_pair& virtual_core,
         const tt::tt_metal::DispatchWorkerType& type,
-        const uint8_t cq_id,
-        const ChipId device_id,
-        const ChipId servicing_device_id);
+        uint8_t cq_id,
+        ChipId device_id,
+        ChipId servicing_device_id);
 
     // static method for clearing all core info to clear stale entries
     static void clear_all_core_info();

@@ -22,6 +22,8 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import MemoryAccess
+from inspector_data import run as get_inspector_data, InspectorData
+from typing import Optional, Any
 
 # Dumping dispatch debug information for triage purposes
 # Shows dispatcher core info and purpose to help with issue diagnosis
@@ -97,6 +99,7 @@ class MultiCategoryCoreLookup:
         # For prefetch kernels on BRISC, use prefetch info
         elif kernel_name == "cq_prefetch":
             return self.prefetch_info
+        return None
 
     def has_any_info(self) -> bool:
         """Check if this core has any info."""
@@ -195,14 +198,12 @@ def read_wait_globals(
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
 
-    has_values = last_wait_count is not None or last_wait_stream is not None
-
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
     # This device._id might mismatch with the tt_cxy_pair::chip_id
     # due to TT_METAL_VISIBLE_DEVICES env variable
     # Avoid using UMD device id in tt-triage because of the mapping problem
-    # TODO: replace device._id with unique_id once its available
+    # TODO: replace device._id with unique_id once it's available
     chip_id = location._device._id
     x, y = virtual_coord
 

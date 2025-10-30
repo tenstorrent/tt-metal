@@ -763,6 +763,7 @@ std::vector<IDevice* > DevicePool::get_all_active_devices() const {
 }
 
 // Get all active device ids
+// This function needs to be thread-safe as its called in inspector::data on a different thread
 std::vector<ChipId> DevicePool::get_all_active_device_ids() const {
     std::vector<ChipId> device_ids;
     std::lock_guard<std::mutex> lock(this->lock);
@@ -777,6 +778,7 @@ std::vector<ChipId> DevicePool::get_all_active_device_ids() const {
 
 // Get all command queue event infos for all active devices
 // The key is the device id and the value is a vector of event ids for each command queue
+// This function needs to be thread-safe as its called in inspector::data on a different thread
 std::unordered_map<ChipId, std::vector<uint32_t>> DevicePool::get_all_command_queue_event_infos() const {
     std::unordered_map<ChipId, std::vector<uint32_t>> cq_to_event_by_device;
     std::lock_guard<std::mutex> lock(this->lock);
