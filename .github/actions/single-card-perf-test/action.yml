@@ -6,33 +6,116 @@ inputs:
   commands:
     required: true
     description: "Shell commands to run the test"
+  # --- optional knobs for the summary ---
+  ci_log_file:
+    required: false
+    default: "/work/ci_tests.log"
+    description: "Where to append combined test output"
+  summary_pattern:
+    required: false
+    # PyTest outcomes + perf lines people care about
+    default: '(?i)(^=+ .* summary info|^\[gw[0-9]+\] (PASSED|FAILED)|^(PASSED|FAILED|ERROR|SKIPPED)\b|^All performance checks passed!|Run and measurement data saved|Mean inference time was|Inference time .*completed|Model compil(ed|ation) took|^=+ .* warnings summary|^=+ .* slowest durations)'
+    description: "EGREP regex for lines to keep in the compact summary"
+  summary_context:
+    required: false
+    default: "2"
+    description: "grep -C context lines"
+  summary_max_lines:
+    required: false
+    default: "600"
+    description: "Cap summary length to avoid spam"
 runs:
   using: composite
   steps:
-    - run: |
-        cd docker-job
-        set -x
-
-        ${{ inputs.commands }}
-
-        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv
-        python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME REPORT
-        cat Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
-        cat Models_Device_Perf_$(date +%Y_%m_%d).csv
-        echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+    # ---- DEVICE PERF branch ----
+    - name: Run device perf commands (tee to log)
       if: ${{ inputs.device_perf_model_name != '' }}
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
-    - run: |
+      run: |
+        set -euo pipefail
         cd docker-job
-        set -x
-        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
+        mkdir -p "$(dirname "$CI_LOG_FILE")"
 
-        ${{ inputs.commands }}
-        status=$?
-        env python3 models/perf/merge_perf_results.py REPORT
-        exit $status
+        # run tests; keep exit code but do not stop subsequent steps
+        set +e
+        bash -eo pipefail -c '${{ inputs.commands }}' 2>&1 | tee -a "$CI_LOG_FILE"
+        status=${PIPESTATUS[0]}
+        echo "$status" > .command_status
+        set -e
 
+        # do your merge (as before)
+        export DEVICE_PERF_REPORT_FILENAME="Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv"
+        python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT || true
+        cat "Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv" > "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
+        cat "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
+        echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+
+        # propagate original test exit code for this step
+        exit "$(cat .command_status)"
+
+    # ---- E2E PERF branch ----
+    - name: Run e2e perf commands (tee to log) + merge
       if: ${{ inputs.device_perf_model_name == '' }}
       shell: bash
+      run: |
+        set -euo pipefail
+        cd docker-job
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
+        mkdir -p "$(dirname "$CI_LOG_FILE")"
+
+        # run tests; keep exit code but do not stop subsequent steps
+        set +e
+        bash -eo pipefail -c '${{ inputs.commands }}' 2>&1 | tee -a "$CI_LOG_FILE"
+        status=${PIPESTATUS[0]}
+        echo "$status" > .command_status
+        set -e
+
+        # your existing merge (as before)
+        env python3 models/perf/merge_perf_results.py REPORT || true
+
+        # propagate original test exit code for this step
+        exit "$(cat .command_status)"
+
+    # ---- ALWAYS produce a compact summary in the job's Step Summary ----
+    - name: Compact test summary (regex)
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd docker-job
+        : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
+
+        if [[ ! -s "$CI_LOG_FILE" ]]; then
+          {
+            echo "### Compact test summary"
+            echo
+            echo "_no aggregated log at \`$CI_LOG_FILE\`_"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        # strip ANSI color, then filter interesting lines with context
+        nolog="${CI_LOG_FILE}.nocolor"
+        sed -r 's/\x1B\[[0-9;]*[mK]//g' "$CI_LOG_FILE" > "$nolog"
+
+        # Use -E for extended regex, -C for context
+        grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
+          | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
+
+        {
+          echo "### Compact test summary"
+          echo
+          echo "Log file: \`$CI_LOG_FILE\`"
+          echo
+          if [[ -s compact-summary.txt ]]; then
+            echo '```text'
+            cat compact-summary.txt
+            echo '```'
+          else
+            echo "_no matches for the current pattern_"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
