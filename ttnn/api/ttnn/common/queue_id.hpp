@@ -8,7 +8,8 @@
 
 namespace ttnn {
 /*
-    Moved to metal as a part of tensor lowering.
+    Moved to metal as a part of tensor lowering. ttnn::QueueId remains to avoid breaking existing code and users, but
+   all new development should use tt::tt_metal::QueueId instead.
 */
 using QueueId = tt::tt_metal::QueueId;
 
