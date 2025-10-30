@@ -4,6 +4,7 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
+#include "debug/dprint.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -2783,6 +2784,8 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+        DPRINT << "[ETH SYNC] Starting remote handshake, sender=" << (uint32_t)is_handshake_sender << ENDL();
+
         if constexpr (is_handshake_sender) {
             erisc::datamover::handshake::sender_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
@@ -2791,21 +2794,36 @@ void kernel_main() {
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
+        DPRINT << "[ETH SYNC] Remote handshake complete" << ENDL();
         *edm_status_ptr = tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE;
 
         if constexpr (wait_for_host_signal) {
+            DPRINT << "[ETH SYNC] Starting local handshake, master=" << (uint32_t)is_local_handshake_master
+                   << " num_local_edms=" << num_local_edms << " master_eth_chan=" << local_handshake_master_eth_chan
+                   << ENDL();
+
             if constexpr (is_local_handshake_master) {
+                DPRINT << "[ETH SYNC] Master: eth_chan=" << local_handshake_master_eth_chan << " waiting for "
+                       << (num_local_edms - 1) << " subordinates" << ENDL();
                 wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+                DPRINT << "[ETH SYNC] Master: received notifications from subordinates" << ENDL();
+
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
                 notify_subordinate_routers(
                     edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
+                DPRINT << "[ETH SYNC] Master: notified subordinates" << ENDL();
             } else {
+                DPRINT << "[ETH SYNC] Subordinate: notifying master eth_chan=" << local_handshake_master_eth_chan
+                       << ENDL();
                 notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
+                DPRINT << "[ETH SYNC] Subordinate: waiting for master notification" << ENDL();
                 wait_for_notification((uint32_t)edm_local_sync_ptr, num_local_edms);
+                DPRINT << "[ETH SYNC] Subordinate: received master notification" << ENDL();
             }
 
+            DPRINT << "[ETH SYNC] Local handshake complete" << ENDL();
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
 
             // 1. All risc cores wait for READY_FOR_TRAFFIC signal

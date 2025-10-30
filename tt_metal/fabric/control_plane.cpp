@@ -940,7 +940,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
     // is consistent for each each neighbouring chip.
-    this->order_ethernet_channels();
+    // this->order_ethernet_channels();
 
     // Trim the ethernet channels that don't map to live fabric routing planes.
     // NOTE: This MUST be called after ordering ethernet channels
