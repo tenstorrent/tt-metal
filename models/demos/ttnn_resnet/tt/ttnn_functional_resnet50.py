@@ -137,6 +137,11 @@ class resnet50Bottleneck:
                 ),
             }
 
+            print("\n")
+            print("-----------------------------------------------------------------------")
+            print(" --- ttnn.conv2d --- ")
+            print("-----------------------------------------------------------------------")
+            print("\n")
             ds_out, [self.ds_conv_weight_tensor, self.ds_conv_bias_tensor] = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.ds_conv_weight_tensor,
@@ -242,6 +247,11 @@ class resnet50Bottleneck:
         print("------------------------------------------------------------------------")
         print("\n")
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print(" --- ttnn.conv2d --- ")
+        print("-----------------------------------------------------------------------")
+        print("\n")
         out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv1_weight_tensor,
@@ -328,6 +338,11 @@ class resnet50Bottleneck:
         print("-----------------------------------------------------------------------")
         print("\n")
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print(" --- ttnn.conv2d --- ")
+        print("-----------------------------------------------------------------------")
+        print("\n")
         out, [input_height, input_width], [self.conv2_weight_tensor, self.conv2_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv2_weight_tensor,
@@ -395,6 +410,11 @@ class resnet50Bottleneck:
         print("-----------------------------------------------------------------------")
         print("\n")
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print(" --- ttnn.conv2d --- ")
+        print("-----------------------------------------------------------------------")
+        print("\n")
         out, [self.conv3_weight_tensor, self.conv3_bias_tensor] = ttnn.conv2d(
             input_tensor=out,
             weight_tensor=self.conv3_weight_tensor,
@@ -870,6 +890,11 @@ class resnet50:
         print("----------------------------------------------------")
         print("\n")
 
+        print("\n")
+        print("-----------------------------------------------------------------------")
+        print(" --- ttnn.conv2d --- ")
+        print("-----------------------------------------------------------------------")
+        print("\n")
         x, [x_height, x_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,
