@@ -14,6 +14,9 @@ FROM base AS release
 # (PYTHON_ENV_DIR is already set in the base image)
 ENV TT_METAL_HOME=/tt-metal
 
+# Set TT_METAL_RUNTIME_ROOT
+ENV TT_METAL_RUNTIME_ROOT=/tt-metal
+
 # Clone tt-metal
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
     https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
@@ -40,6 +43,9 @@ FROM base AS dev
 
 # Set up TT_METAL_HOME environment
 ENV TT_METAL_HOME=/tt-metal
+
+# TT_METAL_RUNTIME_ROOT
+ENV TT_METAL_RUNTIME_ROOT=/tt-metal
 
 # Set working directory to TT_METAL_HOME
 WORKDIR ${TT_METAL_HOME}
