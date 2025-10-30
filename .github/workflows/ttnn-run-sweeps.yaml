@@ -739,8 +739,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: ttnn sweep tests ${{ inputs.arch }} ${{ inputs['runner-label'] }}
-            arch: ${{ inputs.arch }}
+          - name: ttnn sweep tests ${{ inputs['arch'] }} ${{ inputs['runner-label'] }}
+            arch: ${{ inputs['arch'] }}
             tt-smi-cmd: ${{ (inputs['runner-label'] == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
             runs-on: >-
               ${{
