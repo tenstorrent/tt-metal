@@ -55,6 +55,9 @@ void create_ethernet_metrics(
         }
     }
     log_info(tt::LogAlways, "Found {} endpoints to monitor in factory system descriptor", endpoints.size());
+    if (endpoints.size() == 0 && fsd.eth_connections().connection().size() > 0) {
+        log_warning(tt::LogAlways, "Found 0 endpoints to monitor despite {} existing in factory system descriptor. Please check that the hostname in the FSD file matches the actual system hostname of this machine.", fsd.eth_connections().connection().size());
+    }
 
     // For each, create a metric
     for (const auto& endpoint : endpoints) {
