@@ -61,7 +61,7 @@ OBJCOPY         := $(TOOL_PATH)/riscv-tt-elf-objcopy
 # =========================
 # Compiler and Linker Flags
 # =========================
-OPTIONS_ALL	:= -g -O3 -mabi=ilp32 -std=$(CXX_VERSION) -ffast-math
+OPTIONS_ALL	:= -g -O3 -std=$(CXX_VERSION) -ffast-math
 OPTIONS_COMPILE := -fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Werror -Wunused-parameter \
 				   -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized \
 				   -Wmaybe-uninitialized -DTENSIX_FIRMWARE $(ARCH_DEFINE)
