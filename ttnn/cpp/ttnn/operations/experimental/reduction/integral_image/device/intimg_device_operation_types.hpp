@@ -9,16 +9,16 @@
 namespace ttnn::operations::experimental::reduction {
 
 enum class IntImgCB : uint32_t {
-    START,                           // 4
-    INPUT,                           // 4
-    ACC,                             // 4
-    BEFORE_ADDER_PROPAGATION_STAGE,  // 4
-    OUTPUT,                          // 4
-    TO_BOT_STAGE_TILE,               //
-    FROM_TOP_STAGE_TILE,
-    AXIS_3_BUFFER_0,  // 4 (memoizing upper tile for propagation along axis 3rd/4, point of sync between
-                      // UpperWriter<->CurrentReader and CurrentReader<->CurrentCompute)
-    AXIS_3_BUFFER_1,  // 4 (dual channel)
+    START,                           // 8
+    INPUT,                           // 8
+    ACC,                             // 8
+    BEFORE_ADDER_PROPAGATION_STAGE,  // 8
+    OUTPUT,                          // 8
+    TO_BOT_STAGE_TILE,               // 8
+    FROM_TOP_STAGE_TILE,             // 8
+    AXIS_3_BUFFER_0,                 // 8 (memoizing upper tile for propagation along axis 3rd/4, point of sync between
+                                     // UpperWriter<->CurrentReader and CurrentReader<->CurrentCompute)
+    AXIS_3_BUFFER_1,                 // 8 (dual channel)
 };
 
 struct operation_attributes_t {};
