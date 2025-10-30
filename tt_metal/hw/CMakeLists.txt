@@ -444,7 +444,7 @@ target_sources(
             inc/debug/stack_usage.h
             inc/debug/watcher_common.h
             inc/debug/waypoint.h
-            inc/debug/ddump_ttsim.h
+            inc/debug/ttsim_dump.h
             inc/dev_msgs.h
             inc/ethernet/dataflow_api.h
             inc/ethernet/erisc.h
