@@ -366,9 +366,6 @@ class FastOperation:
     def __hash__(self):
         return hash(self.python_fully_qualified_name)
 
-    def __repr__(self):
-        return ""
-
     def __call__(self, *function_args, **function_kwargs):
         cq_id = None
         if "queue_id" in function_kwargs:
@@ -422,9 +419,6 @@ class Operation:
 
     def __hash__(self):
         return hash(self.python_fully_qualified_name)
-
-    def __repr__(self):
-        return ""
 
     def __post_init__(self):
         function = self.function
