@@ -14538,45 +14538,43 @@ def main():
     print(100 * "-")
     print("\n")
 
-    """
-  # Additional Warmup Runs
-  loop_count = 4
-  add_warmup_start = time.time()
-  for _ in range(loop_count):
-    v2 = _main(v1)
-    for item in v2:
-      ttnn.from_device(item, True)
-  add_warmup_end = time.time()
-  add_warmup_duration = add_warmup_end - add_warmup_start
-  print(100 * "-")
-  print(f"Inputs shape: {inputs.shape}")
-  print(f"Warmup completed in {add_warmup_duration} seconds")
-  print(f"Total number of iterations: 1")
-  print(f"Batch size, number of samples: {batch_size}")
-  print(f"Total number of samples: {loop_count * batch_size}")
-  print(f"Samples per second: {loop_count * batch_size / add_warmup_duration}")
-  print(100 * "-")
-  print("\n")
+    # Additional Warmup Runs
+    loop_count = 4
+    add_warmup_start = time.time()
+    for _ in range(loop_count):
+        v2 = _main(v1)
+        for item in v2:
+            ttnn.from_device(item, True)
+    add_warmup_end = time.time()
+    add_warmup_duration = add_warmup_end - add_warmup_start
+    print(100 * "-")
+    print(f"Inputs shape: {inputs.shape}")
+    print(f"Warmup completed in {add_warmup_duration} seconds")
+    print(f"Total number of iterations: 1")
+    print(f"Batch size, number of samples: {batch_size}")
+    print(f"Total number of samples: {loop_count * batch_size}")
+    print(f"Samples per second: {loop_count * batch_size / add_warmup_duration}")
+    print(100 * "-")
+    print("\n")
 
-  # Measured Run
-  loop_count = 15
-  start = time.time()
-  for _ in range(loop_count):
-    v2 = _main(v1)
-    for item in v2:
-      ttnn.from_device(item, True)
-  end = time.time()
-  duration = end - start
-  print(100 * "-")
-  print(f"Inputs shape: {inputs.shape}")
-  print(f"Measure completed in {duration} seconds")
-  print(f"Total number of iterations: 1")
-  print(f"Batch size, number of samples: {batch_size}")
-  print(f"Total number of samples: {loop_count * batch_size}")
-  print(f"Samples per second: {loop_count * batch_size / duration}")
-  print(100 * "-")
-  print("\n")
-  """
+    # Measured Run
+    loop_count = 15
+    start = time.time()
+    for _ in range(loop_count):
+        v2 = _main(v1)
+        for item in v2:
+            ttnn.from_device(item, True)
+    end = time.time()
+    duration = end - start
+    print(100 * "-")
+    print(f"Inputs shape: {inputs.shape}")
+    print(f"Measure completed in {duration} seconds")
+    print(f"Total number of iterations: 1")
+    print(f"Batch size, number of samples: {batch_size}")
+    print(f"Total number of samples: {loop_count * batch_size}")
+    print(f"Samples per second: {loop_count * batch_size / duration}")
+    print(100 * "-")
+    print("\n")
 
 
 if __name__ == "__main__":
