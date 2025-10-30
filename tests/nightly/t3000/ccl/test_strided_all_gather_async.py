@@ -209,6 +209,10 @@ def run_strided_all_gather_impl(
     mesh_device.clear_loaded_sub_device_manager()
 
 
+# tiles_per_chunk needs to be divisible by num_workers_per_link
+# mm_cores_y is the number of in0 first col cores
+# mm_block_h and mm_block_w is the mm_block of a single mm_core_y
+# so the result of one chunk transfer will be mm_cores_y * mm_block_h * mm_block_w, which will be tiles_per_chunk.  tiles_per_chunk % num_workers_per_link must equal 0
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
@@ -222,10 +226,16 @@ def run_strided_all_gather_impl(
         ([1, 1, 32, 768], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         ([1, 1, 32, 1024], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         ([1, 1, 32, 768], 3, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
+        # 2 row tests
         ([1, 1, 64, 256], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
         ([1, 1, 64, 256], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         ([1, 1, 64, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
+        # 4 row tests
         ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 64, 32),
+        # Multiple y core tests
+        ([1, 1, 128, 256], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        ([1, 1, 128, 256], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 2, 32, 32),
+        # Full tests
         ([1, 1, 4096, 2560], 3, 2, 1024, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 4096, 320),
     ],
     ids=[
@@ -236,10 +246,16 @@ def run_strided_all_gather_impl(
         "1tile3chunk1worker1row",
         "2tile2chunk2worker1row",
         "1tile3chunk2worker1row",
+        # 2 row tests
         "2tile1chunk1worker2row",
         "1tile2chunk1worker2row",
         "2tile2chunk2worker2row",
+        # 4 row tests
         "2tile2chunk2worker4row",
+        # Multiple y core tests
+        "2tile2chunk1worker4row2ycores",
+        "2tile2chunk2worker4row2ycores",
+        # Full tests
         "4k4k",
     ],
 )
