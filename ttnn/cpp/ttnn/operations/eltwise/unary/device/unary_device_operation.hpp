@@ -56,4 +56,5 @@ struct UnaryDeviceOperation {
 
 namespace ttnn::prim {
 constexpr auto unary = ttnn::register_operation<"ttnn::prim::unary", ttnn::operations::unary::UnaryDeviceOperation>();
+constexpr auto lazy_unary = ttnn::register_lazy_operation<"ttnn::prim::lazy_unary", ttnn::operations::unary::UnaryDeviceOperation>();
 } // namespace ttnn::prim
