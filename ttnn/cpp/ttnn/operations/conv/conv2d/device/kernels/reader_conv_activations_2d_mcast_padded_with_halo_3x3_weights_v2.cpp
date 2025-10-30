@@ -254,6 +254,9 @@ void kernel_main() {
                                 act_mcast_receiver_semaphore_noc_addr,
                                 act_mcast_num_cores + 1);
                             noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+#ifdef SPLIT_READER
+                            noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+#endif
                         }
                     } else {
                         noc_semaphore_set_multicast(

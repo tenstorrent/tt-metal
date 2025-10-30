@@ -311,7 +311,6 @@ void kernel_main() {
                                         act_mcast_sender_semaphore_valid_addr,
                                         act_multicast_receiver_semaphore_noc_addr,
                                         act_mcast_num_cores + 1);
-                                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
                                 }
                             } else {
                                 noc_semaphore_set_multicast(
