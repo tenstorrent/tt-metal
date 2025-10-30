@@ -114,22 +114,29 @@ runs:
 
         # Fail-first extract (short, only on failure):
         if [[ "${{ job.status }}" != "success" ]]; then
-          grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$nolog" \
+          grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$CI_LOG_FILE" \
             | head -n 150 > fail-first.txt || true
         fi
 
         # Main compact summary:
-        grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
+        grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$CI_LOG_FILE" \
           | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
 
         echo "Log file:"
         cat "$CI_LOG_FILE"
+        echo "########################################################"
+
+        echo "NoLog file:"
+        cat "$nolog"
+        echo "########################################################"
 
         echo "Failed logs:"
         cat fail-first.txt || true
+        echo "########################################################"
 
         echo "Compact summary logs:"
         cat compact-summary.txt || true
+        echo "########################################################"
 
         {
           echo "### Compact test summary"
