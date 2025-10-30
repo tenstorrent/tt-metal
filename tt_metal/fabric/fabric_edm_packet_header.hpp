@@ -162,7 +162,8 @@ static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 byte
 struct UDMWriteControlHeader {
     uint8_t src_chip_id;
     uint16_t src_mesh_id;
-    uint16_t src_noc_xy;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
     uint8_t risc_id;
     uint8_t transaction_id;
 } __attribute__((packed));
@@ -170,22 +171,23 @@ struct UDMWriteControlHeader {
 struct UDMReadControlHeader {
     uint8_t src_chip_id;
     uint16_t src_mesh_id;
-    uint16_t src_noc_xy;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
     uint16_t src_l1_address;
     uint32_t size_bytes;
     uint8_t risc_id;
     uint8_t transaction_id;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMWriteControlHeader) == 7, "UDMWriteControlHeader size is not 8 bytes");
-static_assert(sizeof(UDMReadControlHeader) == 13, "UDMReadControlHeader size is not 14 bytes");
+static_assert(sizeof(UDMWriteControlHeader) == 7, "UDMWriteControlHeader size is not 7 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 13, "UDMReadControlHeader size is not 13 bytes");
 
 union UDMControlFields {
     UDMWriteControlHeader write;
     UDMReadControlHeader read;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMControlFields) == 13, "UDMControlFields size is not 14 bytes");
+static_assert(sizeof(UDMControlFields) == 13, "UDMControlFields size is not 13 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
