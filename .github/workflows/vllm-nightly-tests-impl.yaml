@@ -186,6 +186,7 @@ jobs:
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+        FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -327,12 +328,12 @@ jobs:
             --num-prompts 32 \
             --percentile-metrics ttft,tpot,itl,e2el \
             --save-result \
-            --result-filename output/vllm_result.json \
-            2>&1 | tee ${FILE_BENCHMARK_LOG}
+            --result-filename output/vllm_result_structured.json \
+            2>&1 | tee ${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}
 
           # The benchmark returns zero even if responses are not correct.
           success_message="correct_rate(%) 100.0"
-          if grep -q "$success_message" "${FILE_BENCHMARK_LOG}"; then
+          if grep -q "$success_message" "${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}"; then
             echo "✅ Structured output benchmark completed successfully"
           else
             echo "❌ Structured output benchmark failed"
@@ -413,6 +414,12 @@ jobs:
         continue-on-error: true
         run: |
           cat output/vllm_result.json
+
+      - name: Show structured output report
+        if: ${{ matrix.test-group.structured-output }}
+        continue-on-error: true
+        run: |
+          cat output/vllm_result_structured.json
 
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
