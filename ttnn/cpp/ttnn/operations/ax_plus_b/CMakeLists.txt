@@ -25,6 +25,7 @@ target_sources(
         FILES ${kernels}
     PRIVATE
         device/ax_plus_b_device_operation.cpp
+        device/ax_plus_b_program_factory_common.cpp
         device/single_core_program_factory.cpp
         device/multi_core_program_factory.cpp
 )
