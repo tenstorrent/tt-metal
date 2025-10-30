@@ -642,7 +642,7 @@ def prepare_generator_args(
         ),
         (  # device-perf-default - Measures device performance of a prefill or decode run
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            True,  # instruct mode
+            False,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
             32,  # batch_size
