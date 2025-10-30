@@ -378,7 +378,7 @@ void bind_binary_unary_max_operation(
         ttnn::pybind_overload_t{
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
-               const std::variant<int32_t, float> scalar,
+               unary::ScalarVariant scalar,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -1346,6 +1346,141 @@ void bind_div(
 }
 
 template <typename binary_operation_t>
+void bind_binary_operation_with_fast_approx(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = " ") {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+
+        Keyword args:
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2, fast_and_approximate_mode=True)
+
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> scalar = 3
+            >>> output = {1}(tensor, scalar, fast_and_approximate_mode=False)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        math,
+        supported_dtype,
+        note);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const Tensor& input_tensor_a,
+               const Tensor& input_tensor_b,
+               bool fast_and_approximate_mode,
+               const std::optional<const DataType>& dtype,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
+                return self(
+                    input_tensor_a,
+                    input_tensor_b,
+                    dtype,
+                    memory_config,
+                    output_tensor,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy,
+                    fast_and_approximate_mode);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("fast_and_approximate_mode") = false,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const Tensor& input_tensor_a,
+               float value,
+               bool fast_and_approximate_mode,
+               const std::optional<const DataType>& dtype,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
+                return self(
+                    input_tensor_a,
+                    value,
+                    dtype,
+                    memory_config,
+                    output_tensor,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy,
+                    fast_and_approximate_mode);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("value"),
+            py::kw_only(),
+            py::arg("fast_and_approximate_mode") = false,
+            py::arg("dtype") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt});
+}
+
+template <typename binary_operation_t>
 void bind_polyval(
     py::module& module,
     const binary_operation_t& operation,
@@ -1602,6 +1737,119 @@ void bind_inplace_operation(
             py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
         });
+}
+
+template <typename binary_operation_t>
+void bind_inplace_operation_with_fast_approx(
+    py::module& module,
+    const binary_operation_t& operation,
+    const std::string& description,
+    const std::string& math,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = " ") {
+    auto doc = fmt::format(
+        R"doc(
+        {2}
+
+        .. math::
+            {3}
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {4}
+                 - TILE
+                 - 2, 3, 4
+
+            {5}
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[2, 2], [2, 2]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 1], [1, 1]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {1}(tensor1, tensor2, fast_and_approximate_mode=True)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description,
+        math,
+        supported_dtype,
+        note);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        // tensor and tensor
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const Tensor& input_tensor_a,
+               const Tensor& input_tensor_b,
+               bool fast_and_approximate_mode,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy) {
+                return self(
+                    input_tensor_a,
+                    input_tensor_b,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy,
+                    fast_and_approximate_mode);
+            },
+            py::arg("input_a"),
+            py::arg("input_b"),
+            py::kw_only(),
+            py::arg("fast_and_approximate_mode") = false,
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt},
+
+        // tensor and scalar
+        ttnn::pybind_overload_t{
+            [](const binary_operation_t& self,
+               const Tensor& input_tensor_a,
+               float value,
+               bool fast_and_approximate_mode,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+               const std::optional<bool>& use_legacy) {
+                return self(
+                    input_tensor_a,
+                    value,
+                    activations,
+                    input_tensor_a_activations,
+                    input_tensor_b_activations,
+                    use_legacy,
+                    fast_and_approximate_mode);
+            },
+            py::arg("input_a"),
+            py::arg("value"),
+            py::kw_only(),
+            py::arg("fast_and_approximate_mode") = false,
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("use_legacy") = std::nullopt});
 }
 
 template <typename binary_operation_t>
@@ -2068,11 +2316,16 @@ void py_module(py::module& module) {
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation_with_fast_approx(
         module,
         ttnn::divide,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc");
+        R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
+        When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handle division by zero.
+        )doc");
 
     detail::bind_binary_operation(
         module,
@@ -2393,11 +2646,16 @@ void py_module(py::module& module) {
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation_with_fast_approx(
         module,
         ttnn::divide_,
         R"doc(Performs division in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
-        R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc");
+        R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
+        R"doc(
+        When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
+        When :attr:`fast_and_approximate_mode` is `False` (default), the operation uses SFPU implementation for better accuracy.
+        )doc");
 
     detail::bind_inplace_operation(
         module,

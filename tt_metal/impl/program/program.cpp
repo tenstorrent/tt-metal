@@ -76,6 +76,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
+#include "tt_stl/reflection.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -176,7 +177,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint32_t build_key) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
@@ -213,12 +214,12 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
+    finalized_(false),
+    cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
     id(program_counter++),
     runtime_id(0),
-    local_circular_buffer_allocation_needed_(false),
-    finalized_(false),
-    cached_device_hash_(std::nullopt) {
+    local_circular_buffer_allocation_needed_(false) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -1295,7 +1296,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        ttsl::hash::hash_combine(device_hash, device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);

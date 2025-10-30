@@ -274,33 +274,36 @@ jobs:
           # Function to compare semantic versions
           # Returns: 0 if v1 > v2, 1 if v1 < v2, 2 if v1 == v2
           compare_versions() {
-            # Remove 'v' prefix and any suffix (like -rc1) for comparison
-            v1=$(echo "$1" | sed 's/^v//' | sed 's/-.*$//')
-            v2=$(echo "$2" | sed 's/^v//' | sed 's/-.*$//')
+            v1="${1#v}"; v1="${v1%%-*}"
+            v2="${2#v}"; v2="${v2%%-*}"
 
-            # Use sort -V to compare semantic versions
-            [ "$v1" = "$v2" ] && return 2
-            printf '%s\n%s\n' "$v1" "$v2" | sort -V -C 2>/dev/null && return 1 || return 0
+            if [[ "$v1" == "$v2" ]]; then
+              echo 2; return 0
+            fi
+            if printf '%s\n%s\n' "$v1" "$v2" | sort -V -C 2>/dev/null; then
+              # v1 < v2
+              echo 1; return 0
+            else
+              # v1 > v2
+              echo 0; return 0
+            fi
           }
 
-          # Determine which version to use based on release workflow logic
           if [ -z "$latestRCVersion" ] || [ "$latestRCVersion" = "null" ]; then
             echo "No release candidate found, using latest production release"
             latestReleaseVersion="$latestProdVersion"
           else
-            compare_versions "$latestRCVersion" "$latestProdVersion"
-            comparison_result=$?
-
-            case $comparison_result in
-              2) # Equal versions
+            comparison_result="$(compare_versions "$latestRCVersion" "$latestProdVersion")"
+            case "$comparison_result" in
+              2)
                 echo "RC and production versions are equal ($latestRCVersion ≈ $latestProdVersion), using production release"
                 latestReleaseVersion="$latestProdVersion"
                 ;;
-              0) # RC > Production
+              0)
                 echo "RC version ($latestRCVersion) is newer than production ($latestProdVersion), using RC"
                 latestReleaseVersion="$latestRCVersion"
                 ;;
-              1) # RC < Production
+              1)
                 echo "Production version ($latestProdVersion) is newer than RC ($latestRCVersion), using production"
                 latestReleaseVersion="$latestProdVersion"
                 ;;

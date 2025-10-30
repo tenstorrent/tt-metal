@@ -96,7 +96,8 @@ public:
 
     std::unordered_set<ChipId> sync_set_devices;
 
-    std::mutex file_write_mutex;
+    std::mutex log_file_write_mutex;
+    std::mutex ops_perf_report_write_mutex;
 };
 
 }  // namespace tt_metal

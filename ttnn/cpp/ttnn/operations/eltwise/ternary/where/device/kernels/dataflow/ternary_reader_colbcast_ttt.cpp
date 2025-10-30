@@ -118,7 +118,7 @@ void kernel_main() {
                         cb_reserve_back(predicate_cb, onetile);
 #if !SRC_SHARDED_A
                         uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                        noc_async_read_tile(tile_offset + th, s0, l1_write_addr_predicate);
+                        noc_async_read_page(tile_offset + th, s0, l1_write_addr_predicate);
                         noc_async_read_barrier();
 #endif
                         FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
@@ -128,7 +128,7 @@ void kernel_main() {
                         cb_reserve_back(true_cb, onetile);
 #if !SRC_SHARDED_B
                         uint32_t l1_write_addr_true = get_write_ptr(true_cb);
-                        noc_async_read_tile(true_tile_offset + th, s1, l1_write_addr_true);
+                        noc_async_read_page(true_tile_offset + th, s1, l1_write_addr_true);
                         noc_async_read_barrier();
 #endif
                         FILL_TILE_WITH_FIRST_COLUMN_B(true_cb);
@@ -140,7 +140,7 @@ void kernel_main() {
                         cb_reserve_back(false_cb, onetile);
 #if !SRC_SHARDED_C
                         uint32_t l1_write_addr_false = get_write_ptr(false_cb);
-                        noc_async_read_tile(false_tile_offset + th, s2, l1_write_addr_false);
+                        noc_async_read_page(false_tile_offset + th, s2, l1_write_addr_false);
                         noc_async_read_barrier();
 #endif
                         FILL_TILE_WITH_FIRST_COLUMN_C(false_cb);
@@ -152,7 +152,7 @@ void kernel_main() {
                             cb_reserve_back(predicate_cb, onetile);
 #if !SRC_SHARDED_A
                             uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                            noc_async_read_tile(tile_offset + tw, s0, l1_write_addr_predicate);
+                            noc_async_read_page(tile_offset + tw, s0, l1_write_addr_predicate);
                             noc_async_read_barrier();
 #endif
                             cb_push_back(predicate_cb, onetile);
@@ -161,7 +161,7 @@ void kernel_main() {
                             cb_reserve_back(true_cb, onetile);
 #if !SRC_SHARDED_B
                             uint32_t l1_write_addr_true = get_write_ptr(true_cb);
-                            noc_async_read_tile(true_tile_offset + tw, s1, l1_write_addr_true);
+                            noc_async_read_page(true_tile_offset + tw, s1, l1_write_addr_true);
                             noc_async_read_barrier();
 #endif
                             cb_push_back(true_cb, onetile);
@@ -172,7 +172,7 @@ void kernel_main() {
                             cb_reserve_back(false_cb, onetile);
 #if !SRC_SHARDED_C
                             uint32_t l1_write_addr_false = get_write_ptr(false_cb);
-                            noc_async_read_tile(false_tile_offset + tw, s2, l1_write_addr_false);
+                            noc_async_read_page(false_tile_offset + tw, s2, l1_write_addr_false);
                             noc_async_read_barrier();
 #endif
                             cb_push_back(false_cb, onetile);
