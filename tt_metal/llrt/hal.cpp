@@ -103,7 +103,7 @@ const std::string HalCoreInfoType::get_processor_classes_names(uint32_t processo
         }
         processor_index -= processor_count;
     }
-    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
+    TT_ASSERT(processor_class_idx < this->processor_classes_names_.size());
     if (is_abbreviated) {
         return this->processor_classes_names_[processor_class_idx][processor_index].first;
     } else {
