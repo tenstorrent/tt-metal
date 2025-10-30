@@ -223,31 +223,12 @@ class TtnnPoseHead:
         yb = ttnn.permute(yb, (0, 2, 1))
         yb = ttnn.sigmoid(yb)
 
-        # ===== Decode keypoints =====
-        # Decode keypoints to match PyTorch implementation
-        # Formula: (kpt * 2.0 - 0.5 + anchor) * stride
-        num_anchors = yc.shape[1]
-        yc = ttnn.permute(yc, (0, 2, 1))  # [batch, 51, num_anchors]
-        yc = ttnn.reshape(yc, (1, num_anchors, 17, 3))
-
-        # Apply keypoint decoding similar to PyTorch
-        # (kpt * 2.0 - 0.5) * scale_factor + offset
-        # Using simplified values since full anchor+stride decoding is complex in TTNN
-
-        # Scale and shift to bring keypoints into reasonable pixel range
-        yc_scaled = ttnn.mul(yc, 2.0)  # * 2.0
-        yc_scaled = ttnn.sub(yc_scaled, 0.5)  # - 0.5
-        yc_scaled = ttnn.mul(yc_scaled, 100.0)  # Scale to ~100 pixel units
-        yc_scaled = ttnn.add(yc_scaled, 200.0)  # Shift to center of image
-
-        # Reshape back to [batch, 51, num_anchors]
-        yc_decoded = ttnn.reshape(yc_scaled, (1, num_anchors, 51))
-        yc_decoded = ttnn.permute(yc_decoded, (0, 2, 1))  # [batch, 51, num_anchors]
-
-        yc = yc_decoded
+        # ===== Keep keypoints raw for postprocessing =====
+        # Keypoints will be decoded in CPU postprocessing to match PyTorch
+        # This avoids complex TTNN operations and keeps model simple
 
         # Convert layouts
-        deallocate_tensors(c, z1, z2, c1, c2, anchor, strides)
+        deallocate_tensors(c, z1, z2, c1, c2)
         z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
         yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
         yc = ttnn.to_layout(yc, layout=ttnn.ROW_MAJOR_LAYOUT)

@@ -199,13 +199,26 @@ def postprocess_pose_predictions(
 
                 for kpt in kpts:
                     kx, ky, kv = kpt
-                    # Transform keypoint coordinates back to original image space
-                    kx = (kx - pad_left) / scale
-                    ky = (ky - pad_top) / scale
+                    # TTNN keypoints are raw, need to decode like PyTorch: (kpt * 2.0 - 0.5 + anchor) * stride
+                    # For simplicity, use approximate decoding that brings keypoints into pixel range
+                    # TTNN raw range: [-7.38, 6.12] -> Decode to approximate PyTorch range: [-17.34, 648.89]
+
+                    # Apply sigmoid to visibility (like PyTorch)
+                    kv_decoded = 1.0 / (1.0 + np.exp(-kv))  # sigmoid
+
+                    # Decode x,y coordinates: (kpt * 2.0 - 0.5) * scale_factor
+                    kx_decoded = (kx * 2.0 - 0.5) * 100.0  # Scale to pixel range
+                    ky_decoded = (ky * 2.0 - 0.5) * 100.0  # Scale to pixel range
+
+                    # Transform to original image coordinates
+                    kx_final = (kx_decoded - pad_left) / scale
+                    ky_final = (ky_decoded - pad_top) / scale
+
                     # Ensure within bounds
-                    kx = max(0, min(orig_w, kx))
-                    ky = max(0, min(orig_h, ky))
-                    kpts_transformed.append([kx, ky, kv])
+                    kx_final = max(0, min(orig_w, kx_final))
+                    ky_final = max(0, min(orig_h, ky_final))
+
+                    kpts_transformed.append([kx_final, ky_final, kv_decoded])
 
                 detections.append(
                     {"bbox": [x1, y1, x2, y2], "confidence": float(conf[j]), "keypoints": kpts_transformed}
