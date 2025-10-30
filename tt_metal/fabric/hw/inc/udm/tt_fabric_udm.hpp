@@ -14,8 +14,13 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include <type_traits>
 #include "tt_fabric_udm_impl.hpp"
+#include "debug/dprint.h"
 
 namespace tt::tt_fabric::udm {
+
+// Placeholder max page size for the addrgen until the page size is properly visible by the worker
+// https://github.com/tenstorrent/tt-metal/issues/25966
+static constexpr uint32_t max_fabric_payload_size = 4352;
 
 /**
  * @brief Number of Data Mover (DM) processors for fabric operations
@@ -223,10 +228,45 @@ inline __attribute__((always_inline)) void fabric_full_sync() {
 }
 
 /**
+ * @brief Internal helper for sending a single fabric packet
+ *
+ * @param connection Fabric connection to use
+ * @param packet_header Packet header with routing already configured
+ * @param src_addr Source address in local L1 memory
+ * @param dest_addr Destination NOC address
+ * @param len_bytes Number of bytes to write (must be <= max_fabric_payload_size)
+ * @param multicast Whether this is a multicast operation
+ * @param num_dests Number of destinations (for multicast)
+ */
+inline __attribute__((always_inline)) void fabric_fast_write(
+    WorkerToFabricEdmSender& connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint64_t dest_addr,
+    uint32_t len_bytes,
+    bool multicast = false,
+    uint32_t num_dests = 1) {
+    if (multicast) {
+        // TODO: Set up multicast header with proper routing
+
+    } else {
+        packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, len_bytes);
+    }
+
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_without_header_non_blocking_from_address(src_addr, len_bytes);
+    connection.send_payload_blocking_from_address(
+        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+/**
  * @brief Write data to a remote location through the fabric (similar to ncrisc_noc_fast_write)
  *
  * This function sends data through the fabric network to a remote destination.
  * It automatically handles the fabric connection setup and management internally.
+ * When sending multiple packets, all packets except the last one are sent as posted writes
+ * (no acknowledgment needed), and only the last packet is sent as non-posted to ensure
+ * all data has been received.
  *
  * @param dst_dev_id Destination device ID for fabric routing
  * @param dst_mesh_id Destination mesh ID for fabric routing
@@ -236,8 +276,9 @@ inline __attribute__((always_inline)) void fabric_full_sync() {
  * @param multicast Whether this is a multicast operation
  * @param num_dests Number of destinations (for multicast)
  * @param trid Transaction ID for UDM operations
+ * @param posted Whether to use posted writes (1) or non-posted writes (0) for single packet case
  */
-inline __attribute__((always_inline)) void fabric_fast_write(
+inline __attribute__((always_inline)) void fabric_fast_write_any_len(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint32_t src_addr,
@@ -245,25 +286,28 @@ inline __attribute__((always_inline)) void fabric_fast_write(
     uint32_t len_bytes,
     bool multicast = false,
     uint32_t num_dests = 1,
-    uint16_t trid = 0) {
+    uint16_t trid = 0,
+    uint8_t posted = 0) {
     auto& connection = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
-    if (multicast) {
-        // TODO: Set up multicast header with proper routing
+    // For optimization purpose, the non-last fabric writes will be posted, and only the last fabric write is determined
+    // by the user posted arg.
+    fabric_write_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid, 1 /* posted */);
+    while (len_bytes > max_fabric_payload_size) {
+        fabric_fast_write(
+            connection, packet_header, src_addr, dest_addr, max_fabric_payload_size, multicast, num_dests);
 
-    } else {
-        packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, len_bytes);
-        fabric_write_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid);
+        src_addr += max_fabric_payload_size;
+        dest_addr += max_fabric_payload_size;
+        len_bytes -= max_fabric_payload_size;
     }
+    fabric_write_set_unicast_route_control_field<UDM_CONTROL_FIELD::POSTED>(packet_header, posted);
+    fabric_fast_write(connection, packet_header, src_addr, dest_addr, len_bytes, multicast, num_dests);
 
-    connection.wait_for_empty_write_slot();
-
-    connection.send_payload_without_header_non_blocking_from_address(src_addr, len_bytes);
-    connection.send_payload_blocking_from_address(
-        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
-
-    fabric_nonposted_writes_acked += num_dests;
+    if (!posted) {
+        fabric_nonposted_writes_acked += num_dests;
+    }
 }
 
 /**
@@ -280,6 +324,10 @@ inline __attribute__((always_inline)) void fabric_fast_write(
  */
 inline __attribute__((always_inline)) void fabric_fast_write_ack(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
+    // if this is a posted write then we simply exit
+    if (received_header->udm_control.write.posted) {
+        return;
+    }
     auto& connection = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* ack_header = get_or_allocate_header();
 
@@ -293,7 +341,7 @@ inline __attribute__((always_inline)) void fabric_fast_write_ack(
 
     ack_header->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
-    fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0);
+    fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 0);  // trid=0, posted=0
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));

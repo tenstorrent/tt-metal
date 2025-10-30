@@ -2344,6 +2344,9 @@ void UDMFabric1DUnicastCommon(
 
     if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
+    } else {
+        auto single_payload_size_bytes = worker_mem_map.packet_payload_size_bytes;
+        worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
     }
 
     std::vector<uint32_t> compile_time_args = {

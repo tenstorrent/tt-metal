@@ -18,6 +18,11 @@
 namespace tt::tt_fabric::udm {
 
 /**
+ * @brief Enum for UDM control fields
+ */
+enum class UDM_CONTROL_FIELD { POSTED, SRC_CHIP_ID, SRC_MESH_ID, SRC_NOC_X, SRC_NOC_Y, RISC_ID, TRANSACTION_ID };
+
+/**
  * @brief UDM (Unified Data Movement) fields for fabric write operations
  *
  * Contains the source information needed for UDM write operations:
@@ -25,12 +30,14 @@ namespace tt::tt_fabric::udm {
  * - src_noc_y: Source NOC Y coordinate
  * - risc_id: Processor ID (BRISC, NCRISC, etc.)
  * - trid: Transaction ID for tracking operations
+ * - posted: Whether this is a posted write (1) or non-posted write (0)
  */
 struct udm_write_fields {
     uint8_t src_noc_x;
     uint8_t src_noc_y;
     uint8_t risc_id;
     uint16_t trid;
+    uint8_t posted;
 };
 
 /**
@@ -40,7 +47,7 @@ struct udm_write_fields {
  * This overload handles 1D routing with UDM-specific metadata.
  *
  * @param packet_header Pointer to the UDM low latency packet header
- * @param udm UDM fields containing source information
+ * @param udm UDM fields containing source information (including posted flag)
  * @param dst_dev_id Destination device ID
  * @return true if route was successfully set, false otherwise
  */
@@ -61,6 +68,7 @@ inline bool fabric_write_set_unicast_route(
     packet_header->udm_control.write.src_noc_y = udm.src_noc_y;
     packet_header->udm_control.write.risc_id = udm.risc_id;
     packet_header->udm_control.write.transaction_id = udm.trid;
+    packet_header->udm_control.write.posted = udm.posted;
 
     return result;
 }
@@ -72,7 +80,7 @@ inline bool fabric_write_set_unicast_route(
  * This overload handles 2D mesh routing with UDM-specific metadata.
  *
  * @param packet_header Pointer to the UDM hybrid mesh packet header
- * @param udm UDM fields containing source information
+ * @param udm UDM fields containing source information (including posted flag)
  * @param dst_dev_id Destination device ID
  * @param dst_mesh_id Destination mesh ID
  * @return true if route was successfully set, false otherwise
@@ -96,6 +104,7 @@ inline bool fabric_write_set_unicast_route(
     packet_header->udm_control.write.src_noc_y = udm.src_noc_y;
     packet_header->udm_control.write.risc_id = udm.risc_id;
     packet_header->udm_control.write.transaction_id = udm.trid;
+    packet_header->udm_control.write.posted = udm.posted;
     return result;
 }
 
@@ -110,11 +119,12 @@ inline bool fabric_write_set_unicast_route(
  * @param dst_dev_id Destination device ID
  * @param dst_mesh_id Destination mesh ID
  * @param trid Transaction ID for UDM operations
+ * @param posted Whether this is a posted write (1) or non-posted write (0, default)
  */
 template <typename T>
 FORCE_INLINE void fabric_write_set_unicast_route_impl(
-    volatile tt_l1_ptr T* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t trid) {
-    udm_write_fields udm = {my_x[edm_to_local_chip_noc], my_y[edm_to_local_chip_noc], proc_type, trid};
+    volatile tt_l1_ptr T* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t trid, uint8_t posted) {
+    udm_write_fields udm = {my_x[edm_to_local_chip_noc], my_y[edm_to_local_chip_noc], proc_type, trid, posted};
 
     if constexpr (std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
         fabric_write_set_unicast_route(packet_header, udm, dst_dev_id, dst_mesh_id);
@@ -130,8 +140,51 @@ FORCE_INLINE void fabric_write_set_unicast_route_impl(
 }
 
 FORCE_INLINE void fabric_write_set_unicast_route(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t trid) {
-    fabric_write_set_unicast_route_impl(packet_header, dst_dev_id, dst_mesh_id, trid);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint16_t trid,
+    uint8_t posted) {
+    fabric_write_set_unicast_route_impl(packet_header, dst_dev_id, dst_mesh_id, trid, posted);
+}
+
+/**
+ * @brief Set individual UDM control fields in the packet header
+ *
+ * This template function allows setting specific UDM control fields individually
+ * without affecting other fields. It provides fine-grained control over the
+ * packet header configuration.
+ *
+ * @tparam Field The control field to set (from UDM_CONTROL_FIELD enum)
+ * @tparam T The packet header type (auto-deduced)
+ * @tparam V The value type (auto-deduced)
+ * @param packet_header Pointer to the packet header (UDMLowLatencyPacketHeader or UDMHybridMeshPacketHeader)
+ * @param value The value to set for the specified field
+ *
+ */
+template <UDM_CONTROL_FIELD Field, typename T, typename V>
+FORCE_INLINE void fabric_write_set_unicast_route_control_field(volatile tt_l1_ptr T* packet_header, V value) {
+    // Ensure the packet header type has UDM control fields
+    static_assert(
+        std::is_same_v<T, UDMLowLatencyPacketHeader> || std::is_same_v<T, UDMHybridMeshPacketHeader> ||
+            std::is_same_v<T, PACKET_HEADER_TYPE>,
+        "Packet header must be a UDM packet header type");
+
+    if constexpr (Field == UDM_CONTROL_FIELD::POSTED) {
+        packet_header->udm_control.write.posted = static_cast<uint8_t>(value);
+    } else if constexpr (Field == UDM_CONTROL_FIELD::SRC_CHIP_ID) {
+        packet_header->udm_control.write.src_chip_id = static_cast<uint8_t>(value);
+    } else if constexpr (Field == UDM_CONTROL_FIELD::SRC_MESH_ID) {
+        packet_header->udm_control.write.src_mesh_id = static_cast<uint16_t>(value);
+    } else if constexpr (Field == UDM_CONTROL_FIELD::SRC_NOC_X) {
+        packet_header->udm_control.write.src_noc_x = static_cast<uint8_t>(value);
+    } else if constexpr (Field == UDM_CONTROL_FIELD::SRC_NOC_Y) {
+        packet_header->udm_control.write.src_noc_y = static_cast<uint8_t>(value);
+    } else if constexpr (Field == UDM_CONTROL_FIELD::RISC_ID) {
+        packet_header->udm_control.write.risc_id = static_cast<uint8_t>(value);
+    } else if constexpr (Field == UDM_CONTROL_FIELD::TRANSACTION_ID) {
+        packet_header->udm_control.write.transaction_id = static_cast<uint8_t>(value);
+    }
 }
 
 /**
