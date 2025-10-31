@@ -26,9 +26,9 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
     uint32_t num_pages = get_arg_val<uint32_t>(1);            // pages for this core
-    uint32_t page_start_offset = get_arg_val<uint32_t>(2);    // starting page offset for this core
-    uint32_t num_whole_packets = get_arg_val<uint32_t>(3);    // whole packets for this core
-    uint32_t num_pages_remainder = get_arg_val<uint32_t>(4);  // remainder pages for this core
+    uint32_t page_start_offset = get_arg_val<uint32_t>(2);    // starting page offset
+    uint32_t num_whole_packets = get_arg_val<uint32_t>(3);    // whole packets
+    uint32_t num_pages_remainder = get_arg_val<uint32_t>(4);  // remainder pages
 
     auto input_addr_gen_args = TensorAccessorArgs<input_args_cta_idx, input_args_crta_idx>();
     auto input_addr_gen = TensorAccessor(input_addr_gen_args, input_base_addr, input_page_size);
