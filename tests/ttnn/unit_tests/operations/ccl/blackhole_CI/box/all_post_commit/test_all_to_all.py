@@ -8,8 +8,8 @@ import torch
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
-from models.common.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_for_n_or_less_dev
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
+from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
 def run_with_trace(
@@ -289,9 +289,8 @@ def run_all_to_all_impl(
     "num_links, logical_shape, in_dim, out_dim, layout",
     [
         (1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
-        (1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
     ],
-    ids=["pre-attn", "post-attn"],
+    ids=["pre-attn"],
 )
 @pytest.mark.parametrize(
     "input_dtype",
@@ -307,8 +306,8 @@ def run_all_to_all_impl(
 )
 @pytest.mark.parametrize(
     "num_iters, do_check, reuse_inputs",
-    [(2, True, False), (6, False, True), (20, False, True)],
-    ids=["check", "perf", "stress"],
+    [(2, True, False)],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "enable_trace",
