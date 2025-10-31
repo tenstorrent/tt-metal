@@ -21,6 +21,9 @@ constexpr uint32_t time_seed_init = get_compile_time_arg_val(7);
 constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(8);
 
 void kernel_main() {
+    // TODO: move this into fw once consolidated
+    tt::tt_fabric::udm::fabric_local_state_init();
+
     uint32_t time_seed = time_seed_init;
 
     zero_l1_buf(test_results, test_results_size_bytes);
