@@ -91,7 +91,6 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
     TestEntry("tt_metal/tests/test_multi_core_kernel", "test_multi_core_kernel"),
     TestEntry("tt_metal/tests/test_interleaved_layouts", "test_interleaved_layouts"),
     TestEntry("tt_metal/tests/test_interleaved_l1_buffer", "test_interleaved_l1_buffer"),
-    TestEntry("tt_metal/tests/test_sdpa_reduce_c", "test_sdpa_reduce_c"),
     TestEntry(
         "tt_metal/tests/test_dram_copy_sticks_multi_core",
         "test_dram_copy_sticks_multi_core",
@@ -113,8 +112,9 @@ TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
 )
 
 TT_METAL_FAST_DISPATCH_TEST_ENTRIES = (
-    TestEntry("tt_metal/tests/unit_tests_noc", "unit_tests_noc"),
+    TestEntry("tt_metal/tests/test_sdpa_reduce_c", "test_sdpa_reduce_c"),
     TestEntry("tt_metal/tests/test_eltwise_binary", "test_eltwise_binary"),
+    TestEntry("tt_metal/tests/unit_tests_noc", "unit_tests_noc"),
     # TestEntry(
     #     "tt_metal/tests/test_matmul_multi_core_multi_dram",
     #     "test_matmul_multi_core_multi_dram",
