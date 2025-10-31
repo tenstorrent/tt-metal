@@ -63,6 +63,7 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_UNICAST_READ = 7,
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 // How to send the payload across the cluster
@@ -174,21 +175,21 @@ struct UDMReadControlHeader {
     uint16_t src_mesh_id;
     uint8_t src_noc_x;
     uint8_t src_noc_y;
-    uint16_t src_l1_address;
+    uint32_t src_l1_address;
     uint32_t size_bytes;
     uint8_t risc_id;
     uint8_t transaction_id;
 } __attribute__((packed));
 
 static_assert(sizeof(UDMWriteControlHeader) == 8, "UDMWriteControlHeader size is not 8 bytes");
-static_assert(sizeof(UDMReadControlHeader) == 13, "UDMReadControlHeader size is not 13 bytes");
+static_assert(sizeof(UDMReadControlHeader) == 15, "UDMReadControlHeader size is not 15 bytes");
 
 union UDMControlFields {
     UDMWriteControlHeader write;
     UDMReadControlHeader read;
 } __attribute__((packed));
 
-static_assert(sizeof(UDMControlFields) == 13, "UDMControlFields size is not 13 bytes");
+static_assert(sizeof(UDMControlFields) == 15, "UDMControlFields size is not 15 bytes");
 
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
@@ -590,7 +591,7 @@ public:
 
 struct UDMLowLatencyPacketHeader : public LowLatencyPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[3];  // Padding to align to 48 bytes
+    uint8_t padding[1];  // Padding to align to 48 bytes (32 base + 15 control + 1 padding = 48)
 
     // Override to return correct size for UDMLowLatencyPacketHeader
     size_t get_payload_size_including_header() volatile const {
@@ -728,7 +729,7 @@ static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHead
 
 struct UDMHybridMeshPacketHeader : public HybridMeshPacketHeader {
     UDMControlFields udm_control;
-    uint8_t padding[3];  // Padding to align to 80 bytes
+    uint8_t padding[1];  // Padding to align to 80 bytes (64 base + 15 control + 1 padding = 80)
 
     // Override to return correct size for UDMHybridMeshPacketHeader
     size_t get_payload_size_including_header() volatile const {

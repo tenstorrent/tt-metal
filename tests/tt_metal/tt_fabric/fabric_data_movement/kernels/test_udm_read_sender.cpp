@@ -25,8 +25,6 @@ void kernel_main() {
     // TODO: move this into fw once consolidated
     tt::tt_fabric::udm::fabric_local_state_init();
 
-    // Runtime args are set up by append_fabric_connection_rt_args and used internally by fabric_fast_write
-    // We don't need to read them explicitly here
     uint32_t time_seed = time_seed_init;
 
     zero_l1_buf(test_results, test_results_size_bytes);
@@ -34,25 +32,29 @@ void kernel_main() {
 
     uint64_t start_timestamp = get_timestamp();
 
+    // For read test, we use a separate notification address to avoid conflicts
+    uint32_t local_read_addr = source_l1_buffer_address;
+    uint32_t remote_read_addr = target_address;
     uint32_t local_notification_addr = notification_mailbox_address;  // Where we prepare notifications
     uint32_t remote_notification_addr =
         notification_mailbox_address;  // Where to send notifications (same offset on receiver)
+    bool match = true;
+    uint32_t mismatch_addr, mismatch_val, expected_val;
 
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
 
-        tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
-        fill_packet_data(start_addr, packet_payload_size_bytes / 16, time_seed);
-
         switch (noc_send_type) {
-            case NOC_UNICAST_WRITE: {
-                tt::tt_fabric::udm::fabric_fast_write_any_len(
+            case NOC_UNICAST_READ: {
+                // Issue a read request to the remote device
+                tt::tt_fabric::udm::fabric_fast_read_any_len(
                     dst_dev_id,
                     dst_mesh_id,
-                    source_l1_buffer_address,
-                    get_noc_addr(noc_x_start, noc_y_start, target_address),
+                    get_noc_addr(noc_x_start, noc_y_start, remote_read_addr),
+                    local_read_addr,
                     packet_payload_size_bytes);
 
+                // Notify the receiver that a read request has been issued
                 uint32_t notification_buffer_addr = local_notification_addr + i * req_notification_size_bytes;
                 uint32_t remote_notification_dest = remote_notification_addr + i * req_notification_size_bytes;
                 notify_receiver(
@@ -65,14 +67,34 @@ void kernel_main() {
                     time_seed,
                     req_notification_size_bytes);
 
-                tt::tt_fabric::udm::fabric_write_barrier();
+                // wait for the read to complete
+                tt::tt_fabric::udm::fabric_read_barrier();
+
+                // Check the received data
+                match = check_packet_data(
+                    reinterpret_cast<tt_l1_ptr uint32_t*>(local_read_addr),
+                    packet_payload_size_bytes / 16,
+                    time_seed,
+                    mismatch_addr,
+                    mismatch_val,
+                    expected_val);
+
+                if (!match) {
+                    DPRINT << "Data mismatch at packet " << i << "\n";
+                    DPRINT << "  Mismatch addr: " << mismatch_addr << "\n";
+                    DPRINT << "  Mismatch val: " << mismatch_val << "\n";
+                    DPRINT << "  Expected val: " << expected_val << "\n";
+                    break;
+                }
             } break;
             default: {
                 ASSERT(false);
             } break;
         }
+
         noc_async_writes_flushed();
-        target_address += packet_payload_size_bytes;
+        remote_read_addr += packet_payload_size_bytes;
+        local_read_addr += packet_payload_size_bytes;
     }
 
     // TODO: move this into fw once consolidated
@@ -82,11 +104,19 @@ void kernel_main() {
 
     noc_async_write_barrier();
 
-    uint64_t bytes_sent = packet_payload_size_bytes * num_packets;
+    uint64_t bytes_received = packet_payload_size_bytes * num_packets;
 
-    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+    if (!match) {
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
+        test_results[TT_FABRIC_MISC_INDEX + 12] = mismatch_addr;
+        test_results[TT_FABRIC_MISC_INDEX + 13] = mismatch_val;
+        test_results[TT_FABRIC_MISC_INDEX + 14] = expected_val;
+    } else {
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+    }
+
     test_results[TT_FABRIC_CYCLES_INDEX] = (uint32_t)cycles_elapsed;
     test_results[TT_FABRIC_CYCLES_INDEX + 1] = cycles_elapsed >> 32;
-    test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;
-    test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_sent >> 32;
+    test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_received;
+    test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_received >> 32;
 }

@@ -23,53 +23,35 @@ constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(8);
 void kernel_main() {
     uint32_t time_seed = time_seed_init;
 
-    int32_t dest_bank_id;
-    uint32_t dest_dram_addr;
-
-    tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
-    uint32_t mismatch_addr, mismatch_val, expected_val;
-    bool match = true;
-    uint64_t bytes_received = 0;
-
-    uint32_t notification_addr = notification_mailbox_address;  // Where we receive notifications
-
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    // Process packets
+    uint32_t local_data_addr = target_address;
+    uint32_t notification_addr = notification_mailbox_address;  // Where we receive and poll for notifications
+    uint64_t bytes_sent = 0;
+
     for (uint32_t i = 0; i < num_packets; i++) {
         time_seed = prng_next(time_seed);
 
-        // Wait for the notification from sender
+        // Wait for the read request notification from sender
         uint32_t curr_notification_addr = notification_addr + i * req_notification_size_bytes;
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header =
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* request_header =
             wait_for_notification(curr_notification_addr, time_seed, req_notification_size_bytes);
 
-        // Send write ACK back to the sender
-        tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+        uint32_t curr_local_data_addr = local_data_addr + (i * packet_payload_size_bytes);
+        tt_l1_ptr uint32_t* buffer_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(curr_local_data_addr);
+        fill_packet_data(buffer_addr, packet_payload_size_bytes / 16, time_seed);
 
-        // Check for data correctness
-        match = check_packet_data(
-            start_addr, packet_payload_size_bytes / 16, time_seed, mismatch_addr, mismatch_val, expected_val);
-        if (!match) {
-            break;
-        }
-        start_addr += packet_payload_size_bytes / 4;
-        bytes_received += packet_payload_size_bytes;
+        // Process the read request and send the data back
+        tt::tt_fabric::udm::fabric_fast_read_any_len_ack(request_header, curr_local_data_addr);
+
+        bytes_sent += packet_payload_size_bytes;
     }
 
     // TODO: move this into fw once consolidated
     tt::tt_fabric::udm::close_fabric_connection();
 
-    if (!match) {
-        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
-        test_results[TT_FABRIC_MISC_INDEX + 12] = mismatch_addr;
-        test_results[TT_FABRIC_MISC_INDEX + 13] = mismatch_val;
-        test_results[TT_FABRIC_MISC_INDEX + 14] = expected_val;
-    } else {
-        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
-    }
-
-    test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_received;
-    test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_received >> 32;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+    test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;
+    test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_sent >> 32;
 }
