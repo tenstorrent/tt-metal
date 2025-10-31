@@ -162,8 +162,20 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
         };
         const auto src_curr_edm_config =
             tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
+        log_debug(
+            tt::LogOp,
+            "FabricEriscDatamoverConfig for src_device {}: buffer_size={}, topology={}",
+            src_device->id(),
+            edm_buffer_size,
+            (int)topology);
         const auto dest_curr_edm_config =
             tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, dest_edm_options);
+        log_debug(
+            tt::LogOp,
+            "FabricEriscDatamoverConfig for dest_device {}: buffer_size={}, topology={}",
+            dest_device->id(),
+            edm_buffer_size,
+            (int)topology);
 
         edm_builders_forward_direction[src_device->id()].reserve(local_link_cores.size());
         edm_builders_backward_direction[dest_device->id()].reserve(local_link_cores.size());
@@ -402,27 +414,6 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     }
 }
 
-SenderWorkerAdapterSpec EdmLineFabricOpInterface::uniquely_connect_worker(
-    tt::tt_metal::IDevice* device, Direction direction) {
-    TT_FATAL(
-        (direction == FORWARD)
-            ? edm_builders_forward_direction.find(device->id()) != edm_builders_forward_direction.end()
-            : edm_builders_backward_direction.find(device->id()) != edm_builders_backward_direction.end(),
-        "Device {} not found in edm builders",
-        device->id());
-    auto& edm_builders = (direction == FORWARD) ? edm_builders_forward_direction.at(device->id())
-                                                : edm_builders_backward_direction.at(device->id());
-    auto& link_count_map =
-        (direction == FORWARD) ? next_forward_direction_edm_available : next_backward_direction_edm_available;
-    log_trace(tt::LogOp, "EDM conecting in {} direction", direction == FORWARD ? "FORWARD" : "BACKWARD");
-    const auto next_link = link_count_map[device->id()];
-    link_count_map[device->id()] = (next_link + 1) % edm_builders.size();
-
-    TT_FATAL(!edm_builders.empty(), "No EDM builders found for device {}", device->id());
-    TT_FATAL(
-        next_link < edm_builders.size(), "Next link index {} is out of bounds for device {}", next_link, device->id());
-    return edm_builders.at(next_link).build_connection_to_worker_channel();
-}
 
 EdmLineFabricOpInterface EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
     const std::vector<tt::tt_metal::IDevice*>& device_sequence,

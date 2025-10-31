@@ -83,15 +83,15 @@ HWCommandQueue::HWCommandQueue(
     uint32_t id,
     NOC noc_index,
     uint32_t completion_queue_reader_core) :
-    manager_(device->sysmem_manager()),
-    completion_queue_thread_{},
     id_(id),
+    size_B_(0),
     completion_queue_reader_core_(completion_queue_reader_core),
-    device_(device),
+    manager_(device->sysmem_manager()),
     cq_shared_state_(std::move(cq_shared_state)),
-    noc_index_(noc_index),
     num_entries_in_completion_q_(0),
     num_completed_completion_q_reads_(0),
+    device_(device),
+    noc_index_(noc_index),
     prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(
         MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
@@ -104,7 +104,7 @@ HWCommandQueue::HWCommandQueue(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
 
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_->id());
@@ -600,7 +600,7 @@ void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_e
 }
 
 void HWCommandQueue::read_completion_queue() {
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(this->device_->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(this->device_->id());

@@ -44,6 +44,7 @@ class Buffer;
 // These are supplied from impl
 enum class BufferType;
 struct AllocatorConfig;
+class AllocatorState;
 
 // THREAD SAFETY: Allocator is thread safe.
 class Allocator {
@@ -108,6 +109,13 @@ public:
     void mark_allocations_safe();
 
     void clear();
+
+    // AllocatorState Methods
+    // Extracts the current state of the allocator.
+    AllocatorState extract_state() const;
+
+    // Overrides the current state with the given state, deallocating all of existing buffers.
+    void override_state(const AllocatorState& state);
 
 protected:
     // Initializers for mapping banks to DRAM channels / L1 banks

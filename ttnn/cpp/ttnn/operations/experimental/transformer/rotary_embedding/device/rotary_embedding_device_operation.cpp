@@ -18,7 +18,7 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& cos = input_tensors.at(1);
     const auto& sin = input_tensors.at(2);
-    TT_FATAL(input_tensors.size() == 3, "Error");
+    TT_FATAL(input_tensors.size() == 3, "Expected 3 input tensors but got {}", input_tensors.size());
     auto ref_device = input_tensor.device();
     for (const auto& input : input_tensors) {
         TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to rotary embedding need to be on device!");
@@ -41,8 +41,15 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(cos.padded_shape()[-2] >= seq_len, "Cos dims must match input dims");
     }
     if (input_tensor.is_sharded()) {
-        TT_FATAL(input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
-        TT_FATAL(input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1], "Error");
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+            "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
+            input_tensor.memory_config().memory_layout());
+        TT_FATAL(
+            input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
+            "Input tensor shard width ({}) must equal padded width ({})",
+            input_tensor.shard_spec().value().shape[1],
+            input_tensor.padded_shape()[-1]);
         // Require even work division for now
         TT_FATAL(
             (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
@@ -50,13 +57,25 @@ void RotaryEmbedding::validate(const std::vector<Tensor>& input_tensors) const {
                 0,
             "Error");
         if (this->output_mem_config.is_sharded()) {
-            TT_FATAL(this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            TT_FATAL(
+                this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+                "Output memory config layout must not be WIDTH_SHARDED but got {}",
+                this->output_mem_config.memory_layout());
         }
     } else if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED, "Error");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
+            "Output memory config layout must not be WIDTH_SHARDED but got {}",
+            this->output_mem_config.memory_layout());
     } else {
-        TT_FATAL(input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input tensor memory layout must be INTERLEAVED but got {}",
+            input_tensor.memory_config().memory_layout());
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output memory config layout must be INTERLEAVED but got {}",
+            this->output_mem_config.memory_layout());
     }
 }
 

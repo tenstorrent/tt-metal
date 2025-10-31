@@ -130,6 +130,7 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
+      build-umd-tests: true
       version: 22.04
   galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}

@@ -36,18 +36,38 @@ If a check is critical (such as a missing ELF file), the script should raise a `
 
 `tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. For example, see `dump_callstacks` — `tt-triage` would generate a table with all callstacks.
 
+#### dump_callstacks output modes
+
+By default, `dump_callstacks`:
+- Shows only essential fields: Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, and Callstack
+- **Automatically filters out DONE cores** to reduce noise
+
+You can control the output with two independent flags:
+
+**Show more columns** using `-v` (can be repeated):
+```bash
+# Level 1: Add detailed fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset)
+./tools/tt-triage.py --run=dump_callstacks -v
+
+# Level 2: Add internal debug fields (RD PTR, Base, Offset)
+./tools/tt-triage.py --run=dump_callstacks -vv
+```
+
+**Show all cores** (including DONE cores):
+```bash
+./tools/tt-triage.py --run=dump_callstacks --all-cores
+```
+
+**Combine both** for full details:
+```bash
+./tools/tt-triage.py --run=dump_callstacks --all-cores -vv
+```
+
+This keeps the default output clean while allowing detailed inspection when needed.
+
 To enable rich visualization, a checker script should return data as a tagged `@dataclass` or a list of tagged `@dataclass` objects of the same type. Visualization in `tt-triage` is achieved by serializing data fields in a way that describes how they should appear in the output. You control this by using tagging methods and their arguments to specify how each field should be serialized and thus visualized:
-- `triage_field(serialized_name, serializer)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). This controls how the field appears in the visualization.
-- `combined_field(additional_fields, serialized_name, serializer)` – The field will be serialized together with `additional_fields` under `serialized_name` using `serializer`. If none of the parameters are provided, visualization will be ignored, as it will be visualized with a different field. Example:
-  ```python
-  @dataclass
-  class Chip:
-    # This field will trigger visualization
-    id: int = combined_field("arch", "ID:Arch", collection_serializer(":"))
-    # This will be ignored by visualization
-    arch: str = combined_field()
-  ```
-- `recurse_field()` – This will cause expansion of a field that is tagged as a `@dataclass`, so its internal fields are visualized as part of the parent.
+- `triage_field(serialized_name, serializer, verbose=0)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). The `verbose` parameter controls at which verbosity level the field is shown (0=always, 1=with `-v`, 2=with `-vv`). This controls how the field appears in the visualization.
+- `recurse_field(verbose=0)` – This will cause expansion of a field that is tagged as a `@dataclass`, so its internal fields are visualized as part of the parent. The `verbose` parameter controls the minimum verbosity level for this recursion.
   ```python
   @dataclass
   class ChipCheck:
@@ -55,6 +75,8 @@ To enable rich visualization, a checker script should return data as a tagged `@
     check: str = triage_field("Check")
     # Field that will be expanded and visualized as its internal fields (see previous example)
     chip: Chip = recurse_field()
+    # Advanced data only shown with -vv
+    debug_data: DebugInfo = recurse_field(verbose=2)
   ```
 
 By carefully specifying these serialization options, you control how your data will be visualized in the `tt-triage` output.
@@ -65,14 +87,14 @@ Below is a representative example showing how to define data classes for visuali
 
 ```python
 from dataclasses import dataclass
-from triage import triage_field, combined_field, recurse_field, collection_serializer
+from triage import triage_field, recurse_field, collection_serializer
 
 @dataclass
 class Chip:
     # This field will be visualized as "ID:Arch" with value "id:arch"
-    id: int = combined_field("arch", "ID:Arch", collection_serializer(":"))
+    id: int = triage_field("Id")
     # This field is only used for combination above, not visualized separately
-    arch: str = combined_field()
+    arch: str = triage_field("Arch")
 
 @dataclass
 class ChipCheck:
@@ -94,12 +116,12 @@ When this data is returned from your script, `tt-triage` will visualize it as a 
 
 For example, the output might look like:
 ```
-╭───────────┬─────────╮
-│  Check    │ ID:Arch │
-├───────────┼─────────┤
-│ Power OK  │  1:A0   │
-│ Temp High │  2:B1   │
-╰───────────┴─────────╯
+╭───────────┬────┬──────╮
+│  Check    │ Id │ Arch │
+├───────────┼────┼──────┤
+│ Power OK  │  1 │  A0  │
+│ Temp High │  2 │  B1  │
+╰───────────┴────┴──────╯
 ```
 
 ## Script configuration

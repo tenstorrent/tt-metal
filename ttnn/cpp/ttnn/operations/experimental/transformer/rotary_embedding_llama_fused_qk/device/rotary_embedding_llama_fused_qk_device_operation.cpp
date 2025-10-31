@@ -13,7 +13,7 @@ namespace tt_metal {
 
 void RotaryEmbeddingLlamaFusedQK::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
-    TT_FATAL(input_tensors.size() == 5, "Error");
+    TT_FATAL(input_tensors.size() == 5, "Expected 5 input tensors but got {}", input_tensors.size());
     const auto& q_input_tensor = input_tensors.at(0);
     const auto& k_input_tensor = input_tensors.at(1);
     const auto& cos = input_tensors.at(2);

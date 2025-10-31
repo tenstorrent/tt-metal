@@ -1,13 +1,13 @@
 inputs:
   device_perf_model_name:
-    required: true
+    required: false
     default: ''
     description: "Used to specify the model for a device perf test. E2E perf tests do not set this"
   commands:
     required: true
     description: "Shell commands to run the test"
 runs:
-  using: "composite"
+  using: composite
   steps:
     - run: |
         cd docker-job
@@ -24,15 +24,15 @@ runs:
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
-    - uses: ./.github/actions/docker-run
-      if: ${{ env.PIPELINE == 'model-perf' }}
-      with:
-        docker_image: ${{ env.DOCKER_IMAGE }}
-        docker_password: ${{ env.DOCKER_PASSWORD }}
-        docker_opts: ${{ env.DOCKER_OPTS }}
-        install_wheel: true
-        run_args: |
-          ${{ inputs.commands }}
-          status=$?
-          env python3 models/perf/merge_perf_results.py REPORT
-          exit $status
+    - run: |
+        cd docker-job
+        set -x
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+        ${{ inputs.commands }}
+        status=$?
+        env python3 models/perf/merge_perf_results.py REPORT
+        exit $status
+
+      if: ${{ inputs.device_perf_model_name == '' }}
+      shell: bash

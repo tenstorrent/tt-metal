@@ -699,6 +699,7 @@ struct transform_object_of_type_t<std::vector<T>> {
     template <typename object_t>
     std::vector<T> operator()(auto&& callback, const std::vector<T>& value) const {
         std::vector<T> return_value;
+        return_value.reserve(value.size());
         for (auto& tensor : value) {
             return_value.emplace_back(transform_object_of_type<object_t>(callback, tensor));
         }
@@ -1124,9 +1125,9 @@ inline hash_t hash_object(const T& object) noexcept {
         constexpr auto num_attributes = reflection::detail::get_num_attributes<T>();
         hash_t hash = 0;
         const auto attribute_values = object.attribute_values();
-        [&object, &hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
+        [&hash, &attribute_values]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
-                [&object, &hash, &attribute_values] {
+                [&hash, &attribute_values] {
                     const auto& attribute = std::get<Ns>(attribute_values);
                     hash = hash_objects(hash, attribute);
                 }(),

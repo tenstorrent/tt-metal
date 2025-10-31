@@ -59,7 +59,7 @@ protected:
 
     void TearDown() override { device_->close(); }
 
-    TTNNFixtureWithDevice() : TTNNFixtureBase() {}
+    TTNNFixtureWithDevice() = default;
 
     TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
         TTNNFixtureBase(trace_region_size, l1_small_size) {}
@@ -90,7 +90,7 @@ protected:
 
 class MultiCommandQueueT3KFixture : public TTNNFixtureBase {
 protected:
-    std::map<chip_id_t, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
+    std::map<tt::ChipId, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devs;
 
     void SetUp() override {
         if (!check_dispatch_mode()) {

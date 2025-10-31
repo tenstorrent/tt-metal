@@ -12,7 +12,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -23,7 +23,7 @@ namespace tt::tt_metal {
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
 private:
-    std::map<chip_id_t, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
 public:
     // A function to run a program, according to which dispatch mode is set.
@@ -71,8 +71,8 @@ protected:
         this->DetectDispatchMode();
         // Must set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        std::vector<chip_id_t> ids;
-        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
+        std::vector<ChipId> ids;
+        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
         const auto& dispatch_core_config =

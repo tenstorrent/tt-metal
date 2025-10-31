@@ -99,6 +99,7 @@ public:
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole");
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines");
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/noc");
+        includes.push_back("tt_metal/lite_fabric/hw/inc/wormhole");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
 
@@ -153,7 +154,10 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
-        std::string cflags = "-mcpu=tt-wh ";
+        std::string cflags = params.core_type == HalProgrammableCoreType::TENSIX &&
+                                     params.processor_class == HalProcessorClassType::COMPUTE
+                                 ? "-mcpu=tt-wh-tensix "
+                                 : "-mcpu=tt-wh ";
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             cflags += "-fno-delete-null-pointer-checks ";
         } else if (
@@ -321,7 +325,6 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
-    this->intermesh_eth_links_enabled_ = true;  // Intermesh routing is enabled on Wormhole
     this->virtualized_core_types_ = {dev_msgs::AddressableCoreType::TENSIX, dev_msgs::AddressableCoreType::ETH};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
@@ -358,6 +361,10 @@ void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
             processor_type_idx == 1) {
             launch_msg.kernel_config().ncrisc_kernel_size16() = (iram_text_size + 15) >> 4;
         }
+    };
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version /*eth_fw_version*/) {
+        // No checks
     };
 }
 

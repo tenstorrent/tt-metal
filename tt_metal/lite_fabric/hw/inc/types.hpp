@@ -34,7 +34,7 @@ using ReceiverChannelPointersTuple =
 using ReceiverChannelPointersTupleImpl =
     decltype(lite_fabric::ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make());
 
-using SenderEthChannelBuffer = tt::tt_fabric::EthChannelBuffer<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[0]>;
+using SenderEthChannelBuffer = tt::tt_fabric::SenderEthChannel<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[0]>;
 using ReceiverEthChannelBuffer = tt::tt_fabric::EthChannelBuffer<FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY[0]>;
 
 using HostInterface = HostToFabricLiteInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE>;
@@ -47,11 +47,11 @@ using WriteTridTracker = WriteTransactionIdTracker<
     lite_fabric::edm_to_downstream_noc>;
 
 using RemoteReceiverChannelsType =
-    decltype(tt::tt_fabric::EthChannelBuffers<FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+    decltype(tt::tt_fabric::StaticSizedEthChannelBuffers<FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_RECEIVER_CHANNELS>{}));
 
 using LocalSenderChannelsType =
-    decltype(tt::tt_fabric::EthChannelBuffers<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
+    decltype(tt::tt_fabric::StaticSizedSenderEthChannelBuffers<FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{}));
 
 }  // namespace lite_fabric

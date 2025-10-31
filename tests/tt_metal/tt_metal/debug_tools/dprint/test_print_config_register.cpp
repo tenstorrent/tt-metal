@@ -292,7 +292,7 @@ const std::vector<uint32_t> field_values_pack_config_wormhole = {
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct ConfigRegPrintTestConfig {
-    CoreCoord core = {};
+    CoreCoord core;
     std::string write_kernel;
     std::string print_kernel;
     int num_of_registers;

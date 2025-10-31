@@ -155,13 +155,13 @@ def run(
 
             for i in range(num_iters):
                 start_time = start_measuring_time()
-                tt_out_tensor = ttnn.experimental.all_broadcast_async(
+                tt_out_tensor = ttnn.all_broadcast(
                     tt_input,
-                    num_links=num_links,
-                    memory_config=mem_config,
-                    topology=topology,
-                    subdevice_id=worker_sub_device_id,
                     cluster_axis=cluster_axis,
+                    subdevice_id=worker_sub_device_id,
+                    memory_config=mem_config,
+                    num_links=num_links,
+                    topology=topology,
                 )
                 e2e_perf = stop_measuring_time(start_time)
                 logger.info(f"Done iteration {i}")

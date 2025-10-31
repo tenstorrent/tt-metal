@@ -1,0 +1,102 @@
+ChipSpec: {
+  arch: wormhole_b0,
+  ethernet_ports: {
+    N: 4,
+    E: 4,
+    S: 4,
+    W: 4,
+  }
+}
+
+Board: [
+  { name: Galaxy,
+    type: Mesh,
+    topology: [1, 32]}
+]
+
+Mesh: [
+{
+  id: 0,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 1,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 2,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 3,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 4,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 5,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 6,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 7,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+{
+  id: 8,
+  board: Galaxy,
+  device_topology: [1, 32],
+  host_topology: [1, 1]},
+]
+
+RelaxedGraph: [
+  [M0, M1, 4],
+  [M0, M2, 4],
+  [M0, M3, 4],
+  [M0, M4, 4],
+  [M0, M5, 4],
+  [M0, M6, 4],
+  [M0, M7, 4],
+  [M0, M8, 4],
+  [M1, M2, 4],
+  [M1, M3, 4],
+  [M1, M4, 4],
+  [M1, M5, 4],
+  [M1, M6, 4],
+  [M1, M7, 4],
+  [M1, M8, 4],
+  [M2, M3, 4],
+  [M2, M4, 4],
+  [M2, M5, 4],
+  [M2, M6, 4],
+  [M2, M7, 4],
+  [M2, M8, 4],
+  [M3, M4, 4],
+  [M3, M5, 4],
+  [M3, M6, 4],
+  [M3, M7, 4],
+  [M3, M8, 4],
+  [M4, M5, 4],
+  [M4, M6, 4],
+  [M4, M7, 4],
+  [M4, M8, 4],
+  [M5, M6, 4],
+  [M5, M7, 4],
+  [M5, M8, 4],
+  [M6, M7, 4],
+  [M6, M8, 4],
+  [M7, M8, 4],
+]

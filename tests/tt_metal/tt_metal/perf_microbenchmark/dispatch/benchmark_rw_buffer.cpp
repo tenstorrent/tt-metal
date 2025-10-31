@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
     auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
 
     TT_ASSERT(available_device_ids.contains(0));
-    std::vector<chip_id_t> device_ids = {0};
+    std::vector<ChipId> device_ids = {0};
 
     if (available_device_ids.contains(1)) {
         log_info(LogTest, "Device 1 available, enable testing on device 1 assuming it's a remote device");

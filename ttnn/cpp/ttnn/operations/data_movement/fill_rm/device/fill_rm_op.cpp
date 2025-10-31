@@ -91,9 +91,24 @@ operation::ProgramWithCallbacks fill_rm_single_core(
 
 void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    TT_FATAL((this->N > 0 && this->C > 0 && this->H > 0 && this->W > 0), "Error");
-    TT_FATAL((this->hFill <= this->H && this->wFill <= this->W), "Error");
-    TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Error");
+    TT_FATAL(
+        (this->N > 0 && this->C > 0 && this->H > 0 && this->W > 0),
+        "All dimensions must be positive: N={}, C={}, H={}, W={}",
+        this->N,
+        this->C,
+        this->H,
+        this->W);
+    TT_FATAL(
+        (this->hFill <= this->H && this->wFill <= this->W),
+        "Fill dimensions must be <= tensor dimensions: hFill={} <= H={}, wFill={} <= W={}",
+        this->hFill,
+        this->H,
+        this->wFill,
+        this->W);
+    TT_FATAL(
+        input_tensor_a.dtype() == DataType::BFLOAT16,
+        "Input tensor dtype must be BFLOAT16 but got {}",
+        input_tensor_a.dtype());
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "FillRM does not currently support sharding");

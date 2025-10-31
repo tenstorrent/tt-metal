@@ -22,10 +22,17 @@ using ProgCoreMapping =
 
 // A struct to hold device-specific build environment
 struct DeviceBuildEnv {
-    uint32_t build_key = 0;
+    uint64_t build_key = 0;
     JitBuildEnv build_env;
     std::vector<JitBuildState> firmware_build_states;
     std::vector<JitBuildState> kernel_build_states;
+};
+
+// A struct to hold device-specific build environment info (lightweight version of DeviceBuildEnv)
+struct BuildEnvInfo {
+    ChipId device_id;
+    uint64_t build_key;
+    std::string firmware_root_path;
 };
 
 // Singleton class to generate and hold build environments, build keys, and build states.
@@ -37,30 +44,32 @@ public:
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.
-    void add_build_env(chip_id_t device_id, uint8_t num_hw_cqs);
+    void add_build_env(ChipId device_id, uint8_t num_hw_cqs);
 
     // Getter functions for build envs/keys/states
-    const DeviceBuildEnv& get_device_build_env(chip_id_t device_id);
+    const DeviceBuildEnv& get_device_build_env(ChipId device_id);
 
     // Helper functions to extract build states from the build env.
     const JitBuildState& get_firmware_build_state(
-        chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
+        ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
     const JitBuildState& get_kernel_build_state(
-        chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
-    JitBuildStateSubset get_kernel_build_states(
-        chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class);
+        ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
+    JitBuildStateSubset get_kernel_build_states(ChipId device_id, uint32_t programmable_core, uint32_t processor_class);
 
-    void build_firmware(chip_id_t device_id);
+    void build_firmware(ChipId device_id);
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.
     BuildIndexAndTypeCount get_build_index_and_state_count(uint32_t programmable_core, uint32_t processor_class);
 
+    // Method to get the build environment info for all devices
+    std::vector<BuildEnvInfo> get_all_build_envs_info();
+
 private:
     BuildEnvManager();
     ~BuildEnvManager() = default;
 
-    std::unordered_map<chip_id_t, DeviceBuildEnv> device_id_to_build_env_;
+    std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?

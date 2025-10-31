@@ -53,8 +53,8 @@ The following tests are short in runtime and loop over all chips to test for bas
 ![](https://github.com/tenstorrent/tt-metal/blob/main/docs/source/common/images/Fabric_API_Test.png)
 
 ### Ethernet Bandwidth Tests
-The following Ethernet bandwidth tests loop over all active Ethernet links and prints bandwidth. The following tests require a profiler build and therefore take longer to run:
-- `./build_metal.sh --build-tests --enable-profiler` - This command enables the profiler.
+The following Ethernet bandwidth tests loop over all active Ethernet links and prints bandwidth. These tests require a build with Tracy enabled (default)
+- `./build_metal.sh --build-tests`
 - `pytest tests/tt_metal/microbenchmarks/ethernet/test_all_ethernet_links_bandwidth.py` - This test ensures that Ethernet links are properly sending and receiving data.
   In the following expected output the test is identifying all mismatching values.
 

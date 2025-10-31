@@ -24,7 +24,11 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
             q_input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
     TT_FATAL(kv_input_tensor.dtype() == q_input_tensor.dtype(), "Unsupported data format");
-    TT_FATAL(q_input_tensor.layout() == Layout::TILE && kv_input_tensor.layout() == Layout::TILE, "Error");
+    TT_FATAL(
+        q_input_tensor.layout() == Layout::TILE && kv_input_tensor.layout() == Layout::TILE,
+        "Q and KV input tensors must have TILE layout but got Q: {}, KV: {}",
+        q_input_tensor.layout(),
+        kv_input_tensor.layout());
     TT_FATAL(q_input_tensor.is_sharded() && kv_input_tensor.is_sharded(), "Operands to TM must be sharded");
 
     auto bbox = q_input_tensor.shard_spec().value().grid.bounding_box();
@@ -33,8 +37,14 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate(const std::vector<Te
          bbox.end_coord.y < q_input_tensor.device()->compute_with_storage_grid_size().y),
         "Error");
 
-    TT_FATAL(q_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
-    TT_FATAL(kv_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED, "Error");
+    TT_FATAL(
+        q_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+        "Q input tensor memory layout must be BLOCK_SHARDED but got {}",
+        q_input_tensor.memory_config().memory_layout());
+    TT_FATAL(
+        kv_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+        "KV input tensor memory layout must be BLOCK_SHARDED but got {}",
+        kv_input_tensor.memory_config().memory_layout());
 
     ShardOrientation shard_orientation = q_input_tensor.shard_spec().value().orientation;
     bool rm = shard_orientation == ShardOrientation::ROW_MAJOR;

@@ -465,13 +465,21 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     std::shared_ptr<tt_metal::Buffer> src, dst;
     if constexpr (src_is_in_l1) {
-        TT_FATAL((buffer_size % num_l1_banks) == 0, "Error");
+        TT_FATAL(
+            (buffer_size % num_l1_banks) == 0,
+            "Buffer size ({}) must be divisible by number of L1 banks ({})",
+            buffer_size,
+            num_l1_banks);
 
         src = CreateBuffer(l1_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
 
     } else {
-        TT_FATAL((buffer_size % num_dram_banks) == 0, "Error");
+        TT_FATAL(
+            (buffer_size % num_dram_banks) == 0,
+            "Buffer size ({}) must be divisible by number of DRAM banks ({})",
+            buffer_size,
+            num_dram_banks);
 
         src = CreateBuffer(dram_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
@@ -521,7 +529,7 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
 
     pass &= tt_metal::CloseDevice(device);
 
-    TT_FATAL(pass, "Error");
+    TT_FATAL(pass, "Test failed - buffer comparison did not match");
 
     return pass;
 }
@@ -535,7 +543,7 @@ int main(int argc, char** argv) {
     //                      Initial Runtime Args Parse
     ////////////////////////////////////////////////////////////////////////////
     std::vector<std::string> input_args(argv, argv + argc);
-    std::string arch_name = "";
+    std::string arch_name;
     try {
         std::tie(arch_name, input_args) =
             test_args::get_command_option_and_remaining_args(input_args, "--arch", "grayskull");

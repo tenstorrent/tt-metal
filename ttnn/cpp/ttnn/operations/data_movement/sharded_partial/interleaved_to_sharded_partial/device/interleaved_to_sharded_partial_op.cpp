@@ -32,7 +32,10 @@ void InterleavedToShardedPartialDeviceOperation::validate(const std::vector<Tens
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input tensor must be Interleaved");
     if (input_tensor.dtype() != this->output_dtype) {
-        TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "Input tensor layout must be TILE but got {}",
+            input_tensor.layout());
     }
     auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
     TT_FATAL(

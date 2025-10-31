@@ -20,8 +20,6 @@ namespace py = pybind11;
 void bind_reduction_cumsum_operation(py::module& module) {
     auto docstring =
         R"doc(
-        ``ttnn.cumsum(input: ttnn.Tensor, dim: int, dtype: Optional[ttnn.DataType] = None, reverse_order: bool = False, out: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
-
         Returns cumulative sum of :attr:`input` along dimension :attr:`dim`
         For a given :attr:`input` of size N, the :attr:`output` will also contain N elements and be such that:
 

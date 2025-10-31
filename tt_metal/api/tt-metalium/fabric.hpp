@@ -10,7 +10,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include <vector>
 #include <umd/device/types/core_coordinates.hpp>
 #include <optional>
@@ -67,9 +67,15 @@ void append_fabric_connection_rt_args(
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
 
+enum class FabricApiType : uint8_t {
+    Linear = 0,
+    Mesh = 1,
+};
+
 // Appends connection manager RT args for one or more routes.
 // next_hop_nodes: vector of next-hop nodes, one per route.
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
+// api_type: set envvar for the kernel to indicate which fabric API type being used. Linear or Mesh.
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
@@ -78,6 +84,7 @@ void append_routing_plane_connection_manager_rt_args(
     tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
+    FabricApiType api_type = FabricApiType::Linear,
     CoreType core_type = CoreType::WORKER);
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
@@ -85,7 +92,7 @@ void append_routing_plane_connection_manager_rt_args(
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
-FabricNodeId get_fabric_node_id_from_physical_chip_id(chip_id_t physical_chip_id);
+FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id);
 
 std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction);

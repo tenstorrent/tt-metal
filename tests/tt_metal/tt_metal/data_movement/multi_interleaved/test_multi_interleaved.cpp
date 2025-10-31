@@ -25,7 +25,7 @@ struct MultiInterleavedConfig {
     uint32_t num_pages = 0;
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    CoreRangeSet cores = CoreRangeSet();
+    CoreRangeSet cores;
     bool read_kernel = true;
     bool write_kernel = true;
 };

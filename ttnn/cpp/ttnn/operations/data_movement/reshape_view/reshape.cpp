@@ -68,12 +68,13 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     }
     // Guaranteed to be interleaved
     // We are guaranteed to be working 2D->2D in this function
-    auto temp_tensor2 = tt::tt_metal::operation::run(
-                            ReshapeDeviceOperation{logical_shape, padded_shape, intermediate_out_memory_config},
-                            {temp_tensor},
-                            {},
-                            {})
-                            .at(0);
+    auto temp_tensor2 =
+        tt::tt_metal::operation::run(
+            ttnn::ReshapeDeviceOperation{logical_shape, padded_shape, intermediate_out_memory_config, false},
+            {temp_tensor},
+            {},
+            {})
+            .at(0);
     if (memory_config.is_sharded()) {
     return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
     } else {
@@ -193,7 +194,8 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const PadValue& pad_value) {
+    const PadValue& pad_value,
+    const bool recreate_mapping_tensor) {
     // squeeze input tensor and requested shape to 3D
 
     auto transform_to_3d = [](const auto& shape) -> ttnn::Shape {
@@ -230,7 +232,8 @@ ttnn::Tensor reshape_tiled(
 
     auto output_tensor_3d =
         tt::tt_metal::operation::run(
-            ReshapeDeviceOperation{requested_shape_3d, requested_padded_shape_3d, working_output_memory_config},
+            ttnn::ReshapeDeviceOperation{
+                requested_shape_3d, requested_padded_shape_3d, working_output_memory_config, recreate_mapping_tensor},
             {tensor3d},
             {},
             {})
@@ -252,7 +255,8 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Shape& logical_input_shape,
     const ttnn::Shape& padded_input_shape,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<PadValue>& pad_value) {
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
@@ -329,7 +333,12 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             mem_config,
             pad_value.value_or(default_pad_value));
     } else {
-        return reshape_tiled(tensor, logical_shape, mem_config, pad_value.value_or(default_pad_value));
+        return reshape_tiled(
+            tensor,
+            logical_shape,
+            mem_config,
+            pad_value.value_or(default_pad_value),
+            reshape_map_mode == TileReshapeMapMode::RECREATE);
     }
 }
 
@@ -337,16 +346,23 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<PadValue>& pad_value) {
-    return invoke(tensor, shape, shape, memory_config, pad_value);
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode) {
+    return invoke(tensor, shape, shape, memory_config, pad_value, reshape_map_mode);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<PadValue>& pad_value) {
-    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector), memory_config, pad_value);
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode) {
+    return invoke(
+        tensor,
+        tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),
+        memory_config,
+        pad_value,
+        reshape_map_mode);
 }
 
 }  // namespace ttnn::operations::data_movement

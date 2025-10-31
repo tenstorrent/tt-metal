@@ -28,11 +28,12 @@ enum class HighLevelTrafficPattern;  // Forward declaration
 class IDeviceInfoProvider {
 public:
     virtual ~IDeviceInfoProvider() = default;
-    virtual FabricNodeId get_fabric_node_id(chip_id_t physical_chip_id) const = 0;
+    virtual FabricNodeId get_fabric_node_id(ChipId physical_chip_id) const = 0;
     virtual FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const = 0;
     virtual FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const = 0;
     virtual MeshCoordinate get_device_coord(const FabricNodeId& node_id) const = 0;
     virtual uint32_t get_worker_noc_encoding(CoreCoord logical_core) const = 0;
+    virtual CoreCoord get_virtual_core_from_logical_core(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
     virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;

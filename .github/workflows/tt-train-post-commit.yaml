@@ -40,7 +40,7 @@ jobs:
           {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    # tt-train in N300 is timing out on CIv2: https://github.com/tenstorrent/tt-metal/issues/29443
+    # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
@@ -51,6 +51,7 @@ jobs:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
         LD_LIBRARY_PATH: /work/build/lib
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
@@ -73,7 +74,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
           cd /work/build/tt-train
           mkdir -p generated/test_reports
           ldd tests/ttml_tests || true

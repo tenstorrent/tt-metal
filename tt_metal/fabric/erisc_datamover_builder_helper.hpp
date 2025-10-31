@@ -55,11 +55,6 @@ public:
         std::optional<size_t> desired_num_links = std::nullopt,
         Topology topology = Topology::Linear);
 
-    // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
-    // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique
-    // connections than available will result in an error.
-    tt::tt_fabric::SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction);
-
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;
 
@@ -113,8 +108,6 @@ private:
 
     size_t num_links;
     size_t buffer_size_bytes;
-    size_t firmware_context_switch_interval =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
 };
 
 }  // namespace tt::tt_fabric

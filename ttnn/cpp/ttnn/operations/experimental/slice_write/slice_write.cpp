@@ -30,7 +30,7 @@ ttnn::Tensor SliceWriteOperation::invoke(
     bool no_step = std::all_of(step.begin(), step.end(), [](uint32_t s) { return s == 1; });
 
     bool rm_only_not_sharded = (input_tensor.layout() == Layout::TILE || output_tensor.layout() == Layout::TILE) &&
-                               !(input_tensor.is_sharded() || output_tensor.is_sharded() && !no_step);
+                               !(input_tensor.is_sharded() || (output_tensor.is_sharded() && !no_step));
     ttnn::Tensor input = input_tensor;
     if (rm_only_not_sharded) {
         input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);

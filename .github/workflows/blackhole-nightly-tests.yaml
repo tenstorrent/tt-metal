@@ -4,6 +4,32 @@ name: "(Blackhole) Blackhole nightly tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      run_bh_single_card_nightly_demos:
+        description: 'Run Blackhole single card nightly demo tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_multi_card_nightly_demo_tests:
+        description: 'Run Blackhole multi card nightly demo tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_nightly_20_cores:
+        description: 'Run Blackhole nightly 20 cores tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_multi_card_nightly_unit_tests:
+        description: 'Run Blackhole multi card nightly unit tests'
+        required: false
+        type: boolean
+        default: false
+      run_bh_ttnn_stress_tests:
+        description: 'Run Blackhole nightly ttnn stress tests'
+        required: false
+        type: boolean
+        default: false
   workflow_call:
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
@@ -16,17 +42,10 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
-      version: 22.04
-  build-artifact-profiler:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-wheel: true
       tracy: true
       version: 22.04
   bh-nightly:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_single_card_nightly_demos }}
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
     strategy:
@@ -40,6 +59,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   bh-nightly-20-cores:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_nightly_20_cores }}
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-20-cores-impl.yaml
     strategy:
@@ -53,6 +73,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   blackhole-multi-card-demo-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_demo_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
@@ -84,15 +105,17 @@ jobs:
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
   blackhole-multi-card-unit-tests:
-    needs: build-artifact-profiler
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_nightly_unit_tests }}
+    needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     with:
       arch: blackhole
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-  blackhole-multi-card-ttnn-stress-tests:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  blackhole-ttnn-stress-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
@@ -100,6 +123,8 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
+          - name: P150b ttnn stress tests
+            runner-label: P150b
           - name: LLMBox ttnn stress tests
             runner-label: BH-LLMBox
           - name: DeskBox ttnn stress tests

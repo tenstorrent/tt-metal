@@ -142,6 +142,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
@@ -258,92 +260,96 @@ list(APPEND SOURCES ${METAL_OPS_FILES})
 # Check if TT::Metalium target exists
 # If it does not exist, assume that we are building with tt-train as top level project
 if(NOT TARGET TT::Metalium)
-    if("$ENV{TT_METAL_HOME}" STREQUAL "")
-        message(FATAL_ERROR "TT_METAL_HOME is not set")
-    endif()
+    find_package(TT-NN)
 
-    set(METALIUM_INCLUDE_DIRS
-        # Metalium
-        "$ENV{TT_METAL_HOME}"
-        "$ENV{TT_METAL_HOME}/tt_metal"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
-        "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
-        "$ENV{TT_METAL_HOME}/tt_metal/api/"
-        "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
-        "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
-        "$ENV{TT_METAL_HOME}/tt_metal/include"
-        "$ENV{TT_METAL_HOME}/tt_stl"
-        # TTNN
-        "$ENV{TT_METAL_HOME}/ttnn"
-        "$ENV{TT_METAL_HOME}/ttnn/api"
-        "$ENV{TT_METAL_HOME}/ttnn/cpp"
-        "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
-        "${reflect_SOURCE_DIR}"
-    )
+    if(NOT TT-NN_FOUND)
+        if("$ENV{TT_METAL_HOME}" STREQUAL "")
+            message(FATAL_ERROR "TT_METAL_HOME is not set")
+        endif()
 
-    message(STATUS "Metalium not found, attempting to locate")
-
-    # Define the path to look for the library
-    set(METALIUM_LIB_PATH "$ENV{TT_METAL_HOME}/build/lib")
-
-    # Try to find the library
-    find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-    find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-    find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-    find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-
-    if(TT_STL_LIBRARY)
-        add_library(Metalium::TT_STL SHARED IMPORTED)
-        set_target_properties(
-            Metalium::TT_STL
-            PROPERTIES
-                IMPORTED_LOCATION
-                    "${TT_STL_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES
-                    "$ENV{TT_METAL_HOME}/tt_stl"
+        set(METALIUM_INCLUDE_DIRS
+            # Metalium
+            "$ENV{TT_METAL_HOME}"
+            "$ENV{TT_METAL_HOME}/tt_metal"
+            "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd"
+            "$ENV{TT_METAL_HOME}/tt_metal/third_party/tracy/public"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines"
+            "$ENV{TT_METAL_HOME}/tt_metal/hw/inc/tt-1xx/blackhole"
+            "$ENV{TT_METAL_HOME}/tt_metal/api/"
+            "$ENV{TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
+            "$ENV{TT_METAL_HOME}/tt_metal/hostdevcommon/api"
+            "$ENV{TT_METAL_HOME}/tt_metal/include"
+            "$ENV{TT_METAL_HOME}/tt_stl"
+            # TTNN
+            "$ENV{TT_METAL_HOME}/ttnn"
+            "$ENV{TT_METAL_HOME}/ttnn/api"
+            "$ENV{TT_METAL_HOME}/ttnn/cpp"
+            "$ENV{TT_METAL_HOME}/ttnn/cpp/ttnn/deprecated"
+            "${reflect_SOURCE_DIR}"
         )
-        message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
-    else()
-        message(FATAL_ERROR "libtt_stl.so not found in ${METALIUM_LIB_PATH}")
-    endif()
 
-    if(TT_METAL_LIBRARY)
-        add_library(TT::Metalium SHARED IMPORTED)
-        set_target_properties(
-            TT::Metalium
-            PROPERTIES
-                IMPORTED_LOCATION
-                    "${TT_METAL_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES
-                    "${METALIUM_INCLUDE_DIRS}"
-        )
-        target_link_libraries(
-            TT::Metalium
-            INTERFACE
-                ${DEVICE_LIBRARY}
+        message(STATUS "Metalium not found, attempting to locate")
+
+        # Define the path to look for the library
+        set(METALIUM_LIB_PATH "$ENV{TT_METAL_HOME}/build/lib")
+
+        # Try to find the library
+        find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+        find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+        find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+        find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+
+        if(TT_STL_LIBRARY)
+            add_library(Metalium::TT_STL SHARED IMPORTED)
+            set_target_properties(
                 Metalium::TT_STL
-                nlohmann_json::nlohmann_json
-        )
-        message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
-    else()
-        message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
-    endif()
-    if(TTNNCPP_LIBRARY)
-        add_library(TTNN::TTNN SHARED IMPORTED)
-        set_target_properties(
-            TTNN::TTNN
-            PROPERTIES
-                IMPORTED_LOCATION
-                    "${TTNNCPP_LIBRARY}"
-                INTERFACE_INCLUDE_DIRECTORIES
-                    "${METALIUM_INCLUDE_DIRS}"
-        )
-        message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
-    else()
-        message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
+                PROPERTIES
+                    IMPORTED_LOCATION
+                        "${TT_STL_LIBRARY}"
+                    INTERFACE_INCLUDE_DIRECTORIES
+                        "$ENV{TT_METAL_HOME}/tt_stl"
+            )
+            message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
+        else()
+            message(FATAL_ERROR "libtt_stl.so not found in ${METALIUM_LIB_PATH}")
+        endif()
+
+        if(TT_METAL_LIBRARY)
+            add_library(TT::Metalium SHARED IMPORTED)
+            set_target_properties(
+                TT::Metalium
+                PROPERTIES
+                    IMPORTED_LOCATION
+                        "${TT_METAL_LIBRARY}"
+                    INTERFACE_INCLUDE_DIRECTORIES
+                        "${METALIUM_INCLUDE_DIRS}"
+            )
+            target_link_libraries(
+                TT::Metalium
+                INTERFACE
+                    ${DEVICE_LIBRARY}
+                    Metalium::TT_STL
+                    nlohmann_json::nlohmann_json
+            )
+            message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
+        else()
+            message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
+        endif()
+        if(TTNNCPP_LIBRARY)
+            add_library(TTNN::TTNN SHARED IMPORTED)
+            set_target_properties(
+                TTNN::TTNN
+                PROPERTIES
+                    IMPORTED_LOCATION
+                        "${TTNNCPP_LIBRARY}"
+                    INTERFACE_INCLUDE_DIRECTORIES
+                        "${METALIUM_INCLUDE_DIRS}"
+            )
+            message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
+        else()
+            message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
+        endif()
     endif()
 else()
     message(STATUS "Metalium targets already exists")
@@ -383,7 +389,6 @@ target_link_libraries(
         xtensor-blas
         xtl
         tokenizers_cpp
-        wandbcpp
         Boost::core
         Boost::container
         tt-logger
@@ -410,12 +415,10 @@ if(ENABLE_LIBCXX)
     target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
 
     target_link_libraries(
-        wandbcpp
         PUBLIC
             ${LIBC++}
             ${LIBC++ABI}
     )
-    target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
 endif()
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
@@ -456,7 +459,6 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_bfloat16.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp

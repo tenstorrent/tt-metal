@@ -84,20 +84,20 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
-    std::string unpadded_sticks_str = "";
+    std::string unpadded_sticks_str;
     for (auto& i : num_input_sticks_per_dim) {
         unpadded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string padded_sticks_str = "";
+    std::string padded_sticks_str;
     for (auto& i : num_output_sticks_per_dim) {
         padded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string accumulated_str = "";
+    std::string accumulated_str;
     for (auto& i : accumulated_total_per_dim) {
         accumulated_str += std::to_string(i) + ", ";
     }
 
-    std::string rev_stride_str = "";
+    std::string rev_stride_str;
     for (auto& i : rev_stride) {
         rev_stride_str += std::to_string(i) + ", ";
     }
@@ -245,15 +245,15 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         accumulated_input_total_per_dim[i] = num_unpadded_dim * accumulated_input_total_per_dim[i - 1];
     }
 
-    std::string unpadded_sticks_str = "";
+    std::string unpadded_sticks_str;
     for (auto& i : num_input_sticks_per_dim) {
         unpadded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string padded_sticks_str = "";
+    std::string padded_sticks_str;
     for (auto& i : num_output_sticks_per_dim) {
         padded_sticks_str += std::to_string(i) + ", ";
     }
-    std::string accumulated_str = "";
+    std::string accumulated_str;
     for (auto& i : accumulated_total_per_dim) {
         accumulated_str += std::to_string(i) + ", ";
     }

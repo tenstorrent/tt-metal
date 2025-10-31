@@ -69,11 +69,11 @@ static void watcher_sanitize_host_noc(
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    if (coord_found_p(soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0), core) ||
+    if (coord_found_p(soc_d.get_cores(CoreType::PCIE, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_pcie_cores, core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (
-        coord_found_p(soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::NOC0), core) ||
+        coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
         uint64_t dram_addr_base = 0;
         uint64_t dram_addr_size = soc_d.dram_core_size;
@@ -99,7 +99,7 @@ static void watcher_sanitize_host_noc(
     }
 }
 
-void watcher_sanitize_host_noc_read(
+inline void watcher_sanitize_host_noc_read(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
@@ -120,7 +120,7 @@ void watcher_sanitize_host_noc_read(
         lbytes);
 }
 
-void watcher_sanitize_host_noc_write(
+inline void watcher_sanitize_host_noc_write(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,

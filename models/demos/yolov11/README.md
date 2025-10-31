@@ -9,7 +9,6 @@
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 Use the following command to run the model:
@@ -19,14 +18,15 @@ pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::t
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `179` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+
+- For `640x640`, end-2-end perf is `234` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 ```
 pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ### Performant Demo with Trace+2CQ
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `290` FPS :
+- For `640x640`, end-2-end perf is `372` FPS :
   ```
   pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py::test_e2e_performant_dp
   ```

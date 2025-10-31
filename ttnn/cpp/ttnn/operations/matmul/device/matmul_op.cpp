@@ -68,9 +68,7 @@ uint32_t estimate_interm_tile_size(
     uint32_t result = tt::tile_size(tt::DataFormat::Float16_b);  // packer l1 acc
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
-    if (output_tile_size > result) {
-        result = output_tile_size;
-    }
+    result = std::max(output_tile_size, result);
     return result;
 }
 
@@ -1498,7 +1496,7 @@ std::vector<Tensor> matmul_batched_weights(
 }
 
 ttnn::Shape compute_sparse_matmul_output_shape(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse) {
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool is_input_a_sparse, bool is_input_b_sparse) {
     const auto& input_shape_a = input_tensor_a.logical_shape();
     const auto& input_shape_b = input_tensor_b.logical_shape();
 
@@ -1508,8 +1506,8 @@ ttnn::Shape compute_sparse_matmul_output_shape(
     // Decide the rank of the output shape based on batch dimensions in input tensors
     // Find batched dimensions in both. Add batched dimensions from both to output rank and then add 2
     // Batched dimensions are all dimensions except the last two
-    uint32_t a_batched_dims = (is_input_a_sparse || (a_rank <= 2)) ? 0 : (a_rank - 2);
-    uint32_t b_batched_dims = (b_rank > 2) ? (b_rank - 2) : 0;
+    uint32_t a_batched_dims = ((is_input_a_sparse && is_input_b_sparse) || (a_rank <= 2)) ? 0 : (a_rank - 2);
+    uint32_t b_batched_dims = ((is_input_a_sparse && !is_input_b_sparse) || (b_rank <= 2)) ? 0 : (b_rank - 2);
     uint32_t output_rank = a_batched_dims + b_batched_dims + 2;
 
     // Initialize output shape with zeros based on the output rank
@@ -1559,6 +1557,7 @@ SparseMatmul create_sparse_matmul_struct(
     return SparseMatmul{
         parameters.nnz,
         parameters.is_input_a_sparse,
+        parameters.is_input_b_sparse,
         matmul_struct.program_config,
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,
@@ -2820,16 +2819,27 @@ void SparseMatmul::validate(
     TT_FATAL(this->nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", this->nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
-    uint32_t batch_length = 1;
-    if ((!this->is_input_a_sparse) && ashape.rank() > 2) {
+    uint32_t batch_length_A = 1;
+    if (ashape.rank() > 2) {
         for (int i = 0; i < ashape.rank() - 2; ++i) {
-            batch_length *= ashape[i];
+            batch_length_A *= ashape[i];
         }
     }
+
+    uint32_t batch_length_B = 1;
     if (bshape.rank() > 2) {
         for (int i = 0; i < bshape.rank() - 2; ++i) {
-            batch_length *= bshape[i];
+            batch_length_B *= bshape[i];
         }
+    }
+
+    uint32_t batch_length = 0;
+    if (this->is_input_a_sparse && this->is_input_b_sparse) {
+        batch_length = batch_length_B;
+    } else if (this->is_input_a_sparse) {
+        batch_length = batch_length_A;
+    } else {
+        batch_length = batch_length_A * batch_length_B;
     }
 
     // Check that sparsity has enough entries
@@ -2862,8 +2872,8 @@ std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    const auto output_shape =
-        compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b, this->is_input_a_sparse);
+    const auto output_shape = compute_sparse_matmul_output_shape(
+        input_tensor_a, input_tensor_b, this->is_input_a_sparse, this->is_input_b_sparse);
 
     const auto output_dtype = this->output_dtype.has_value() ? this->output_dtype.value() : input_tensor_a.dtype();
 
@@ -2920,6 +2930,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_
                     sparsity,
                     this->nnz,
                     this->is_input_a_sparse,
+                    this->is_input_b_sparse,
                     output_tensor,
                     program_config.compute_with_storage_grid_size,
                     this->compute_kernel_config.value(),

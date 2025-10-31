@@ -29,6 +29,8 @@ class TtnnA2C2f:
         use_1d_systolic_array=True,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         config_override=None,
+        mlp_sharding=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        core_count=64,
     ):
         residual = True
         self.m = []
@@ -73,7 +75,8 @@ class TtnnA2C2f:
                         num_heads=12,
                         mlp_ratio=1.2,
                         area=area,
-                        is_bk_enabled=False,
+                        mlp_sharding=mlp_sharding,
+                        core_count=core_count,
                     )
             else:
                 self.m[i] = TtnnC3k(device, parameter[i], conv_pt.m[i])
@@ -95,8 +98,8 @@ class TtnnA2C2f:
                 y.append(out)
 
         y_concat = concat(-1, False, *y)
-        y_concat = ttnn.sharded_to_interleaved(y_concat, ttnn.L1_MEMORY_CONFIG)
-
+        if y_concat.is_sharded():
+            y_concat = ttnn.sharded_to_interleaved(y_concat, ttnn.L1_MEMORY_CONFIG)
         y = self.cv2(y_concat)
         ttnn.deallocate(y_concat)
 
@@ -108,5 +111,4 @@ class TtnnA2C2f:
             gamma = ttnn.unsqueeze_to_4D(self.gamma)
             y = gamma * y
             return x + y
-
         return y

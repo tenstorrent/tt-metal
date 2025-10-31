@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import os
 import time
 from functools import partial
 
@@ -176,7 +177,6 @@ def run_falcon_demo_kv(
     batch_size,
     num_layers,
     max_seq_len,
-    model_location_generator,
     get_tt_cache_path,
     mesh_device,
     prefill_on_host,
@@ -214,8 +214,9 @@ def run_falcon_demo_kv(
     logger.info("Loading weights...")
     profiler.start("loading_weights")
 
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
-    hugging_face_reference_model = FalconForCausalLM.from_pretrained(model_name, low_cpu_mem_usage=True)
+    hugging_face_reference_model = FalconForCausalLM.from_pretrained(
+        model_version, local_files_only=os.getenv("CI") == "true", low_cpu_mem_usage=True
+    )
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 

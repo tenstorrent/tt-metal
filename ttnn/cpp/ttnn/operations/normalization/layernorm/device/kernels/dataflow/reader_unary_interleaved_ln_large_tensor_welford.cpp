@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 template <typename T>
@@ -55,12 +54,6 @@ void kernel_main() {
     const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
 #endif
 
-    // Generate constant tiles for layernorm compute
-    {
-        constexpr uint32_t cb_in_2 = 2;
-        uint32_t scaler = get_arg_val<uint32_t>(4);
-        generate_reduce_scaler(cb_in_2, scaler);
-    }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);
     generate_bcast_col_scalar(eps_cb_id, eps);

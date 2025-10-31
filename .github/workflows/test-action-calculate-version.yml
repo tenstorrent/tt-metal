@@ -1,0 +1,378 @@
+name: Test Calculate Version Action
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/actions/calculate-version/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '.github/actions/calculate-version/**'
+  workflow_dispatch:
+
+jobs:
+  test-calculate-version:
+    name: Test Calculate Version Action
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git tag operations
+
+      # Clean up existing tags to simulate a repository with no tags
+      - name: Remove all existing tags for clean test
+        run: |
+          echo "Removing all existing tags to simulate clean repository"
+          git tag -d $(git tag -l) || echo "No tags to delete"
+          echo "Remaining tags after cleanup:"
+          git tag -l
+
+      # Test 1: Normal release with no previous tags
+      - name: Test 1 - No previous tags (should create v0.0.0)
+        id: test-no-tags
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify Test 1 Results
+        run: |
+          echo "Test 1 Results:"
+          echo "  Latest semver: ${{ steps.test-no-tags.outputs.latest_semver }}"
+          echo "  Bump type: ${{ steps.test-no-tags.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-no-tags.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-no-tags.outputs.final_version }}"
+
+          # Verify outputs
+          if [ "${{ steps.test-no-tags.outputs.latest_semver }}" != "v0.0.0" ]; then
+            echo "FAIL: Expected latest_semver to be v0.0.0"
+            exit 1
+          fi
+          echo "PASS: Test 1 passed"
+
+      # Create some test tags for subsequent tests
+      - name: Setup test tags
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+          git tag v1.1.0
+          git tag v1.1.1
+          git tag v2.0.0-rc1  # This should be ignored by semver logic
+          git tag v2.1.0
+          echo "Created test tags"
+          git tag -l | sort -V
+
+      # Test 2: Normal release with existing tags
+      - name: Test 2 - With existing tags
+        id: test-with-tags
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify Test 2 Results
+        run: |
+          echo "Test 2 Results:"
+          echo "  Latest semver: ${{ steps.test-with-tags.outputs.latest_semver }}"
+          echo "  Bump type: ${{ steps.test-with-tags.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-with-tags.outputs.new_version }}"
+          echo "  Final version: ${{ steps.test-with-tags.outputs.final_version }}"
+
+          # Verify latest tag detection
+          if [ "${{ steps.test-with-tags.outputs.latest_semver }}" != "v2.1.0" ]; then
+            echo "FAIL: Expected latest_semver to be v2.1.0, got ${{ steps.test-with-tags.outputs.latest_semver }}"
+            exit 1
+          fi
+          echo "PASS: Test 2 passed"
+
+      # Test 3: RC (Release Candidate) tag type
+      - name: Test 3 - RC tag type
+        id: test-rc
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "rc"
+
+      - name: Verify Test 3 Results
+        run: |
+          echo "Test 3 Results:"
+          echo "  Final version: ${{ steps.test-rc.outputs.final_version }}"
+
+          # RC version should have -rc suffix
+          if [[ "${{ steps.test-rc.outputs.final_version }}" != *"-rc"* ]]; then
+            echo "FAIL: Expected final_version to contain -rc suffix"
+            exit 1
+          fi
+          echo "PASS: Test 3 passed"
+
+      # Test 4: Dev tag type
+      - name: Test 4 - Dev tag type
+        id: test-dev
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "dev"
+
+      - name: Verify Test 4 Results
+        run: |
+          echo "Test 4 Results:"
+          echo "  Final version: ${{ steps.test-dev.outputs.final_version }}"
+
+          # Dev version should have -dev suffix with date
+          if [[ "${{ steps.test-dev.outputs.final_version }}" != *"-dev"* ]]; then
+            echo "FAIL: Expected final_version to contain -dev suffix"
+            exit 1
+          fi
+          echo "PASS: Test 4 passed"
+
+  test-version-bumping:
+    name: Test Version Bumping Logic
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+
+      # Test MAJOR version bump
+      - name: Create commit with MAJOR indicator
+        run: |
+          echo "test change" > test-major.txt
+          git add test-major.txt
+          git commit -m "Breaking change (MAJOR): Updated API"
+
+      - name: Test MAJOR version bump
+        id: test-major
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify MAJOR bump
+        run: |
+          echo "MAJOR test results:"
+          echo "  Bump type: ${{ steps.test-major.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-major.outputs.new_version }}"
+
+          if [ "${{ steps.test-major.outputs.bump_type }}" != "major" ]; then
+            echo "FAIL: Expected bump_type to be major"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-major.outputs.new_version }}" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0, got ${{ steps.test-major.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: MAJOR bump test passed"
+
+      # Reset and test MINOR version bump
+      - name: Reset to v1.0.0 and create MINOR commit
+        run: |
+          git reset --hard v1.0.0
+          echo "new feature" > test-minor.txt
+          git add test-minor.txt
+          git commit -m "Add new feature (MINOR): User dashboard"
+
+      - name: Test MINOR version bump
+        id: test-minor
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify MINOR bump
+        run: |
+          echo "MINOR test results:"
+          echo "  Bump type: ${{ steps.test-minor.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-minor.outputs.new_version }}"
+
+          if [ "${{ steps.test-minor.outputs.bump_type }}" != "minor" ]; then
+            echo "FAIL: Expected bump_type to be minor"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-minor.outputs.new_version }}" != "v1.1.0" ]; then
+            echo "FAIL: Expected new_version to be v1.1.0, got ${{ steps.test-minor.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: MINOR bump test passed"
+
+      # Reset and test PATCH version bump
+      - name: Reset to v1.0.0 and create PATCH commit
+        run: |
+          git reset --hard v1.0.0
+          echo "bug fix" > test-patch.txt
+          git add test-patch.txt
+          git commit -m "Fix critical bug (PATCH): Memory leak resolved"
+
+      - name: Test PATCH version bump
+        id: test-patch
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify PATCH bump
+        run: |
+          echo "PATCH test results:"
+          echo "  Bump type: ${{ steps.test-patch.outputs.bump_type }}"
+          echo "  New version: ${{ steps.test-patch.outputs.new_version }}"
+
+          if [ "${{ steps.test-patch.outputs.bump_type }}" != "patch" ]; then
+            echo "FAIL: Expected bump_type to be patch"
+            exit 1
+          fi
+
+          if [ "${{ steps.test-patch.outputs.new_version }}" != "v1.0.1" ]; then
+            echo "FAIL: Expected new_version to be v1.0.1, got ${{ steps.test-patch.outputs.new_version }}"
+            exit 1
+          fi
+          echo "PASS: PATCH bump test passed"
+
+  test-edge-cases:
+    name: Test Edge Cases
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+
+      # Test with no commit indicators
+      - name: Create commit without version indicators
+        run: |
+          echo "regular change" > test-regular.txt
+          git add test-regular.txt
+          git commit -m "Regular commit without version indicators"
+
+      - name: Test no version bump
+        id: test-no-bump
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify no bump
+        run: |
+          echo "No bump test results:"
+          echo "  Bump type: ${{ steps.test-no-bump.outputs.bump_type }}"
+
+          if [ "${{ steps.test-no-bump.outputs.bump_type }}" != "none" ]; then
+            echo "FAIL: Expected bump_type to be none"
+            exit 1
+          fi
+          echo "PASS: No bump test passed"
+
+      # Test multiple RC tags
+      - name: Test multiple RC tags
+        run: |
+          git tag v1.0.0
+          echo "new feature" > test-minor.txt
+          git add test-minor.txt
+          git commit -m "Add new feature (MINOR): User dashboard"
+          git tag v1.1.0-rc1
+          git tag v1.1.0-rc2
+          echo "Created multiple RC tags and one MINOR commit"
+
+      - name: Test RC increment
+        id: test-rc-increment
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: "rc"
+
+      - name: Verify RC increment
+        run: |
+          echo "RC increment test results:"
+          echo "  Final version: ${{ steps.test-rc-increment.outputs.final_version }}"
+
+          # Should create rc3 since rc1 and rc2 already exist for v1.1.0
+          expected_pattern="v.*-rc3"
+          if [[ ! "${{ steps.test-rc-increment.outputs.final_version }}" =~ $expected_pattern ]]; then
+            echo "FAIL: Expected final_version to match RC pattern"
+            exit 1
+          fi
+          echo "PASS: RC increment test passed"
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: [test-calculate-version, test-version-bumping, test-edge-cases]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup git
+        run: |
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          git tag v1.0.0
+
+      - name: Simulate realistic workflow
+        run: |
+          # Create a series of realistic commits
+          echo "feature1" > feature1.txt
+          git add feature1.txt
+          git commit -m "Add user authentication (MINOR)"
+
+          echo "bugfix1" > bugfix1.txt
+          git add bugfix1.txt
+          git commit -m "Fix login validation (PATCH)"
+
+          echo "breaking" > breaking.txt
+          git add breaking.txt
+          git commit -m "Refactor API endpoints (MAJOR)"
+
+      - name: Run integration test
+        id: integration
+        uses: ./.github/actions/calculate-version
+        with:
+          tag-type: ""
+
+      - name: Verify integration results
+        run: |
+          echo "Integration test results:"
+          echo "  Latest semver: ${{ steps.integration.outputs.latest_semver }}"
+          echo "  Bump type: ${{ steps.integration.outputs.bump_type }}"
+          echo "  New version: ${{ steps.integration.outputs.new_version }}"
+          echo "  Final version: ${{ steps.integration.outputs.final_version }}"
+
+          # Should detect MAJOR bump (highest priority)
+          if [ "${{ steps.integration.outputs.bump_type }}" != "major" ]; then
+            echo "FAIL: Expected bump_type to be major (highest priority)"
+            exit 1
+          fi
+
+          if [ "${{ steps.integration.outputs.new_version }}" != "v2.0.0" ]; then
+            echo "FAIL: Expected new_version to be v2.0.0"
+            exit 1
+          fi
+
+          echo "PASS: Integration test passed"
+
+      - name: Test summary
+        run: |
+          echo "All tests passed successfully!"
+          echo ""
+          echo "Test coverage includes:"
+          echo "  - No previous tags scenario"
+          echo "  - Existing tags detection"
+          echo "  - RC tag generation"
+          echo "  - Dev tag generation"
+          echo "  - MAJOR version bumping"
+          echo "  - MINOR version bumping"
+          echo "  - PATCH version bumping"
+          echo "  - No bump scenario"
+          echo "  - RC increment logic"
+          echo "  - Integration scenario"

@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 
 import ttnn
-from models.common.utility_functions import nearest_32
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3YarnRotaryEmbedding
+from models.demos.deepseek_v3.utils.config_helpers import find_largest_divisor
 
 
 def get_rot_transformation_mat():
@@ -71,31 +71,30 @@ class RotarySetup:
     Class to set up rotary positional embeddings for DeepSeekV3 models.
 
     Duplicate + changes from TTT rope.py
+    NOTE: it would be better to re-migrate this class to TTT rope.py at some point
     """
 
-    def __init__(self, device, batch_size: int, hf_config, use_dp: bool = False):
-        self.batch_size = batch_size
+    def __init__(self, device, batch_size_per_row: int, hf_config):
+        self.batch_size_per_row = batch_size_per_row
         self.hf_config = hf_config
         self.dim = hf_config.qk_rope_head_dim
         self.device = device
-        self.use_dp = use_dp
 
-        if self.use_dp:
-            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[0], 1)
-        else:
-            self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
-        self.cos_matrix, self.sin_matrix = self.get_rot_mats_table()
+        rot_tensors = self.get_rot_mats_table()
+        self.cos_matrix = rot_tensors["cos_matrix"]
+        self.sin_matrix = rot_tensors["sin_matrix"]
 
-        self.batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
+        num_cores = find_largest_divisor(batch_size_per_row, device.core_grid.num_cores)
+        self.batch_grid = ttnn.num_cores_to_corerangeset(num_cores, self.core_grid, row_wise=True)
 
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat().repeat(
             1,
             1,
-            batch_size,
+            batch_size_per_row,
             1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
@@ -125,25 +124,31 @@ class RotarySetup:
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
-    def get_rot_idxs(self, position_idxs, on_host=False):
+    def get_rot_idxs(self, position_idxs):
         """
         Get the rotary positional embedding indices for the given position indices.
         Args:
             position_idxs: A tensor of shape [batch] containing the position indices.
-            on_host: If True, the indices will be sent to the host device.
         Returns:
             rot_idxs: A tensor of shape [1, batch] containing the rotary positional embedding indices.
         """
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
-        batch = position_idxs.shape[0]
-        position_idxs = position_idxs.reshape(1, batch)  # [1, 1, 1, batch]
-        assert position_idxs.shape == (1, batch), "position idxs must be a [1, batch] tensor"
+        position_idxs = position_idxs.unsqueeze(0)  # [1, batch]
+        assert position_idxs.shape in [
+            (1, self.batch_size_per_row),
+            (1, self.batch_size_per_row * self.device.shape[0]),
+        ], "position idxs must either be row-interleaved or row-sharded"
+        interleaved = position_idxs.shape[1] == self.batch_size_per_row
+
+        # If any element of position_idxs is < 0, set it to 0. This is needed for vLLM.
+        position_idxs = position_idxs.clamp_min(0)
+
         assert torch.min(position_idxs) >= 0, "position idxs must be non-negative"
 
         # Add padding if needed
-        pad_size = nearest_32(batch) - batch
+        pad_size = ttnn.core.roundup(position_idxs.shape[1], ttnn.TILE_SIZE) - position_idxs.shape[1]
         position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
 
         rot_idxs = ttnn.as_tensor(
@@ -152,16 +157,16 @@ class RotarySetup:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.device,
-                dims=(1, None) if self.use_dp else (None, None),
-                mesh_shape=list(self.device.shape),
+                dims=(None, None) if interleaved else (1, None),
+                mesh_shape=self.device.shape,
             ),
-            device=None if on_host else self.device,
-            memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return rot_idxs
 
-    def get_rot_mats_table(self, seq_len=None):
+    def get_rot_mats_table(self, seq_len: int | None = None):
         """
         Get the cos and sin matrices for all positions in the sequence length.
         If seq_len is None, it will use the max position embeddings from the HF config.
@@ -190,8 +195,8 @@ class RotarySetup:
         )
 
         if seq_len is not None:
-            return cos_matrix, sin_matrix, self.transformation_mat_prefill
-        return cos_matrix, sin_matrix
+            return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": self.transformation_mat_prefill}
+        return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix}
 
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         """
@@ -227,9 +232,9 @@ class RotarySetup:
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], dim]
 
-        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size_per_device_group, :, :]
-            sin = sin[:, : self.batch_size_per_device_group, :, :]
+        if self.batch_size_per_row % ttnn.TILE_SIZE != 0:
+            cos = cos[:, : self.batch_size_per_row, :, :]
+            sin = sin[:, : self.batch_size_per_row, :, :]
 
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.dim),
@@ -243,5 +248,5 @@ class RotarySetup:
         sin = ttnn.interleaved_to_sharded(sin, mem_config)  # [1, 1 (= batch / shard_num_cores), 1[32], self.dim]
 
         if return_rot_idxs:
-            return [cos, sin, self.transformation_mat], rot_idxs
-        return [cos, sin, self.transformation_mat]
+            return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}, rot_idxs
+        return {"cos_matrix": cos, "sin_matrix": sin, "trans_matrix": self.transformation_mat}

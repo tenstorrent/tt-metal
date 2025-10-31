@@ -38,9 +38,6 @@ void validate_fold(
             shard_shape[0] % (input_shape[2] * stride_h) == 0,
             "Fold: Shard height must be divisible by input width times stride_h for proper folding operation.");
         TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Fold: Expect sharded input tensor in row-major layout.");
-        TT_FATAL(
-            (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
-            "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
     } else if (is_dram_interleaved) {
         TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
         TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");

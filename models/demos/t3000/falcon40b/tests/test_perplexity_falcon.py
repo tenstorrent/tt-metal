@@ -2,7 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -22,6 +24,7 @@ from models.datasets.llm_dataset_utils import (
 from models.demos.t3000.falcon40b.tests.test_utils import load_hf_model
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from ttnn import ConcatMeshToTensor
 
 
@@ -120,8 +123,6 @@ def run_test_perplexity(
     batch_size,
     max_seq_len,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     mesh_device,
     num_samples,
     expected_acc_metrics,
@@ -138,13 +139,13 @@ def run_test_perplexity(
 
     # Load HF model
     logger.info("Loading HuggingFace model...")
-    hugging_face_reference_model, state_dict = load_hf_model(model_location_generator, model_version)
+    hugging_face_reference_model, state_dict = load_hf_model(model_version)
     configuration = hugging_face_reference_model.config
 
     # Prepare dataset
     logger.info("Preparing dataset...")
     dataset = prepare_textgen_dataset(dataset_name, dataset_config, split)
-    tokenizer = AutoTokenizer.from_pretrained(model_version)
+    tokenizer = AutoTokenizer.from_pretrained(model_version, local_files_only=os.getenv("CI") == "true")
     encodings = tokenizer(dataset, return_tensors="pt")["input_ids"].squeeze(0)
     dataloader = prepare_textgen_dataloader(encodings, batch_size, max_seq_len, num_samples, stride)
 
@@ -154,9 +155,7 @@ def run_test_perplexity(
         model_config = get_model_config(
             model_config_str, llm_mode, input_shape, num_devices=mesh_device.get_num_devices()
         )
-        tt_cache_path = get_tt_cache_path(
-            model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-        )
+        tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
         # Load tt-metal model
         logger.info("Moving weights (all layers) to device; might take some time...")
@@ -233,7 +232,6 @@ def test_perplexity_huggingface(
     expected_ppl,
     expected_top1,
     expected_top5,
-    model_location_generator,
     is_ci_env,
 ):
     if is_ci_env:
@@ -243,8 +241,6 @@ def test_perplexity_huggingface(
         llm_mode,
         batch_size,
         max_seq_len,
-        None,
-        model_location_generator,
         None,
         None,
         num_samples,
@@ -282,8 +278,6 @@ def test_perplexity(
     expected_ppl,
     expected_top1,
     expected_top5,
-    model_location_generator,
-    get_tt_cache_path,
     t3k_mesh_device,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
@@ -296,8 +290,6 @@ def test_perplexity(
         batch_size,
         max_seq_len,
         model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
         t3k_mesh_device,
         num_samples,
         {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},

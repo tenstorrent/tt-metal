@@ -186,15 +186,14 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         system_shape);
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
-    auto requested_mesh_fits =
-        [this, &system_offset, &system_shape](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
-            for (int i = 0; i < system_shape.dims(); ++i) {
-                if (system_offset[i] + rotated_shape[i] > system_shape[i]) {
-                    return false;
-                }
+    auto requested_mesh_fits = [&system_offset, &system_shape](const tt::stl::SmallVector<uint32_t>& rotated_shape) {
+        for (int i = 0; i < system_shape.dims(); ++i) {
+            if (system_offset[i] + rotated_shape[i] > system_shape[i]) {
+                return false;
             }
-            return true;
-        };
+        }
+        return true;
+    };
 
     tt::stl::SmallVector<uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
     size_t rotations = 0;

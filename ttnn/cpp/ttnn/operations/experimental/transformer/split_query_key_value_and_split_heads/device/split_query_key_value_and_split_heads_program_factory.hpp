@@ -13,7 +13,7 @@ using namespace tt::constants;
 using namespace tt;
 using namespace tt_metal;
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(
+inline tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
@@ -205,7 +205,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
     return {std::move(program), override_runtime_args_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
+inline tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_and_split_heads_sharded(
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

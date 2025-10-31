@@ -4,13 +4,13 @@
 
 import pytest
 import torch
-from diffusers import UNet2DConditionModel
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_feedforward import feedforward
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
@@ -20,14 +20,12 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
     TRANSFORMER_PARAMETERIZATIONS,
 )
 def test_feedforward_512x512(
     device,
-    model_name,
     input_shape,
     shard_layout,
     shard_end_core,
@@ -36,8 +34,11 @@ def test_feedforward_512x512(
     block,
     block_index,
     attention_index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
-    model = UNet2DConditionModel.from_pretrained(model_name, subfolder="unet").eval()
+    model = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     if block == "up":
         basic_transformer = model.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]

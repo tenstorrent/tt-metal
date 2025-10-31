@@ -34,6 +34,35 @@ void bind_gather_operation(py::module& module) {
         Additional Information:
             * Currently, the `sparse_grad` argument is not supported.
 
+        Note:
+
+            Supported dtypes and layout for input tensor values:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE
+               * - UINT16, UINT32
+                 - TILE
+               * - INT32
+                 - TILE
+
+            Supported dtypes and layout for index tensor values:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - UINT16, UINT32
+                 - TILE
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+
         Example:
 
         .. code-block:: python

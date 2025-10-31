@@ -31,9 +31,21 @@ void CopyDeviceOperation::validate_with_output_tensors(
 
     if (input_tensors.size() == 2) {
         const auto& dst_tensor = input_tensors[1];
-        TT_FATAL(input_tensor_a.padded_shape() == dst_tensor.padded_shape(), "Error");
-        TT_FATAL(input_tensor_a.layout() == dst_tensor.layout(), "Error");
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == dst_tensor.memory_config().memory_layout(), "Error");
+        TT_FATAL(
+            input_tensor_a.padded_shape() == dst_tensor.padded_shape(),
+            "Input tensor padded shape ({}) must equal destination tensor padded shape ({})",
+            input_tensor_a.padded_shape(),
+            dst_tensor.padded_shape());
+        TT_FATAL(
+            input_tensor_a.layout() == dst_tensor.layout(),
+            "Input tensor layout ({}) must equal destination tensor layout ({})",
+            input_tensor_a.layout(),
+            dst_tensor.layout());
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == dst_tensor.memory_config().memory_layout(),
+            "Input tensor memory layout ({}) must equal destination tensor memory layout ({})",
+            input_tensor_a.memory_config().memory_layout(),
+            dst_tensor.memory_config().memory_layout());
     }
     DataType output_dtype = this->output_dtype;
     if (!output_tensors.empty() && output_tensors.at(0).has_value()) {

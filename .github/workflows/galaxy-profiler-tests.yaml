@@ -1,4 +1,4 @@
-name: "Galaxy profiler tests"
+name: "(Galaxy) profiler tests"
 
 on:
   workflow_dispatch:
