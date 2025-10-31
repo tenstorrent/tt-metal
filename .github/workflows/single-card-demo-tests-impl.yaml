@@ -235,7 +235,7 @@ jobs:
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
         id: save-environment-data
-        if: ${{ !cancelled() }}
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled()  }}
         shell: bash
         run: |
           if [ -d "generated/benchmark_data" ]; then
