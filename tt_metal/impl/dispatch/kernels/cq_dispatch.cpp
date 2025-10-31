@@ -365,7 +365,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
 
     // First page should be valid since it has the command
     ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);
-    ASSERT(data_ptr <= dispatch_cb_reader.cb_fence - dispatch_cb_page_size);
+    ASSERT(dispatch_cb_page_size <= dispatch_cb_reader.available_space(data_ptr));
 
     // regular write, inline writes, and atomic writes use different cmd bufs, so we can init state for each
     // TODO: Add support for stateful atomics. We can preserve state once cb_acquire_pages is changed to a free running
