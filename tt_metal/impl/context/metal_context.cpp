@@ -152,7 +152,7 @@ void MetalContext::initialize(
         [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
         log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
         generate_device_bank_to_noc_tables(device_id);
-        generate_logical_to_virtual_map(device_id);
+        generate_worker_logical_to_virtual_map(device_id);
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
@@ -822,24 +822,24 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     }
 }
 
-void MetalContext::generate_logical_to_virtual_map(ChipId device_id) {
+void MetalContext::generate_worker_logical_to_virtual_map(ChipId device_id) {
     // Generate logical to virtual map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
 
-    logical_col_to_virtual_col_[device_id].clear();
-    logical_row_to_virtual_row_[device_id].clear();
-    logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
-    logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
+    worker_logical_col_to_virtual_col_[device_id].clear();
+    worker_logical_row_to_virtual_row_[device_id].clear();
+    worker_logical_col_to_virtual_col_[device_id].reserve(tensix_grid_size.x);
+    worker_logical_row_to_virtual_row_[device_id].reserve(tensix_grid_size.y);
 
     for (size_t x = 0; x < tensix_grid_size.x; x++) {
-        logical_col_to_virtual_col_[device_id].push_back(
+        worker_logical_col_to_virtual_col_[device_id].push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .x);
     }
     for (size_t y = 0; y < tensix_grid_size.y; y++) {
-        logical_row_to_virtual_row_[device_id].push_back(
+        worker_logical_row_to_virtual_row_[device_id].push_back(
             soc_desc
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
@@ -884,16 +884,16 @@ void MetalContext::initialize_device_bank_to_noc_tables(
         l1_offset_addr);
 }
 
-void MetalContext::initialize_logical_to_virtual_tables(
+void MetalContext::initialize_worker_logical_to_virtual_tables(
     ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
     // Generate logical to virtual map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     const uint32_t logical_col_to_virtual_col_sz_in_bytes =
-        logical_col_to_virtual_col_[device_id].size() * sizeof(uint8_t);
+        worker_logical_col_to_virtual_col_[device_id].size() * sizeof(uint8_t);
     const uint8_t firmware_grid_size_x =
         tt::round_up(soc_desc.grid_size.x, 4);  // Ensure multiple of 4 for uint32_t alignment
     const uint32_t logical_row_to_virtual_row_sz_in_bytes =
-        logical_row_to_virtual_row_[device_id].size() * sizeof(uint8_t);
+        worker_logical_row_to_virtual_row_[device_id].size() * sizeof(uint8_t);
     const uint64_t logical_to_virtual_map_addr =
         hal_->get_dev_addr(core_type, HalL1MemAddrType::LOGICAL_TO_VIRTUAL_SCRATCH);
     const uint32_t logical_to_virtual_map_size =
@@ -905,7 +905,7 @@ void MetalContext::initialize_logical_to_virtual_tables(
 
     uint64_t logical_col_to_virtual_col_addr = logical_to_virtual_map_addr;
     cluster_->write_core(
-        &logical_col_to_virtual_col_[device_id][0],
+        &worker_logical_col_to_virtual_col_[device_id][0],
         logical_col_to_virtual_col_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         logical_col_to_virtual_col_addr);
@@ -914,7 +914,7 @@ void MetalContext::initialize_logical_to_virtual_tables(
     // Therefore, we must adjust the address to account for the full grid size.
     uint64_t logical_row_to_virtual_row_addr = logical_to_virtual_map_addr + (firmware_grid_size_x * sizeof(uint8_t));
     cluster_->write_core(
-        &logical_row_to_virtual_row_[device_id][0],
+        &worker_logical_row_to_virtual_row_[device_id][0],
         logical_row_to_virtual_row_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         logical_row_to_virtual_row_addr);
@@ -933,7 +933,7 @@ void MetalContext::initialize_firmware(
     if (core_type == HalProgrammableCoreType::TENSIX) {
         // Only need to generate logical to virtual tables for Tensix cores, as only they run the firmware that
         // requires it.
-        initialize_logical_to_virtual_tables(device_id, core_type, virtual_core);
+        initialize_worker_logical_to_virtual_tables(device_id, core_type, virtual_core);
     }
 
     uint32_t core_type_idx = hal_->get_programmable_core_type_index(core_type);
