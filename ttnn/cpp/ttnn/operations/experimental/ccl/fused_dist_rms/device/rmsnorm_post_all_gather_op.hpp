@@ -19,6 +19,9 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const Tensor& stats_tensor,
     Tensor& output_tensor,
     const std::optional<const Tensor>& weight,
+    const std::optional<const Tensor>& transformation_mat,
+    const std::optional<const Tensor>& rope_cos,
+    const std::optional<const Tensor>& rope_sin,
     float eps,
     uint32_t num_heads,
     DeviceComputeKernelConfig compute_kernel_config);

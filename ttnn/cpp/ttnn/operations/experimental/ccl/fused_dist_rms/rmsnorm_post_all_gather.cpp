@@ -14,6 +14,9 @@ ttnn::Tensor ExecuteFusedRMSNormPostAllGather::invoke(
     float epsilon,
     uint32_t num_heads,
     const std::optional<const ttnn::Tensor>& weight,
+    const std::optional<const ttnn::Tensor>& transformation_mat,
+    const std::optional<const ttnn::Tensor>& rope_cos,
+    const std::optional<const ttnn::Tensor>& rope_sin,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType>& dtype) {
@@ -28,7 +31,7 @@ ttnn::Tensor ExecuteFusedRMSNormPostAllGather::invoke(
                    .compute_kernel_config = kernel_config_val,
                    .dtype = dtype},
                {input_tensor, stats},
-               {weight})
+               {weight, transformation_mat, rope_cos, rope_sin})
         .at(0);
 }
 
