@@ -10,7 +10,6 @@ runtime
 *.code-workspace
 /tt-perf*
 test_hlk_args_init_gen
-profile_layernorm_with_profiler.py
 tt_build
 tt_debug
 .build/
