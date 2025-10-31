@@ -38,7 +38,7 @@ void filter_tensor_shards(
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&](const Tensor& tensor_to_return) {
             auto& tensor_storage =
-                std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes->get_storage());
+                std::get<tt::tt_metal::DeviceStorage>(tensor_to_return.tensor_attributes()->get_storage());
 
             auto coord_it = tensor_coordinates.cbegin();
             auto storage_it = tensor_storage.coords.begin();

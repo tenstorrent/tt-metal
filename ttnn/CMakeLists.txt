@@ -79,6 +79,9 @@ target_sources(
         core/old_infra_device_operation.cpp
         core/reports.cpp
         core/run_operation.cpp
+        core/tensor/experimental/jit/lazy_tensor.cpp
+        core/tensor/experimental/jit/graph_utils.cpp
+        core/tensor/experimental/jit/evaluation_manager.cpp
         core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
@@ -90,6 +93,7 @@ target_sources(
         core/tensor/serialization.cpp
         core/tensor/storage.cpp
         core/tensor/tensor.cpp
+        core/tensor/metal_tensor.cpp
         core/tensor/tensor_attributes.cpp
         core/tensor/tensor_impl.cpp
         core/tensor/tensor_ops.cpp

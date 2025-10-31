@@ -49,7 +49,7 @@ struct BinaryNgDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor_a;
+        const Tensor input_tensor_a;
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
     };
@@ -120,4 +120,6 @@ struct BinaryNgDeviceOperation {
 namespace ttnn::prim {
 constexpr auto binary_ng =
     ttnn::register_operation<"ttnn::prim::binary_ng", ttnn::operations::binary_ng::BinaryNgDeviceOperation>();
+constexpr auto lazy_binary_ng =
+    ttnn::register_lazy_operation<"ttnn::prim::lazy_binary_ng", ttnn::operations::binary_ng::BinaryNgDeviceOperation>();
 }  // namespace ttnn::prim

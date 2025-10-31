@@ -267,4 +267,5 @@ struct BinaryDeviceOperation {
 namespace ttnn::prim {
 constexpr auto binary =
     ttnn::register_operation<"ttnn::prim::binary", ttnn::operations::binary::BinaryDeviceOperation>();
+constexpr auto lazy_binary = ttnn::register_lazy_operation<"ttnn::prim::lazy_binary", ttnn::operations::binary::BinaryDeviceOperation>();
 }  // namespace ttnn::prim
