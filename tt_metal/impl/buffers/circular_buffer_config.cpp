@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "circular_buffer_config.hpp"
+#include <tt-metalium/circular_buffer_config.hpp>
+#include "impl/buffers/circular_buffer_config.hpp"
 
 #include <unordered_map>
 
@@ -251,6 +252,8 @@ CircularBufferConfig& CircularBufferConfig::operator=(const CircularBufferConfig
     }
     return *this;
 }
+
+CircularBufferConfig::~CircularBufferConfig() = default;
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
     impl_->set_page_size(buffer_index, page_size);

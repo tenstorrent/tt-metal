@@ -6,6 +6,8 @@
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
 
+#include "impl/buffers/circular_buffer_config.hpp"
+
 namespace tt::tt_metal {
 
 // Original types defined in buffer_types.hpp
