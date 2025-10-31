@@ -29,6 +29,19 @@ runs:
           exit 0
         fi
 
+        # TEMPORARY: Add fake regression for testing - REMOVE BEFORE MERGING
+        echo "🧪 TESTING MODE: Adding fake regression for testing purposes"
+        jq '. + [{
+          "name": "[TEST] Fake Regression Workflow",
+          "workflow_url": "https://github.com/tenantplatform/tt-metal/actions/workflows/test.yaml",
+          "run_url": "https://github.com/tenantplatform/tt-metal/actions/runs/123456789",
+          "commit_url": "https://github.com/tenantplatform/tt-metal/commit/abcdef123456",
+          "commit_short": "abcdef1",
+          "owners": [{"id": "U123456", "name": "test-user"}],
+          "failing_jobs": ["test-job-1", "test-job-2"],
+          "original_owner_names_for_generic_exit": []
+        }]' "$tmp_file" > "${tmp_file}.new" && mv "${tmp_file}.new" "$tmp_file"
+
         # Check if there are any regressions
         REGRESSION_COUNT=$(jq -r 'if (type=="array") then length else 0 end' "$tmp_file")
         if [ "$REGRESSION_COUNT" -eq 0 ]; then
