@@ -156,11 +156,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
 
     // Step 1: Compute log2(base)
     // Normalize base to calculation range
-    sfpi::vFloat absbase = setsgn(base, 0);       // set base as positive
+    sfpi::vFloat absbase = sfpi::setsgn(base, 0);  // set base as positive
     sfpi::vFloat x = sfpi::setexp(absbase, 127);  // set exp to exp bias (put base in range of 1-2)
 
-    // 5th order polynomial approx - REMEZ algorithm over [1,2]
-    const float coeffs[] = {-1.94046315f, 3.5271965f, -2.45830873f, 1.1286426f, -0.28807408f, 0.03101577f};
+    // 5th degree polynomial approx - REMEZ algorithm over [1,2]
+    constexpr float coeffs[] = {-1.94046315f, 3.5271965f, -2.45830873f, 1.1286426f, -0.28807408f, 0.03101577f};
     sfpi::vFloat series_result = PolynomialEvaluator<6, sfpi::vFloat, float>::eval(coeffs, x);
 
     // Convert exponent to float
@@ -199,15 +199,15 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     //   instruction with immediate operand (i.e. no extra register used).
     //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
 
-    z_f32 = addexp(z_f32, 23);  // equal to multiplying by 2**23
+    z_f32 = sfpi::addexp(z_f32, 23);  // equal to multiplying by 2**23
     const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
+    sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
     // 61f
-    //  Normalize mantissa field into a fractional value in [0,1)
+    // Normalize mantissa field into a fractional value in [0,1)
     sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
 
     // Evaluate degree-6 polynomial coefficients using Horner’s rule
@@ -216,7 +216,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
     // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
     // purely mathematical without integer-based operations.
-    const float coeffs_61f[] = {
+    constexpr float coeffs_61f[] = {
         1.0000000018f, 0.69314699f, 0.24022982f, 0.055483369f, 0.0096788315f, 0.001243946f, 0.0002170391f};
     sfpi::vFloat poly = PolynomialEvaluator<7, sfpi::vFloat, float>::eval(coeffs_61f, frac);
 
@@ -241,7 +241,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
         // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = setsgn(y, pow_int << 31);
+        y = sfpi::setsgn(y, pow_int << 31);
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
