@@ -22,9 +22,9 @@ Tensor EmaOperation::invoke(
                    .compute_kernel_config = init_device_compute_kernel_config(
                        input_tensor.device()->arch(),
                        compute_kernel_config,
-                       /*math_fidelity=*/MathFidelity::HiFi4,
+                       /*default_fidelity=*/MathFidelity::HiFi4,
                        /*default_approx_mode=*/false,
-                       /*fp32_acc=*/true),
+                       /*default_fp32_acc=*/true),
                },
                {input_tensor},
                {},
