@@ -1105,7 +1105,7 @@ int main(int argc, char** argv) {
             BM_pgm_dispatch,
             TestInfo{
                 .warmup_iterations = 5000,
-                .brisc_enabled = false,
+                .brisc_enabled = true,
                 .ncrisc_enabled = false,
                 .trisc_enabled = false,
                 .erisc_enabled = false,
