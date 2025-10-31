@@ -13,6 +13,7 @@ import ttnn
 from ...layers.conv2d import Conv2d
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList, Parameter
+from ...layers.normalization import DistributedRMSNorm, RMSNorm
 from ...parallel.config import VAEParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
@@ -80,28 +81,31 @@ class QwenImageRmsNorm(Module):
     def __init__(self, dim: int, *, eps: float = 1e-12, ctx: QwenImageVaeContext) -> None:
         super().__init__()
 
-        # Using DistributedRMSNorm leads to a drop in accuracy: RMSE increases by a factor of 8
-        # from RMSE = 0.022 * σ to RMSE = 0.18 * σ. So we implement the operation here directly.
+        tp_axis_size = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
 
-        # self.norm = (
-        #     DistributedRMSNorm(
-        #         dim,
-        #         norm_eps=eps,
-        #         bias=False,
-        #         mesh_axis=ctx.tp_axis,
-        #         mesh_device=ctx.device,
-        #         ccl_manager=ctx.ccl_manager,
-        #     )
-        #     if ctx.tp_axis is not None
-        #     else RMSNorm(
-        #         dim,
-        #         norm_eps=eps,
-        #         bias=False,
-        #         mesh_device=ctx.device,
-        #     )
-        # )
+        # https://github.com/tenstorrent/tt-metal/issues/31216
+        self._use_rms_workaround = dim % (tp_axis_size * 32) != 0
 
-        self.gamma = Parameter(total_shape=[dim], mesh_axes=[ctx.tp_axis], device=ctx.device)
+        if self._use_rms_workaround:
+            self.gamma = Parameter(total_shape=[dim], mesh_axes=[ctx.tp_axis], device=ctx.device)
+        else:
+            self.norm = (
+                DistributedRMSNorm(
+                    dim,
+                    norm_eps=eps,
+                    bias=False,
+                    mesh_axis=ctx.tp_axis,
+                    mesh_device=ctx.device,
+                    ccl_manager=ctx.ccl_manager,
+                )
+                if ctx.tp_axis is not None
+                else RMSNorm(
+                    dim,
+                    norm_eps=eps,
+                    bias=False,
+                    mesh_device=ctx.device,
+                )
+            )
 
         self.dim = dim
         self.eps = eps
@@ -109,17 +113,18 @@ class QwenImageRmsNorm(Module):
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
         self._device = ctx.device
-        self._tp_axis_size = ctx.device.shape[ctx.tp_axis] if ctx.tp_axis is not None else 1
+        self._tp_axis_size = tp_axis_size
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # if "gamma" in state:
-        #     state["norm.weight"] = state.pop("gamma").reshape([-1])
-
         if "gamma" in state:
-            state["gamma"] = state["gamma"].reshape([-1])
+            if self._use_rms_workaround:
+                state["gamma"] = state["gamma"].reshape([-1])
+            else:
+                state["norm.weight"] = state.pop("gamma").reshape([-1])
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # return self.norm.forward(x)
+        if not self._use_rms_workaround:
+            return self.norm.forward(x)
 
         norm = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
 
