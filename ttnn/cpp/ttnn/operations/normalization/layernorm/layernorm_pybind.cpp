@@ -24,7 +24,7 @@ void bind_normalization_layernorm_program_config(py::module& module) {
 
     py::class_<LayerNormShardedMultiCoreProgramConfig>(module, "LayerNormShardedMultiCoreProgramConfig")
         .def(
-            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool>(),
+            py::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool, bool>(),
             py::kw_only(),
             py::arg("compute_with_storage_grid_size"),
             py::arg("subblock_w").noconvert(),
@@ -32,7 +32,8 @@ void bind_normalization_layernorm_program_config(py::module& module) {
             py::arg("block_w").noconvert(),
             py::arg("inplace").noconvert(),
             py::arg("legacy_reduction").noconvert() = false,
-            py::arg("legacy_rsqrt").noconvert() = false)
+            py::arg("legacy_rsqrt").noconvert() = false,
+            py::arg("use_welford").noconvert() = false)
         .def(
             "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 }
@@ -42,11 +43,8 @@ void bind_normalization_layernorm_operation(py::module& module) {
         module,
         ttnn::layer_norm,
         R"doc(
-
-        ``ttnn.layer_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
-
-          Compute layer norm over :attr:`input_tensor`.
-          See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
+        Compute layer norm over :attr:`input_tensor`.
+        See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
           .. math::
 

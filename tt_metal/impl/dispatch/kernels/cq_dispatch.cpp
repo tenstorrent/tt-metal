@@ -353,6 +353,8 @@ void process_exec_buf_end_h() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+CBWriter<my_downstream_cb_sem_id, 0, 0, 0> dispatch_h_cb_writer{};
+
 // Relay, potentially through the mux/dmux/tunneller path
 // Code below sends 1 page worth of data except at the end of a cmd
 // This means the downstream buffers are always page aligned, simplifies wrap handling
@@ -380,7 +382,7 @@ void relay_to_next_cb(
         while (length > 0) {
             ASSERT(downstream_cb_end > downstream_cb_data_ptr);
 
-            cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1);
+            dispatch_h_cb_writer.acquire_pages(1);
 
             uint32_t xfer_size;
             bool not_end_of_cmd;
@@ -1055,15 +1057,19 @@ void process_go_signal_mcast_cmd() {
             (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
         noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
+        WAYPOINT("WCW");
         while (!stream_wrap_ge(
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
+        WAYPOINT("WCD");
     }
 
     *aligned_go_signal_storage = go_signal_value;

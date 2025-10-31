@@ -9,6 +9,7 @@
  * metrics received from remote instances are propagated via delta updates.
  */
 
+#include <functional>
 #include <future>
 #include <queue>
 #include <unistd.h>
@@ -18,11 +19,16 @@
 #include <tt-logger/tt-logger.hpp>
 #include <server/collection_clients.hpp>
 #include <utils/simple_concurrent_queue.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt_metal/fabric/physical_system_descriptor.hpp>
+#include "protobuf/factory_system_descriptor.pb.h"
 
 #include <telemetry/telemetry_collector.hpp>
+#include <telemetry/watchdog.hpp>
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
+#include <topology/topology.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 
@@ -125,20 +131,48 @@ static std::string get_cluster_wide_telemetry_path(const Metric& metric) {
     return path;
 }
 
+// Helper function to update a collection of metrics with exception handling
+template <typename MetricType>
+static size_t update_metrics_with_exception_handling(
+    std::vector<std::unique_ptr<MetricType>>& metrics,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    std::chrono::steady_clock::time_point start_of_update_cycle,
+    std::string_view metric_type_name) {
+    size_t failed_count = 0;
+
+    for (auto& metric : metrics) {
+        try {
+            metric->update(cluster, start_of_update_cycle);
+        } catch (const std::exception& e) {
+            failed_count++;
+            log_debug(
+                tt::LogAlways,
+                "Failed to update {} metric {} (will skip): {}",
+                metric_type_name,
+                metric->telemetry_path_string(),
+                e.what());
+        }
+    }
+
+    return failed_count;
+}
+
 static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     log_info(tt::LogAlways, "Starting telemetry readout...");
     std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
 
-    for (auto& metric : bool_metrics_) {
-        metric->update(cluster, start_of_update_cycle);
-    }
+    // Track failed metrics to report summary at end of cycle
+    size_t failed_metrics = 0;
 
-    for (auto& metric : uint_metrics_) {
-        metric->update(cluster, start_of_update_cycle);
-    }
+    failed_metrics += update_metrics_with_exception_handling(bool_metrics_, cluster, start_of_update_cycle, "bool");
+    failed_metrics += update_metrics_with_exception_handling(uint_metrics_, cluster, start_of_update_cycle, "uint");
+    failed_metrics += update_metrics_with_exception_handling(double_metrics_, cluster, start_of_update_cycle, "double");
 
-    for (auto& metric : double_metrics_) {
-        metric->update(cluster, start_of_update_cycle);
+    if (failed_metrics > 0) {
+        log_warning(
+            tt::LogAlways,
+            "Skipped {} metrics due to read failures (likely device busy or inaccessible)",
+            failed_metrics);
     }
 
     std::chrono::steady_clock::time_point end_of_update_cycle = std::chrono::steady_clock::now();
@@ -224,18 +258,36 @@ static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<Telemetry
 static void telemetry_thread(
     bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
-    const std::vector<std::string>& aggregate_endpoints) {
+    const std::vector<std::string>& aggregate_endpoints,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
+    int watchdog_timeout_seconds) {
     try {
+        Watchdog watchdog(watchdog_timeout_seconds);
+        TT_FATAL(
+            watchdog_timeout_seconds <= 0 || std::chrono::seconds(watchdog_timeout_seconds) > MONITOR_INTERVAL_SECONDS,
+            "Watchdog timeout ({} seconds) cannot be shorter than the telemetry monitoring interval ({} seconds)",
+            watchdog_timeout_seconds,
+            MONITOR_INTERVAL_SECONDS.count());
+
         std::unique_ptr<tt::umd::Cluster> cluster;
         std::unique_ptr<tt::tt_metal::Hal> hal;
+        std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
+        std::unique_ptr<TopologyHelper> topology_translation;
 
         if (telemetry_enabled) {
             cluster = std::make_unique<tt::umd::Cluster>();
+            auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
             hal = create_hal(cluster);
-            log_info(tt::LogAlways, "Created cluster and HAL");
+            psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+                cluster, distributed_context, hal.get(), rtoptions);
+            topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
+            log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
+            log_info(tt::LogAlways, "Our hostname is: {}", topology_translation->my_host_name);
 
-            create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
-            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+            create_ethernet_metrics(
+                bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
+            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
             log_info(tt::LogAlways, "Initialized metrics");
         }
 
@@ -249,6 +301,9 @@ static void telemetry_thread(
             send_initial_snapshot(subscribers);
             log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
         }
+
+        // Increment heartbeat after initialization
+        watchdog.heartbeat();
 
         // Main telemetry monitoring loop
         while (!stopped_.load()) {
@@ -269,30 +324,46 @@ static void telemetry_thread(
                 for (auto& subscriber : subscribers) {
                     subscriber->on_telemetry_ready(delta_snapshot);
                 }
+
+                // Increment heartbeat to signal watchdog that we've completed this loop iteration
+                watchdog.heartbeat();
+
             } catch (const std::exception& e) {
                 log_fatal(tt::LogAlways, "Exception in telemetry monitoring loop: {}", e.what());
             } catch (...) {
                 log_fatal(tt::LogAlways, "Unknown exception in telemetry monitoring loop");
             }
         }
-
     } catch (const std::exception& e) {
         log_fatal(tt::LogAlways, "Fatal exception during telemetry thread initialization: {}", e.what());
     } catch (...) {
         log_fatal(tt::LogAlways, "Unknown fatal exception during telemetry thread initialization");
     }
 
-    log_info(tt::LogAlways, "Telemetry thread stopped");
+    // Telemetry thread should currently never stop. If it happens, it's an error and should terminate the app.
+    log_fatal(tt::LogAlways, "Telemetry thread stopped");
+    exit(1);  // kill process so that job scheduler notices and restarts app
 }
 
 void run_telemetry_collector(
     bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
-    const std::vector<std::string>& aggregate_endpoints) {
+    const std::vector<std::string>& aggregate_endpoints,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
+    int watchdog_timeout_seconds) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
     // Run telemetry thread
-    auto t = std::async(std::launch::async, telemetry_thread, telemetry_enabled, subscribers, aggregate_endpoints);
+    auto t = std::async(
+        std::launch::async,
+        telemetry_thread,
+        telemetry_enabled,
+        subscribers,
+        aggregate_endpoints,
+        std::cref(rtoptions),
+        fsd,
+        watchdog_timeout_seconds);
     t.wait();
 }

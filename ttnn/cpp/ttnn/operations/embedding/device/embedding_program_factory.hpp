@@ -25,7 +25,7 @@ struct CoreSplitResult {
     uint32_t units_per_core_group_2 = 0;
 };
 
-CoreSplitResult split_work_to_cores_aligned(
+inline CoreSplitResult split_work_to_cores_aligned(
     const CoreCoord grid_size, const uint32_t units_to_divide, const uint32_t alignment) {
     ZoneScoped;
 
@@ -73,7 +73,7 @@ CoreSplitResult split_work_to_cores_aligned(
 
 namespace ttnn::operations::embedding::detail {
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -363,7 +363,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -601,7 +601,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,
@@ -818,7 +818,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks embeddings_(
+inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_(
     const Tensor& a,
     const Tensor& weights,
     Tensor& output,

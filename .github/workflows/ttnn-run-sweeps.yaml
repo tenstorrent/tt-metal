@@ -512,6 +512,7 @@ on:
           - matmul.short.matmul_user_program_config_mcast_1d
           - matmul.short.matmul_user_program_config_mcast_2d
           - matmul.sparse.sparse_matmul
+          - matmul.sparse.batched_sparse_matmul
           - max_pool2d.full.max_pool2d_large_dims
           - max_pool2d.full.max_pool2d_params
           - max_pool2d.short.max_pool2d_short_sweep
@@ -562,13 +563,39 @@ on:
         description: "Upload sweep results to Superset?"
         type: boolean
         default: true
+      measure_device_perf:
+        description: "Measure device performance using device profiler (--device-perf flag)."
+        type: boolean
+        default: true
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+        default: "wormhole_b0"
+      runner-label:
+        description: "Single sweep only"
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - P100a
+          - P150b
+          - n300-llmbox
+          - topology-6u
+          - BH-LLMBox
+          - BH-DeskBox
+          - BH-LoudBox
+        default: "N150"
+
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
-
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs['runner-label'] || 'N150' }}
   cancel-in-progress: true
 
 jobs:
@@ -580,13 +607,15 @@ jobs:
     with:
       build-wheel: true
       version: "22.04"
+      tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   ttnn-generate-sweeps:
-    name: Generate sweeps vectors
+    name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
     needs: build-artifact
     strategy:
       matrix:
-        arch:
-          - wormhole_b0
+        include:
+          - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -598,6 +627,7 @@ jobs:
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -607,7 +637,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-n150-stable
+    runs-on: >-
+      ${{
+        (matrix.runner_label == 'topology-6u' || matrix.runner_label == 'BH-LLMBox' || matrix.runner_label == 'BH-DeskBox' || matrix.runner_label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.runner_label)
+      }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
@@ -648,7 +682,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' > /tmp/matrix.json
-          import os, json, math
+          import os, json, math, sys
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
 
@@ -669,9 +703,11 @@ jobs:
           regular_modules = [m for m in modules if m not in suite_split_modules.keys()]
 
           # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
+          # Also use smaller batch size when device performance measurement is enabled to avoid timeouts
           # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
-          if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
-              BATCH_SIZE = 3  # Smaller batches for comprehensive runs (must stay under 256 total batches due to GitHub Actions limit)
+          device_perf_enabled = "${{ github.event_name }}" == "schedule" or "${{ github.event.inputs.measure_device_perf }}" == "true"
+          if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" or device_perf_enabled:
+              BATCH_SIZE = 3  # Smaller batches for comprehensive runs or when device performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
           else:
               BATCH_SIZE = 10  # Larger batches for nightly runs
 
@@ -684,6 +720,10 @@ jobs:
                   for suite in suites:
                       batches.append(f"{module_name}:{suite}")
 
+          total_batches = len(batches)
+          if total_batches > 256:
+              print(f"Total batch count ({total_batches}) exceeds GitHub Actions matrix limit of 256. Please adjust BATCH_SIZE or reduce the number of modules.", file=sys.stderr)
+              sys.exit(1)
           print(json.dumps({"module": modules, "batches": batches}))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
@@ -699,20 +739,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          [
-            {
-              name: "wormhole-n150-sweeps",
-              arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-stable,
-              tt-smi-cmd: "tt-smi -r"
-            },
-            # {
-            #   name: "Wormhole N300 Sweeps",
-            #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-stable,
-            #   tt-smi-cmd: "tt-smi-metal -r 0"
-            # }
-          ]
+          - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
+            arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -724,18 +753,26 @@ jobs:
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
-        TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      options: >-
+        --device /dev/tenstorrent
+        --device /dev/ipmi0
+        --privileged
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 720
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: >-
+      ${{
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
+      }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
@@ -754,7 +791,13 @@ jobs:
           if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           fi
-          python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
+
+          DEVICE_PERF_FLAG=""
+          if [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          fi
+
+          python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -803,6 +846,7 @@ jobs:
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
         TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -840,18 +884,26 @@ jobs:
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           fi
 
+          # Enable device performance for scheduled runs and when requested on manual dispatch
+          DEVICE_PERF_FLAG=""
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          elif [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
+            DEVICE_PERF_FLAG="--device-perf"
+          fi
+
           # Check if batch contains colon (suite-specific execution)
           if [[ "$BATCH" == *":"* ]]; then
             MODULE_NAME="${BATCH%:*}"
             SUITE_NAME="${BATCH#*:}"
             # Suite-specific execution doesn't need nightly restriction
-            python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
+            python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
           else
             # Regular batch execution
             if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
             else
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
             fi
           fi
       - name: Compute artifact suffix

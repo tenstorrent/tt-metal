@@ -6,7 +6,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/op_profiler.hpp"
@@ -109,8 +109,8 @@ std::vector<Tensor> LerpBackwardOperation::invoke(
     const Tensor& weight,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result_1 =
-        ttnn::multiply(grad, ttnn::rsub(weight, 1.0, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result_1 = ttnn::multiply(
+        grad, ttnn::rsub(weight, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_1);
     Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_2);

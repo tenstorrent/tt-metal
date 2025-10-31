@@ -1,0 +1,9 @@
+# sfpi version information
+sfpi_repo=https://github.com/tenstorrent/sfpi
+sfpi_version=7.6.0
+sfpi_aarch64_linux_deb_md5=8e4e9e7a1b78509a76cafacca58fc9d0
+sfpi_aarch64_linux_rpm_md5=c272a74ba5a8dde68f78afaffbd83df4
+sfpi_aarch64_linux_txz_md5=3e1c6fa30523f3458bd208d8b724ad44
+sfpi_x86_64_linux_deb_md5=2c212aa8484110135f44a0d2bb12150e
+sfpi_x86_64_linux_rpm_md5=fa89b66906d56461f050d9988b309d1e
+sfpi_x86_64_linux_txz_md5=2714ff49907552416b037590c28d2341

@@ -13,7 +13,7 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import run_for_blackhole
 
 
@@ -132,7 +132,11 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         )
 
     # groupnorm
+
     num_itr = 2  # second iteration to help catch potential runtime args issue.
+
+    if C > 512 or N > 2:
+        num_itr = 1  # one iter if it is too slow
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
