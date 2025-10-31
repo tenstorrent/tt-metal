@@ -93,35 +93,35 @@ uint32_t default_workers(
 using namespace ccl;
 
 void fabric_mux_connection_ct_args(
-    const bool is_termination_master,
-    const CoreCoord& mux_virtual_core,
+    const uint32_t num_workers_per_direction,
     const tt::tt_fabric::FabricMuxChannelType channel_type,
-    uint32_t worker_id,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     std::vector<uint32_t>& writer_ct_args) {
-    writer_ct_args.push_back(is_termination_master);
-    writer_ct_args.push_back(mux_virtual_core.x);
-    writer_ct_args.push_back(mux_virtual_core.y);
     writer_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
     writer_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
-    writer_ct_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, worker_id));
-    writer_ct_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, worker_id));
     writer_ct_args.push_back(mux_kernel_config.get_status_address());
-    writer_ct_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));
     writer_ct_args.push_back(mux_kernel_config.get_termination_signal_address());
+    worker_ct_args.push_back(num_workers_per_direction);
 }
 
 void fabric_mux_connection_rt_args(
     const bool& mux_connection_valid,
+    const CoreCoord& mux_virtual_core,
+    const uint32_t worker_id,
     const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     tt::tt_metal::Program& program,
     CoreCoord termination_master_virtual_core,
-    uint32_t num_workers_per_direction,
     std::vector<uint32_t>& worker_rt_args) {
     worker_rt_args.push_back(mux_connection_valid);
+    writer_rt_args.push_back(mux_virtual_core.x);
+    writer_rt_args.push_back(mux_virtual_core.y);
+    writer_rt_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, worker_id));
+    writer_rt_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, worker_id));
+    writer_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, worker_id));
+    writer_rt_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, worker_id));
+    writer_rt_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, worker_id));
+    writer_rt_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
@@ -129,7 +129,6 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));
     worker_rt_args.push_back(termination_master_virtual_core.x);
     worker_rt_args.push_back(termination_master_virtual_core.y);
-    worker_rt_args.push_back(num_workers_per_direction);
 }
 
 void all_gather_async_minimal_default_helper_override_runtime_arguments(
@@ -268,20 +267,20 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     }
 
     // op hyperparams
-    uint32_t num_directions_per_link = 2;  // 2;
+    uint32_t num_directions_per_link = 2;
     uint32_t num_mux_cores_per_direction_per_link = 1;
     // Get worker cores
     // 2 senders (reader + writer) per direction (forward, reverse_order) per link
-    // uint32_t output_data_size_bytes = output_tensor.buffer()->size();
-    uint32_t num_workers_per_direction = 1;  // num_workers_per_direction_opt.value_or(detail::default_workers(
-                                             //         *mesh_device,
-                                             //         sub_device_id,
-                                             //         topology,
-                                             //         output_data_size_bytes,
-                                             //         num_links,
-                                             //         ring_size,
-                                             //         num_directions_per_link,
-                                             //         num_mux_cores_per_direction_per_link));
+    uint32_t output_data_size_bytes = output_tensor.buffer()->size();
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers(
+        *mesh_device,
+        sub_device_id,
+        topology,
+        output_data_size_bytes,
+        num_links,
+        ring_size,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link));
     uint32_t num_cores_per_link = detail::all_gather_async_core_count_per_link(
         num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
 
@@ -469,6 +468,17 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
     uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
 
+    auto num_full_size_channels = num_workers_per_direction;
+    auto num_header_only_channels = 0;
+    size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        0,
+        buffer_size_bytes_full_size_channel,
+        mux_base_l1_address);
+
     // Reader
     std::vector<uint32_t> sender_reader_compile_args = {
         ring_size,                        // ring_size
@@ -507,6 +517,48 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         sender_worker_core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
 
+    // Writer
+    std::vector<uint32_t> sender_writer_compile_args = {
+        ring_size,                        // ring_size
+        ring_index,                       // my_chip_id
+        sender_cb_index,                  // cb_forward_id
+        num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
+        page_size,                        // page_size
+        num_targets_forward,              // num_targets_forward_direction
+        num_targets_backward,             // num_targets_backward_direction
+        static_cast<uint32_t>(topology),  // topology
+        normalized_dim,                   // gather_dim
+        batch_head_size,                  // input_batch_head_count (product of the first two dims)
+        input_tensor_Wt,                  // input_tensor_Wt
+        input_tensor_Ht,                  // input_tensor_Ht
+        input_tensor_C,                   // input_tensor_C
+        output_tensor_Wt,                 // output_tensor_Wt
+        output_tensor_Ht,                 // output_tensor_Ht
+        output_tensor_C,                  // output_tensor_C
+        fuse_op,                          // fuse_op
+        reverse_order,                    // reverse
+    };
+    fabric_mux_connection_ct_args(
+        num_workers_per_direction,
+        mux_virtual_core,
+        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
+        worker,
+        mux_kernel_config,
+        sender_writer_compile_args);
+
+    if (output_is_sharded) {
+        shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
+    } else {
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
+    }
+    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+        "minimal_default_writer.cpp",
+        {core},
+        tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+    writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
+
     auto sender_core_iter = sender_worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -514,18 +566,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
             uint32_t mux_core_offset = (link * num_cores_per_link) +
                                        (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
             CoreCoord mux_logical_core = all_cores[mux_core_offset];
-
             CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
-            auto num_full_size_channels = num_workers_per_direction;
-            auto num_header_only_channels = 0;
-            size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-            auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
-                num_full_size_channels,
-                num_header_only_channels,
-                num_buffers_full_size_channels,
-                0,
-                buffer_size_bytes_full_size_channel,
-                mux_base_l1_address);
 
             const bool mux_connection_valid =
                 (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
@@ -629,68 +670,6 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
-                // Writer
-                std::vector<uint32_t> sender_writer_compile_args = {
-                    ring_size,                        // ring_size
-                    ring_index,                       // my_chip_id
-                    sender_cb_index,                  // cb_forward_id
-                    num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
-                    page_size,                        // page_size
-                    num_targets_forward,              // num_targets_forward_direction
-                    num_targets_backward,             // num_targets_backward_direction
-                    static_cast<uint32_t>(topology),  // topology
-                    dir,                              // direction
-                    normalized_dim,                   // gather_dim
-                    batch_head_size,                  // input_batch_head_count (product of the first two dims)
-                    input_tensor_Wt,                  // input_tensor_Wt
-                    input_tensor_Ht,                  // input_tensor_Ht
-                    input_tensor_C,                   // input_tensor_C
-                    output_tensor_Wt,                 // output_tensor_Wt
-                    output_tensor_Ht,                 // output_tensor_Ht
-                    output_tensor_C,                  // output_tensor_C
-                    input_tile_id_start,              // input_tile_id_start
-                    input_tile_id_end,                // input_tile_id_end
-                    start_pages_read_in_row,          // start_pages_read_in_row
-                    start_row_offset,                 // start_row_offset
-                    fuse_op,                          // fuse_op
-                    chunks_per_sync_val,              // chunks_per_sync
-                    reverse_order,                    // reverse
-                };
-                fabric_mux_connection_ct_args(
-                    worker == 0,
-                    mux_virtual_core,
-                    tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                    worker,
-                    mux_kernel_config,
-                    sender_writer_compile_args);
-                if (dir) {
-                    sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
-                    sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        barrier_mcast_backward_args.begin(),
-                        barrier_mcast_backward_args.end());
-                } else {
-                    sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
-                    sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(),
-                        barrier_mcast_forward_args.begin(),
-                        barrier_mcast_forward_args.end());
-                }
-                if (output_is_sharded) {
-                    shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
-                } else {
-                    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(sender_writer_compile_args);
-                }
-                auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-                    program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-                    "minimal_default_writer.cpp",
-                    {core},
-                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
-                writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
-
                 std::vector<uint32_t> writer_rt_args = {
                     output_tensor.buffer()->address(),                           // output_tensor_address
                     virtual_core.x,                                              // out_ready_sem_noc0_x
@@ -701,7 +680,14 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                         ? barrier_semaphore.value().address()
                         : 0,
                     opposite_core_coord.x,
-                    opposite_core_coord.y};
+                    opposite_core_coord.y,
+                    dir,                      // direction
+                    input_tile_id_start,      // input_tile_id_start
+                    input_tile_id_end,        // input_tile_id_end
+                    start_pages_read_in_row,  // start_pages_read_in_row
+                    start_row_offset,         // start_row_offset
+                    chunks_per_sync_val};     // chunks_per_sync
+
                 fabric_mux_connection_rt_args(
                     mux_connection_valid,
                     core,
@@ -720,6 +706,19 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                         worker + (link * num_workers_per_direction),
                         1);
                 }
+
+                if (dir) {
+                    writer_rt_args.insert(
+                        writer_rt_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+                    writer_rt_args.insert(
+                        writer_rt_args.end(), barrier_mcast_backward_args.begin(), barrier_mcast_backward_args.end());
+                } else {
+                    writer_rt_args.insert(
+                        writer_rt_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+                    writer_rt_args.insert(
+                        writer_rt_args.end(), barrier_mcast_forward_args.begin(), barrier_mcast_forward_args.end());
+                }
+
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
             }
         }

@@ -42,9 +42,7 @@ constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(14);
 constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(15);
 constexpr uint32_t output_tensor_C = get_compile_time_arg_val(16);
 constexpr uint32_t input_tile_id_start = get_compile_time_arg_val(17);
-constexpr uint32_t input_tile_id_end = get_compile_time_arg_val(18);
-constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(19);
-constexpr uint32_t start_row_offset = get_compile_time_arg_val(20);
+
 constexpr bool fuse_op = get_compile_time_arg_val(21);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(22);
 constexpr uint32_t reverse = get_compile_time_arg_val(23) == 1;
@@ -62,11 +60,6 @@ constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(33);
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(34);
 constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(35);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(36);
-
-constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<37>();
-constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<37 + ccl_routing_utils::num_line_unicast_args>();
 
 inline constexpr uint32_t sharded_args_start_idx =
     37 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
@@ -96,6 +89,14 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
+
+    constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
+        ccl_routing_utils::get_line_unicast_route_info_from_args<37>();
+    constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route_info =
+        ccl_routing_utils::get_line_multicast_route_info_from_args<37 + ccl_routing_utils::num_line_unicast_args>();
+
+    const bool is_termination_master =
+        (my_x[NOC_INDEX] == termination_master_noc_x && my_y[NOC_INDEX] termination_master_noc_y);
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
