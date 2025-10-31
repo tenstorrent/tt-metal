@@ -267,6 +267,7 @@ target_link_libraries(
         distributed
         fabric
         lite_fabric
+        TT::ScaleoutTools
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
 )

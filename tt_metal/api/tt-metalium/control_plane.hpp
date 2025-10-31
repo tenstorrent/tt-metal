@@ -201,6 +201,8 @@ public:
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
 
+    tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;

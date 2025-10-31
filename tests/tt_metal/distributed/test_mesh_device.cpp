@@ -23,6 +23,10 @@
 #include <tt-metalium/shape_base.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <tt-metalium/control_plane.hpp>
+#include <impl/context/metal_context.hpp>
+#include <tt_metal/fabric/physical_system_descriptor.hpp>
+#include "tools/scaleout/board/board.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -160,6 +164,62 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
         EXPECT_EQ(
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->get_device(coord)->id()),
             fabric_node_id);
+    }
+}
+
+TEST_F(MeshDeviceTest, GenerateLogicalToPhysicalMappings) {
+    // High Level Example:
+    //  - Derive the physical location of a device given its coordinate in a MeshDevice
+    //  - Determine how the ethernet channels on each device are mapped to physical ports and cables in the system
+
+    // Step 1
+    // Build a Physical System Descriptor for the Multi-Node cluster.
+    // This descriptor uses the:
+    //  - Driver from UMD
+    //  - The distributed context (for exhanging across all nodes)
+    // - The HAL and Runtime Options objects for device address queries
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    constexpr bool run_discovery = true;
+    const auto& driver = cluster.get_driver();
+
+    // This object will be identical across all hosts and will contain a graph of the entire system.
+    auto physical_system_descriptor =
+        tt::tt_metal::PhysicalSystemDescriptor(driver, distributed_context, &hal, rtoptions, run_discovery);
+
+    // Step 2: Perform the MeshCoord -> Physical Location Mapping based on the MeshDevice, Control Plane, and Physical
+    // System Descriptor Access the Control Plane for Fabric Node ID to ASIC ID mappings
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    // Only do lookups on rank 0 to avoid duplicate output
+    if (*distributed_context->rank() == 0) {
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            // Query Fabric Node ID from MeshDevice
+            tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_fabric_node_id(coord);
+            // Pass Fabric Node Id to Control Plane and determine the ASIC ID
+            tt_metal::AsicID asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
+            // Query the ASIC Descriptor from the Physical System Descriptor for the requested ASIC. This will contain
+            // Physical Information for the Device.
+            auto asic_desc = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+            // Print Device Mapping
+            std::cout << "Device Coordinate: " << coord << ", Host Name: " << asic_desc.host_name
+                      << ", Tray ID: " << *asic_desc.tray_id << ", ASIC Location: " << *asic_desc.asic_location
+                      << ", Board Type: " << asic_desc.board_type << std::endl;
+            // Print the Ethernet Channel to Port Mapping for the Device
+            auto board = tt::scaleout_tools::create_board(asic_desc.board_type);
+            std::cout << "    Eth Channel to Port Mapping: " << std::endl;
+            for (auto neighbor_asic_id : physical_system_descriptor.get_asic_neighbors(asic_id)) {
+                for (const auto& eth_connection :
+                     physical_system_descriptor.get_eth_connections(asic_id, neighbor_asic_id)) {
+                    auto port = board.get_port_for_asic_channel(tt::scaleout_tools::AsicChannel{
+                        *(asic_desc.asic_location), tt::scaleout_tools::ChanId{eth_connection.src_chan}});
+                    std::cout << "        - Ethernet Channel: " << +eth_connection.src_chan
+                              << ", Port ID: " << *port.port_id
+                              << ", Port Type: " << enchantum::to_string(port.port_type) << std::endl;
+                }
+            }
+        }
     }
 }
 

@@ -2769,6 +2769,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     return intermesh_connections;
 }
 
+tt::tt_metal::AsicID ControlPlane::get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
+    return topology_mapper_->get_asic_id_from_fabric_node_id(fabric_node_id);
+}
+
 ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric
