@@ -81,10 +81,6 @@ class Attention:
         # Some models (e.g., GLM-4.5-Air-1L) do not have o_proj.bias
         o_proj_bias = o_state.get("bias", torch.zeros(hf_config.hidden_size, dtype=torch.bfloat16))
 
-        # Disable attention sinks by setting them to -inf (no contribution after softmax)
-        sinks = torch.full((1, hf_config.num_attention_heads, 1, 1), float("-inf"), dtype=torch.bfloat16)
-        decode_sinks = torch.full((hf_config.num_attention_heads, ttnn.TILE_SIZE), float("-inf"), dtype=torch.bfloat16)
-
         # Clean mesh mapping using MeshConfig
         col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
         row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
@@ -206,24 +202,7 @@ class Attention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        self.decode_sinks = ttnn.as_tensor(
-            decode_sinks,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=self.mesh_config.row_parallel(mesh_device),
-            cache_file_name=get_cache_file_name(tensor_cache_path, "decode_sinks"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        self.sinks = ttnn.as_tensor(
-            sinks,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=self.mesh_config.sequence_parallel(mesh_device),
-            cache_file_name=get_cache_file_name(tensor_cache_path, "sinks"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # No attention sinks: align behavior with HF reference
 
         # Set up kv cache
         # Store paged attention config for later use in operations
@@ -373,12 +352,12 @@ class Attention:
             tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, self.num_local_kv_heads, self.head_dim])
             tt_v = ttnn.reshape(tt_v, [batch_size * seq_len, self.num_local_kv_heads, self.head_dim])
 
-            # Use provided mask and attention sinks
+            # Use provided mask (no attention sinks)
             tt_sdpa_out, _ = tt_sdpa(
                 tt_q,
                 tt_k,
                 tt_v,
-                self.sinks,
+                None,
                 sm_scale=self.scaling,
                 tt_mask=mask,
                 tt_cache=None,
@@ -461,12 +440,12 @@ class Attention:
             tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, -1, self.head_dim])
             tt_v = ttnn.reshape(tt_v, [batch_size * seq_len, -1, self.head_dim])
 
-            # Disable sliding window mask and attention sinks in prefill
+            # Disable sliding window mask in prefill (reference prefill is causal-internal)
             tt_sdpa_out, _ = tt_sdpa(
                 tt_q,
                 tt_k,
                 tt_v,
-                self.sinks,
+                None,
                 sm_scale=self.scaling,
                 tt_mask=None,
                 tt_cache=None,
@@ -480,15 +459,12 @@ class Attention:
         tt_sdpa_out.deallocate(True)
         tt_out = ttnn.add(tt_out, self.o_proj_bias, output_tensor=tt_out)
 
-        # Return shape should match input x: [batch_size, seq_len, hidden]
+        # Return shape should match input x: [batch_size, seq_len, hidden], unify decode and prefill
         if seq_len == 1:
-            # Convert [1, 1, batch, hidden] -> [batch, 1, hidden] using transpose + squeeze
+            # [1, 1, batch, hidden] -> [batch, 1, hidden]
             tt_out = ttnn.transpose(tt_out, 0, 2)
             tt_out = ttnn.squeeze(tt_out, dim=2)
-            # For static decode path, return early to avoid TP allreduce reshape complexities
-            return tt_out
-        else:
-            tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
+        tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         # Clean tensor parallel communication (with performance padding)
         if self.mesh_config.tp > 1:

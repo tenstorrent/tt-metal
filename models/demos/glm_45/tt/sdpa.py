@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Scaled Dot Product Attention (SDPA) implementation for GPT-OSS.
+Scaled Dot Product Attention (SDPA) implementation aligned with HF reference.
 
 This module provides a custom SDPA implementation that supports:
-- Sliding window attention with attention sinks
+- Sliding window/causal masking
 - KV cache management for efficient autoregressive generation
 - Group query attention (GQA) with key-value head broadcasting
 - Stable softmax computation for numerical stability
@@ -56,7 +56,7 @@ def sdpa(
     position_idx: int = None,
 ) -> ttnn.Tensor:
     """
-    Perform scaled dot-product attention with sliding window and attention sinks.
+    Perform scaled dot-product attention with causal/sliding window masking.
 
     This implementation supports Group Query Attention (GQA) where the number of
     key-value heads (nkv) may be less than the number of query heads (nh).
@@ -65,7 +65,7 @@ def sdpa(
         tt_q: Query tensor of shape (num_tokens, 1, nh, dim)
         tt_k: Key tensor of shape (num_tokens, nkv, dim)
         tt_v: Value tensor of shape (num_tokens, nkv, dim)
-        tt_sink: Attention sink values for stable long-context attention, shape (nkv, nh // nkv, 1, 1)
+        tt_sink: Deprecated/unused. Present for API compatibility.
         sm_scale: Scaling factor for attention scores (typically 1/sqrt(head_dim))
         tt_mask: Optional attention mask for sliding window, shape (1, nh, num_tokens, kv_len)
         tt_cache: Optional KV cache tuple [k_cache, v_cache] for autoregressive generation
@@ -77,10 +77,9 @@ def sdpa(
             - tt_cache: Updated KV cache [k_cache, v_cache]
 
     Note:
-        The hardcoded dimensions in reshapes are specific to GPT-OSS's attention pattern:
-        - dim=2 is used for concat along sequence/cache length dimension
-        - dim=3 is used for feature/hidden dimension operations
-        - These match the expected tensor layouts for TTNN operations
+        The hardcoded dimensions in reshapes follow attention tensor layouts:
+        - dim=2 is the sequence/cache length dimension
+        - dim=3 is the feature/hidden dimension
     """
 
     assert tt_q.shape[-1] == tt_k.shape[-1] == tt_v.shape[-1], "Head dimension mismatch between Q, K, V"
@@ -133,16 +132,8 @@ def sdpa(
     if tt_mask is not None:
         tt_qk += tt_mask  # Masked positions get -inf
 
-    # Add attention sink logits for stable long-context attention
-    tt_sink = ttnn.reshape(tt_sink, [nkv, nh // nkv, 1, 1])  # (nkv, nh // nkv, 1, 1)
-    tt_sink = ttnn.repeat(tt_sink, [1, 1, num_tokens, 1])  # (nkv, nh // nkv, num_tokens, 1)
-    # Concat sink as an extra attention position (dim=-1 is kv_len dimension)
-    tt_qk = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
-
     # Softmax - using custom implementation for stability
-    tt_qk = softmax(tt_qk, stable=True)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
-    # Remove the sink dimension after softmax (we only needed it for normalization)
-    tt_qk = tt_qk[:, :, :, :kv_len]
+    tt_qk = softmax(tt_qk, stable=True)  # (nkv, nh // nkv, num_tokens, kv_len)
 
     # Compute attention output: softmax(QK^T) @ V
     out = ttnn.matmul(tt_qk, tt_v)  # (nkv, nh // nkv, num_tokens, dim)
