@@ -368,7 +368,7 @@ void ElfFile::Impl::Elf<Is64>::LoadImage() {
         // Require loadable segments to be nicely aligned
         if (((phdr.p_offset | phdr.p_vaddr | phdr.p_paddr) & (sizeof(word_t) - 1)) ||
             // Only support loading into the first 4GB
-            (Is64 && ((phdr.p_vaddr | phdr.p_paddr) + phdr.p_memsz) >> 32 * Is64)) {
+            (Is64 && ((phdr.p_vaddr | phdr.p_paddr) + phdr.p_memsz) > UINT32_MAX)) {
             TT_THROW(
                 "{}: loadable segment {} is misaligned or misplaced, [{}({}),+{}/{})@{}",
                 path_,
