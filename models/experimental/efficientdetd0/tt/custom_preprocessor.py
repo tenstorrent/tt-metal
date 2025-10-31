@@ -4,6 +4,7 @@
 
 import ttnn
 import torch
+import torch.nn as nn
 
 from ttnn.dot_access import make_dot_access_dict
 from ttnn.model_preprocessing import (
@@ -263,3 +264,52 @@ def infer_module_args(model):
             module_args[child_name] = infer_module_args(child)
 
     return make_dot_access_dict(module_args, ignore_types=(ModuleArgs,))
+
+
+def register_layer_hooks(model, layer_type):
+    """Register hooks on all instances of a given layer type."""
+    layer_info = {}
+
+    def hook_fn(module, input, output):
+        # input and output are tuples
+        input_shape = tuple(input[0].shape) if isinstance(input, (tuple, list)) else tuple(input.shape)
+        output_shape = tuple(output.shape) if isinstance(output, torch.Tensor) else tuple(output[0].shape)
+
+        layer_info[len(layer_info)] = ConvArgs(
+            kernel_size=getattr(module, "kernel_size", None),
+            stride=getattr(module, "stride", None),
+            padding=getattr(module, "padding", None),
+            padding_mode=getattr(module, "padding_mode", None),
+            dilation=getattr(module, "dilation", None),
+            groups=getattr(module, "groups", None),
+            in_channels=getattr(module, "in_channels", None),
+            out_channels=getattr(module, "out_channels", None),
+            batch_size=input_shape[0],
+            input_height=input_shape[-2],
+            input_width=input_shape[-1],
+            # input_shape=input_shape,
+            # output_shape=output_shape,
+        )
+
+    hooks = []
+    for name, module in model.named_modules():
+        if isinstance(module, layer_type):
+            hooks.append(module.register_forward_hook(hook_fn))
+
+    return layer_info, hooks
+
+
+def infer_torch_module_args(model, input, layer_type=nn.Conv2d):
+    """Run forward pass and collect layer information."""
+    model.eval()
+
+    layer_info, hooks = register_layer_hooks(model, layer_type)
+
+    with torch.no_grad():
+        _ = model(input)
+
+    # Remove hooks to avoid memory leaks
+    for h in hooks:
+        h.remove()
+
+    return layer_info

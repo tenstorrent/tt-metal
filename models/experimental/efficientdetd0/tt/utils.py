@@ -174,7 +174,6 @@ class EfficientNetb0Conv2D:
         self.parameters = parameters
         self.shard_layout = shard_layout
         self.output_layout = output_layout
-        self.shard_layout = shard_layout
         self.dilation = dilation
         self.weights_dtype = weights_dtype
         self.conv_config = self._initialize_conv_config()
