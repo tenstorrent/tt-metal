@@ -124,6 +124,8 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
             _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
 
             sfpu_reduce_max_sdpa(reduce_dst_idx, static_cast<int>(VectorMode::RC_custom));
+
+            _llk_math_eltwise_unary_sfpu_done_();
             // DPRINT << "FINISHED ONE REDUCE" << ENDL();
         }
         // reduce_uninit();
