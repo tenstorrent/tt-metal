@@ -88,7 +88,7 @@ def main():
         "--device-memory-profiler",
         dest="device_memory_profiler",
         action="store_true",
-        help="Profile device memory buffer usage",
+        help="Profile allocated device L1 and DRAM memory buffer usage",
         default=False,
     )
     parser.add_option(
