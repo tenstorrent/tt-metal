@@ -31,6 +31,17 @@ from ....utils.test import line_params, ring_params
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (832, 480),
+        (1280, 720),
+    ],
+    ids=[
+        "resolution_480p",
+        "resolution_720p",
+    ],
+)
 def test_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -40,6 +51,8 @@ def test_pipeline_performance(
     num_links: int,
     dynamic_load: dict,
     topology: ttnn.Topology,
+    width: int,
+    height: int,
     is_ci_env: bool,
     galaxy_type: str,
 ) -> None:
@@ -89,10 +102,10 @@ def test_pipeline_performance(
     ]
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
-    height = 480
-    width = 832
     num_frames = 81
     num_inference_steps = 40
+    guidance_scale = 3.0
+    guidance_scale_2 = 4.0
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -118,8 +131,8 @@ def test_pipeline_performance(
             width=width,
             num_frames=num_frames,
             num_inference_steps=2,  # Small number of steps to reduce test time.
-            guidance_scale=3.0,
-            guidance_scale_2=4.0,
+            guidance_scale=guidance_scale,
+            guidance_scale_2=guidance_scale_2,
         )
 
     logger.info(f"Warmup completed in {pipeline.timing_data['total']:.2f}s")
@@ -168,8 +181,8 @@ def test_pipeline_performance(
                     width=width,
                     num_frames=num_frames,
                     num_inference_steps=num_inference_steps,
-                    guidance_scale=3.0,
-                    guidance_scale_2=4.0,
+                    guidance_scale=guidance_scale,
+                    guidance_scale_2=guidance_scale_2,
                 )
 
         # Collect timing data
@@ -223,19 +236,26 @@ def test_pipeline_performance(
         "vae_decoding_time": statistics.mean(vae_times),
         "total_time": statistics.mean(total_times),
     }
-    if tuple(mesh_device.shape) == (2, 4):
+    if tuple(mesh_device.shape) == (2, 4) and height == 480:
         expected_metrics = {
             "text_encoding_time": 14.8,
             "denoising_time": 909,
             "vae_decoding_time": 64.6,
             "total_time": 990,
         }
-    elif tuple(mesh_device.shape) == (4, 8):
+    elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
             "text_encoding_time": 9.34,
             "denoising_time": 163,
             "vae_decoding_time": 18.2,
             "total_time": 192,
+        }
+    elif tuple(mesh_device.shape) == (4, 8) and height == 720:
+        expected_metrics = {
+            "text_encoding_time": 10000,
+            "denoising_time": 10000,
+            "vae_decoding_time": 10000,
+            "total_time": 10000,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"

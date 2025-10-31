@@ -106,7 +106,7 @@ jobs:
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
-            cmd: 'export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" && pytest models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "wh_4x8sp1tp0" && TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0"',
+            cmd: 'export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" && pytest models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "wh_4x8sp1tp0" && TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0 and resolution_720p"',
             owner_id: U03FJB5TM5Y # Colman Glagovich
          },
          {

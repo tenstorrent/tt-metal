@@ -382,7 +382,7 @@ run_t3000_wan22_tests() {
 
   export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
   pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "2x4sp0tp1"
-  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1" --timeout 1500; fail+=$?
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "2x4sp0tp1 and resolution_480p" --timeout 1500; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
