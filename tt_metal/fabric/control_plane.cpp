@@ -2089,12 +2089,21 @@ std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId c
 void ControlPlane::assign_direction_to_fabric_eth_chan(
     const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction) {
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
-    // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
-    auto fabric_router_channels_on_chip =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
+    const auto& connected_chips =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+            physical_chip_id);
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    auto eth_core = soc_desc.get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
 
-    // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
-    if (fabric_router_channels_on_chip.contains(chan_id)) {
+    bool is_active_connection = false;
+    for (const auto& [connected_chip_id, eth_cores] : connected_chips) {
+        if (std::find(eth_cores.begin(), eth_cores.end(), eth_core) != eth_cores.end()) {
+            is_active_connection = true;
+            break;
+        }
+    }
+
+    if (is_active_connection) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
     } else {
         log_debug(
