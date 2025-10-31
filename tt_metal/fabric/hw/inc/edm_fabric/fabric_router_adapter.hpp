@@ -269,14 +269,14 @@ private:
                     auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
                     noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr_, packed_val, 0xf, noc);
                 } else {
-                    noc_inline_dw_write_with_state<true, false, true>(
+                    noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
                         0,  // val unused
                         this->edm_buffer_remote_free_slots_update_addr,
                         this->sync_noc_cmd_buf,
                         noc);
                 }
             } else {
-                noc_inline_dw_write_with_state<false, false, true>(
+                noc_inline_dw_write_with_state<false, false, true, false, false, InlineWriteDst::REG>(
                     0,  // val unused
                     0,  // addr unused
                     this->sync_noc_cmd_buf,
