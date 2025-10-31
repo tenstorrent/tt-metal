@@ -410,7 +410,7 @@ private:
     uint32_t local_count_{0};
 };
 
-// Unified reader that delegates release to a policy defined in the TU
+// Reader that releases a block of pages at a time.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
