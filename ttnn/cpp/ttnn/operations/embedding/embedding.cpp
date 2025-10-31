@@ -9,6 +9,7 @@
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include <ttnn/operations/copy/typecast/typecast.hpp>
 
 namespace ttnn::operations::embedding {
 
@@ -51,6 +52,9 @@ ttnn::Tensor EmbeddingOperation::invoke(
             }
         } else if (weight_arg.layout() == ttnn::TILE_LAYOUT) {
             fused_tilized = true;
+        } else {
+            bool typecast_needed = dtype.has_value() && (dtype.value() != weight.dtype());
+            TT_FATAL(!typecast_needed, "Can only typecast output embeddings when producing TILE_LAYOUT output");
         }
     }
 
@@ -60,7 +64,7 @@ ttnn::Tensor EmbeddingOperation::invoke(
                               .tilized = fused_tilized,
                               .embeddings_type = embeddings_type,
                               .pad_token = pad_token,
-                              .output_dtype = dtype.value_or(weight.dtype())},
+                          },
                           {input_tensor, weight})
                           .at(0);
     // Don't include batch_size if there was none
@@ -70,6 +74,9 @@ ttnn::Tensor EmbeddingOperation::invoke(
         embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
+    if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {
+        embeddings = ttnn::typecast(embeddings, dtype.value_or(weight.dtype()));
+    }
     return embeddings;
 }
 
