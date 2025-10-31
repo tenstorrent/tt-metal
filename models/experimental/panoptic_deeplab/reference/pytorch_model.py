@@ -21,6 +21,7 @@ from models.experimental.panoptic_deeplab.reference.pytorch_semseg import Panopt
 from models.experimental.panoptic_deeplab.reference.pytorch_insemb import PanopticDeepLabInsEmbedHead
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.panoptic_deeplab.reference.pytorch_resnet import ResNet
+from models.experimental.panoptic_deeplab.tt.common import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
 
 
 class PytorchPanopticDeepLab(nn.Module):
@@ -52,6 +53,7 @@ class PytorchPanopticDeepLab(nn.Module):
         # Weight initialization
         use_real_weights: bool = True,
         weights_path: Optional[str] = None,
+        model_category: str = PANOPTIC_DEEPLAB,
     ):
         """
         Initialize the PyTorch Panoptic-DeepLab model.
@@ -61,7 +63,7 @@ class PytorchPanopticDeepLab(nn.Module):
             **kwargs: Same arguments as TtPanopticDeepLab for consistency
         """
         super().__init__()
-
+        self.model_category = model_category
         self.num_classes = num_classes
         self.common_stride = common_stride
         self.train_size = train_size
@@ -217,8 +219,11 @@ class PytorchPanopticDeepLab(nn.Module):
         # Get semantic segmentation predictions
         semantic_logits, _ = self.semantic_head(features)
 
-        # Get instance embedding predictions
-        center_heatmap, offset_map, _, _ = self.instance_head(features)
+        if self.model_category == DEEPLAB_V3_PLUS:
+            # Get instance embedding predictions
+            center_heatmap, offset_map, _, _ = None, None, None, None
+        else:
+            center_heatmap, offset_map, _, _ = self.instance_head(features)
 
         # Return predictions and optionally features
         if return_features:

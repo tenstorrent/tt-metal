@@ -19,14 +19,21 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import Pytorch
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
+    PANOPTIC_DEEPLAB,
+    DEEPLAB_V3_PLUS,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
+from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
 
-
+@pytest.mark.parametrize(
+    "model_category",
+    [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS],
+    ids=["test_panoptic_deeplab", "test_deeplab_v3_plus"],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-def test_panoptic_deeplab(device, model_location_generator):
+def test_model_panoptic_deeplab(device, model_category, model_location_generator):
     """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
 
     compute_grid = device.compute_with_storage_grid_size()
@@ -55,8 +62,6 @@ def test_panoptic_deeplab(device, model_location_generator):
     pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
 
     # Use proper input preprocessing to avoid OOM (creates HEIGHT SHARDED memory config)
-    from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
-
     ttnn_input = preprocess_nchw_input_tensor(device, pytorch_input)
 
     try:
@@ -69,6 +74,7 @@ def test_panoptic_deeplab(device, model_location_generator):
             ins_embed_head_channels=ins_embed_head_channels,
             train_size=train_size,
             weights_path=complete_weights_path,
+            model_category=model_category,
         )
         pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
         pytorch_model.eval()
@@ -112,6 +118,7 @@ def test_panoptic_deeplab(device, model_location_generator):
             ins_embed_head_channels=ins_embed_head_channels,
             train_size=train_size,
             model_configs=model_configs,
+            model_category=model_category,
         )
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
@@ -134,26 +141,27 @@ def test_panoptic_deeplab(device, model_location_generator):
             exp_pcc=0.993,
         )
     )
-    all_passed.append(
-        check_ttnn_output(
-            "Center",
-            pytorch_center,
-            ttnn_center,
-            to_channel_first=False,
-            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-            exp_pcc=0.959,
+    if model_category == PANOPTIC_DEEPLAB:
+        all_passed.append(
+            check_ttnn_output(
+                "Center",
+                pytorch_center,
+                ttnn_center,
+                to_channel_first=False,
+                output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+                exp_pcc=0.959,
+            )
         )
-    )
-    all_passed.append(
-        check_ttnn_output(
-            "Offset",
-            pytorch_offset,
-            ttnn_offset,
-            to_channel_first=False,
-            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-            exp_pcc=0.999,
+        all_passed.append(
+            check_ttnn_output(
+                "Offset",
+                pytorch_offset,
+                ttnn_offset,
+                to_channel_first=False,
+                output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+                exp_pcc=0.999,
+            )
         )
-    )
 
     # Fail test based on PCC results
     assert all(all_passed), f"PDL outputs did not pass the PCC check {all_passed=}"

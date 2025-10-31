@@ -7,55 +7,139 @@ Common utilities for Panoptic DeepLab.
 This module provides functions used across the Panoptic DeepLab model.
 """
 
+from loguru import logger
 import torch
 import ttnn
 import os
 
 PDL_L1_SMALL_SIZE = 4 * 1024  # Minimum L1 small size for Panoptic DeepLab
+PANOPTIC_DEEPLAB = "panoptic_deeplab"
+DEEPLAB_V3_PLUS = "deeplab_v3_plus"
 
 
-def get_panoptic_deeplab_weights_path(model_location_generator=None, test_file_path=None):
+def load_images(image_dir: str):
+    """Load all images from a directory."""
+    if not check_if_folder_contains_image(image_dir):
+        logger.warning(f"No images found in directory: {image_dir}")
+        return []
+
+    supported_formats = (".png", ".jpg", ".jpeg", ".bmp")
+    image_paths = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.lower().endswith(supported_formats)]
+    return image_paths
+
+
+def check_if_folder_contains_image(folder_path):
     """
-    Get the complete path to the Panoptic DeepLab model weights file.
+    Check if the given folder contains any image files.
 
     Args:
-        model_location_generator: Optional model location generator function for CI environments
-        test_file_path: Optional path to the test file (used for local path determination)
+        folder_path (str): Path to the folder to check.
 
     Returns:
-        str: Complete path to the model weights file
+        bool: True if the folder contains image files, False otherwise.
     """
-    # Determine weights path based on environment
+    if not os.path.isdir(folder_path):
+        return False
+
+    image_extensions = (".png", ".jpg", ".jpeg")
+    for filename in os.listdir(folder_path):
+        if filename.lower().endswith(image_extensions):
+            return True
+    return False
+
+
+def get_panoptic_deeplab_resource_path(resource_type, model_location_generator=None, test_file_path=None):
+    """
+    Get the path to Panoptic DeepLab resources (weights or images).
+
+    Args:
+        resource_type: Either "weights" or "images"
+        model_location_generator: Optional model location generator for CI
+        test_file_path: Optional path to test file for local path determination
+
+    Returns:
+        str: Path to the requested resource
+    """
+    # All differences parametrized in one config
+    config = {
+        "weights": {
+            "local_subdir": "weights",
+            "filename": "model_final_bd324a.pkl",
+            "ci_cache_path": "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl",
+            "ci_download_path": "vision-models/panoptic_deeplab",
+            "ci_model_subdir": "",  # Use default
+            "validate_func": None,  # No validation for weights
+            "error_message": None,
+        },
+        "images": {
+            "local_subdir": "images",
+            "filename": None,  # Return directory, not specific file
+            "ci_cache_path": "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/images",
+            "ci_download_path": "vision-models/panoptic_deeplab/images",
+            "ci_model_subdir": "",  # Use default
+            "validate_func": check_if_folder_contains_image,
+            "error_message": "No images found in directory",
+        },
+    }[resource_type]
+
+    # Get base directory (same logic for both)
+    base_dir = _get_base_directory(test_file_path)
+
+    # Environment-based path resolution
     if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        # Use local path
-        if test_file_path is not None:
-            current_dir = os.path.dirname(os.path.abspath(test_file_path))
-            # Navigate up from tests/pcc/ to models/experimental/panoptic_deeplab/
-            while not current_dir.endswith("panoptic_deeplab"):
-                parent_dir = os.path.dirname(current_dir)
-                if parent_dir == current_dir:  # Reached root directory
-                    break
-                current_dir = parent_dir
-        else:
-            # Fallback to current working directory approach
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            # Navigate up from tt/ to models/experimental/panoptic_deeplab/
-            current_dir = os.path.dirname(current_dir)
-        complete_weights_path = os.path.join(current_dir, "weights", "model_final_bd324a.pkl")
+        # Local environment
+        resource_path = os.path.join(base_dir, config["local_subdir"])
+        if config["filename"]:
+            resource_path = os.path.join(resource_path, config["filename"])
+
+        # Validate local path immediately for images
+        if config["validate_func"] and not config["validate_func"](resource_path):
+            raise RuntimeError(f"{config['error_message']}: {resource_path}")
     else:
-        # Check if weights already exist in CI v2 cache first
-        cached_weights_path = (
-            "/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab/model_final_bd324a.pkl"
-        )
-        if os.path.exists(cached_weights_path):
-            complete_weights_path = cached_weights_path
+        # CI environment - check cache first
+        cache_exists = os.path.exists(config["ci_cache_path"])
+        cache_valid = config["validate_func"] is None or config["validate_func"](config["ci_cache_path"])
+        if cache_exists and cache_valid:
+            resource_path = config["ci_cache_path"]
+            # Validate CI cached path immediately for images
         else:
-            # Use CI v2 model location generator to download
-            complete_weights_path = (
-                model_location_generator("vision-models/panoptic_deeplab", model_subdir="", download_if_ci_v2=True)
-                / "model_final_bd324a.pkl"
+            # Download using model location generator
+            resource_path = model_location_generator(
+                config["ci_download_path"], model_subdir=config["ci_model_subdir"], download_if_ci_v2=True
             )
-    return complete_weights_path
+
+            # Add filename if specified
+            if config["filename"]:
+                resource_path = os.path.join(resource_path, config["filename"])
+
+            # Validate CI downloaded path immediately for images
+            if config["validate_func"] and not config["validate_func"](resource_path):
+                raise RuntimeError(f"{config['error_message']}: {resource_path}")
+
+    return resource_path
+
+
+def _get_base_directory(test_file_path):
+    """Helper to get the panoptic_deeplab base directory."""
+    if test_file_path is not None:
+        current_dir = os.path.dirname(os.path.abspath(test_file_path))
+        while not current_dir.endswith("panoptic_deeplab"):
+            parent_dir = os.path.dirname(current_dir)
+            if parent_dir == current_dir:
+                break
+            current_dir = parent_dir
+    else:
+        current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return current_dir
+
+
+# Simple wrapper functions
+def get_panoptic_deeplab_weights_path(model_location_generator=None, test_file_path=None):
+    return get_panoptic_deeplab_resource_path("weights", model_location_generator, test_file_path)
+
+
+def get_panoptic_deeplab_images_path(model_location_generator=None, test_file_path=None):
+    return get_panoptic_deeplab_resource_path("images", model_location_generator, test_file_path)
 
 
 def get_panoptic_deeplab_config():
