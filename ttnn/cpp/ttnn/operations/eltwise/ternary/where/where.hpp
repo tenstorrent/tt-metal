@@ -22,6 +22,15 @@ struct WhereOperation {
         const std::variant<float, Tensor>& value_false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt);
+
+    template <typename T>
+        requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
+    static Tensor invoke(
+        const Tensor& predicate,
+        const T& value_true,
+        const T& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
 };
 
 }  // namespace ternary
