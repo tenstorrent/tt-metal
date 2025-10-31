@@ -9,11 +9,10 @@
 #include <array>
 #include <type_traits>
 
-#if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
-#include "tt-metalium/routing_table_generator.hpp"
-#endif
-
 namespace tt::tt_fabric {
+
+// Forward declaration to avoid including heavy host-only headers here
+class FabricNodeId;
 
 using chan_id_t = std::uint8_t;
 using routing_plane_id_t = std::uint8_t;
@@ -170,7 +169,7 @@ struct __attribute__((packed)) intra_mesh_routing_path_t {
 
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Routing calculation methods
-    void calculate_chip_to_all_routing_fields(FabricNodeId src_fabric_node_id, uint16_t num_chips);
+    void calculate_chip_to_all_routing_fields(const FabricNodeId& src_fabric_node_id, uint16_t num_chips);
 #else
     // Device-side methods (declared here, implemented in fabric_routing_path_interface.h):
     inline bool decode_route_to_buffer(uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const;
