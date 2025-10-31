@@ -315,7 +315,7 @@ void MAIN {
     // ---------------------------------------------------------------------------
     cb_wait_front(cb_ex_global, num_block_ht_result_tiles);
     cb_reserve_back(cb_transpose, num_block_ht_result_tiles);
-    transpose_wh_init(cb_ex_global, cb_transpose);
+    transpose_wh_init_short(cb_ex_global);
     uint32_t processed_tiles = 0;
     while (processed_tiles < num_block_ht_result_tiles) {
         uint32_t tiles_to_load = std::min(num_block_ht_result_tiles - processed_tiles, num_dest_regs);
