@@ -246,13 +246,13 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
     LocalMeshBinding local_mesh_binding;
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
         local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{0};
+        local_mesh_binding.host_rank = MeshHostRankId{1};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 1) {
         local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{1};
+        local_mesh_binding.host_rank = MeshHostRankId{2};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 2) {
         local_mesh_binding.mesh_ids = {MeshId{0}};
-        local_mesh_binding.host_rank = MeshHostRankId{2};
+        local_mesh_binding.host_rank = MeshHostRankId{0};
     } else if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 3) {
         local_mesh_binding.mesh_ids = {MeshId{0}};
         local_mesh_binding.host_rank = MeshHostRankId{3};

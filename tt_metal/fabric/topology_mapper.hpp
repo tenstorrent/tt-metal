@@ -220,8 +220,8 @@ private:
      * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
      * to gather the mappings from all ranks.
      */
-    std::unordered_map<MeshId, std::unordered_map<HostName, MeshHostRankId>> build_host_name_to_mesh_rank_mapping()
-        const;
+    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>
+    build_asic_id_to_mesh_rank_mapping() const;
 
     /**
      * @brief Build the mapping between fabric node IDs and host ranks
@@ -284,8 +284,8 @@ private:
         const MeshId mesh_id,
         const PhysicalAdjacencyMap& adjacency_map_physical,
         const LogicalAdjacencyMap& adjacency_map_logical,
-        const std::unordered_map<HostName, MeshHostRankId>& host_name_to_mesh_rank,
-        const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_host_rank);
+        const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
+        const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank);
 
     /**
      * @brief Broadcast the mapping to all hosts
@@ -318,7 +318,13 @@ private:
     std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 
     // Rebuild host-rank containers purely from fabric_node_id_to_asic_id_ mapping
-    void rebuild_host_rank_structs_from_mapping();
+    void rebuild_host_rank_structs_from_mapping(
+        const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>&
+            asic_id_to_mesh_rank);
+
+    void print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const;
+
+    void print_physical_adjacency_map(const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adj_map) const;
 };
 
 }  // namespace tt::tt_fabric

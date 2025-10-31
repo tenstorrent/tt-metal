@@ -1,15 +1,15 @@
 rank_bindings:
   - rank: 0
     mesh_id: 0
-    mesh_host_rank: 0
+    mesh_host_rank: 1
 
   - rank: 1
     mesh_id: 0
-    mesh_host_rank: 1
+    mesh_host_rank: 2
 
   - rank: 2
     mesh_id: 0
-    mesh_host_rank: 2
+    mesh_host_rank: 0
 
   - rank: 3
     mesh_id: 0

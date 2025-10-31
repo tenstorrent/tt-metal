@@ -226,7 +226,8 @@ void TopologyMapper::build_mapping() {
 
     // Build host-to-mesh mapping via distributed all-gather of local bindings.
     auto mesh_id_host_names = build_host_mesh_mapping();
-    auto host_name_to_mesh_rank = build_host_name_to_mesh_rank_mapping();
+
+    auto asic_id_to_mesh_rank = build_asic_id_to_mesh_rank_mapping();
     auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
@@ -235,8 +236,8 @@ void TopologyMapper::build_mapping() {
         auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
         auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
 
-        log_debug(tt::LogFabric, "TopologyMapper: Adjacency map logical: {}", adjacency_map_logical);
-        log_debug(tt::LogFabric, "TopologyMapper: Adjacency map physical: {}", adjacency_map_physical);
+        print_logical_adjacency_map(adjacency_map_logical);
+        print_physical_adjacency_map(adjacency_map_physical);
 
         // Use sat solver algo to preserve the logical connectivity in the physical topology
         for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
@@ -244,7 +245,7 @@ void TopologyMapper::build_mapping() {
                 mesh_id,
                 adjacency_map_physical.at(mesh_id),
                 adjacency_map_logical.at(mesh_id),
-                host_name_to_mesh_rank.at(mesh_id),
+                asic_id_to_mesh_rank.at(mesh_id),
                 fabric_node_id_to_mesh_rank.at(mesh_id));
         }
 
@@ -256,7 +257,7 @@ void TopologyMapper::build_mapping() {
     }
 
     // Build host rank containers now that mapping is complete
-    rebuild_host_rank_structs_from_mapping();
+    rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
 }
 
 std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_host_mesh_mapping() const {
@@ -329,15 +330,31 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_h
     return mesh_id_to_hosts;
 }
 
-std::unordered_map<MeshId, std::unordered_map<HostName, MeshHostRankId>>
-TopologyMapper::build_host_name_to_mesh_rank_mapping() const {
-    std::unordered_map<MeshId, std::unordered_map<HostName, MeshHostRankId>> mapping;
+std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
+TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping() const {
+    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>> mapping;
+    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+        for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
+            auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
+            TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
+            mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
+        }
+    }
+    return mapping;
+}
+
+std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>
+TopologyMapper::build_asic_id_to_mesh_rank_mapping() const {
+    std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>> mapping;
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
 
     if (world_size <= 1) {
         for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
-            mapping[mesh_id][physical_system_descriptor_.my_host_name()] = local_mesh_binding_.host_rank;
+            for (const auto& asic_id :
+                 physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name())) {
+                mapping[mesh_id][asic_id] = local_mesh_binding_.host_rank;
+            }
         }
         return mapping;
     }
@@ -386,21 +403,10 @@ TopologyMapper::build_host_name_to_mesh_rank_mapping() const {
             }
             const auto [mesh_id, host_rank] = decode_mesh_id_and_rank(encoded);
             const auto& host_name = rank_to_host.at(mpi_rank);
-            mapping[mesh_id][host_name] = host_rank;
-        }
-    }
-
-    return mapping;
-}
-
-std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
-TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping() const {
-    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>> mapping;
-    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
-        for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
-            auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
-            TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
-            mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
+            auto asics = physical_system_descriptor_.get_asics_connected_to_host(host_name);
+            for (const auto& asic : asics) {
+                mapping[mesh_id][asic] = host_rank;
+            }
         }
     }
     return mapping;
@@ -469,7 +475,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     const MeshId mesh_id,
     const PhysicalAdjacencyMap& adjacency_map_physical,
     const LogicalAdjacencyMap& adjacency_map_logical,
-    const std::unordered_map<HostName, MeshHostRankId>& host_name_to_mesh_rank,
+    const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
     const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
     auto& phys_adj = adjacency_map_physical;
     auto& log_adj = adjacency_map_logical;
@@ -922,6 +928,9 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         }
 
         for (size_t j : candidates) {
+            if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[j])) {
+                continue;
+            }
             // Debug: occasionally emit candidate summary for selected logical index
             if ((dfs_calls & ((1u << 18) - 1)) == 1) {
                 log_debug(
@@ -1028,14 +1037,7 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 continue;
             }
 
-            // In the candidate generation loop, after degree check
-            HostName phys_host = physical_system_descriptor_.get_host_name_for_asic(phys_nodes[j]);
-            MeshHostRankId actual_rank = host_name_to_mesh_rank.at(phys_host);
-            FabricNodeId fn = log_nodes[li];
-            MeshHostRankId expected_rank = fabric_node_id_to_mesh_rank.at(fn);
-            if (actual_rank != expected_rank) {
-                continue;
-            }
+            log_debug(tt::LogFabric, "Assigning fabric_node: {} to asic: {}", log_nodes[li], phys_nodes[j]);
 
             used[j] = true;
             mapping[li] = static_cast<int>(j);
@@ -1286,12 +1288,13 @@ MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional
     return MeshContainer<ChipId>(sub_shape, sub_chip_ids);
 }
 
-void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
+void TopologyMapper::rebuild_host_rank_structs_from_mapping(
+    const std::unordered_map<MeshId, std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
-    std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_to_hosts;
-    std::unordered_map<MeshId, std::unordered_map<HostName, MeshCoordinateRange>> mesh_host_to_range;
+    std::unordered_map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
+    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;
     // For wraparound-aware construction, accumulate coordinates per host then compute minimal circular ranges.
-    std::unordered_map<MeshId, std::unordered_map<HostName, std::vector<MeshCoordinate>>> mesh_host_to_coords;
+    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, std::vector<MeshCoordinate>>> mesh_host_to_coords;
 
     // Precompute coordinate per chip from MeshGraph
     std::unordered_map<MeshId, std::unordered_map<ChipId, MeshCoordinate>> per_mesh_chip_to_coord;
@@ -1305,17 +1308,18 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
 
     // Accumulate coordinates per host
     for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
-        const auto host = physical_system_descriptor_.get_host_name_for_asic(asic_id);
-        mesh_to_hosts[fabric_node_id.mesh_id].insert(host);
-        const auto coord = per_mesh_chip_to_coord[fabric_node_id.mesh_id].at(fabric_node_id.chip_id);
-        mesh_host_to_coords[fabric_node_id.mesh_id][host].push_back(coord);
+        const auto mesh_id_val = fabric_node_id.mesh_id;
+        const auto host_rank = asic_id_to_mesh_rank.at(mesh_id_val).at(asic_id);
+        mesh_to_hosts[mesh_id_val].insert(host_rank);
+        const auto coord = per_mesh_chip_to_coord[mesh_id_val].at(fabric_node_id.chip_id);
+        mesh_host_to_coords[mesh_id_val][host_rank].push_back(coord);
     }
 
     // Build minimal wraparound-aware ranges per host
     for (const auto& [mesh_id, host_coords_map] : mesh_host_to_coords) {
         const auto shape = mesh_graph_.get_mesh_shape(mesh_id);
         auto& range_map = mesh_host_to_range[mesh_id];
-        for (const auto& [host, coords] : host_coords_map) {
+        for (const auto& [host_rank, coords] : host_coords_map) {
             // Compute unique values per dimension
             std::vector<uint32_t> unique_r;
             std::vector<uint32_t> unique_c;
@@ -1370,9 +1374,9 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
 
             bool wraparound = row_start > row_end || col_start > col_end;
             if (wraparound) {
-                range_map.emplace(host, MeshCoordinateRange(start, end, shape));
+                range_map.emplace(host_rank, MeshCoordinateRange(start, end, shape));
             } else {
-                range_map.emplace(host, MeshCoordinateRange(start, end));
+                range_map.emplace(host_rank, MeshCoordinateRange(start, end));
             }
         }
     }
@@ -1390,7 +1394,7 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
         const auto& range_map = mesh_host_to_range.at(mesh_id);
         std::set<std::uint32_t> rows;
         std::set<std::uint32_t> cols;
-        for (const auto& [host, range] : range_map) {
+        for (const auto& [host_rank, range] : range_map) {
             rows.insert(range.start_coord()[0]);
             cols.insert(range.start_coord()[1]);
         }
@@ -1404,21 +1408,18 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
         auto col_index = [&](std::uint32_t c) {
             return std::distance(col_list.begin(), std::find(col_list.begin(), col_list.end(), c));
         };
-        // Map host -> normalized host-rank id aligned with distributed ranks for this mesh
-        std::unordered_map<HostName, std::uint32_t> host_to_rank;
+        // Compute base_rank as min over host_ranks
         std::uint32_t base_rank = std::numeric_limits<std::uint32_t>::max();
-        for (const auto& [host, _] : range_map) {
-            std::uint32_t rank = physical_system_descriptor_.get_rank_for_hostname(host);
-            host_to_rank[host] = rank;
-            base_rank = std::min(base_rank, rank);
+        for (const auto& [host_rank, _] : range_map) {
+            base_rank = std::min(base_rank, host_rank.get());
         }
         for (std::uint32_t r : row_list) {
             for (std::uint32_t c : col_list) {
-                // find host whose range starts at (r,c)
-                for (const auto& [host, range] : range_map) {
+                // find host_rank whose range starts at (r,c)
+                for (const auto& [original_host_rank, range] : range_map) {
                     if (range.start_coord()[0] == r && range.start_coord()[1] == c) {
                         std::size_t idx = (row_index(r) * host_grid_shape[1]) + col_index(c);
-                        std::uint32_t norm_rank = host_to_rank[host] - base_rank;
+                        std::uint32_t norm_rank = original_host_rank.get() - base_rank;
                         MeshHostRankId host_rank_val{norm_rank};
                         if (idx < host_rank_values.size()) {
                             host_rank_values[idx] = host_rank_val;
@@ -1430,6 +1431,42 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
             }
         }
         mesh_host_ranks_[*mesh_id] = MeshContainer<MeshHostRankId>(host_grid_shape, host_rank_values);
+    }
+}
+
+void TopologyMapper::print_logical_adjacency_map(const std::unordered_map<MeshId, LogicalAdjacencyMap>& adj_map) const {
+    log_debug(tt::LogFabric, "TopologyMapper: Logical Adjacency Map:");
+    for (const auto& [mesh_id, node_map] : adj_map) {
+        log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
+        for (const auto& [node, neighbors] : node_map) {
+            std::string neigh_str;
+            for (size_t i = 0; i < neighbors.size(); ++i) {
+                neigh_str += fmt::format("{}", neighbors[i]);
+                if (i < neighbors.size() - 1) {
+                    neigh_str += ", ";
+                }
+            }
+            log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node, neigh_str);
+        }
+    }
+}
+
+void TopologyMapper::print_physical_adjacency_map(
+    const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adj_map) const {
+    log_debug(tt::LogFabric, "TopologyMapper: Physical Adjacency Map:");
+    for (const auto& [mesh_id, node_map] : adj_map) {
+        log_debug(tt::LogFabric, "  Mesh ID: {}", *mesh_id);
+        for (const auto& [node, neighbors] : node_map) {
+            std::string neigh_str;
+            for (size_t i = 0; i < neighbors.size(); ++i) {
+                neigh_str += fmt::format("{}", neighbors[i].get());
+                if (i < neighbors.size() - 1) {
+                    neigh_str += ", ";
+                }
+            }
+            log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node.get(), neigh_str);
+            log_debug(tt::LogFabric, "    Host_name = {}", physical_system_descriptor_.get_host_name_for_asic(node));
+        }
     }
 }
 
