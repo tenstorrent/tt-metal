@@ -83,6 +83,7 @@ jobs:
           {
             name: "Galaxy DiT Flux.1 model perf tests",
             model-type: "Flux.1-Dev",
+            model-name: "flux1-dev",
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
@@ -102,6 +103,7 @@ jobs:
           {
             name: "Galaxy Mochi model perf tests",
             model-type: "mochi",
+            model-name: "mochi",
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
@@ -159,7 +161,7 @@ jobs:
           run_args: |
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
+        if: ${{ matrix.test-group.save-perf-data && (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) && !cancelled() }}
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
@@ -171,7 +173,7 @@ jobs:
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
+        if: ${{ matrix.test-group.save-perf-data && (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -180,7 +182,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() }}
+        if: ${{ !(matrix.test-group.save-perf-data) && (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
@@ -212,14 +214,14 @@ jobs:
             fi
           fi
       - name: Upload Models perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy}}
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && !matrix.test-group.tracy && (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - name: Upload CCL perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy}}
+        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' && matrix.test-group.tracy && (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
@@ -233,7 +235,7 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) }}
         with:
           path: generated/test_reports/
           prefix: "test_reports_"

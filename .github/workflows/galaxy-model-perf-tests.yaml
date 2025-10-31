@@ -15,7 +15,9 @@ on:
           - llama_unit_tests
           - llama70b_prefill
           - sd35
+          - flux1-dev
           - sentence_bert
+          - mochi
   schedule:
     - cron: "0 10 * * *"  # Every day at 10:00 UTC
 
