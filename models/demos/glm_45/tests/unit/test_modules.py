@@ -281,10 +281,14 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         position_ids, device=setup["mesh_device"], layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
     )
 
-    # Create TTNN mask
-    tt_mask = mask.repeat(1, config.num_attention_heads // setup["mesh_device"].shape[1], 1, 1).transpose(1, 2)
+    # Create TTNN mask in expected SDPA shape for GQA: [1, nh_per_kv, num_tokens(seq_len), kv_len]
+    # sdpa expects second dim = nh // nkv (grouped query heads per KV head)
+    num_local_heads = config.num_attention_heads // setup["mesh_device"].shape[1]
+    num_local_kv_heads = config.num_key_value_heads // setup["mesh_device"].shape[1]
+    nh_per_kv = num_local_heads // num_local_kv_heads
+    tt_mask_torch = mask.repeat(1, nh_per_kv, 1, 1)
     tt_mask = ttnn.from_torch(
-        tt_mask.transpose(1, 2) if seq_len > 1 else tt_mask,
+        tt_mask_torch,
         device=setup["mesh_device"],
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
