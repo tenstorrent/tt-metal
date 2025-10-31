@@ -10,6 +10,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include "circular_buffer_config.hpp"
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
 
@@ -57,7 +58,7 @@ CircularBufferImpl::CircularBufferImpl(
 CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
     id_(reinterpret_cast<uintptr_t>(this)),
     core_ranges_(descriptor.core_ranges),
-    config_(descriptor),
+    config_(CircularBufferConfigImpl(descriptor)),
     locally_allocated_address_(std::nullopt) {
     this->validate_set_config_attributes();
     if (descriptor.global_circular_buffer) {
