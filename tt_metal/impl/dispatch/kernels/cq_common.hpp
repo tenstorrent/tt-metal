@@ -352,13 +352,6 @@ public:
         return usable;
     }
 
-    // Advance the block to the next index, wrapping around if necessary.
-    FORCE_INLINE void move_rd_to_next_block() {
-        static_assert((cb_blocks & (cb_blocks - 1)) == 0);
-        rd_block_idx++;
-        rd_block_idx &= cb_blocks - 1;
-    }
-
     FORCE_INLINE void wait_all_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
@@ -395,6 +388,14 @@ protected:
         this->rd_block_idx = 0;
     }
 
+    // Advance the block to the next index, wrapping around if necessary.
+    FORCE_INLINE void move_rd_to_next_block() {
+        static_assert((cb_blocks & (cb_blocks - 1)) == 0);
+        rd_block_idx++;
+        rd_block_idx &= cb_blocks - 1;
+    }
+
+
 private:
     // Last value read from the upstream semaphore (producer credits). Cached snapshot for availability checks.
     uint32_t upstream_count_{0};
@@ -417,23 +418,6 @@ class CBReaderWithReleasePolicy : public CBReader<my_sem_id, cb_log_page_size, c
 public:
     FORCE_INLINE void init() {
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
-        this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
-    }
-
-    FORCE_INLINE void release_block_pages() {
-        // When finishing a block, don't immediately return it, but just store the number of nonposted write requests
-        // issued. We will wait for writes to be sent and will return the  block when the next block is finished; this
-        // allows time for writes from that block to complete. Note: this is incorrect if writes can be sent out of
-        // order. We should use transaction IDs instead in that case.
-        if (released_prev_block_) {
-            WAYPOINT("CBRW");
-            while (!wrap_ge(
-                NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT), this->block_noc_writes_to_clear_));
-            ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
-            WAYPOINT("CBRD");
-        } else {
-            released_prev_block_ = true;
-        }
         this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
     }
 
@@ -465,6 +449,24 @@ public:
     }
 
 private:
+    FORCE_INLINE void release_block_pages() {
+        // When finishing a block, don't immediately return it, but just store the number of nonposted write requests
+        // issued. We will wait for writes to be sent and will return the  block when the next block is finished; this
+        // allows time for writes from that block to complete. Note: this is incorrect if writes can be sent out of
+        // order. We should use transaction IDs instead in that case.
+        if (released_prev_block_) {
+            WAYPOINT("CBRW");
+            while (!wrap_ge(
+                NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT), this->block_noc_writes_to_clear_));
+            ReleasePolicy::template release<noc_idx, noc_xy, sem_id>(cb_pages_per_block);
+            WAYPOINT("CBRD");
+        } else {
+            released_prev_block_ = true;
+        }
+        this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
+    }
+
+
     bool released_prev_block_{false};
     // Snapshot of nonposted write requests issued at block entry; used to wait/clear before releasing credits.
     uint32_t block_noc_writes_to_clear_{0};
