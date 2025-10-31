@@ -77,7 +77,7 @@ TrayID get_tray_id_for_chip(
     const std::string& mobo_name,
     bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
-        {"SIENAD8-2L2T", {0xc1, 0x01, 0x42, 0x41}},
+        {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
 

@@ -4,5 +4,5 @@ hosts: {
   rack: 3
   shelf_u: 1
   node_type: "P150_QB_AE_DEFAULT"
-  host: "qbae-metal-04"
+  host: "sjc1-tt-qb-01"
 }

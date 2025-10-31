@@ -38,6 +38,7 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
+    bool kill_links = false;
 };
 
 std::filesystem::path generate_output_dir() {
@@ -108,7 +109,7 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     input_args.help = test_args::has_command_option(args_vec, "--help");
     input_args.validate_connectivity =
         input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
-
+    input_args.kill_links = test_args::has_command_option(args_vec, "--kill-links");
     return input_args;
 }
 
@@ -252,7 +253,40 @@ int main(int argc, char* argv[]) {
 
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
-
+    if (input_args.kill_links) {
+        std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+            asic_id_to_chip_id[asic_id] = chip_id;
+        }
+        std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+        for (const auto& [asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name())) {
+            for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+                for (const auto& eth_connection : eth_connections) {
+                    if (reset_cores[*asic_id].find(eth_connection.src_chan) != reset_cores[*asic_id].end()) {
+                        TT_FATAL(reset_cores[*dst_asic_id].find(eth_connection.dst_chan) != reset_cores[*dst_asic_id].end(), "Expected channel {} on ASIC {} to already be reset", eth_connection.dst_chan, *dst_asic_id);
+                        continue;
+                    }
+                    reset_cores[*asic_id].insert(eth_connection.src_chan);
+                    reset_cores[*dst_asic_id].insert(eth_connection.dst_chan);
+                    auto src_chan = eth_connection.src_chan;
+                    // auto dst_chan = eth_connection.dst_chan;   
+                    const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+                    EthChannelIdentifier src_link = {
+                        .host = physical_system_descriptor.my_host_name(),
+                        .asic_id = asic_id,
+                        .tray_id = asic_descriptor.tray_id,
+                        .asic_location = asic_descriptor.asic_location,
+                        .channel = src_chan,
+                    };
+                    std::cout << "Taking down link " << +src_chan << " on ASIC " << *asic_id << std::endl;
+                    issue_reset_step(src_link, ResetAction::PORT_ACTION_DOWN);
+                }
+            }
+        }
+    
+        physical_system_descriptor.run_discovery(true, true);
+    }
     AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     bool links_reset = false;
@@ -264,9 +298,7 @@ int main(int argc, char* argv[]) {
 
     while (!missing_asic_topology.empty() && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
         // reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
-        for (uint32_t reset_step = 0; reset_step < MAX_RETRAINS_BEFORE_FAILURE; reset_step++) {
-            reset_ethernet_links_bh(missing_asic_topology, reset_step);
-        }
+        reset_ethernet_links_bh(missing_asic_topology, num_retrains);
 
         links_reset = true;
         num_retrains++;
