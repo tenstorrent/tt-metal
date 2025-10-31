@@ -179,6 +179,7 @@ public:
         // Unlike other core types, the stack on erisc0 is not dynamic because it's setup by base firmware.
         // Trigger an error for kernels which may exceed the static stack usage to prevent difficult to debug issues
         // 2048 B = stack size taken from the base firmware
+        // 64 B = Reserved for base firmware usage
         // 72 B = Approx. stack usage at the time the kernel is launched
         // 2048 B - 64 B - 72 B = 1912 B free for kernel
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
