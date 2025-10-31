@@ -6,6 +6,7 @@ import ttnn
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_semseg import TtDeepLabV3PlusHead
+from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsampleMatmulTTNN as TtBilinearUpsample
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 
 
@@ -81,12 +82,59 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             self._offset_output_original_channels = offset_predictor_params["original_out_channels"]
             logger.debug(f"Offset predictor: stored original_out_channels={self._offset_output_original_channels}")
 
-        # Final upsample - use builder API
-        # Store scale factor for dynamic upsample creation during forward pass
-        self.final_upsample_scale = (
-            common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
+        # Final upsample - matmul based bilinear upsample
+        # perf wise this makes sense because we dont need to permute to channel last after it
+        # we dont need to permute to channel last because this is final output that goes to the host
+
+        # First config
+        final_upsample_mm_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 4),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            out_block_h=4,
+            out_block_w=2,
+            per_core_M=4,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+            gather_in0=False,
+            num_global_cb_receivers=0,
+            untilize_out=False,
         )
-        self.final_upsample_mode = "nearest"
+
+        # Second config
+        final_upsample_mm_config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 4),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            out_block_h=16,
+            out_block_w=2,
+            per_core_M=16,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+            gather_in0=False,
+            num_global_cb_receivers=0,
+            untilize_out=False,
+        )
+
+        self.final_upsample = TtBilinearUpsample(
+            device,
+            input_batch=1,
+            input_channels=32,  # true value is 1 (offset) and 2 (logits); this is padded somewhere
+            input_height=128,
+            input_width=256,
+            scale=common_stride,
+            input_channels_first=False,
+            output_channels_first=True,
+            mm1_program_config=final_upsample_mm_config1,
+            mm2_program_config=final_upsample_mm_config2,
+            output_dtype=ttnn.bfloat8_b,
+        )
 
         # Initialize original output channels to None if not already set from parameters
         if not hasattr(self, "_center_output_original_channels"):
@@ -122,27 +170,12 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # Convert to interleaved DRAM if sharded
         if center_logits.is_sharded():
-            center_logits = ttnn.sharded_to_interleaved(center_logits, ttnn.DRAM_MEMORY_CONFIG)
+            center_logits = ttnn.sharded_to_interleaved(center_logits, ttnn.L1_MEMORY_CONFIG)
         else:
-            center_logits = ttnn.to_memory_config(center_logits, ttnn.DRAM_MEMORY_CONFIG)
+            center_logits = ttnn.to_memory_config(center_logits, ttnn.L1_MEMORY_CONFIG)
 
-        # Convert to ROW_MAJOR for upsample
-        center_logits = ttnn.to_layout(center_logits, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Calculate scale factors
-        scale_h = self.final_upsample_scale[0]
-        scale_w = self.final_upsample_scale[1]
-        logger.debug(
-            f"Center: Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
-        )
-
-        # Upsample directly
-        center_logits = ttnn.upsample(center_logits, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
-
-        # Convert back to TILE_LAYOUT and DRAM
-        center_logits = ttnn.to_layout(center_logits, ttnn.TILE_LAYOUT)
-        center_logits = ttnn.to_memory_config(center_logits, ttnn.DRAM_MEMORY_CONFIG)
-        logger.debug(f"TtPanopticDeepLabInsEmbedHead center upsample complete - shape: {center_logits.shape}")
+        # Matmul based upsample
+        center_logits = self.final_upsample(center_logits)
 
         # --- Final Upsample for Offset ---
         # Use saved spatial dimensions
@@ -160,26 +193,13 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
 
         # Convert to interleaved DRAM if sharded
         if offset_logits.is_sharded():
-            offset_logits = ttnn.sharded_to_interleaved(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
+            offset_logits = ttnn.sharded_to_interleaved(offset_logits, ttnn.L1_MEMORY_CONFIG)
         else:
-            offset_logits = ttnn.to_memory_config(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
-
-        # Convert to ROW_MAJOR for upsample
-        offset_logits = ttnn.to_layout(offset_logits, ttnn.ROW_MAJOR_LAYOUT)
+            offset_logits = ttnn.to_memory_config(offset_logits, ttnn.L1_MEMORY_CONFIG)
 
         # Calculate scale factors
-        scale_h = self.final_upsample_scale[0]
-        scale_w = self.final_upsample_scale[1]
-        logger.debug(
-            f"Offset: Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
-        )
-
-        # Upsample directly
-        offset_logits = ttnn.upsample(offset_logits, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
-
-        # Convert back to TILE_LAYOUT and DRAM
-        offset_logits = ttnn.to_layout(offset_logits, ttnn.TILE_LAYOUT)
-        offset_logits = ttnn.to_memory_config(offset_logits, ttnn.DRAM_MEMORY_CONFIG)
+        # Matmul based upsample
+        offset_logits = self.final_upsample(offset_logits)
 
         # Apply offset scaling
         offset_logits = ttnn.mul(offset_logits, self.common_stride)

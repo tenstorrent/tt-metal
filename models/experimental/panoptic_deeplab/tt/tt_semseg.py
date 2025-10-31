@@ -6,6 +6,7 @@ import ttnn
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
+from models.experimental.panoptic_deeplab.tt.tt_upsample import BilinearUpsampleMatmulTTNN as TtBilinearUpsample
 from models.tt_cnn.tt.builder import TtConv2d
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.common.lightweightmodule import LightweightModule
@@ -215,7 +216,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 )
 
             # Use TtUpsample wrapper with channel slicing
-            from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration, ChannelSliceStrategyConfiguration
+            from models.tt_cnn.tt.builder import TtUpsample, UpsampleConfiguration
 
             # Convert to interleaved DRAM if sharded
             if y.is_sharded():
@@ -241,8 +242,8 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 channels=y_channels,
                 batch_size=y_batch,
                 scale_factor=(scale_h, scale_w),
-                mode="bilinear",
-                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=4),
+                mode="nearest",  # accuracy changes are negligible, so we use nearest for performance
+                slice_strategy=None,
             )
             upsample_layer = TtUpsample(upsample_config, self.device)
             y_upsampled = upsample_layer(y)
@@ -374,12 +375,60 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         # Track original output channels for torch conversion (will be set during forward if needed)
         self._last_output_original_channels = None
 
-        # Final upsample - use builder API
-        # Store scale factor for dynamic upsample creation during forward pass
-        self.final_upsample_scale = (
-            common_stride if isinstance(common_stride, tuple) else (common_stride, common_stride)
+        # Final upsample - matmul based bilinear upsample
+        # perf wise this makes sense because we dont need to permute to channel last after it
+        # we dont need to permute to channel last because this is final output that goes to the host
+        # todo: remove hardcoded values; they should come from infer_ttnn_params in the preprocessing step
+
+        # First config
+        final_upsample_mm_config1 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 4),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            out_block_h=4,
+            out_block_w=2,
+            per_core_M=4,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+            gather_in0=False,
+            num_global_cb_receivers=0,
+            untilize_out=False,
         )
-        self.final_upsample_mode = "nearest"
+
+        # Second config
+        final_upsample_mm_config2 = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(5, 4),
+            in0_block_w=2,
+            out_subblock_h=4,
+            out_subblock_w=2,
+            out_block_h=16,
+            out_block_w=2,
+            per_core_M=16,
+            per_core_N=2,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+            gather_in0=False,
+            num_global_cb_receivers=0,
+            untilize_out=False,
+        )
+
+        self.final_upsample = TtBilinearUpsample(
+            device,
+            input_batch=1,
+            input_channels=32,  # true value is 19; this is padded somewhere
+            input_height=128,
+            input_width=256,
+            scale=common_stride,
+            input_channels_first=False,
+            output_channels_first=True,
+            mm1_program_config=final_upsample_mm_config1,
+            mm2_program_config=final_upsample_mm_config2,
+            output_dtype=ttnn.bfloat8_b,
+        )
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
 
     def forward(self, features: Dict[str, ttnn.Tensor]) -> Tuple[ttnn.Tensor, Dict]:
@@ -413,20 +462,13 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
 
         # Convert to interleaved DRAM if sharded
         if y.is_sharded():
-            y = ttnn.sharded_to_interleaved(y, ttnn.DRAM_MEMORY_CONFIG)
+            y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
         else:
-            y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+            y = ttnn.to_memory_config(y, ttnn.L1_MEMORY_CONFIG)
 
         # Convert to ROW_MAJOR for upsample
+        # Staying tilized causes OOM during upsample;
         y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Calculate scale factors
-        # Head convolutions use stride=1 (no downsampling), so use base scale factor
-        scale_h = self.final_upsample_scale[0]
-        scale_w = self.final_upsample_scale[1]
-        logger.debug(
-            f"Upsampling from [{current_h}, {current_w}] with scale_factor=[{scale_h}, {scale_w}] to [{current_h * scale_h}, {current_w * scale_w}]"
-        )
 
         # Check allocation before final upsample
         if not y.is_allocated():
@@ -434,18 +476,14 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         else:
             logger.debug(f"Final upsample: input y is allocated (shape={y.shape}, dtype={y.dtype}, layout={y.layout})")
 
-        # Upsample directly
-        y = ttnn.upsample(y, scale_factor=(scale_h, scale_w), mode=self.final_upsample_mode)
+        # Matmul based upsample
+        y = self.final_upsample(y)
 
         # Check allocation after final upsample
         if not y.is_allocated():
             logger.warning(f"Final upsample: output y is NOT allocated after upsample!")
         else:
             logger.debug(f"Final upsample: output y is allocated (shape={y.shape}, dtype={y.dtype}, layout={y.layout})")
-
-        # Convert back to TILE_LAYOUT and DRAM
-        y = ttnn.to_layout(y, ttnn.TILE_LAYOUT)
-        y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
         logger.debug(f"After final upsample: shape={y.shape}, layout={y.layout}")
 
