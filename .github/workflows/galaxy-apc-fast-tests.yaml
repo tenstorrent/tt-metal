@@ -1,4 +1,4 @@
-name: "(Galaxy) APC fast tests"
+name: "(Galaxy) Fast tests"
 
 on:
   workflow_dispatch:  # Manual trigger only used to test galaxy apc fast tests
