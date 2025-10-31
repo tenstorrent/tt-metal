@@ -1128,7 +1128,7 @@ jobs:
 
           # Add helpful tip if triggered via comment and ping was not used
           if [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ]; then
-            COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username\\\` to ping specific users."
+            COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username1 @username2 @team/subteam\\\` to ping specific users and teams."
           fi
 
           # Add section for files without codeowners if any exist
@@ -1185,21 +1185,52 @@ jobs:
           COMMENT="${{ steps.generate-comment.outputs.comment }}"
           CREATE_NEW="${{ steps.generate-comment.outputs.create-new }}"
 
-          # Get existing comments to find if we should edit or create new
+          # Get existing comments to find if we should edit or create new (with pagination)
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
-          EXISTING_COMMENTS=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                                -H "Accept: application/vnd.github.v3+json" \
-                                "$COMMENTS_API")
+          ALL_COMMENTS="[]"
+          PAGE=1
 
-          # Find existing comment from this workflow (starts with CodeOwners Analysis or contains our marker)
+          echo "Fetching existing comments..."
+          while true; do
+            COMMENTS_PAGE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                                  -H "Accept: application/vnd.github.v3+json" \
+                                  "$COMMENTS_API?per_page=100&page=$PAGE")
+
+            # Check if we got any data
+            if [ -z "$COMMENTS_PAGE" ] || [ "$COMMENTS_PAGE" = "null" ] || [ "$COMMENTS_PAGE" = "[]" ]; then
+              break
+            fi
+
+            # Merge this page with existing comments
+            ALL_COMMENTS=$(echo "$ALL_COMMENTS $COMMENTS_PAGE" | jq -s '.[0] + .[1]')
+
+            # Check if we got a full page (100 items), if not, we're done
+            PAGE_COUNT=$(echo "$COMMENTS_PAGE" | jq '. | length')
+            if [ "$PAGE_COUNT" -lt 100 ]; then
+              break
+            fi
+
+            PAGE=$((PAGE + 1))
+
+            # Safety check to avoid infinite loop
+            if [ $PAGE -gt 10 ]; then
+              echo "Warning: Too many comment pages, stopping at page $PAGE"
+              break
+            fi
+          done
+
+          TOTAL_COMMENTS=$(echo "$ALL_COMMENTS" | jq '. | length')
+          echo "Found $TOTAL_COMMENTS total comments across $((PAGE)) pages"
+
+          # Find existing comment from this workflow (contains our marker)
           # Get the most recent one by sorting by created_at descending
-          EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r "[.[] | select(.body | startswith(\"## CodeOwners\") or contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
+          EXISTING_COMMENT_ID=$(echo "$ALL_COMMENTS" | jq -r "[.[] | select(.body | contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
 
           # Use jq to properly escape the comment for JSON
           TEMP_JSON_FILE=$(mktemp)
           jq -n --arg body "$COMMENT" '{"body": $body}' > "$TEMP_JSON_FILE"
 
-          if [ "$CREATE_NEW" = "true" ] || [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
+          if [ "$CREATE_NEW" = "true" ]; then
             # Create new comment
             echo "Creating new comment..."
             curl -s -X POST \
@@ -1208,6 +1239,21 @@ jobs:
               -H "Content-Type: application/json" \
               --data-binary @"$TEMP_JSON_FILE" \
               "$COMMENTS_API"
+          elif [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
+            # No existing comment found - create new for all commands except explicit "new"
+            if [ "$CREATE_NEW" = "false" ]; then
+              echo "No existing CodeOwners analysis found. Creating new summary comment..."
+              # Create new comment for bare commands and ping commands
+              curl -s -X POST \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$TEMP_JSON_FILE" \
+                "$COMMENTS_API"
+              echo "Created new CodeOwners summary comment"
+            else
+              echo "No existing comment found and CREATE_NEW=true - this shouldn't happen"
+            fi
           else
             # Edit existing comment
             echo "Updating existing comment (ID: $EXISTING_COMMENT_ID)..."
@@ -1221,6 +1267,33 @@ jobs:
 
           rm -f "$TEMP_JSON_FILE"
           echo "Comment updated for PR #$PR_NUMBER"
+
+          # If we updated an existing comment, post an acknowledgment
+          if [ "$CREATE_NEW" = "false" ] && [ -n "$EXISTING_COMMENT_ID" ] && [ "$EXISTING_COMMENT_ID" != "null" ]; then
+            echo "Posting acknowledgment comment for updated summary..."
+
+            # Create URL to the updated comment
+            REPO_NAME="${{ github.repository }}"
+            COMMENT_URL="https://github.com/$REPO_NAME/pull/$PR_NUMBER#issuecomment-$EXISTING_COMMENT_ID"
+
+            # Create acknowledgment message
+            ACK_COMMENT=$(printf "## 🔄 CodeOwners Summary Updated\n\n✅ **CodeOwners summary updated** [here](%s)\n\n💡 **Tip:** Use \`/codeowners new\` to post a fresh summary comment instead of updating the existing one." "$COMMENT_URL")
+
+            # Create JSON payload for acknowledgment comment
+            ACK_JSON_FILE=$(mktemp)
+            jq -n --arg body "$ACK_COMMENT" '{"body": $body}' > "$ACK_JSON_FILE"
+
+            # Post acknowledgment comment
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              --data-binary @"$ACK_JSON_FILE" \
+              "$COMMENTS_API"
+
+            rm -f "$ACK_JSON_FILE"
+            echo "Acknowledgment comment posted for updated summary"
+          fi
 
       - name: Fetch Slack users for direct ping
         if: needs.parse-comment.outputs.is-direct-ping == 'true'
@@ -1344,7 +1417,7 @@ jobs:
             exit 1
           fi
 
-          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
 
@@ -1626,7 +1699,7 @@ jobs:
             }')
 
           echo "Sending direct ping to Slack..."
-          SLACK_RESPONSE=$(curl -s -X POST \
+          SLACK_RESPONSE=$(curl -s --max-time 30 -X POST \
             -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
             -H "Content-type: application/json" \
             -d "$SLACK_PAYLOAD" \
@@ -1675,7 +1748,7 @@ jobs:
 
           # Get PR information
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
@@ -2100,7 +2173,7 @@ jobs:
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
@@ -2227,7 +2300,7 @@ jobs:
 
           # Fetch PR title safely to avoid shell injection
           PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
-          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+          PR_DATA=$(curl -s --max-time 30 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
@@ -2548,7 +2621,7 @@ jobs:
             echo "$SLACK_PAYLOAD"
 
             echo "Attempting to send message to Slack..."
-            SLACK_RESPONSE=$(curl -s -X POST \
+            SLACK_RESPONSE=$(curl -s --max-time 30 -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
               -H "Content-type: application/json" \
               -d "$SLACK_PAYLOAD" \
