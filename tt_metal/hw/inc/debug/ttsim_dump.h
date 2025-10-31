@@ -1,5 +1,5 @@
 #pragma once
-#ifdef ENABLE_TTSIM_TENSIX_DUMP
+#ifdef USING_TTSIM
 class TTSIM_Dump_Guard {
 public:
     TTSIM_Dump_Guard() { __asm__ volatile(".word 0x00000000"); }
