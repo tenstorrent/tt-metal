@@ -121,25 +121,24 @@ jobs:
                 echo "Command: direct ping"
 
                 # Extract GitHub usernames and optional author notes from /ping command
-                # Format: /ping @user1 @team1/subteam "optional message"
+                # Format: /ping @user1 @team1/subteam optional message (quotes optional)
 
-                # Extract the part before quotes for direct ping users only
-                PING_PART=$(echo "$COMMENT_BODY" | sed -n 's/^\/ping\s\+\([^"]*\).*/\1/p')
-                if [ -z "$PING_PART" ]; then
-                  # No quotes, use entire comment after /ping
-                  PING_PART=$(echo "$COMMENT_BODY" | sed 's/^\/ping\s\+//')
-                fi
+                FULL_TEXT=$(echo "$COMMENT_BODY" | sed 's/^\/ping\s\+//')
 
-                # Extract mentions from ping part only (with proper team support)
-                PING_USERS=$(echo "$PING_PART" | grep -oE '@[a-zA-Z0-9_/-]+' | tr '\n' ',' | sed 's/,$//')
+                # Extract all @mentions for ping users
+                PING_USERS=$(echo "$FULL_TEXT" | grep -oE '@[a-zA-Z0-9_/-]+' | tr '\n' ',' | sed 's/,$//')
                 echo "direct-ping-users=$PING_USERS" >> $GITHUB_OUTPUT
                 echo "Found users to ping: $PING_USERS"
 
-                # Extract optional quoted message after usernames
-                PING_QUOTED_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/ping\s\+.*"\([^"]*\)".*/\1/p')
-                if [ -n "$PING_QUOTED_TEXT" ]; then
-                  AUTHOR_NOTES="$PING_QUOTED_TEXT"
-                  echo "Found ping message: $AUTHOR_NOTES"
+                # Extract message (everything after last @mention, strip quotes if present)
+                if [ -n "$PING_USERS" ]; then
+                  # Remove all @mentions to get just the message
+                  MSG_TEXT=$(echo "$FULL_TEXT" | sed 's/@[a-zA-Z0-9_/-]\+//g' | sed 's/^\s*//')
+                  if [ -n "$MSG_TEXT" ]; then
+                    # Strip leading and trailing quotes (handles both complete and incomplete quoting)
+                    AUTHOR_NOTES=$(echo "$MSG_TEXT" | sed -e 's/^["'"'"']\+//' -e 's/["'"'"']\+$//')
+                    echo "Found ping message: $AUTHOR_NOTES"
+                  fi
                 fi
               else
                 # Default: update existing comment
@@ -152,22 +151,13 @@ jobs:
 
               # Extract author notes from /codeowners ping command if provided
               if [ -z "$AUTHOR_NOTES" ]; then
-                # Look for author notes after /codeowners ping
                 if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping\s+" > /dev/null; then
-                  # First, try to extract text between quotes (format: /codeowners ping "text here")
-                  QUOTED_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s\+.*"\([^"]*\)".*/\1/p')
-
-                  if [ -n "$QUOTED_TEXT" ]; then
-                    AUTHOR_NOTES="$QUOTED_TEXT"
-                    echo "Found quoted author notes: $AUTHOR_NOTES"
-                  else
-                    # If no quotes, extract everything after /codeowners ping as plain text
-                    # This captures text without requiring quotes
-                    PLAIN_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s\+\(.*\)$/\1/p')
-                    if [ -n "$PLAIN_TEXT" ]; then
-                      AUTHOR_NOTES="$PLAIN_TEXT"
-                      echo "Found plain text author notes: $AUTHOR_NOTES"
-                    fi
+                  # Extract everything after /codeowners ping
+                  RAW_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s\+\(.*\)$/\1/p')
+                  if [ -n "$RAW_TEXT" ]; then
+                    # Strip leading and trailing quotes (handles both complete and incomplete quoting)
+                    AUTHOR_NOTES=$(echo "$RAW_TEXT" | sed -e 's/^["'"'"']\+//' -e 's/["'"'"']\+$//')
+                    echo "Found author notes: $AUTHOR_NOTES"
                   fi
                 fi
               fi
@@ -738,7 +728,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -776,7 +766,8 @@ jobs:
             for team_entry in "${TEAM_ARRAY[@]}"; do
               [ -z "$team_entry" ] && continue
               team=$(echo "$team_entry" | cut -d':' -f1)
-              [ -z "$team" ] || [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ] && continue
+              [ -z "$team" ] && continue
+              [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ] && continue
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               clean_team=$(echo "$team" | sed 's/^@//')
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
@@ -785,33 +776,37 @@ jobs:
               GROUP_TYPE["$KEY"]="team"
               GROUP_NAME["$KEY"]="$clean_team"
               GROUP_FILES["$KEY"]="$sorted_files"
-              team_members_info="" team_members_list=""
+              team_members_info=""
+              team_members_list=""
               if [ -n "$TEAM_MEMBERS" ]; then
                 team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
                 if [ -n "$team_members_entry" ]; then
                   team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
-                  case "$team_owners" in
-                    insufficient-permissions) team_members_info="Members: (insufficient token permissions)";;
-                    team-not-found) team_members_info="Members: (team not found)";;
-                    unauthorized) team_members_info="Members: (unauthorized access)";;
-                    api-error) team_members_info="Members: (API error)";;
-                    no-members) team_members_info="Members: (no members)";;
-                    *)
-                      all_members=""
-                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
-                      for member in "${MEMBERS_ARRAY[@]}"; do
-                        member_name="$member"
-                        if [ -n "$member" ] && [ "$member" != " " ]; then
-                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
-                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                          [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ] && member_name="$USER_NAME"
-                        fi
-                        all_members="$all_members$member_name, "
-                      done
-                      team_members_info="Members: $(echo "$all_members" | sed 's/, $//')"
-                      team_members_list="$team_owners"
-                      ;;
-                  esac
+                  if [ "$team_owners" = "insufficient-permissions" ]; then
+                    team_members_info="Members: (insufficient token permissions)"
+                  elif [ "$team_owners" = "team-not-found" ]; then
+                    team_members_info="Members: (team not found)"
+                  elif [ "$team_owners" = "unauthorized" ]; then
+                    team_members_info="Members: (unauthorized access)"
+                  elif [ "$team_owners" = "api-error" ]; then
+                    team_members_info="Members: (API error)"
+                  elif [ "$team_owners" = "no-members" ]; then
+                    team_members_info="Members: (no members)"
+                  else
+                    all_members=""
+                    IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                    for member in "${MEMBERS_ARRAY[@]}"; do
+                      member_name="$member"
+                      if [ -n "$member" ] && [ "$member" != " " ]; then
+                        USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                        USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                        [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ] && member_name="$USER_NAME"
+                      fi
+                      all_members="$all_members$member_name, "
+                    done
+                    team_members_info="Members: $(echo "$all_members" | sed 's/, $//')"
+                    team_members_list="$team_owners"
+                  fi
                 else
                   team_members_info="Members: (team not found)"
                 fi
@@ -1187,7 +1182,7 @@ jobs:
           fi
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
@@ -1986,7 +1981,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
@@ -2113,7 +2108,7 @@ jobs:
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
 
           # Use #tt-metal-pr-review-requests Slack channel
-          SLACK_CHANNEL="C09HT5VSXRB"
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # GitHub team to Slack group mapping (needed for author notes processing)
           get_slack_group_id() {
