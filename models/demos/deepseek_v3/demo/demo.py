@@ -147,12 +147,8 @@ def run_demo(
 
     # Open mesh device (reusing test fixture defaults) and set fabric to 1D
     mesh_shape = _default_mesh_shape()
-    if generator == "bp":
-        fabric = ttnn.FabricConfig.FABRIC_2D
-    else:
-        fabric = ttnn.FabricConfig.FABRIC_1D
-    logger.info(f"Setting fabric config to {fabric.name} for demo run")
-    ttnn.set_fabric_config(fabric)
+    logger.info("Setting fabric config to FABRIC_1D for demo run")
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
