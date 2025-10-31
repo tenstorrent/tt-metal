@@ -132,7 +132,6 @@ uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chi
 }
 
 UbbId get_ubb_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id) {
-    using namespace tt::tt_fabric;
     auto cluster_desc = cluster->get_cluster_description();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
     const auto bus_id = get_bus_id(cluster, chip_id);
