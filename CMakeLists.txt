@@ -186,7 +186,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-pragmas>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-aliasing>"

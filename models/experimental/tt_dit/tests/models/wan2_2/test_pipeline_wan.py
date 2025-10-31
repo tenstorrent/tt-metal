@@ -16,11 +16,15 @@ from ....utils.test import line_params, ring_params
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
     [
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
+        # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        # BH (linear) on 4x8
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear],
     ],
     ids=[
         "2x4sp0tp1",
-        "4x8sp1tp0",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )

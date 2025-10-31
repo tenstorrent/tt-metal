@@ -19,7 +19,7 @@ namespace ttnn::operations::ccl {
 void py_bind_all_reduce(py::module& module) {
     auto doc =
         R"doc(
-        All-reduce operation across devices with Sum reduction. If cluster axis is specified, the all-reduce is performed along the cluster axis. All-reduce is a collective operation that reduces data from all devices using the Sum operation and returns the result to all devices.
+        All-reduce operation across devices with Sum reduction. If cluster axis is specified, the all-reduce is performed on tensor shards along the cluster axis, resulting in identical tensor shards across all devices along the cluster axis. If it is not specified, then we reduce across all devices in the mesh. All-reduce is a collective operation that reduces data from all devices using the Sum operation and returns the result to all devices.
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor to be reduced.
@@ -34,6 +34,7 @@ void py_bind_all_reduce(py::module& module) {
         Returns:
             ttnn.Tensor: The reduced tensor with the same shape as the input tensor.
 
+<<<<<<< HEAD
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
@@ -48,6 +49,25 @@ void py_bind_all_reduce(py::module& module) {
             >>> print(output.shape)
             [1, 1, 32, 256]
         )doc";
+=======
+Returns:
+               ttnn.Tensor: The reduced tensor with the same shape as the input tensor. The output tensor is identical across all devices along the cluster axis if specified, otherwise it is identical across all devices in the mesh.
+
+            Example:
+                >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+                >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+                >>> ttnn_tensor = ttnn.from_torch(
+                                full_tensor,
+                                dtype=input_dtype,
+                                device=mesh_device,
+                                layout=layout,
+                                memory_config=mem_config,
+                                mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
+                >>> output = ttnn.all_reduce(ttnn_tensor)
+                >>> print(output.shape)
+                [1, 1, 32, 256]
+                )doc";
+>>>>>>> main
 
     using OperationType = decltype(ttnn::all_reduce);
     ttnn::bind_registered_operation(
