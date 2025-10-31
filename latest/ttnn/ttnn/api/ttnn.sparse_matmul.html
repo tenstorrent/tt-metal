@@ -142,34 +142,37 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.sparse_matmul">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sparse_matmul</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sparsity:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nnz:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_input_a_sparse:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_input_b_sparse:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config:</span> <span class="pre">MatmulProgramConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config:</span> <span class="pre">ttnn.DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">core_grid:</span> <span class="pre">ttnn.CoreGrid</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tile:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int]</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optional_output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sparse_matmul" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sparse_matmul</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor_a:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_tensor_b:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sparsity:</span> <span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config:</span> <span class="pre">ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nnz:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_input_a_sparse:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">is_input_b_sparse:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config:</span> <span class="pre">ttnn.MemoryConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype:</span> <span class="pre">ttnn.DataType</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config:</span> <span class="pre">ttnn.DeviceComputeKernelConfig</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">core_grid:</span> <span class="pre">ttnn.CoreGrid</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tile:</span> <span class="pre">List</span> <span class="pre">of</span> <span class="pre">[int]</span> <span class="pre">=</span> <span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optional_output_tensor:</span> <span class="pre">ttnn.Tensor</span> <span class="pre">=</span> <span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sparse_matmul" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.</p>
+<p>Returns the matrix product of two tensors. Based on <cite>is_input_a_sparse</cite>, <cite>is_input_b_sparse</cite> and the sparsity tensor, some parts of the output computation is skipped.</p>
+<p>The two input tensors must be be tiled and each have a rank of 4.
+The sparsity tensor must be a rank 4 tensor in row major layout.</p>
+<p>Based on the input tensor shapes and <cite>is_input_a_sparse</cite> and <cite>is_input_b_sparse</cite> values, the output tensor shape is computed. See the supported modes table below.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the first tensor to be multiplied containing the weights of the experts. Needs to be on the device.</p></li>
-<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the second tensor to be multiplied, containing the tokens to be processed. Needs to be on the device.</p></li>
+<li><p><strong>input_tensor_a</strong> (<em>ttnn.Tensor</em>) – the first tensor to be multiplied. Needs to be on the device.</p></li>
+<li><p><strong>input_tensor_b</strong> (<em>ttnn.Tensor</em>) – the second tensor to be multiplied. Needs to be on the device.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>sparsity</strong> (<em>ttnn.Tensor</em>) – the sparsity tensor containing the scale factor for each token for each expert. Needs to be on the device.</p></li>
+<li><p><strong>sparsity</strong> (<em>ttnn.Tensor</em>) – the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.</p></li>
+<li><p><strong>program_config</strong> (<a class="reference internal" href="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.html#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig" title="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig"><em>ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig</em></a>) – the program configuration for the matmul operation. Only this config type is supported. <code class="docutils literal notranslate"><span class="pre">mcast_in0</span></code> must be set to True.</p></li>
 <li><p><strong>nnz</strong> (<em>int</em><em>, </em><em>optional</em>) – the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.</p></li>
-<li><p><strong>is_input_a_sparse</strong> (<em>bool</em>) – boolean indicating whether input_tensor_a is sparse. If both a and b are true, corresponding inputs in both input_tensor_a and input_tensor_b are skipped according to sparsity tensor. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>is_input_b_sparse</strong> (<em>bool</em>) – boolean indicating whether input_tensor_b is sparse. If both a and b are true, corresponding inputs in both input_tensor_a and input_tensor_b are skipped according to sparsity tensor. Defaults to <cite>True</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using <cite>ttnn.DRAM_MEMORY_CONFIG</cite>.</p></li>
+<li><p><strong>is_input_a_sparse</strong> (<em>bool</em><em>, </em><em>optional</em>) – boolean indicating whether <cite>input_tensor_a</cite> is sparse. Defaults to <cite>False</cite>. Together with <cite>is_input_b_sparse</cite>, it determines how the sparsity tensor is interpreted. See the supported modes table below.</p></li>
+<li><p><strong>is_input_b_sparse</strong> (<em>bool</em><em>, </em><em>optional</em>) – boolean indicating whether <cite>input_tensor_b</cite> is sparse. Defaults to <cite>True</cite>. Together with <cite>is_input_a_sparse</cite>, it determines how the sparsity tensor is interpreted. See the supported modes table below.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration of the output tensor. Defaults to <cite>None</cite>, which will result in using ttnn.DRAM_MEMORY_CONFIG.</p></li>
 <li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the data type of the output tensor. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>program_config</strong> (<em>MatmulProgramConfig</em><em>, </em><em>optional</em>) – the program configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration for the matmul operation. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>core_grid</strong> (<em>ttnn.CoreGrid</em><em>, </em><em>optional</em>) – the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>output_tile</strong> (<em>List</em><em> of </em><em>[</em><em>int</em><em>]</em><em>, </em><em>optional</em>) – Specifies the output tile configuration. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – User provided on-device output tensor where the result of sparse_matmul is to be written. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>optional_output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – User provided on-device output tensor where the result of matmul is to be written. Defaults to <cite>None</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
@@ -178,9 +181,65 @@
 <p><em>ttnn.Tensor</em> – the output tensor with sparse results.</p>
 </dd>
 </dl>
+<dl>
+<dt>Supported Modes</dt>
+<dd>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>is_input_a_sparse</p></th>
+<th class="head"><p>is_input_b_sparse</p></th>
+<th class="head"><p>input_tensor_a shape</p></th>
+<th class="head"><p>input_tensor_b shape</p></th>
+<th class="head"><p>sparsity shape</p></th>
+<th class="head"><p>nnz</p></th>
+<th class="head"><p>output shape</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>True</p></td>
+<td><p>True</p></td>
+<td><p>[1, E, M, K]</p></td>
+<td><p>[1, E, K, N]</p></td>
+<td><p>[1, 1, 1, E]</p></td>
+<td><p>None or 0 ≤ nnz ≤ E</p></td>
+<td><p>[1, E, M, N]</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>False</p></td>
+<td><p>True</p></td>
+<td><p>[A, B, M, K]</p></td>
+<td><p>[1, E, K, N]</p></td>
+<td><p>[A, B, 1, E]</p></td>
+<td><p>None or 0 ≤ nnz ≤ A * B * E</p></td>
+<td><p>[A, B, 1, E, M, N]</p></td>
+</tr>
+<tr class="row-even">
+<td><p>True</p></td>
+<td><p>False</p></td>
+<td><p>[A, E, M, K]</p></td>
+<td><p>[1, E, K, N]</p></td>
+<td><p>[1, 1, A, E]</p></td>
+<td><p>None or 0 ≤ nnz ≤ A * E</p></td>
+<td><p>[A, E, M, N]</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>False</p></td>
+<td><p>False</p></td>
+<td><p>Invalid</p></td>
+<td><p>–</p></td>
+<td><p>–</p></td>
+<td><p>–</p></td>
+<td><p>–</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>The tensors support the following data types and layouts:</p>
+<p>The input tensors support the following data types and layouts:</p>
 <table class="docutils align-default" id="id2">
 <caption>
 <span class="caption-text">input_tensor_a</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
@@ -193,7 +252,7 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32</p></td>
 <td><p>TILE</p></td>
 </tr>
 </tbody>
@@ -215,7 +274,6 @@
 </tr>
 </tbody>
 </table>
-<p>FLOAT32 is only supported if <code class="xref py py-attr docutils literal notranslate"><span class="pre">nnz</span></code> is provided.</p>
 <table class="docutils align-default" id="id4">
 <caption>
 <span class="caption-text">sparsity</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
@@ -234,25 +292,97 @@
 </tbody>
 </table>
 </div>
+<dl>
+<dt>Memory Support:</dt>
+<dd>
+<p>The supported memory configurations for the two input tensors are program config dependent, as described below:</p>
+<table class="docutils align-default" id="id5">
+<caption>
+<span class="caption-text">Supported Memory Configurations</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Config</p></th>
+<th class="head"><p>Input A</p></th>
+<th class="head"><p>Input B</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig with (mcast_in0=True)</p></td>
+<td><p>Interleaved (L1/DRAM)</p></td>
+<td><p>Interleaved (L1/DRAM)</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="c1"># Sparse matmul for 64 batch, 128 sequence, 512 hidden dimensions, 8 experts</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">expert_weights</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ones</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">tokens</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ones</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">512</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Create sparsity bitmask</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Set some tokens to be processed by different experts (simplified pattern)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span>  <span class="c1"># First token goes to expert 0</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">10</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span>  <span class="c1"># First token goes to expert 10 as well</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.7</span>  <span class="c1"># Second token goes to expert 2</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.3</span>  <span class="c1"># Another token goes to expert 1</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Move sparsity bitmask to device</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">device</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="c1"># Perform sparse matmul</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sparse_matmul</span><span class="p">(</span><span class="n">expert_weights</span><span class="p">,</span> <span class="n">tokens</span><span class="p">,</span> <span class="n">sparsity</span><span class="o">=</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">nnz</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">config</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">MatmulMultiCoreReuseMultiCast1DProgramConfig</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">compute_with_storage_grid_size</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">CoreCoord</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">in0_block_w</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">out_subblock_h</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">out_subblock_w</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">out_block_h</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">out_block_w</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">per_core_M</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">per_core_N</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">fuse_batch</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">fused_activation</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">mcast_in0</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">nnz</span> <span class="o">=</span> <span class="mi">4</span>
+<span class="go"># Case 1: When `is_input_a_sparse` is True and `is_input_b_sparse` is True</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
+<span class="go"># Create a sparsity tensor</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">sparsity_bitmask</span><span class="o">.</span><span class="n">numel</span><span class="p">())[:</span><span class="n">nnz</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">1.0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">sparsity_bitmask</span><span class="p">),</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sparse_matmul</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">sparsity</span><span class="o">=</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">nnz</span><span class="o">=</span><span class="n">nnz</span><span class="p">,</span> <span class="n">is_input_a_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">is_input_b_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
-<span class="go">[64, 128, 8, 512]</span>
+<span class="go"># [1, 8, 64, 64]</span>
+<span class="go"># When nnz is not provided, it will be inferred from the sparsity tensor at runtime</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sparse_matmul</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">sparsity</span><span class="o">=</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">is_input_a_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">is_input_b_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go"># [1, 8, 64, 64]</span>
+<span class="go"># Case 2: When `is_input_a_sparse` is False and `is_input_b_sparse` is True</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
+<span class="go"># Create a sparsity tensor</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">sparsity_bitmask</span><span class="o">.</span><span class="n">numel</span><span class="p">())[:</span><span class="n">nnz</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">1.0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">sparsity_bitmask</span><span class="p">),</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sparse_matmul</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">sparsity</span><span class="o">=</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">nnz</span><span class="o">=</span><span class="n">nnz</span><span class="p">,</span> <span class="n">is_input_a_sparse</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">is_input_b_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go"># [2, 16, 1, 8, 64, 64]</span>
+<span class="go"># When nnz is not provided, it will be inferred from the sparsity tensor at runtime</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sparse_matmul</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">sparsity</span><span class="o">=</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">is_input_a_sparse</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">is_input_b_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go"># [2, 16, 1, 8, 64, 64]</span>
+<span class="go"># Case 3: When `is_input_a_sparse` is True and `is_input_b_sparse` is False</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor1</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">tensor2</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)),</span> <span class="n">device</span><span class="p">)</span>
+<span class="go"># Create a sparsity tensor</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">sparsity_bitmask</span><span class="o">.</span><span class="n">numel</span><span class="p">())[:</span><span class="n">nnz</span><span class="p">]]</span> <span class="o">=</span> <span class="mf">1.0</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">sparsity_bitmask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">sparsity_bitmask</span><span class="p">),</span> <span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sparse_matmul</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">sparsity</span><span class="o">=</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">nnz</span><span class="o">=</span><span class="n">nnz</span><span class="p">,</span> <span class="n">is_input_a_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">is_input_b_sparse</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go"># [4, 8, 64, 64]</span>
+<span class="go"># When nnz is not provided, it will be inferred from the sparsity tensor at runtime</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sparse_matmul</span><span class="p">(</span>
+<span class="gp">&gt;&gt;&gt; </span>    <span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">,</span> <span class="n">sparsity</span><span class="o">=</span><span class="n">sparsity_bitmask</span><span class="p">,</span> <span class="n">is_input_a_sparse</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">is_input_b_sparse</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">program_config</span><span class="o">=</span><span class="n">config</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>
+<span class="go"># [4, 8, 64, 64]</span>
+<span class="go"># Case 4: When `is_input_a_sparse` is False and `is_input_b_sparse` is False</span>
+<span class="go"># This is invalid</span>
 </pre></div>
 </div>
 </div>
