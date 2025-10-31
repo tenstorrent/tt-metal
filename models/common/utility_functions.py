@@ -535,6 +535,334 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
+def debug_nonfinite_positions(input, exponent, golden, calculated, file_path="nonfinite_debug.txt"):
+    """
+    Debug function to print all non-finite positions and their values in both golden and calculated tensors.
+    Also shows corresponding input and exponent values.
+    """
+    output_lines = []
+    output_lines.append("=" * 80)
+    output_lines.append("NON-FINITE VALUES DEBUG REPORT")
+    output_lines.append("=" * 80)
+    output_lines.append("")
+
+    # Check for NaN positions
+    golden_nan = torch.isnan(golden)
+    calculated_nan = torch.isnan(calculated)
+
+    # Check for Inf positions
+    golden_inf = torch.isinf(golden)
+    calculated_inf = torch.isinf(calculated)
+
+    # Check for finite positions
+    golden_finite = torch.isfinite(golden)
+    calculated_finite = torch.isfinite(calculated)
+
+    # Find mismatches
+    nan_mismatch = torch.not_equal(golden_nan, calculated_nan)
+    inf_mismatch = torch.not_equal(golden_inf, calculated_inf)
+    finite_mismatch = torch.not_equal(golden_finite, calculated_finite)
+
+    output_lines.append(f"Total elements: {golden.numel()}")
+    output_lines.append(f"Golden NaN count: {golden_nan.sum().item()}")
+    output_lines.append(f"Calculated NaN count: {calculated_nan.sum().item()}")
+    output_lines.append(f"Golden Inf count: {golden_inf.sum().item()}")
+    output_lines.append(f"Calculated Inf count: {calculated_inf.sum().item()}")
+    output_lines.append(f"NaN mismatch count: {nan_mismatch.sum().item()}")
+    output_lines.append(f"Inf mismatch count: {inf_mismatch.sum().item()}")
+    output_lines.append(f"Finite mismatch count: {finite_mismatch.sum().item()}")
+    output_lines.append("")
+
+    # Report positions where golden is NaN but calculated is not
+    golden_nan_only = golden_nan & ~calculated_nan
+    if golden_nan_only.any():
+        indices = torch.nonzero(golden_nan_only, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE GOLDEN IS NaN BUT CALCULATED IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:  # Limit to first 100
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val}, Calculated={calc_val}"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    # Report positions where calculated is NaN but golden is not
+    calculated_nan_only = calculated_nan & ~golden_nan
+    if calculated_nan_only.any():
+        indices = torch.nonzero(calculated_nan_only, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE CALCULATED IS NaN BUT GOLDEN IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:  # Limit to first 100
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val}, Calculated={calc_val}"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    # Report positions where golden is Inf but calculated is not (or different sign)
+    golden_posinf = golden == float("inf")
+    golden_neginf = golden == float("-inf")
+    calculated_posinf = calculated == float("inf")
+    calculated_neginf = calculated == float("-inf")
+
+    posinf_mismatch = golden_posinf & ~calculated_posinf
+    if posinf_mismatch.any():
+        indices = torch.nonzero(posinf_mismatch, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE GOLDEN IS +Inf BUT CALCULATED IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val}, Calculated={calc_val}"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    neginf_mismatch = golden_neginf & ~calculated_neginf
+    if neginf_mismatch.any():
+        indices = torch.nonzero(neginf_mismatch, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE GOLDEN IS -Inf BUT CALCULATED IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val}, Calculated={calc_val}"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    # Report positions where calculated is +Inf but golden is not
+    calculated_posinf_only = calculated_posinf & ~golden_posinf
+    if calculated_posinf_only.any():
+        indices = torch.nonzero(calculated_posinf_only, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE CALCULATED IS +Inf BUT GOLDEN IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val}, Calculated={calc_val}"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    # Report positions where calculated is -Inf but golden is not
+    calculated_neginf_only = calculated_neginf & ~golden_neginf
+    if calculated_neginf_only.any():
+        indices = torch.nonzero(calculated_neginf_only, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE CALCULATED IS -Inf BUT GOLDEN IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val}, Calculated={calc_val}"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    # Report positions where golden is finite but calculated is not (NaN or Inf)
+    golden_finite_but_calculated_not = golden_finite & ~calculated_finite
+    if golden_finite_but_calculated_not.any():
+        indices = torch.nonzero(golden_finite_but_calculated_not, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE GOLDEN IS FINITE BUT CALCULATED IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            calc_status = (
+                "NaN"
+                if torch.isnan(calculated[idx_tuple])
+                else ("+Inf" if calculated[idx_tuple] == float("inf") else "-Inf")
+            )
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val} (finite), Calculated={calc_val} ({calc_status})"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    # Report positions where calculated is finite but golden is not (NaN or Inf)
+    calculated_finite_but_golden_not = calculated_finite & ~golden_finite
+    if calculated_finite_but_golden_not.any():
+        indices = torch.nonzero(calculated_finite_but_golden_not, as_tuple=False)
+        output_lines.append(f"\n{'='*80}")
+        output_lines.append(f"POSITIONS WHERE CALCULATED IS FINITE BUT GOLDEN IS NOT ({indices.shape[0]} positions):")
+        output_lines.append(f"{'='*80}")
+        for idx in indices[:100]:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            golden_status = (
+                "NaN" if torch.isnan(golden[idx_tuple]) else ("+Inf" if golden[idx_tuple] == float("inf") else "-Inf")
+            )
+            output_lines.append(
+                f"Position {idx_tuple}: Input={inp_val}, Exponent={exp_val}, "
+                f"Golden={golden_val} ({golden_status}), Calculated={calc_val} (finite)"
+            )
+        if indices.shape[0] > 100:
+            output_lines.append(f"... and {indices.shape[0] - 100} more positions")
+
+    output_lines.append(f"\n{'='*80}")
+    output_lines.append("END OF REPORT")
+    output_lines.append(f"{'='*80}")
+
+    # Write to file
+    with open(file_path, "w") as f:
+        f.write("\n".join(output_lines))
+
+    print(f"\nNon-finite debug report saved to {file_path}")
+    print(f"Summary: {nan_mismatch.sum().item()} NaN mismatches, {inf_mismatch.sum().item()} Inf mismatches")
+
+    return "\n".join(output_lines)
+
+
+def comp_ulp_check(input, exponent, golden, calculated, ulp_threshold, allow_nonfinite=False):
+    """
+    Compute absolute error between two tensors in Units of Least Precision (ULP)
+    """
+
+    # If both tensors are empty, then we can return True
+    if torch.numel(golden) == 0 and torch.numel(calculated) == 0:
+        return True, "Both tensors are empty"
+
+    if not allow_nonfinite and not torch.all(torch.isfinite(calculated)):
+        return False, "Calculated tensor contains non-finite values"
+
+    if not _comp_nonfinite(golden, calculated):
+        # Call debug function before returning
+        debug_nonfinite_positions(input, exponent, golden, calculated)
+        return False, "Tensors are not finite at the same positions"
+    # nonfinite elments can intefere with ULP error calculation
+    # To avoid this, replace nan, +inf, -inf with 0
+    # (we have already checked that both tensors have the same nonfinite elements)
+    mask_finite = ~torch.isfinite(golden)
+    golden = golden.clone()
+    calculated = calculated.clone()
+    golden[mask_finite] = 0
+    calculated[mask_finite] = 0
+
+    # ULP is measured according to the golden tensor
+    # In most cases, data type of golden tensor should be the same as calculated tensor.
+    # However, in some cases, we may want to measure < 1 ULP differences, which requires golden tensor
+    # to have higher precision than calculated tensor.
+    # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
+    # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
+    ulp_value = ulp(golden.type(calculated.dtype))
+
+    if golden.dtype != calculated.dtype:  # Note: assumes that golden has higher precision than calculated tensor
+        calculated = calculated.type(golden.dtype)
+        ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+
+    ULP_Cond = torch.abs(calculated - golden) / ulp_value
+    mask = ULP_Cond > ulp_threshold
+
+    if mask.any():
+        indices = torch.nonzero(mask, as_tuple=False)
+        output_lines = []
+
+        # Collect all failing input values for range calculation
+        all_failing_inputs = []
+        for idx in indices:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = exponent[idx_tuple].item()
+            all_failing_inputs.append(inp_val)
+
+        # Calculate failing range
+        min_failing = min(all_failing_inputs)
+        max_failing = max(all_failing_inputs)
+
+        output_lines.append(f"Found {indices.shape[0]} values with ULP > {ulp_threshold}:")
+        output_lines.append(f"Failing range: ({min_failing}, {max_failing})\n")
+
+        # Collect all ULP errors and sort by worst ULP
+        # Use (input, exponent) as key to avoid duplicates
+        seen_pairs = set()
+        ulp_errors = []
+
+        for idx in indices:
+            idx_tuple = tuple(idx.tolist())
+            inp_val = input[idx_tuple].item()
+            exp_val = exponent[idx_tuple].item()
+
+            # Skip if we've already seen this (input, exponent) pair
+            pair_key = (inp_val, exp_val)
+            if pair_key in seen_pairs:
+                continue
+            seen_pairs.add(pair_key)
+
+            calc_val = calculated[idx_tuple].item()
+            golden_val = golden[idx_tuple].item()
+            ulp_val = ULP_Cond[idx_tuple].item()
+
+            ulp_errors.append({"inp": inp_val, "exp": exp_val, "calc": calc_val, "golden": golden_val, "ulp": ulp_val})
+
+        # Sort by ULP (worst first)
+        ulp_errors.sort(key=lambda x: x["ulp"], reverse=True)
+
+        # Print all unique ULP errors
+        output_lines.append(f"All unique ULP errors (sorted by worst first):")
+        output_lines.append("")
+        for i, err in enumerate(ulp_errors, 1):
+            line = f"{i}. Input: {err['inp']}, Exponent: {err['exp']}, Calculated: {err['calc']}, Golden: {err['golden']}, ULP: {err['ulp']}"
+            output_lines.append(line)
+
+        file_path = "ulp_mismatches.txt"
+        with open(file_path, "w") as f:
+            f.write("\n".join(output_lines))
+
+        print(f"\nSaved mismatch details to {file_path}")
+        print(f"Failing range: ({min_failing}, {max_failing})")
+    else:
+        print(f"No values with ULP > {ulp_threshold} found.")
+
+    ulp_delta = torch.max(ULP_Cond)
+
+    return (ulp_delta <= ulp_threshold, f"Max ULP Delta: {ulp_delta}")
+
+
 def comp_pcc(golden, calculated, pcc=0.99):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)
