@@ -16,9 +16,8 @@ namespace py = pybind11;
 
 void py_bind_point_to_point(py::module& module) {
     auto doc =
-        R"doc(point_to_point(input_tensor: ttnn.Tensor, send_coord: ttnn.MeshCoordinate, receive_coord: ttnn.MeshCoordinate, topology: ttnn.Topology, receiver_semaphore: ttnn.GlobalSemaphore) -> ttnn.Tensor
-
-            Point-to-point send receive Op. Send a tensor from one device to another.
+        R"doc(
+            Point-to-point send and receive operation. Send a tensor from one device to another.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.

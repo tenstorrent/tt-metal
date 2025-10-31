@@ -20,8 +20,7 @@ void bind_split_qkv(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::split_query_key_value_and_split_heads,
-        R"doc(split_query_key_value_and_split_heads(input_tensor: ttnn.Tensor, compute_with_storage_grid_size: ttnn.CoreCoord: *, num_heads: int = 16, memory_config: Optional[MemoryConfig] = None) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]
-
+        R"doc(
             Splits [B, 1, 384, 3072] fused qkv matrix into 3 heads with shapes [B, 16, 384, 64], [B, 16, 64, 384], and [B, 16, 384, 64]. Supports both sharded and interleaved inputs.
 
             Args:

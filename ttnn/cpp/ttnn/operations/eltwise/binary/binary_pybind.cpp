@@ -104,7 +104,7 @@ void bind_binary_operation(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
 
 
         Returns:
@@ -242,7 +242,7 @@ void bind_binary_gcd_lcm_operation(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
 
 
         Returns:
@@ -337,7 +337,7 @@ void bind_binary_unary_max_operation(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
 
 
         Returns:
@@ -469,7 +469,7 @@ void bind_binary_unary_operation(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
 
 
         Returns:
