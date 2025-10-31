@@ -236,11 +236,11 @@ def main():
             testCommand = f"python3 -m tracy {osCmd}"
 
             envVars = dict(os.environ)
-            if options.device:
-                envVars["TT_METAL_DEVICE_PROFILER"] = "1"
-            else:
-                if "TT_METAL_DEVICE_PROFILER" in envVars.keys():
-                    del envVars["TT_METAL_DEVICE_PROFILER"]
+            # if options.device:
+            # # envVars["TT_METAL_DEVICE_PROFILER"] = "1"
+            # else:
+            if "TT_METAL_DEVICE_PROFILER" in envVars.keys():
+                del envVars["TT_METAL_DEVICE_PROFILER"]
 
             if port:
                 envVars["TRACY_PORT"] = port
