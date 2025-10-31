@@ -553,6 +553,9 @@ public:
                 // We hit the nail on the head, wrap the fence
                 ASSERT(length == 0);
                 this->cb_fence_ = cb_base;
+                // TODO eliminate usage of block_next_start_addr_ in this CB reader. rd_block_idx_ will point to the
+                // last block, not the first block, so the limit calculation in acquire_pages will be incorrect. We
+                // don't really use blocks for anything, here, so we should get rid of them and simplify the code.
             }
         }
         cmd_ptr += length;
