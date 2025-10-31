@@ -10,6 +10,7 @@
 
 #include "unary_op_types.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
@@ -107,5 +108,12 @@ std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
+
+// Helper function for automatic shard spec generation
+std::array<uint32_t, 2> compute_auto_shard_shape(
+    const ttnn::Shape& logical_shape,
+    const tt::tt_metal::CoreRangeSet& core_grid,
+    const tt::tt_metal::TensorMemoryLayout& memory_layout,
+    const tt::tt_metal::Layout& layout);
 
 }  // namespace ttnn::operations::unary::utils

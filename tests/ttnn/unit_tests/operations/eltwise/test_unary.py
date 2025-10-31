@@ -1851,3 +1851,34 @@ def test_hardmish_bfloat16_allclose(device):
     tt_result = ttnn.hardmish(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(golden, result, rtol=1e-05, atol=1e-35)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    (
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+def test_hardmish_shard(input_shape, memory_config, device):
+    # Create random tensors
+    torch_input = torch.randn(*input_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the operation with the specified memory config
+    ttnn_result = ttnn.hardmish(
+        ttnn_input,
+        memory_config=memory_config,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(torch_input, device=device)
+
+    result = ttnn.to_torch(ttnn_result)
+    assert_with_ulp(golden, result, 1)

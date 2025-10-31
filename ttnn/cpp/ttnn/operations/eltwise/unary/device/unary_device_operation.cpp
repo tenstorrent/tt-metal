@@ -90,11 +90,30 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         input_tensor.buffer() != nullptr,
         "Operands to eltwise unary need to be allocated in buffers on the device. Buffer is null.");
 
-    TT_FATAL(
-        input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
-        "Unary operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        static_cast<int>(input_tensor.memory_config().memory_layout()),
-        static_cast<int>(out_memory_config.memory_layout()));
+    // Allow different memory layouts for input and output when sharding is involved
+    bool input_sharded = input_tensor.memory_config().is_sharded();
+    bool output_sharded = out_memory_config.is_sharded();
+
+    if (input_sharded || output_sharded) {
+        // If either input or output is sharded, allow different layouts
+        // But validate that both are valid (either interleaved or sharded)
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED || input_sharded,
+            "Input tensor must be either interleaved or sharded. Input layout: {}",
+            static_cast<int>(input_tensor.memory_config().memory_layout()));
+
+        TT_FATAL(
+            out_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED || output_sharded,
+            "Output memory config must be either interleaved or sharded. Output layout: {}",
+            static_cast<int>(out_memory_config.memory_layout()));
+    } else {
+        // If neither is sharded, layouts must match
+        TT_FATAL(
+            input_tensor.memory_config().memory_layout() == out_memory_config.memory_layout(),
+            "Unary operation requires Input and Output memory layout to match when neither is sharded. Input layout: {}, Output layout: {}",
+            static_cast<int>(input_tensor.memory_config().memory_layout()),
+            static_cast<int>(out_memory_config.memory_layout()));
+    }
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
@@ -134,13 +153,39 @@ spec_return_value_t UnaryDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
 
+    const auto output_shape = tensor_args.input.logical_shape();
+    auto output_memory_config = args.output_memory_config;
+
+    // Handle automatic shard spec generation for sharded memory configs without explicit shard specs
+    if (output_memory_config.is_sharded() && !output_memory_config.shard_spec().has_value()) {
+        // Get the device and compute grid
+        auto device = tensor_args.input.device();
+        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+        CoreCoord start_coord(0, 0);
+        CoreCoord end_coord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1);
+        CoreRangeSet core_grid({CoreRange(start_coord, end_coord)});
+
+        // Compute automatic shard shape
+        auto auto_shard_shape = ttnn::operations::unary::utils::compute_auto_shard_shape(
+            output_shape,
+            core_grid,
+            output_memory_config.memory_layout(),
+            tensor_args.input.layout());
+
+        // Create shard spec and update memory config
+        ShardSpec shard_spec(core_grid, auto_shard_shape);
+        output_memory_config = MemoryConfig(
+            output_memory_config.memory_layout(),
+            output_memory_config.buffer_type(),
+            shard_spec);
+    }
+
     auto output_layout = Layout::TILE;
-    if (args.output_memory_config.is_sharded()) {
+    if (output_memory_config.is_sharded()) {
         output_layout = tensor_args.input.layout();
     }
 
-    const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, output_memory_config));
 }
 
 tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
