@@ -419,10 +419,10 @@ bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->dtype()); }
 
-Tensor Tensor::reshape(const ttnn::Shape& new_shape) const { return tensor_ops::tensor_reshape(*this, new_shape); }
+Tensor Tensor::reshape(const ttnn::Shape& new_shape) const { return tensor_ops::tensor_view(*this, new_shape); }
 
 Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const {
-    return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
+    return tensor_ops::tensor_view(*this, new_logical_shape, new_padded_shape);
 }
 
 Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
@@ -691,5 +691,14 @@ const std::optional<ShardSpec>& Tensor::shard_spec() const { return this->memory
 const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->memory_config().nd_shard_spec(); }
 
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
+
+namespace operations {
+Tensor view(const Tensor& input_tensor, const ttnn::Shape& new_shape, const ttnn::Shape& new_padded_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
+}
+Tensor view(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
+    return tensor_ops::tensor_view(input_tensor, new_shape);
+}
+}  // namespace operations
 
 }  // namespace tt::tt_metal
