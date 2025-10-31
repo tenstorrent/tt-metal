@@ -248,7 +248,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_KERNEL_PATH=/path/to/kernels
         case EnvVarID::TT_METAL_KERNEL_PATH:
             this->is_kernel_dir_env_var_set = true;
-            this->kernel_dir = normalize_path(value);
+            this->kernel_dir = normalize_path(value) + "/";
             break;
 
         // TT_METAL_SIMULATOR
