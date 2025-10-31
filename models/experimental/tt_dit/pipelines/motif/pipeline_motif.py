@@ -20,7 +20,7 @@ from ...encoders.clip.encoder_pair import CLIPTokenizerEncoderPair
 from ...encoders.t5.encoder_pair import T5TokenizerEncoderPair
 from ...models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_state
 from ...models.vae.vae_sd35 import VAEDecoder
-from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
@@ -58,7 +58,6 @@ class MotifPipeline:
         num_links: int,
         height: int = 1024,
         width: int = 1024,
-        use_cache: bool,
     ) -> None:
         self.timing_collector = None
 
@@ -164,25 +163,15 @@ class MotifPipeline:
                 padding_config=padding_config,
             )
 
-            if use_cache:
-                cache_path = cache.get_and_create_cache_path(
-                    model_name="motif-image-6b",
-                    subfolder="transformer",
-                    parallel_config=self._parallel_config,
-                    mesh_shape=submesh_device.shape,
-                    dtype="bf16",
-                )
-                # create cache if it doesn't exist
-                if not cache.cache_dict_exists(cache_path):
-                    logger.info(
-                        f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
-                    )
-                    tt_transformer.load_torch_state_dict(transformer_state_dict)
-                    cache.save_cache_dict(tt_transformer.to_cached_state_dict(cache_path), cache_path)
-                else:
-                    logger.info(f"Loading transformer weights from cache: {cache_path}")
-                    tt_transformer.from_cached_state_dict(cache.load_cache_dict(cache_path))
-            else:
+            if not cache.initialize_from_cache(
+                tt_model=tt_transformer,
+                torch_state_dict=transformer_state_dict,
+                model_name="motif-image-6b",
+                subfolder="transformer",
+                parallel_config=self._parallel_config,
+                mesh_shape=tuple(submesh_device.shape),
+                dtype="bf16",
+            ):
                 logger.info("Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_torch_state_dict(transformer_state_dict)
 
@@ -214,6 +203,106 @@ class MotifPipeline:
             ccl_manager=self._ccl_managers[self.vae_submesh_idx],
         )
 
+        self.warmup()
+
+    @staticmethod
+    def create_pipeline(
+        mesh_device,
+        dit_cfg=None,
+        dit_sp=None,
+        dit_tp=None,
+        encoder_tp=None,
+        vae_tp=None,
+        enable_t5_text_encoder=True,
+        use_torch_t5_text_encoder=False,
+        use_torch_clip_text_encoder=False,
+        num_links=None,
+        topology=ttnn.Topology.Linear,
+        width=1024,
+        height=1024,
+    ):
+        default_config = {
+            (2, 4): {
+                "cfg_config": (2, 1),
+                "sp": (2, 0),
+                "tp": (2, 1),
+                "encoder_tp": (4, 1),
+                "vae_tp": (4, 1),
+                "num_links": 1,
+            },
+            (4, 8): {
+                "cfg_config": (2, 1),
+                "sp": (4, 0),
+                "tp": (4, 1),
+                "encoder_tp": (4, 1),
+                "vae_tp": (4, 1),
+                "num_links": 4,
+            },
+        }
+        cfg_factor, cfg_axis = dit_cfg or default_config[tuple(mesh_device.shape)]["cfg_config"]
+        sp_factor, sp_axis = dit_sp or default_config[tuple(mesh_device.shape)]["sp"]
+        tp_factor, tp_axis = dit_tp or default_config[tuple(mesh_device.shape)]["tp"]
+        encoder_tp_factor, encoder_tp_axis = encoder_tp or default_config[tuple(mesh_device.shape)]["encoder_tp"]
+        vae_tp_factor, vae_tp_axis = vae_tp or default_config[tuple(mesh_device.shape)]["vae_tp"]
+        num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
+
+        dit_parallel_config = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+        )
+        encoder_parallel_config = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=encoder_tp_factor, mesh_axis=encoder_tp_axis)
+        )
+        vae_parallel_config = VAEParallelConfig(
+            tensor_parallel=ParallelFactor(factor=vae_tp_factor, mesh_axis=vae_tp_axis)
+        )
+
+        logger.info(f"Mesh device shape: {mesh_device.shape}")
+        logger.info(f"Parallel config: {dit_parallel_config}")
+        logger.info(f"Encoder parallel config: {encoder_parallel_config}")
+        logger.info(f"VAE parallel config: {vae_parallel_config}")
+        logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+
+        pipeline = MotifPipeline(
+            mesh_device=mesh_device,
+            enable_t5_text_encoder=enable_t5_text_encoder,
+            use_torch_t5_text_encoder=use_torch_t5_text_encoder,
+            use_torch_clip_text_encoder=use_torch_clip_text_encoder,
+            parallel_config=dit_parallel_config,
+            encoder_parallel_config=encoder_parallel_config,
+            vae_parallel_config=vae_parallel_config,
+            topology=topology,
+            num_links=num_links,
+            width=width,
+            height=height,
+        )
+
+        return pipeline
+
+    def warmup(self):
+        """Warmup the pipeline by running a single inference."""
+        logger.info("Pipeline warmup...")
+        self.run_single_prompt(
+            prompt="", negative_prompt=None, num_inference_steps=2, cfg_scale=3.5, seed=0, traced=False
+        )
+
+    def run_single_prompt(
+        self, prompt, negative_prompt=None, num_inference_steps=40, cfg_scale=5.0, seed=None, traced=True
+    ):
+        return self.__call__(
+            prompt_1=[prompt],
+            prompt_2=[prompt],
+            prompt_3=[prompt],
+            negative_prompt_1=[negative_prompt],
+            negative_prompt_2=[negative_prompt],
+            negative_prompt_3=[negative_prompt],
+            num_inference_steps=num_inference_steps,
+            cfg_scale=cfg_scale,
+            seed=seed,
+            traced=traced,
+        )
+
     def __call__(
         self,
         *,
@@ -231,7 +320,7 @@ class MotifPipeline:
         seed: int | None = None,
         traced: bool = False,
     ) -> list[Image.Image]:
-        timer = self.timing_collector
+        timer = self.timing_collector.reset() if self.timing_collector else None
         prompt_count = len(prompt_1)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
@@ -476,18 +565,19 @@ class MotifPipeline:
                 timestep_device = timestep[submesh_id].to(submesh_device)
                 sigma_difference_device = sigma_difference[submesh_id].to(submesh_device)
 
-                pred = self._step_inner(
-                    cfg_enabled=cfg_enabled,
-                    latent=latents[submesh_id],
-                    prompt=prompt_embeds[submesh_id],
-                    pooled=pooled_prompt_embeds[submesh_id],
-                    timestep=timestep_device,
-                    submesh_index=submesh_id,
-                )
+                # pred = self._step_inner(
+                #     cfg_enabled=cfg_enabled,
+                #     latent=latents[submesh_id],
+                #     prompt=prompt_embeds[submesh_id],
+                #     pooled=pooled_prompt_embeds[submesh_id],
+                #     timestep=timestep_device,
+                #     submesh_index=submesh_id,
+                # )
 
-                for device in self._submesh_devices:
-                    ttnn.synchronize_device(device)
+                # for device in self._submesh_devices:
+                #     ttnn.synchronize_device(device)
 
+                # Already cached during warmup. Just capture.
                 trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
                 pred = self._step_inner(
                     cfg_enabled=cfg_enabled,

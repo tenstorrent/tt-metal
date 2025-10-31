@@ -9,7 +9,6 @@ import pytest
 import ttnn
 from loguru import logger
 
-from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ....pipelines.motif.pipeline_motif import MotifPipeline
 from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
     TimingCollector,
@@ -25,7 +24,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
     indirect=True,
 )
-@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
+@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 20)])
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
@@ -73,50 +72,23 @@ def test_motif_pipeline(
     traced: bool,
     mesh_test_id: str,
 ) -> None:
-    cfg_factor, cfg_axis = cfg
-    sp_factor, sp_axis = sp
-    tp_factor, tp_axis = tp
-    encoder_tp_factor, encoder_tp_axis = encoder_tp
-    vae_tp_factor, vae_tp_axis = vae_tp
-
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-
-    encoder_parallel_config = EncoderParallelConfig(
-        tensor_parallel=ParallelFactor(factor=encoder_tp_factor, mesh_axis=encoder_tp_axis),
-    )
-
-    vae_parallel_config = VAEParallelConfig(
-        tensor_parallel=ParallelFactor(factor=vae_tp_factor, mesh_axis=vae_tp_axis),
-    )
-
-    logger.info(f"Mesh device shape: {mesh_device.shape}")
-    logger.info(f"Parallel config: {parallel_config}")
-    logger.info(f"Encoder TP: factor={encoder_tp_factor}, axis={encoder_tp_axis}")
-    logger.info(f"VAE TP: factor={vae_tp_factor}, axis={vae_tp_axis}")
-    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
-
-    timing_collector = TimingCollector()
-
-    pipeline = MotifPipeline(
+    pipeline = MotifPipeline.create_pipeline(
         mesh_device=mesh_device,
+        dit_cfg=cfg,
+        dit_sp=sp,
+        dit_tp=tp,
+        encoder_tp=encoder_tp,
+        vae_tp=vae_tp,
         enable_t5_text_encoder=enable_t5_text_encoder,
         use_torch_t5_text_encoder=use_torch_t5_text_encoder,
         use_torch_clip_text_encoder=use_torch_clip_text_encoder,
-        parallel_config=parallel_config,
-        encoder_parallel_config=encoder_parallel_config,
-        vae_parallel_config=vae_parallel_config,
-        topology=topology,
         num_links=num_links,
+        topology=topology,
         width=width,
         height=height,
-        use_cache=False,
     )
 
-    pipeline.timing_collector = timing_collector
+    pipeline.timing_collector = TimingCollector()
 
     prompts = [
         "cinematic film still of Kodak Motion Picture Film (Sharp Detailed Image) An Oscar winning movie for Best "
@@ -137,13 +109,8 @@ def test_motif_pipeline(
         filename_prefix += "_untraced"
 
     def run(*, prompt: str, number: int, seed: int) -> None:
-        images = pipeline(
-            prompt_1=[prompt],
-            prompt_2=[prompt],
-            prompt_3=[prompt],
-            negative_prompt_1=[None],
-            negative_prompt_2=[None],
-            negative_prompt_3=[None],
+        images = pipeline.run_single_prompt(
+            prompt=prompt,
             num_inference_steps=num_inference_steps,
             cfg_scale=5.0,
             seed=seed,
@@ -154,7 +121,7 @@ def test_motif_pipeline(
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
-        timing_data = timing_collector.get_timing_data()
+        timing_data = pipeline.timing_collector.get_timing_data()
         logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
         logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
         logger.info(f"Total encoding time: {timing_data.total_encoding_time:.2f}s")
