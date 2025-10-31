@@ -410,7 +410,7 @@ private:
     uint32_t local_count_{0};
 };
 
-// Reader that releases a block of pages at a time.
+// Reader that releases a block of pages at a time. At most one block of pages can be available at a time.
 template <
     uint32_t my_sem_id,
     uint32_t cb_log_page_size,
