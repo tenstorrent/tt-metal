@@ -8,7 +8,6 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition_pybind.hpp"
-#include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
 #include "ttnn/operations/ccl/all_broadcast/all_broadcast_pybind.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
 #include "ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_pybind.hpp"
