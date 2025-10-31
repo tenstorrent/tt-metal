@@ -13,7 +13,7 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.common.utility_functions import torch2tt_tensor, is_wormhole_b0, is_grayskull, skip_for_blackhole
+from models.common.utility_functions import torch2tt_tensor, is_wormhole_b0, skip_for_blackhole
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -68,9 +68,6 @@ def rms_norm(x, dim, gamma, beta, eps):
 def test_layernorm_sharded_mix_precision_rm(
     test_id, in_dtype, gamma_dtype, gamma_beta_mem_config, out_mem_config, device, width_padding
 ):
-    if is_grayskull() and in_dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     torch.manual_seed(1234)
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
@@ -147,10 +144,9 @@ def test_layernorm_sharded_mix_precision_rm(
         inplace=True,
     )
 
-    if not is_grayskull():
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=True
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=True, fp32_dest_acc_en=True
+    )
 
     if test_id == 0:
         ttz = ttnn.layer_norm(
@@ -159,7 +155,7 @@ def test_layernorm_sharded_mix_precision_rm(
             epsilon=epsf,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 1:
         ttz = ttnn.layer_norm(
@@ -169,7 +165,7 @@ def test_layernorm_sharded_mix_precision_rm(
             weight=gamma_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 2:
         ttz = ttnn.layer_norm(
@@ -180,7 +176,7 @@ def test_layernorm_sharded_mix_precision_rm(
             bias=beta_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 3:
         ttz = ttnn.rms_norm(
@@ -189,7 +185,7 @@ def test_layernorm_sharded_mix_precision_rm(
             epsilon=epsf,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 4:
         ttz = ttnn.rms_norm(
@@ -199,7 +195,7 @@ def test_layernorm_sharded_mix_precision_rm(
             weight=gamma_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 5:
         ttz = ttnn.rms_norm(
@@ -210,7 +206,7 @@ def test_layernorm_sharded_mix_precision_rm(
             bias=beta_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 6:
         ttz = ttnn.layer_norm(
@@ -218,7 +214,7 @@ def test_layernorm_sharded_mix_precision_rm(
             epsilon=epsf,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 7:
         ttz = ttnn.layer_norm(
@@ -227,7 +223,7 @@ def test_layernorm_sharded_mix_precision_rm(
             weight=gamma_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 8:
         ttz = ttnn.layer_norm(
@@ -237,7 +233,7 @@ def test_layernorm_sharded_mix_precision_rm(
             bias=beta_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 9:
         ttz = ttnn.rms_norm(
@@ -245,7 +241,7 @@ def test_layernorm_sharded_mix_precision_rm(
             epsilon=epsf,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 10:
         ttz = ttnn.rms_norm(
@@ -254,7 +250,7 @@ def test_layernorm_sharded_mix_precision_rm(
             weight=gamma_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
     if test_id == 11:
         ttz = ttnn.rms_norm(
@@ -264,7 +260,7 @@ def test_layernorm_sharded_mix_precision_rm(
             bias=beta_t,
             memory_config=out_mem_config,
             program_config=program_config,
-            compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+            compute_kernel_config=compute_kernel_config,
         )
 
     ttz = ttnn.sharded_to_interleaved(ttz, in0_mem_config)
@@ -342,9 +338,6 @@ def test_layernorm_sharded_mix_precision_rm(
 def test_layernorm_1d_sharded_mix_precision_rm(
     test_id, M, K, subblock_w, in_dtype, gamma_dtype, gamma_beta_mem_config, out_mem_config, shard_orientation, device
 ):
-    if is_grayskull() and in_dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
-
     torch.manual_seed(1234)
     in0_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
@@ -420,7 +413,8 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         block_w=shard_shape[1] // 32,
         inplace=True,
     )
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
         fp32_dest_acc_en=False,

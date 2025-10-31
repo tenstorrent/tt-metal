@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, skip_for_wormhole_b0, is_blackhole
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
@@ -22,7 +22,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 import random
 import math
-from models.common.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (
@@ -443,19 +442,14 @@ def run_multi_core_matmul_1d(
         untilize_out=untilize_out,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
-            dst_full_sync_en=True,
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+        dst_full_sync_en=True,
+    )
     rs_input_mem_config = model_configuration["SHARDED_FF12_OUT_RING_MEMCFG"]
     input = gen_tensor(
         dim,
@@ -596,7 +590,6 @@ def run_multi_core_matmul_1d(
 
 
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
-@pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
@@ -716,7 +709,6 @@ def test_tg_matmul_1d_ring_llama_with_rs_perf(
 
 
 @pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
-@pytest.mark.skipif(is_grayskull(), reason="Test suite for WH only")
 @pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
