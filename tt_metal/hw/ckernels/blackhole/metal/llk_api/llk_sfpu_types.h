@@ -131,4 +131,5 @@ enum class SfpuType {
     rpow,
     cbrt,  // cube root
     hardmish,
+    reduce,
 };
