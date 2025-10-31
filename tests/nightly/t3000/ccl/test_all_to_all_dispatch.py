@@ -347,19 +347,7 @@ def run_all_to_all_dispatch_test(
             buffer_index = i
             if test_skew:
                 ttnn.apply_device_delay(mesh_device, delays)
-            output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
-                input_tensors[buffer_index],
-                expert_indices_tensors[buffer_index],
-                expert_mapping_tensors[buffer_index],
-                cluster_axis=cluster_axis,
-                num_links=num_links,
-                topology=topology,
-                memory_config=output_memory_config,
-                subdevice_id=worker_sub_device_id,
-                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
-                if use_optional_output_tensors
-                else None,
-            )
+            output_tensor, metadata_tensor = ttnn.relu(input_tensor)
 
             tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
             tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor

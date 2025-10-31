@@ -352,13 +352,25 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
 
         if (sysmem_manager.get_bypass_mode()) {
-            this->capture_program_trace_on_subgrid(
-                device_range,
-                program_cmd_seq,
-                dispatch_metadata.stall_first,
-                dispatch_metadata.stall_before_program,
-                program.get_runtime_id());
-            active_sub_grids.push_back(device_range);
+            bool is_local_subgrid = false;
+            MeshCoordinateRangeSet local_device_range_set;
+            for (const auto& coord : device_range) {
+                if (mesh_device_->is_local(coord)) {
+                    is_local_subgrid = true;
+                    local_device_range_set.merge(MeshCoordinateRange(coord));
+                }
+            }
+            MeshCoordinateRange local_device_range = local_device_range_set.ranges().front();
+            if (is_local_subgrid) {
+                std::cout << " capturing program trace on local subgrid: " << local_device_range << std::endl;
+                this->capture_program_trace_on_subgrid(
+                    local_device_range,
+                    program_cmd_seq,
+                    dispatch_metadata.stall_first,
+                    dispatch_metadata.stall_before_program,
+                    program.get_runtime_id());
+                active_sub_grids.push_back(local_device_range);
+            }
         } else {
             this->write_program_cmds_to_subgrid(
                 device_range,

@@ -141,7 +141,13 @@ def test_all_to_all_dispatch_no_trace(
 )
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device",
+    [
+        pytest.param((8, 4), (8, 4), id="8x4_grid"),
+        pytest.param((8, 8), (8, 8), id="8x8_grid"),
+        pytest.param((8, 16), (8, 16), id="8x16_grid"),
+    ],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [32])
@@ -205,6 +211,38 @@ def test_all_to_all_dispatch_trace(
         dtype=dtype,
         cluster_axis=cluster_axis,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 500000,
+        },
+    ],
+    ids=["fabric_1d_line"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param((8, 4), id="8x4_grid"),
+        pytest.param((8, 8), id="8x8_grid"),
+        pytest.param((8, 16), id="8x16_grid"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_mesh_device_trace(mesh_device):
+    shape = (1, 1, 512, 512)
+    input_0_dev = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device)
+    output_dev = ttnn.relu(input_0_dev)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    output_dev = ttnn.relu(input_0_dev)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    print("done capturing trace")
+    ttnn.synchronize_device(mesh_device)
+    ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+    ttnn.release_trace(mesh_device, trace_id)
 
 
 @pytest.mark.parametrize(
