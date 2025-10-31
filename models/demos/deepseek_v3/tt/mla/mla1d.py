@@ -977,7 +977,9 @@ class MLA1D(AbstractModule):
             Output tensor after MLP computation
         """
 
-        sdpa_dp_factor, mla_tp_factor = mesh_shape = cfg["mesh_shape"]
+        mesh_shape = cfg["mesh_shape"]
+
+        sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
 
         num_heads = cfg["num_heads"]
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
@@ -1061,8 +1063,10 @@ class MLA1D(AbstractModule):
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         # Update KVPE Cache
-        local_batch_idx = batch_idx % sdpa_dp_factor  # Local batch index within the DP shard
-        col_idx = batch_idx // sdpa_dp_factor  # Which DP shard the batch belongs to
+        batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
+        local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
+        col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
             tt_kvpe,
