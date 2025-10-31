@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <compute_kernel_api/eltwise_binary_sfpu.h>
 #include <compute_kernel_api/reconfig_data_format.h>
-#include <debug/dprint.h>
 
 #include <cstdint>
 
@@ -120,51 +119,106 @@ inline void mul_AxB_accumulate_C(
 }
 
 // ============================================================================
-// Compute XW1[r, k] and XW3[r, k] over all p_blocks
+// Flash-attention optimization: Accumulate XW results across k_block batches
+// This function accumulates X[r, p_block] * W[p_block, k_block] into partial/final buffers
+// avoiding re-reading X for each k_block
+// ============================================================================
+inline void mul_XW_accumulate_k_block(
+    tt::CBIndex cb_x_idx,        // X[r, p_block]
+    tt::CBIndex cb_w_idx,        // W[p_block, k_block] (W1 or W3)
+    tt::CBIndex cb_partial_idx,  // Partial results buffer (cb_xw1_partial or cb_xw3_partial)
+    tt::CBIndex cb_final_idx,    // Final results buffer (cb_xw1 or cb_xw3)
+    uint32_t p_block_size,
+    uint32_t k_block_size,
+    bool first_p_block,
+    bool last_p_block) {
+    tile_regs_acquire();
+
+    // Initialize or load previous partial results for this k_block
+    if (!first_p_block) {
+        cb_wait_front(cb_partial_idx, block_size);
+
+        copy_tile_init(cb_partial_idx);
+        // Only load k_block_size values (actual data), ignore padding
+        for (uint32_t k = 0; k < k_block_size; ++k) {
+            copy_tile(cb_partial_idx, k, k);  // CB tile -> REG
+        }
+
+        cb_pop_front(cb_partial_idx, block_size);
+    }
+
+    mm_init_short(cb_x_idx, cb_w_idx, false);
+
+    // Process each p in this p_block (to match reader's organization)
+    for (uint32_t p = 0; p < p_block_size; ++p) {
+        // Wait for W data: W[p, k_block] (entire row, matching reader pattern)
+        cb_wait_front(cb_w_idx, block_size);
+
+        // Accumulate: result[k] += X[p] * W[p, k] for all k in k_block
+        for (uint32_t k = 0; k < k_block_size; ++k) {
+            matmul_tiles(cb_x_idx, cb_w_idx, p, k, k, false);
+        }
+
+        cb_pop_front(cb_w_idx, block_size);
+    }
+
+    tile_regs_commit();
+
+    // Store result to appropriate CB
+    const auto output_cb_idx = last_p_block ? cb_final_idx : cb_partial_idx;
+    pack_and_push_block(output_cb_idx, block_size);
+}
+
+// ============================================================================
+// Compute XW1[r, k] and XW3[r, k] over all p_blocks using flash-attention optimization
 //   XW1[r, k] = sum_p( X[r, p] * W1[p, k] )
 //   XW3[r, k] = sum_p( X[r, p] * W3[p, k] )
 //
-// NOTE(maciek): This function could be rewritten to avoid re-reading X[r, :] for each k_block.
-// Instead, we could use a flash-attention-like approach where we accumulate partial XW1[r, :] and XW3[r, :]
-// results and store the entire row (i.e., hidden_Wt elements). This would reduce memory reads
-// but at the cost of increased complexity when accessing partial results. For each k_block,
-// we would need to iterate over hidden_Wt elements and update the partial results.
-// While this approach might be faster, it would definitely be more complex to implement.
+// This function implements a flash-attention-like optimization where X[r, p_block] is read
+// only once per p_block and reused across all k_blocks, significantly reducing memory reads.
 // ============================================================================
 
 inline void compute_XW1_XW3_for_r() {
-    for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-        const uint32_t k_block_size =
-            (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
-        // Compute XW1[r, k_block_start : k_block_start + k_block_size] and XW3[r, k_block_start : k_block_start +
-        // k_block_size]
-        for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
-            const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
-            const bool first_p_block = (p_block_start == 0);
-            const bool last_p_block = (p_block_start + block_size >= Wt);
-            cb_wait_front(cb_input_idx, block_size);
-            mul_AxB_accumulate_C(
-                /* cb_a_idx */ cb_input_idx,
-                /* cb_b_idx */ cb_w1_idx,
-                /* cb_c_partial_idx */ cb_xw1_partial_idx,
-                /* cb_c_final_idx */ cb_xw1_idx,
-                /* a_start_idx */ 0U,
-                /* ab_block_size */ p_block_size,
-                /* c_block_size */ k_block_size,
-                /* first_ab_block */ first_p_block,
-                /* last_ab_block */ last_p_block);
-            mul_AxB_accumulate_C(
-                /* cb_a_idx */ cb_input_idx,
-                /* cb_b_idx */ cb_w3_idx,
-                /* cb_c_partial_idx */ cb_xw3_partial_idx,
-                /* cb_c_final_idx */ cb_xw3_idx,
-                /* a_start_idx */ 0U,
-                /* ab_block_size */ p_block_size,
-                /* c_block_size */ k_block_size,
-                /* first_ab_block */ first_p_block,
-                /* last_ab_block */ last_p_block);
-            cb_pop_front(cb_input_idx, block_size);
+    // Flash-attention optimization: Read X[r, p_block] only once per p_block
+    // Loop order: outer p_blocks, inner k_blocks (but process k_blocks one at a time due to register limits)
+    for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
+        const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
+        const bool first_p_block = (p_block_start == 0);
+        const bool last_p_block = (p_block_start + block_size >= Wt);
+
+        // Read X[r, p_block] once for this p_block
+        cb_wait_front(cb_input_idx, block_size);
+
+        // Process each k_block separately (due to register constraints)
+        for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+            const uint32_t k_block_size =
+                (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+
+            // Accumulate contributions to XW1[r, k_block] and XW3[r, k_block]
+            // On last_p_block, results go directly to final CBs
+            mul_XW_accumulate_k_block(
+                /* cb_x_idx */ cb_input_idx,
+                /* cb_w_idx */ cb_w1_idx,
+                /* cb_partial_idx */ cb_xw1_partial_idx,
+                /* cb_final_idx */ cb_xw1_idx,
+                /* p_block_size */ p_block_size,
+                /* k_block_size */ k_block_size,
+                /* first_p_block */ first_p_block,
+                /* last_p_block */ last_p_block);
+
+            mul_XW_accumulate_k_block(
+                /* cb_x_idx */ cb_input_idx,
+                /* cb_w_idx */ cb_w3_idx,
+                /* cb_partial_idx */ cb_xw3_partial_idx,
+                /* cb_final_idx */ cb_xw3_idx,
+                /* p_block_size */ p_block_size,
+                /* k_block_size */ k_block_size,
+                /* first_p_block */ first_p_block,
+                /* last_p_block */ last_p_block);
         }
+
+        // Done with X[r, p_block]
+        cb_pop_front(cb_input_idx, block_size);
     }
 }
 
@@ -226,14 +280,17 @@ inline void compute_M_for_r() {
 }
 
 // ================= Compute kernel structure (M fits in L1) ==================
+// FLASH-ATTENTION OPTIMIZATION: Read X only once per p_block!
 // for r in rows:
-//     # Phase A: Compute XW1[r, :] and XW3[r, :]
-//     for k_block in k_blocks:                         # iterate over hidden dimension
-//         for p_block in p_blocks:                     # iterate over input dimension
-//             XW1_partial[r, k] += X[r, p_block] * W1[p_block, k]
-//             XW3_partial[r, k] += X[r, p_block] * W3[p_block, k]
-//          store XW1_partial[r, k_block] → XW1[r, k_block]
-//          store XW3_partial[r, k_block] → XW3[r, k_block]
+//     # Phase A: Compute XW1[r, :] and XW3[r, :] - Flash-attention trick
+//     for p_block in p_blocks:                         # OUTER LOOP - read X once per p_block
+//         read X[r, p_block]
+//         for k_block in k_blocks:                     # INNER LOOP - reuse X for all k_blocks
+//             # Process W1 first for all p in p_block
+//             XW1_partial[r, k_block] += X[r, p_block] * W1[p_block, k_block]
+//             # Process W3 second for all p in p_block
+//             XW3_partial[r, k_block] += X[r, p_block] * W3[p_block, k_block]
+//         # After last p_block: XW1_partial[r, k_block] → XW1[r, k_block]
 //
 //     # Phase B: Compute M[r,:] once
 //     for k_block in k_blocks:                         # iterate over hidden dimension
@@ -241,7 +298,7 @@ inline void compute_M_for_r() {
 //             M[r, k] = SiLU( XW1[r, k] ) * XW3[r, k]
 //
 //     # Phase C: Use M[r, :] for all c-blocks to compute Y[r, :]
-//     for c_block in c_blocks:                         # iterate over input dimension
+//     for c_block in c_blocks:                         # iterate over output dimension
 //         for k_block in k_blocks:                     # iterate over hidden dimension
 //             Y_partial[r, c] += M[r, k] * W2[k, c]
 //         store Y_partial[r, c] → Y[r, c]

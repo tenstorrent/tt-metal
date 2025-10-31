@@ -35,7 +35,7 @@ constexpr auto kInputCbIndex = tt::CBIndex::c_0;
 constexpr auto kW1CbIndex = tt::CBIndex::c_1;
 constexpr auto kW2CbIndex = tt::CBIndex::c_2;
 constexpr auto kW3CbIndex = tt::CBIndex::c_3;
-// CBs with intermediate computations
+// CBs with intermediate computations (used when row of M fits in L1 with flash-attention optimization)
 constexpr auto kXW1PartialCbIndex = tt::CBIndex::c_4;  // keeps track of partial (X @ W1) [r, k]
 constexpr auto kXW3PartialCbIndex = tt::CBIndex::c_5;  // keeps track of partial (X @ W3) [r, k]
 constexpr auto kXW1CbIndex = tt::CBIndex::c_6;         // keeps track of (X @ W1) [r, k]
@@ -121,6 +121,7 @@ bool row_of_m_fits_in_l1_check(
 
     // Calculate memory requirements for "M fits in L1" algorithm
     // This algorithm caches full rows of XW1, XW3, and M in L1 for better performance
+    // and uses flash-attention optimization to reduce X memory reads
     const uint32_t hidden_Wt_rounded_up = ((hidden_Wt + block_size - 1) / block_size) * block_size;
 
     // Memory for input CBs (always needed regardless of algorithm)
@@ -238,12 +239,13 @@ SwiGLUForwardProgramFactory::cached_program_t SwiGLUForwardProgramFactory::creat
         program, all_cores, kW2CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     [[maybe_unused]] auto cb_w3 = create_circular_buffer(
         program, all_cores, kW3CbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    // Partial CBs are only needed when row of M fits in L1
+    // Partial CBs are only needed when row of M fits in L1 (with flash-attention optimization)
     if (row_of_m_fits_in_l1) {
+        // Partial CBs need to store the same amount as the final XW1/XW3 results during accumulation
         [[maybe_unused]] auto cb_x_w1_partial = create_circular_buffer(
-            program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+            program, all_cores, kXW1PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw1);
         [[maybe_unused]] auto cb_x_w3_partial = create_circular_buffer(
-            program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+            program, all_cores, kXW3PartialCbIndex, data_format, bfloat16_single_tile_size_bytes, num_tiles_xw3);
     }
     // XW1, XW3, and M CBs use conditional sizing
     [[maybe_unused]] auto cb_x_w1 = create_circular_buffer(

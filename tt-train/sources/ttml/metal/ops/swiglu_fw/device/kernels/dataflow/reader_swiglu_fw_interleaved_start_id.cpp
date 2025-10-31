@@ -11,11 +11,11 @@ constexpr auto cb_w2_idx = tt::CBIndex::c_2;     // W2[k_block, c_block]
 constexpr auto cb_w3_idx = tt::CBIndex::c_3;     // W3[p_block, k]
 // CBs with intermediate computations
 constexpr auto cb_xw1_partial_idx = tt::CBIndex::c_4;  // Partial (X @ W1)[r, k_block] between p_blocks
-constexpr auto cb_xw3_partial_idx = tt::CBIndex::c_5;
-constexpr auto cb_xw1_idx = tt::CBIndex::c_6;        // (X @ W1)[r, k_block]
-constexpr auto cb_xw3_idx = tt::CBIndex::c_7;        // (X @ W3)[r, k_block]
-constexpr auto cb_m_idx = tt::CBIndex::c_8;          // M[r, k_block]
-constexpr auto cb_y_partial_idx = tt::CBIndex::c_9;  // Partial Y[r, c_block] between k_blocks
+constexpr auto cb_xw3_partial_idx = tt::CBIndex::c_5;  // Partial (X @ W3)[r, k_block] between p_blocks
+constexpr auto cb_xw1_idx = tt::CBIndex::c_6;          // (X @ W1)[r, k_block]
+constexpr auto cb_xw3_idx = tt::CBIndex::c_7;          // (X @ W3)[r, k_block]
+constexpr auto cb_m_idx = tt::CBIndex::c_8;            // M[r, k_block]
+constexpr auto cb_y_partial_idx = tt::CBIndex::c_9;    // Partial Y[r, c_block] between k_blocks
 // CB with output data
 constexpr auto cb_y_idx = tt::CBIndex::c_10;  // Final Y[r, c_block]
 
@@ -85,15 +85,18 @@ void kernel_main() {
 
 #ifdef ROW_OF_M_FITS_IN_L1
     // ================== Loop structure matches compute kernel ==================
-    // for r in rows:
-    //     # Phase A: Compute XW1[r, :] and XW3[r, :]
-    //     for k_block in k_blocks:
-    //        for p_block in p_blocks:
-    //           read X[r, p_block]
-    //           read W1[p_block, k_block]
-    //           read W3[p_block, k_block]
-    //           [compute XW1_partial[r, k_block] += X[r, p_block] * W1[p_block, k_block]]
-    //           [compute XW3_partial[r, k_block] += X[r, p_block] * W3[p_block, k_block]]
+    // Flash-attention optimization: for r in rows:
+    //     # Phase A: Compute XW1[r, :] and XW3[r, :] - read X[r, p_block] only once!
+    //     for p_block in p_blocks:                    # OUTER LOOP - read X once per p_block
+    //        read X[r, p_block]
+    //        for k_block in k_blocks:                 # INNER LOOP - accumulate across full hidden dimension
+    //          # First process W1 for all p in p_block (compute processes W1 first)
+    //          for p in p_block:
+    //            read W1[p, k_block] (read entire row of k_block elements)
+    //          # Then process W3 for all p in p_block (compute processes W3 second)
+    //          for p in p_block:
+    //            read W3[p, k_block] (read entire row of k_block elements)
+    //          # Compute processes: XW1[k] += X[r,p] * W1[p,k] for all p, then XW3[k] += X[r,p] * W3[p,k] for all p
     //
     //     # Phase B: Compute M[r,:] once
     //     [no reading required to compute M[r, :]]
@@ -105,48 +108,35 @@ void kernel_main() {
     //           [compute Y[r, c_block] += M[r, k_block] * W2[k_block, c_block]]
     // ============================================================================
     for (uint32_t r = start_row; r < end_row; ++r) {
-        // ---- Phase A: Compute XW1[r,:] and XW3[r,:] ----
+        // ---- Phase A: Compute XW1[r,:] and XW3[r,:] with flash-attention optimization ----
         // XW1[r,k] = sum_p( X[r,p] * W1[p,k] )
         // XW3[r,k] = sum_p( X[r,p] * W3[p,k] )
-        for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
-            const uint32_t k_block_size =
-                (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
-            // Accumulate XW1_partial[r, k_block_start : k_block_start + k_block_size]
-            // Accumulate XW3_partial[r, k_block_start : k_block_start + k_block_size]
-            // Loop over p_blocks along inner dimention
-            for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
-                const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
-                // --- Read p_block_size tiles of X[r, p_block]
-                // Calculate starting tile index for X. We read X in row-major order, so the offset equals
-                uint32_t x_tile_start = r * Wt + p_block_start;
-                read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes);
+        for (uint32_t p_block_start = 0; p_block_start < Wt; p_block_start += block_size) {
+            const uint32_t p_block_size = (p_block_start + block_size <= Wt) ? block_size : Wt - p_block_start;
 
-                // First loop for W1
-                for (uint32_t k = 0; k < k_block_size; ++k) {
-                    const uint32_t k_global = k_block_start + k;
-                    // --- Read p_block_size tiles of W1[p_block, k_global]
-                    // Calculate starting tile index for W1. We read W1 in col-major order, so offset equals
-                    uint32_t w1_tile_start = p_block_start * hidden_Wt + k_global;
-                    read_tiles_by_col(
-                        cb_w1_idx, w1_address_generator, w1_tile_start, p_block_size, tile_bytes, hidden_Wt);
+            // --- Read p_block_size tiles of X[r, p_block] ONCE per p_block
+            uint32_t x_tile_start = r * Wt + p_block_start;
+            read_tiles_by_row(cb_input_idx, x_address_generator, x_tile_start, p_block_size, tile_bytes);
 
-                    // --- Compute XW1_partial[r, k_global] += X[r, p_block] * W1[p_block, k_global]
+            // Stream W1 and W3 data organized by k_blocks to match compute kernel expectations
+            for (uint32_t k_block_start = 0; k_block_start < hidden_Wt; k_block_start += block_size) {
+                const uint32_t k_block_size =
+                    (k_block_start + block_size <= hidden_Wt) ? block_size : hidden_Wt - k_block_start;
+
+                // First, read all W1 data for this k_block (compute processes W1 first)
+                for (uint32_t p = 0; p < p_block_size; ++p) {
+                    const uint32_t p_global = p_block_start + p;
+                    uint32_t w1_tile_start = p_global * hidden_Wt + k_block_start;
+                    read_tiles_by_row(cb_w1_idx, w1_address_generator, w1_tile_start, k_block_size, tile_bytes);
                 }
 
-                // Second loop for W3
-                for (uint32_t k = 0; k < k_block_size; ++k) {
-                    const uint32_t k_global = k_block_start + k;
-                    // --- Read p_block_size tiles of W3[p_block, k_global]
-                    // Calculate starting tile index for W3. We read W3 in col-major order, so offset equals
-                    uint32_t w3_tile_start = p_block_start * hidden_Wt + k_global;
-                    read_tiles_by_col(
-                        cb_w3_idx, w3_address_generator, w3_tile_start, p_block_size, tile_bytes, hidden_Wt);
-
-                    // --- Compute XW3_partial[r, k_global] += X[r, p_block] * W3[p_block, k_global]
+                // Then, read all W3 data for this k_block (compute processes W3 second)
+                for (uint32_t p = 0; p < p_block_size; ++p) {
+                    const uint32_t p_global = p_block_start + p;
+                    uint32_t w3_tile_start = p_global * hidden_Wt + k_block_start;
+                    read_tiles_by_row(cb_w3_idx, w3_address_generator, w3_tile_start, k_block_size, tile_bytes);
                 }
             }
-            // Store XW1_partial[r, k_block] → XW1[r, k_block]
-            // Store XW3_partial[r, k_block] → XW3[r, k_block]
         }
 
         // ---- Phase B: Compute M[r, :] once ----
