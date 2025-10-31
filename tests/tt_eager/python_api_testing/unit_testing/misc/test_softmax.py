@@ -17,7 +17,6 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax, comp_pcc
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from models.common.utility_functions import is_blackhole, skip_for_blackhole
 
 
 @pytest.mark.parametrize(
