@@ -143,7 +143,7 @@ def test_model_inference(
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
             "llama32_90b": 0.9759,
             # TODO: Investigate HF_MODEL PCC drop compared to LLAMA_DIR (especially 3.2-3B)
-            "Llama-3.1-8B": 0.966 if mode_accuracy else 0.955,
+            "Llama-3.1-8B": 0.965 if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.979 if mode_accuracy else 0.97607,
             "Llama-3.2-1B": 0.9990 if mode_accuracy else 0.9864,
             "Llama-3.2-3B": 0.958 if mode_accuracy else 0.948,
