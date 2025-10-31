@@ -20,7 +20,6 @@
 #include <array>
 #include <cstddef>
 #include <iterator>
-#include <numeric>
 #include <optional>
 #include <unordered_set>
 #include <variant>
@@ -438,7 +437,7 @@ static FabricRouterRecipes choose_router_recipe(
     }
 }
 
-std::pair<FabricRouterRecipes, GlobalPoolAllocator> initialize_channel_configs(
+std::pair<FabricRouterRecipes, std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>> initialize_channel_configs(
     tt::tt_fabric::Topology topology,
     const tt::tt_fabric::FabricEriscDatamoverOptions& options,
     size_t num_used_sender_channels,
@@ -449,21 +448,27 @@ std::pair<FabricRouterRecipes, GlobalPoolAllocator> initialize_channel_configs(
     auto recipes = choose_router_recipe(topology, options, num_used_sender_channels, num_used_receiver_channels);
     const auto& pool_definitions = recipes.local.get_pool_definitions();
 
-    // Use the new global pool allocator function
-    return {
-        std::move(recipes),
-        create_global_pool_allocators(
-            topology,
-            options,
-            pool_definitions,
-            num_used_sender_channels,
-            num_used_receiver_channels,
-            channel_buffer_size_bytes,
-            available_buffer_memory_regions)};
+    // Create the global pool allocator to get the allocators and types
+    auto global_pool_allocator = create_global_pool_allocators(
+        topology,
+        options,
+        pool_definitions,
+        num_used_sender_channels,
+        num_used_receiver_channels,
+        channel_buffer_size_bytes,
+        available_buffer_memory_regions);
+
+    // Create the multi-pool allocator with full ownership
+    auto multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
+        global_pool_allocator.local_pool_allocators, global_pool_allocator.local_pool_types);
+
+    return {std::move(recipes), multi_pool_allocator};
 }
 
 void FabricEriscDatamoverConfig::add_receiver_channel_to_downstream_adapters(
-    GlobalPoolAllocator global_pool_allocator, size_t vc_idx, const FabricEriscDatamoverOptions& options) {
+    const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator,
+    size_t vc_idx,
+    const FabricEriscDatamoverOptions& options) {
     // find the allocator that is mapped to the sender channels of the vc_idx
     // 1D_LINE: always VC0 (fatal)
     // 1D_RING: VC0: CH1, VC1: CH2
@@ -524,23 +529,19 @@ void FabricEriscDatamoverConfig::add_receiver_channel_to_downstream_adapters(
     }
 
     // Get pool type and allocator
-    TT_FATAL(pool_idx < global_pool_allocator.local_pool_types.size(), "Pool index {} is out of range", pool_idx);
-    TT_FATAL(
-        pool_idx < global_pool_allocator.local_pool_allocators.size(),
-        "Pool index {} is out of range for allocators",
-        pool_idx);
+    TT_FATAL(pool_idx < multi_pool_allocator->get_num_pools(), "Pool index {} is out of range", pool_idx);
 
     bool downstream_is_elastic =
-        global_pool_allocator.local_pool_types[pool_idx] == tt::tt_fabric::FabricChannelPoolType::ELASTIC;
+        multi_pool_allocator->get_pool_type(pool_idx) == tt::tt_fabric::FabricChannelPoolType::ELASTIC;
     if (downstream_is_elastic) {
         auto elastic_allocator = std::dynamic_pointer_cast<tt::tt_fabric::ElasticChannelsAllocator>(
-            global_pool_allocator.local_pool_allocators[pool_idx]);
+            multi_pool_allocator->get_pool(pool_idx));
         TT_FATAL(elastic_allocator != nullptr, "Failed to cast allocator to ElasticChannelsAllocator");
         this->receiver_channel_to_downstream_adapters[vc_idx] =
             std::make_shared<tt::tt_fabric::ElasticChannelConnectionWriterAdapter>(*elastic_allocator, this->topology);
     } else {
         auto static_allocator = std::dynamic_pointer_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
-            global_pool_allocator.local_pool_allocators[pool_idx]);
+            multi_pool_allocator->get_pool(pool_idx));
         TT_FATAL(static_allocator != nullptr, "Failed to cast allocator to FabricStaticSizedChannelsAllocator");
         this->receiver_channel_to_downstream_adapters[vc_idx] =
             std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
@@ -636,38 +637,37 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     configure_skip_connection_flags(topology, options);
 
-    auto [recipes, global_pool_allocator] = initialize_channel_configs(
-        TODO... update to emit MultiPoolChannelAllocator directly topology,
+    auto [recipes, multi_pool_allocator] = initialize_channel_configs(
+        topology,
         options,
         this->num_used_sender_channels,
         this->num_used_receiver_channels,
         this->channel_buffer_size_bytes,
         this->available_buffer_memory_regions);
 
-    add_receiver_channel_to_downstream_adapters(global_pool_allocator, 0, options);
+    add_receiver_channel_to_downstream_adapters(multi_pool_allocator, 0, options);
     bool vc1_enabled = topology == Topology::Ring || topology == Topology::Torus;
     if (vc1_enabled) {
-        add_receiver_channel_to_downstream_adapters(global_pool_allocator, 1, options);
+        add_receiver_channel_to_downstream_adapters(multi_pool_allocator, 1, options);
     }
 
-    // Assign allocators from the global pool allocator
+    // Assign allocators from the multi pool allocator
     // For now, use the first local allocator as the main channel allocator
-    if (!global_pool_allocator.local_pool_allocators.empty()) {
-        this->channel_allocator = global_pool_allocator.local_pool_allocators[0];
+    if (multi_pool_allocator->get_num_pools() > 0) {
+        this->channel_allocator = multi_pool_allocator->get_pool(0);
     }
-    this->multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
-        global_pool_allocator.local_pool_allocators, global_pool_allocator.local_pool_types);
+    this->multi_pool_allocator = multi_pool_allocator;
     // Create the channel-to-pool mapping
     this->channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipes.local);
     this->remote_channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipes.remote);
 
     // Create remote channels allocator from the first local allocator
-    if (!global_pool_allocator.local_pool_allocators.empty()) {
+    if (multi_pool_allocator->get_num_pools() > 0) {
         auto static_allocator = std::dynamic_pointer_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
-            global_pool_allocator.local_pool_allocators[0]);
+            multi_pool_allocator->get_pool(0));
         if (static_allocator) {
-            this->remote_channels_allocator =
-                std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator);
+            this->remote_channels_allocator = std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(
+                *static_allocator, this->num_used_receiver_channels);
         }
     }
     // // Compute available channel buffering space from memory regions
@@ -1230,7 +1230,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     ct_args.push_back(0xabaddad7);
     for (auto& adapter : config.receiver_channel_to_downstream_adapters) {
-        adapter->emit_ct_args(ct_args, config.num_fwd_paths);
+        if (adapter) {
+            adapter->emit_ct_args(ct_args, config.num_fwd_paths);
+        }
     }
     ct_args.push_back(0xabaddad9);
 

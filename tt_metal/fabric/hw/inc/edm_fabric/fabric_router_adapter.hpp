@@ -44,9 +44,6 @@ namespace tt::tt_fabric {
 template <uint8_t EDM_NUM_BUFFER_SLOTS>
 // <<<<<<< HEAD
 struct RouterStaticSizedChannelWriterAdapter {
-    // =======
-    // struct RouterChannelWriterAdapter {
-    // >>>>>>> 268a262fc3 (checkpoint)
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
@@ -61,11 +58,7 @@ struct RouterStaticSizedChannelWriterAdapter {
 
     // HACK: Need a way to properly set this up
 
-    // <<<<<<< HEAD
     RouterStaticSizedChannelWriterAdapter() = default;
-    // =======
-    //     RouterChannelWriterAdapter() = default;
-    // >>>>>>> 268a262fc3 (checkpoint)
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(

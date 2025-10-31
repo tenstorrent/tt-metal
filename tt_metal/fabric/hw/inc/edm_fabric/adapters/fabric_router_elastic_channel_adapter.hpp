@@ -31,7 +31,7 @@ namespace tt::tt_fabric {
  *
  * The consumer when issuing an acknowledgement, will increment the producer's free slots counter.
  */
-template <uint8_t SLOTS_PER_CHUNK, uint8_t CHUNK_SIZE_BYTES>
+template <uint8_t SLOTS_PER_CHUNK, uint32_t CHUNK_SIZE_BYTES>
 struct ActiveDestinationChunk {
     ActiveDestinationChunk() = default;
 
@@ -56,7 +56,7 @@ struct ActiveDestinationChunk {
 
 using destination_chunk_allocation_t = uint32_t;  // bank_address;
 
-template <uint8_t SLOTS_PER_CHUNK, uint8_t CHUNK_SIZE_BYTES>
+template <uint8_t SLOTS_PER_CHUNK, uint32_t CHUNK_SIZE_BYTES>
 struct RouterElasticChannelWriterAdapter {
     FORCE_INLINE void init(
         uint8_t edm_worker_x,
@@ -83,7 +83,7 @@ struct RouterElasticChannelWriterAdapter {
         static_assert(false, "Unimplemented");
         tt::tt_fabric::connection::open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>(
             this->router_worker_location_info_addr,
-            static_cast<size_t>(this->destination_chunk_address_ptr),
+            reinterpret_cast<size_t>(this->destination_chunk_address_ptr),
             this->my_connection_teardown_addr,
             this->router_noc_x,
             this->router_noc_y);
@@ -146,7 +146,7 @@ struct RouterElasticChannelWriterAdapter {
         bool stateful_api,
         bool increment_pointers>
     FORCE_INLINE void send_payload_with_trid(uint32_t source_address, size_t size_bytes, uint8_t trid) {
-        ASSERT(size_bytes <= this->buffer_size_bytes);
+        // ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
 
@@ -173,7 +173,8 @@ struct RouterElasticChannelWriterAdapter {
     FORCE_INLINE void update_edm_buffer_slot_word(uint32_t offset, uint32_t data, uint8_t noc = noc_index) {
         noc_inline_dw_write(this->active_destination_chunk.get_current_dest_address(), data, 0xf, noc);
         if constexpr (inc_pointers) {
-            post_send_payload_increment_pointers(noc);
+            this->active_destination_chunk.advance();
+            this->update_edm_buffer_free_slots(noc);
         }
     }
 

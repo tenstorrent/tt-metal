@@ -26,7 +26,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_packet_recorder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_code_profiling.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_channel_traits.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_router_elastic_channel_adapter.hpp"
 
 #include "noc_overlay_parameters.h"
@@ -279,11 +278,6 @@ constexpr bool ANY_SENDER_CHANNELS_ARE_ELASTIC() {
     }
     return false;
 }
-
-// Stubbed out the elastic channel writer adapter until elastic channels implemented
-// Issue: https://github.com/tenstorrent/tt-metal/issues/26311
-template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
-struct RouterElasticChannelWriterAdapter {};
 
 template <bool DOWNSTREAM_IS_ELASTIC, uint8_t SENDER_NUM_BUFFERS>
 using RouterToRouterSender = std::conditional_t<
@@ -1573,7 +1567,6 @@ FORCE_INLINE void run_sender_channel_step_impl(
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
         if constexpr (IS_ELASTIC_SENDER_CHANNEL[sender_channel_index]) {
-            // <<<<<<< HEAD
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 static_assert(
                     SKIP_CONNECTION_LIVENESS_CHECK || !IS_ELASTIC_SENDER_CHANNEL[sender_channel_index],
@@ -2049,6 +2042,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     }
 }
 
+// We wait for all router-to-router noc connections to establish before starting the main loop
 template <typename EdmChannelWorkerIFs>
 void
 #ifdef FABRIC_2D
@@ -2635,6 +2629,7 @@ void kernel_main() {
                     is_2d_fabric ? StreamId{receiver_channel_free_slots_stream_ids[downstream_direction]}
                                  : StreamId{receiver_channel_free_slots_stream_ids[0]};
                 new (&downstream_edm_noc_interfaces_vc0[edm_index]) RouterToRouterSender<
+                    DOWNSTREAM_VC0_IS_ELASTIC,
                     DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>(
                     // persistent_mode -> hardcode to false for 1D because for 1D, EDM -> EDM
                     // connections we must always use semaphore lookup
@@ -2693,32 +2688,33 @@ void kernel_main() {
             auto downstream_sender_channel_credit_stream_id =
                 is_2d_fabric ? StreamId{vc1_sender_channel_free_slots_stream_id}
                              : StreamId{local_sender_channel_free_slots_stream_ids_ordered[2]};
-            new (&downstream_edm_noc_interface_vc1) RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
-                // persistent_mode -> hardcode to false because for EDM -> EDM
-                //  connections we must always use semaphore lookup
-                is_persistent_fabric,
-                downstream_edm_vc1_noc_x,
-                downstream_edm_vc1_noc_y,
-                downstream_edm_vc1_buffer_base_address,
-                DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
-                downstream_edm_vc1_worker_registration_id,
-                downstream_edm_vc1_worker_location_info_address,
-                channel_buffer_size,
-                local_sender_channel_connection_buffer_index_id[NUM_USED_RECEIVER_CHANNELS - 1],
-                0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
-                    // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
-                    // Router that a Worker adapter is connected to writes its read counter to this address. The
-                    // worker uses this to calculate free slots in the router's sender channel.
-                reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
-                downstream_vc1_noc_interface_buffer_index_local_addr,
+            new (&downstream_edm_noc_interface_vc1)
+                RouterToRouterSender<DOWNSTREAM_VC1_IS_ELASTIC, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>(
+                    // persistent_mode -> hardcode to false because for EDM -> EDM
+                    //  connections we must always use semaphore lookup
+                    is_persistent_fabric,
+                    downstream_edm_vc1_noc_x,
+                    downstream_edm_vc1_noc_y,
+                    downstream_edm_vc1_buffer_base_address,
+                    DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+                    downstream_edm_vc1_worker_registration_id,
+                    downstream_edm_vc1_worker_location_info_address,
+                    channel_buffer_size,
+                    local_sender_channel_connection_buffer_index_id[NUM_USED_RECEIVER_CHANNELS - 1],
+                    0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
+                        // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
+                        // Router that a Worker adapter is connected to writes its read counter to this address. The
+                        // worker uses this to calculate free slots in the router's sender channel.
+                    reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
+                    downstream_vc1_noc_interface_buffer_index_local_addr,
 
-                // remote (downstream) sender channel credits stream ID
-                downstream_sender_channel_credit_stream_id,
-                // This is our local stream register for the copy of the downstream router's
-                // free slots
-                StreamId{receiver_channel_1_free_slots_from_downstream_stream_id},
-                receiver_channel_forwarding_data_cmd_buf_ids[1],
-                receiver_channel_forwarding_sync_cmd_buf_ids[1]);
+                    // remote (downstream) sender channel credits stream ID
+                    downstream_sender_channel_credit_stream_id,
+                    // This is our local stream register for the copy of the downstream router's
+                    // free slots
+                    StreamId{receiver_channel_1_free_slots_from_downstream_stream_id},
+                    receiver_channel_forwarding_data_cmd_buf_ids[1],
+                    receiver_channel_forwarding_sync_cmd_buf_ids[1]);
 
             // Only receiver channel servicing cores should be setting up the noc cmd buf.
             // If there is only one active erisc, then it is guaranteed we are the receiver channel
@@ -2951,8 +2947,8 @@ void kernel_main() {
     run_fabric_edm_main_loop<
         enable_packet_header_recording,
         NUM_RECEIVER_CHANNELS,
-        RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
-        RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>>(
+        RouterToRouterSender<DOWNSTREAM_VC0_IS_ELASTIC, DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>,
+        RouterToRouterSender<DOWNSTREAM_VC1_IS_ELASTIC, DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>>(
         local_receiver_channels,
         local_sender_channels,
         local_sender_channel_worker_interfaces,

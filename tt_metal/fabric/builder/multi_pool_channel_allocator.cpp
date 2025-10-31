@@ -123,30 +123,32 @@ void MultiPoolChannelAllocator::emit_ct_args(
         return channel_to_pool_index;
     };
 
-    auto sender_channel_to_pool_index = build_channel_to_pool_index_map(
-        [](FabricChannelAllocator* allocator) { return allocator->get_sender_local_to_global_index_map(); });
-    auto receiver_channel_to_pool_index = build_channel_to_pool_index_map(
-        [](FabricChannelAllocator* allocator) { return allocator->get_receiver_local_to_global_index_map(); });
-
-    TT_FATAL(
-        sender_channel_to_pool_index.size() == num_used_sender_channels,
-        "Sender channel to pool index size {} does not match num_used_sender_channels {}",
-        sender_channel_to_pool_index.size(),
-        num_used_sender_channels);
-    for (size_t i = 0; i < num_used_sender_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(sender_channel_to_pool_index[i]));
+    if (num_used_sender_channels > 0) {
+        auto sender_channel_to_pool_index = build_channel_to_pool_index_map(
+            [](FabricChannelAllocator* allocator) { return allocator->get_sender_local_to_global_index_map(); });
+        TT_FATAL(
+            sender_channel_to_pool_index.size() == num_used_sender_channels,
+            "Sender channel to pool index size {} does not match num_used_sender_channels {}",
+            sender_channel_to_pool_index.size(),
+            num_used_sender_channels);
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(sender_channel_to_pool_index[i]));
+        }
+        log_info(tt::LogMetal, "\tsender_channel_to_pool_index_map={}", sender_channel_to_pool_index);
     }
-    TT_FATAL(
-        receiver_channel_to_pool_index.size() == num_used_receiver_channels,
-        "Receiver channel to pool index size {} does not match num_used_receiver_channels {}",
-        receiver_channel_to_pool_index.size(),
-        num_used_receiver_channels);
-    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(receiver_channel_to_pool_index[i]));
+    if (num_used_receiver_channels > 0) {
+        auto receiver_channel_to_pool_index = build_channel_to_pool_index_map(
+            [](FabricChannelAllocator* allocator) { return allocator->get_receiver_local_to_global_index_map(); });
+        TT_FATAL(
+            receiver_channel_to_pool_index.size() == num_used_receiver_channels,
+            "Receiver channel to pool index size {} does not match num_used_receiver_channels {}",
+            receiver_channel_to_pool_index.size(),
+            num_used_receiver_channels);
+        for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(receiver_channel_to_pool_index[i]));
+        }
+        log_info(tt::LogMetal, "\treceiver_channel_to_pool_index_map={}", receiver_channel_to_pool_index);
     }
-
-    log_info(tt::LogMetal, "\tsender_channel_to_pool_index_map={}", sender_channel_to_pool_index);
-    log_info(tt::LogMetal, "\treceiver_channel_to_pool_index_map={}", receiver_channel_to_pool_index);
 }
 
 std::shared_ptr<FabricChannelAllocator> MultiPoolChannelAllocator::get_pool(size_t pool_index) const {
