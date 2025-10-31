@@ -73,7 +73,7 @@ void configure_static_tlbs(
         // use this on a perf path and the launch_msg "kernel config" needs to
         // arrive prior to the "go" message during device init and slow dispatch
         // Revisit this when we have a more flexible UMD api
-        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, TLB_DATA::Strict);
+        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
     // Setup static TLBs for all eth cores
     for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
