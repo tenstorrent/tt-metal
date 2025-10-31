@@ -49,10 +49,13 @@ def run_attention_component(
     reference_attention = reference_layer.self_attn
 
     # Reference attention forward
+    # Match TT behavior: in prefill (seq_len > 1) current TT attention ignores mask
+    seq_len = hidden_shape[1]
+    ref_mask = None if seq_len > 1 else mask
     reference_out, _ = reference_attention(
         hidden_states=hidden_states,
         position_embeddings=position_embeddings,
-        attention_mask=mask,
+        attention_mask=ref_mask,
         use_cache=True,
     )
 
@@ -170,14 +173,17 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     hidden_states = torch.randn(hidden_shape)
 
     reference_model = reference_layer.mlp
-    reference_output, routing_scores = reference_model(hidden_states)
+    if hasattr(reference_model, "router"):
+        reference_output, _ = reference_model(hidden_states)
+    else:
+        reference_output = reference_model(hidden_states)
 
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     # Create TT MLP using TestFactory setup
     tt_mlp = decoder_layer.mlp
-    tt_output, routing_scores = tt_mlp(tt_hidden_states)
+    tt_output, _ = tt_mlp(tt_hidden_states)
 
     # Compare outputs
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.88)
@@ -221,7 +227,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         layer_idx=0,
         ccl_manager=setup["ccl_manager"],
         dtype=setup["dtype"],
-        tensor_cache_path=setup["tensor_cache_path"] + "module_tests",
+        tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
         mesh_config=setup["mesh_config"],
     )
 
@@ -242,7 +248,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         mask = get_decode_mask(position_ids[0].item(), sliding_window)
 
     # Create position embeddings for reference model
-    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeDecoderLayer
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeRotaryEmbedding
 
     rope_embeddings = Glm4MoeRotaryEmbedding(config)
     cos, sin = rope_embeddings(hidden_states, position_ids)
@@ -253,12 +259,37 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings)
 
     # Create TTNN RoPE embeddings for decoder layer
-    tt_cos = ttnn.from_torch(
-        cos.unsqueeze(-2), device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-    )
-    tt_sin = ttnn.from_torch(
-        sin.unsqueeze(-2), device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-    )
+    # In decode path (seq_len == 1), the attention uses a device RoPE op that
+    # requires HEIGHT_SHARDED inputs for cos/sin. Build a height-sharded memcfg.
+    cos_in = cos.unsqueeze(-2)
+    sin_in = sin.unsqueeze(-2)
+    if seq_len == 1:
+        grid_size = setup["mesh_device"].compute_with_storage_grid_size()
+        core_grid = ttnn.num_cores_to_corerangeset(1, grid_size, row_wise=True)
+        hs_memcfg = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, cos_in.shape[-1]),
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        tt_cos = ttnn.from_torch(
+            cos_in,
+            device=setup["mesh_device"],
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=hs_memcfg,
+        )
+        tt_sin = ttnn.from_torch(
+            sin_in,
+            device=setup["mesh_device"],
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=hs_memcfg,
+        )
+    else:
+        tt_cos = ttnn.from_torch(cos_in, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_sin = ttnn.from_torch(sin_in, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
     from models.demos.glm_45.tt.rope import ApplyRotaryPosEmb
 
@@ -286,7 +317,8 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     # Test individual components
 
-    if seq_len == 1:
+    # Only test router if the reference layer actually has one (some layers are dense-only)
+    if seq_len == 1 and hasattr(reference_layer.mlp, "router"):
         run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
     # run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
