@@ -29,6 +29,102 @@ constexpr auto BFLOAT = "Unsupported type: Bfloat";
 
 }  // namespace UnsupportedMessages
 
+namespace {
+
+/**
+ * Check if a numpy ndarray is C-contiguous.
+ * A C-contiguous array has elements stored in row-major order with no gaps.
+ *
+ * WARNING: Despite documentation, empirically nanobind's ndarray.stride()
+ * appears to return strides in ELEMENTS (not bytes)!
+ */
+template <typename T>
+bool is_c_contiguous(const nb::ndarray<>& array) {
+    const size_t rank = array.ndim();
+    if (rank == 0) {
+        return true;  // Scalar is always contiguous
+    }
+
+    size_t expected_stride_elements = 1;
+
+    // Check strides in reverse order (from last to first dimension)
+    // Strides appear to be in elements, not bytes
+    for (size_t i = rank; i > 0; --i) {
+        const size_t dim_idx = i - 1;
+        const size_t actual_stride = array.stride(dim_idx);
+
+        if (actual_stride != expected_stride_elements) {
+            return false;
+        }
+
+        expected_stride_elements *= array.shape(dim_idx);
+    }
+
+    return true;
+}
+
+/**
+ * Copy non-contiguous numpy array to a contiguous std::vector.
+ * Uses proper stride-aware indexing to read elements in correct order.
+ *
+ * This function recursively iterates through all dimensions, computing the
+ * proper memory offset using stride information.
+ */
+template <typename T>
+void copy_strided_impl(
+    std::vector<T>& output,
+    const T* data_ptr,
+    const std::vector<size_t>& shape,
+    const std::vector<size_t>& strides,
+    size_t dim,
+    size_t offset) {
+    if (dim == shape.size() - 1) {
+        // Last dimension: copy all elements directly
+        for (size_t i = 0; i < shape[dim]; ++i) {
+            output.push_back(data_ptr[offset + i * strides[dim]]);
+        }
+    } else {
+        // Recurse into next dimension
+        for (size_t i = 0; i < shape[dim]; ++i) {
+            copy_strided_impl(output, data_ptr, shape, strides, dim + 1, offset + i * strides[dim]);
+        }
+    }
+}
+
+template <typename T>
+std::vector<T> make_contiguous_copy(const nb::ndarray<>& array) {
+    const size_t rank = array.ndim();
+    const size_t total_elements = array.size();
+
+    std::vector<T> contiguous_data;
+    contiguous_data.reserve(total_elements);
+
+    if (rank == 0) {
+        // Scalar case
+        contiguous_data.push_back(*static_cast<const T*>(array.data()));
+        return contiguous_data;
+    }
+
+    // Get strides and shape
+    // WARNING: Despite documentation, empirically nanobind's ndarray.stride()
+    // appears to return strides in ELEMENTS (not bytes)!
+    std::vector<size_t> strides(rank);
+    std::vector<size_t> shape(rank);
+    for (size_t i = 0; i < rank; ++i) {
+        strides[i] = array.stride(i);  // Already in elements, don't divide!
+        shape[i] = array.shape(i);
+    }
+
+    const T* data_ptr = static_cast<const T*>(array.data());
+
+    // Recursively copy with proper stride handling
+    copy_strided_impl(contiguous_data, data_ptr, shape, strides, 0, 0);
+
+    return contiguous_data;
+}
+
+}  // namespace
+
 [[noreturn]] void throw_exception(
     std::source_location source_location,
     nb::exception_type exception_type,
@@ -322,6 +418,50 @@ tt::tt_metal::Tensor make_metal_tensor(
             auto* device = &ttml::autograd::ctx().get_device();
             // device->enable_program_cache();
 
+            // Check if the numpy array is C-contiguous
+            // Non-contiguous arrays (e.g., after transpose) must be copied to contiguous storage
+            const bool is_contiguous = is_c_contiguous<NumpyType>(numpy_data);
+
+            if (!is_contiguous) {
+                // Non-contiguous case: must copy to contiguous storage first
+                std::vector<NumpyType> contiguous_storage = make_contiguous_copy<NumpyType>(numpy_data);
+
+                if constexpr (!std::is_same_v<MetalType, NumpyType>) {
+                    // Convert type during copy
+                    std::vector<MetalType> converted_data(contiguous_storage.begin(), contiguous_storage.end());
+
+                    auto row_major_tensor =
+                        (mapper != nullptr)
+                            ? ttnn::distributed::create_distributed_tensor(
+                                  ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
+                            : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
+
+                    if (mapper != nullptr) {
+                        row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+                    }
+
+                    return (target_layout == tt::tt_metal::Layout::ROW_MAJOR)
+                               ? row_major_tensor
+                               : ttnn::tilize_with_zero_padding(row_major_tensor);
+                } else {
+                    // No type conversion needed
+                    auto row_major_tensor =
+                        (mapper != nullptr)
+                            ? ttnn::distributed::create_distributed_tensor(
+                                  ttsl::make_const_span(contiguous_storage), tensor_shape, tensor_layout, *mapper)
+                            : tt::tt_metal::Tensor::from_vector(contiguous_storage, tensor_spec, device);
+
+                    if (mapper != nullptr) {
+                        row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+                    }
+
+                    return (target_layout == tt::tt_metal::Layout::ROW_MAJOR)
+                               ? row_major_tensor
+                               : ttnn::tilize_with_zero_padding(row_major_tensor);
+                }
+            }
+
+            // Contiguous case: use original fast path with span
             std::span<const NumpyType> numpy_data_span(
                 static_cast<const NumpyType*>(numpy_data.data()), numpy_data.size());
 

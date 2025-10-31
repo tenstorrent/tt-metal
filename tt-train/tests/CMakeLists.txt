@@ -6,6 +6,7 @@ set(SOURCES
     core/n300_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
+    core/tile_layout_round_trip_test.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
@@ -14,6 +15,7 @@ set(SOURCES
     model/weight_tying_test.cpp
     model/bert_polymorphism_test.cpp
     model/bert_weight_loading_test.cpp
+    model/bert_operator_test.cpp
     ttnn_fixed/concat_op_test.cpp
     ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
     ttnn_fixed/trivial_ttnn_ops_test.cpp

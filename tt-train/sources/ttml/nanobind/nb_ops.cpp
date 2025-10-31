@@ -4,6 +4,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
@@ -21,6 +22,7 @@
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
+#include "ops/scaled_dot_product_attention.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -190,6 +192,8 @@ void py_module(nb::module_& m) {
 
     {
         auto py_multi_head_utils = static_cast<nb::module_>(m.attr("multi_head_utils"));
+        // Note: heads_creation returns std::tuple, which is automatically converted by nanobind
+        // with the <nanobind/stl/tuple.h> include
         py_multi_head_utils.def("heads_creation", &ttml::ops::heads_creation, nb::arg("qkv"), nb::arg("num_heads"));
         py_multi_head_utils.def("heads_fusion", &ttml::ops::heads_fusion, nb::arg("x"));
         py_multi_head_utils.def(
@@ -199,6 +203,24 @@ void py_module(nb::module_& m) {
             nb::arg("kvs"),
             nb::arg("num_heads"),
             nb::arg("num_groups"));
+
+        // Attention operations
+        py_multi_head_utils.def(
+            "scaled_dot_product_attention",
+            &ttml::ops::scaled_dot_product_attention,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = nullptr,
+            "Scaled dot-product attention: softmax(Q @ K^T / sqrt(d_k)) @ V");
+        py_multi_head_utils.def(
+            "scaled_sigmoid_dot_product_attention",
+            &ttml::ops::scaled_sigmoid_dot_product_attention,
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = nullptr,
+            "Scaled sigmoid dot-product attention");
     }
 
     {
@@ -277,6 +299,7 @@ void py_module(nb::module_& m) {
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
         py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
+        py_unary.def("tanh", &ttml::ops::tanh, nb::arg("tensor"));
         py_unary.def("mean", &ttml::ops::mean, nb::arg("tensor"));
         // py_unary.def("sum", &ttml::ops::sum,
         //              nb::arg("tensor"));
