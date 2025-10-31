@@ -42,6 +42,7 @@ FORCE_INLINE void send_next_data(
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile lite_fabric::FabricLiteHeader*>(src_addr);
+    pkt_header->debug = 0xd05e0000;
 
     if (pkt_header->get_base_send_type() == lite_fabric::NocSendTypeEnum::WRITE_REG) {
         const uint32_t reg_address = pkt_header->command_fields.write_reg.reg_address;
