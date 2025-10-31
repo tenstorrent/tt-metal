@@ -30,7 +30,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
 
-    // Collect all matching receiver cores instead of just the first one
     std::vector<CoreCoord> receiver_core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
@@ -74,7 +73,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         socket_block_size = socket_aligned_page_size;
     }
 
-    // Use all cores for consistent CoreRangeSet across devices
     auto receiver_core_range_set = CoreRangeSet(std::set<CoreRange>());
     for (const auto& core : receiver_core_coords) {
         receiver_core_range_set = receiver_core_range_set.merge(CoreRangeSet({CoreRange(core, core)}));
