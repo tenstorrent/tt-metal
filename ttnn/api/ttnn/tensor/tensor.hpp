@@ -269,8 +269,7 @@ private:
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-[[deprecated]]
-Tensor create_device_tensor(
+[[deprecated]] Tensor create_device_tensor(
     const ttnn::Shape& shape,
     DataType dtype,
     Layout layout,
@@ -317,6 +316,10 @@ void write_tensor(
     const Tensor& src, Tensor& dst, bool blocking = true, std::optional<ttnn::QueueId> cq_id = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
+
+namespace operations {
+Tensor to_dtype(const Tensor& tensor, DataType dtype);
+}  // namespace operations
 
 }  // namespace tt_metal
 

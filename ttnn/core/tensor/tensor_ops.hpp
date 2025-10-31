@@ -45,4 +45,6 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape);
 Tensor tensor_reshape(
     const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape);
 
+Tensor tensor_to_dtype(const Tensor& input_tensor, DataType dtype);
+
 }  // namespace tt::tt_metal::tensor_ops
