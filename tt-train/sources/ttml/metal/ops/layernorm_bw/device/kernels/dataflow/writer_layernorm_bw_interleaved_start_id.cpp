@@ -9,8 +9,6 @@ constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gr
 constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_11;     // dgamma components
 constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta components
 
-constexpr uint32_t cb_x_debug_idx = tt::CBIndex::c_19;  // debug x_hat (to avoid conflict with reader)
-
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
@@ -61,23 +59,12 @@ void kernel_main() {
 
             // Write dx block
             write_cb_block_to_dram(cb_dx_idx, dx_output_addr_generator, start_idx, current_block_size, tile_bytes);
-
             // Write dgamma_components block
             write_cb_block_to_dram(
                 cb_dgamma_components, dgamma_output_addr_generator, start_idx, current_block_size, tile_bytes_dgamma);
             // Write dbeta_components block
-            DPRINT << "WRITER: dgamma_components block " << start_idx << ":" << ENDL();
-            cb_wait_front(cb_dgamma_components, block_size);
-            if (c == 0) {
-                DPRINT << "WRITER: dgamma_components block " << 1 << ":" << ENDL();
-                print_tile(cb_dgamma_components, 0, false);
-            }
             write_cb_block_to_dram(
                 cb_dbeta_components, dbeta_output_addr_generator, start_idx, current_block_size, tile_bytes_dgamma);
-
-            // DPRINT << "WRITER: Processing row printing cb_debug_idx " << r << ENDL();
-            // cb_wait_front(cb_x_debug_idx, 1);
-            // print_tile(cb_x_debug_idx, 0, false);
             noc_async_write_barrier();
 
             cb_pop_front(cb_dx_idx, current_block_size);
