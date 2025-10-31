@@ -27,7 +27,7 @@ Tensor where_impl(
     const auto& value_false,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& output) {
-    log_info(tt::LogOp, "Where Legacy");
+    log_debug(tt::LogOp, "Where Legacy");
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
@@ -114,7 +114,7 @@ Tensor invoke_impl(
     }
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
 
-    log_info(tt::LogOp, "Where LLK - TTT");
+    log_debug(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
         std::move(condition),
@@ -151,7 +151,7 @@ Tensor invoke_impl(
     }
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-    log_info(tt::LogOp, "Where LLK - TTS");
+    log_debug(tt::LogOp, "Where LLK - TTS");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
         std::move(condition),
@@ -187,7 +187,7 @@ Tensor invoke_impl(
     }
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
-    log_info(tt::LogOp, "Where LLK - TST");
+    log_debug(tt::LogOp, "Where LLK - TST");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
         std::move(condition),
@@ -205,7 +205,7 @@ Tensor invoke_impl(
     float t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    log_info(tt::LogOp, "Where LLK - TSS");
+    log_debug(tt::LogOp, "Where LLK - TSS");
     unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
     return ttnn::operations::unary::Unary_chain::invoke(
         condition,
