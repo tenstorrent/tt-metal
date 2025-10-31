@@ -145,7 +145,12 @@ void MetalContext::initialize(
 
         [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
         log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
-        generate_device_bank_to_noc_tables(device_id);
+        
+        // Generate bank to NOC tables - skip for mock devices as they don't need routing tables
+        // and Galaxy mock cluster descriptors don't define NOC translation for all chips
+        if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
+            generate_device_bank_to_noc_tables(device_id);
+        }
 
         // Skip firmware building for mock devices
         if (cluster_->get_target_device_type() != tt::TargetDevice::Mock) {
