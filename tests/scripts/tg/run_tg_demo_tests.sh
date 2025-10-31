@@ -123,14 +123,27 @@ run_tg_falcon7b_tests() {
   fi
 }
 
-run_tg_sd35_demo_tests() {
+run_tg_dit_tests() {
   fail=0
-  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5  pytest -n auto models/experimental/tt_dit/tests/models/test_pipeline_sd35.py -k "4x8cfg1sp0tp1" --timeout=600 ; fail+=$?
+  test_name=${FUNCNAME[1]}
+  test_cmd=$1
+
+  echo "LOG_METAL: Running ${test_cmd}"
+
+  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto ${test_cmd} --timeout 600 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
-    echo "LOG_METAL: run_tg_sd35_demo_tests failed"
+    echo "LOG_METAL: ${test_name} failed"
     exit 1
   fi
+}
+
+run_tg_sd35_demo_tests() {
+  run_tg_dit_tests "models/experimental/tt_dit/tests/models/sd35/test_pipeline_sd35.py -k 4x8cfg1sp0tp1"
+}
+
+run_tg_flux1_tests() {
+  run_tg_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k 4x8sp0tp1-dev"
 }
 
 run_tg_gpt_oss_tests() {
@@ -149,6 +162,19 @@ run_tg_gpt_oss_tests() {
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_gpt_oss_tests failed"
+    exit 1
+  fi
+}
+
+run_tg_mochi_demo_tests() {
+  fail=0
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0"
+  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500 ; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_mochi_demo_tests failed"
     exit 1
   fi
 }
@@ -175,6 +201,10 @@ run_tg_demo_tests() {
     run_tg_llama3_70b_dp_tests
   elif [[ "$1" == "sd35" ]]; then
     run_tg_sd35_demo_tests
+  elif [[ "$1" == "mochi" ]]; then
+    run_tg_mochi_demo_tests
+  elif [[ "$1" == "flux1" ]]; then
+    run_tg_flux1_tests
   elif [[ "$1" == "sentence_bert" ]]; then
     run_tg_sentence_bert_tests
   elif [[ "$1" == "gpt-oss" ]]; then

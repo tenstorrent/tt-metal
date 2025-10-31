@@ -92,7 +92,7 @@ std::string get_default_root_path() {
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
-    uint32_t build_key,
+    uint64_t build_key,
     size_t fw_compile_hash,
     tt::ARCH arch,
     const std::map<std::string, std::string>& device_kernel_defines) {
@@ -282,14 +282,14 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     core_id_(build_config.processor_id),
     is_fw_(build_config.is_fw),
     dispatch_message_addr_(build_config.dispatch_message_addr),
+    process_defines_at_compile_(true),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
     cflags_(env.cflags_),
     defines_(env.defines_),
     includes_(env.includes_),
     lflags_(env.lflags_),
     default_compile_opt_level_("Os"),
-    default_linker_opt_level_("Os"),
-    process_defines_at_compile_(true) {
+    default_linker_opt_level_("Os") {
     // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
     if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
         build_config.processor_class == HalProcessorClassType::COMPUTE) {

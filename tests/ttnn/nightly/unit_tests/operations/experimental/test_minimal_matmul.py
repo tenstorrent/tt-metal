@@ -25,6 +25,69 @@ def assert_quality(torch_output, tt_output):
     }
 
 
+def run_test_linear_impl(
+    device,
+    torch_input,
+    weight_input,
+    bias_input,
+    tt_input,
+    tt_weight,
+    tt_bias,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    activation=None,
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    fp32_acc=True,
+    core_grid=None,
+):
+    core_grid = core_grid or device.compute_with_storage_grid_size()
+
+    activation_fn = None
+    if activation == "gelu":
+        activation_fn = (ttnn.UnaryOpType.GELU, False)
+    else:
+        assert activation is None, f"Unsupported activation: {activation}"
+
+    with torch.no_grad():
+        torch_output = torch_input @ weight_input
+        if bias_input is not None:
+            torch_output = torch_output + bias_input
+
+        if activation == "gelu":
+            torch_output = torch.nn.functional.gelu(torch_output)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=True,
+    )
+
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=core_grid,
+    )
+    tt_output = ttnn.experimental.minimal_matmul(
+        tt_input,
+        tt_weight,
+        bias_tensor=tt_bias,
+        fused_activation=activation_fn,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output = ttnn.to_torch(tt_output)
+    check_result = assert_quality(torch_output, tt_output)
+    return check_result
+
+
 def run_test_linear(
     device,
     M,
@@ -49,58 +112,35 @@ def run_test_linear(
 
     torch_input = torch.randn((M, K), dtype=torch_dtype)
     weight_input = torch.randn((K, N), dtype=torch_dtype)
+    bias_input = None
     if use_bias:
         bias_input = torch.randn((1, N), dtype=torch_dtype)
 
     # Prepare TT tensors
     tt_input = ttnn.from_torch(torch_input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
     tt_weight = ttnn.from_torch(weight_input, dtype=weight_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = None
     if use_bias:
         tt_bias = ttnn.from_torch(bias_input, dtype=bias_dtype or dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
-    activation_fn = None
-    if activation == "gelu":
-        activation_fn = (ttnn.UnaryOpType.GELU, False)
-    else:
-        assert activation is None, f"Unsupported activation: {activation}"
-
-    with torch.no_grad():
-        torch_output = torch_input @ weight_input
-        if use_bias:
-            torch_output = torch_output + bias_input
-
-        if activation == "gelu":
-            torch_output = torch.nn.functional.gelu(torch_output)
-
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=math_fidelity,
-        math_approx_mode=False,
-        fp32_dest_acc_en=fp32_acc,
-        packer_l1_acc=True,
-    )
-
-    core_grid = core_grid or device.compute_with_storage_grid_size()
-
-    matmul_config = ttnn.MinimalMatmulConfig(
+    return run_test_linear_impl(
+        device=device,
+        torch_input=torch_input,
+        weight_input=weight_input,
+        bias_input=bias_input,
+        tt_input=tt_input,
+        tt_weight=tt_weight,
+        tt_bias=tt_bias,
         M_block_size=M_block_size,
         K_block_size=K_block_size,
         N_block_size=N_block_size,
         subblock_h=subblock_h,
         subblock_w=subblock_w,
-        compute_with_storage_grid_size=core_grid,
+        activation=activation,
+        math_fidelity=math_fidelity,
+        fp32_acc=fp32_acc,
+        core_grid=core_grid,
     )
-    tt_output = ttnn.experimental.minimal_matmul(
-        tt_input,
-        tt_weight,
-        bias_tensor=tt_bias if use_bias else None,
-        fused_activation=activation_fn,
-        compute_kernel_config=compute_config,
-        config=matmul_config,
-    )
-    tt_output = ttnn.to_torch(tt_output)
-    check_result = assert_quality(torch_output, tt_output)
-    return check_result
 
 
 @pytest.mark.parametrize(
@@ -138,7 +178,11 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     ids=["LoFi", "HiFi2", "HiFi4"],
 )
 @pytest.mark.parametrize("fp32_acc", [True, False], ids=["fp32_acc", "fp16_acc"])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8b", "bf4b"])
+@pytest.mark.parametrize(
+    "dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.float32],
+    ids=["bf16", "bf8b", "bf4b", "fp32"],
+)
 def test_linear_dtype_compute_config(
     device,
     M,
@@ -172,8 +216,8 @@ def test_linear_dtype_compute_config(
 
     PCC_THRESHOLD = 0.999_500
     RMSE_THRESHOLD = 0.02
-    if dtype in [ttnn.bfloat8_b, ttnn.bfloat16] and math_fidelity == ttnn.MathFidelity.LoFi:
-        RMSE_THRESHOLD = 0.03
+    if dtype in [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32] and math_fidelity == ttnn.MathFidelity.LoFi:
+        RMSE_THRESHOLD = 0.04
     if dtype == ttnn.bfloat4_b:
         PCC_THRESHOLD = 0.97
         RMSE_THRESHOLD = 0.26
@@ -205,9 +249,9 @@ def test_linear_tile_padding(device, M, K, N, M_block_size, K_block_size, N_bloc
     assert check_result["relative_rmse"] < 0.02
 
 
-@pytest.mark.parametrize("act_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
-@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
-@pytest.mark.parametrize("bias_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8b"])
+@pytest.mark.parametrize("act_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
+@pytest.mark.parametrize("bias_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8b", "fp32"])
 def test_linear_dtypes(device, act_dtype, weight_dtype, bias_dtype):
     M, K, N = 256, 256, 256
     M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
@@ -239,6 +283,45 @@ def test_linear_core_grid(device, core_grid):
     M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 1, 1, 1, 1, 1
     check_result = run_test_linear(
         device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w, core_grid=core_grid
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 4096, 4096)],
+)
+@pytest.mark.parametrize("B", [2, 3])
+@pytest.mark.parametrize("T", [4, 5])
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_batch_broadcast(
+    device, B, T, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    torch_input = torch.randn((B, T, M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    bias_input = torch.randn((1, N), dtype=torch.float32)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = ttnn.from_torch(bias_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    check_result = run_test_linear_impl(
+        device=device,
+        torch_input=torch_input,
+        weight_input=weight_input,
+        bias_input=bias_input,
+        tt_input=tt_input,
+        tt_weight=tt_weight,
+        tt_bias=tt_bias,
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
