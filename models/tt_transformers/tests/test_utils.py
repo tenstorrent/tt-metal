@@ -123,7 +123,6 @@ def merge_device_rows(df):
 
     device_ids = sorted(block_by_device.keys())
     merged_blocks = []
-
     global_index = 0
     while max(len(block_by_device[device_id]) for device_id in device_ids) > 0:
         blocks = []

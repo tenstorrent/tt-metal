@@ -27,6 +27,8 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
 @pytest.mark.parametrize("data_parallel", [1, 2, 4, 8])
 @pytest.mark.parametrize("num_layers", [10])
 @pytest.mark.parametrize("max_seq_len", [1024])
+@pytest.mark.parametrize("max_generated_tokens", [2])
+@pytest.mark.parametrize("machine", ["bh", "wh"])
 @pytest.mark.parametrize(
     "mode, num_runs",
     [
@@ -36,14 +38,9 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
     ids=["prefill", "decode"],
 )
 def test_device_perf_one_iter(
-    num_layers,
-    batch_size,
-    data_parallel,
-    max_seq_len,
-    mode,
-    num_runs,
+    num_layers, batch_size, data_parallel, max_seq_len, mode, num_runs, max_generated_tokens, machine
 ):
-    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf-{mode} --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --paged_attention 1  --batch_size {batch_size}"
+    cmd = f"pytest models/tt_transformers/demo/simple_text_demo.py -k performance-device-perf --num_layers {num_layers} --data_parallel {data_parallel} --max_seq_len {max_seq_len} --max_generated_tokens {max_generated_tokens} --paged_attention 1  --batch_size {batch_size} --mode {mode}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     device_analysis_types = ["device_kernel_duration", "device_kernel_first_to_last_start"]
     subdir = f"ttt-device-perf-{mode}"
@@ -79,7 +76,7 @@ def test_device_perf_one_iter(
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
     df = merge_device_rows(df)
-    df = df[df["DEVICE ID"] == 0]  # only keep the first device
+    df = df[df["DEVICE ID"] == 0] if machine == "bh" else df  # only keep the first device for BH runs
 
     # Split compile and trace
     (
