@@ -48,8 +48,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             connection_indices.push_back(i);
         }
     }
-
-    TT_FATAL(!receiver_core_coords.empty(), "No receiver cores found for target device");
     uint32_t num_cores = receiver_core_coords.size();
 
     // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
@@ -100,15 +98,15 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     tt::CBIndex scratch_buffer_cb_index = tt::CBIndex::c_1;
     bool socket_storage_in_dram =
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;
-    bool use_local_storage = !socket_storage_in_dram;  // Create scratch buffer for non-local storage (DRAM mode)
-    if (!use_local_storage) {
+
+    if (socket_storage_in_dram) {
         // For DRAM mode, scratch buffer size should be based on packet size, not total pages per core
         // This matches the original single-core logic: 2 * num_pages_per_block * socket_aligned_page_size
         uint32_t num_pages_per_block = 0;
         if (num_pages_per_packet > 0) {
             num_pages_per_block = num_pages_per_packet;
         } else {
-            num_pages_per_block = 1;  // Large pages case
+            num_pages_per_block = 1;
         }
         uint32_t scratch_buffer_size = 2 * num_pages_per_block * socket_aligned_page_size;
 
@@ -122,8 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
     tt::tt_metal::KernelHandle reader_kernel = 0;
     tt::tt_metal::KernelHandle writer_kernel = 0;
 
-    if (use_local_storage) {
-        // Create compile-time arguments (constant across all cores)
+    if (!socket_storage_in_dram) {
         std::vector<uint32_t> writer_compile_args = {
             packet_header_cb_index,    // fabric_packet_header_cb_id
             output_page_size,          // output_page_size
@@ -143,30 +140,19 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             receiver_core_range_set,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
-        // Set runtime arguments for each core individually
         for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
             const auto& receiver_core_coord = receiver_core_coords[core_idx];
             const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
             const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
 
-            // Calculate pages for this core using local core index within device
             uint32_t pages_for_this_core = pages_per_core + (core_idx < remainder_pages ? 1 : 0);
 
-            // Calculate cumulative start offset: sum of pages assigned to all previous cores within this device
             uint32_t page_start_offset = 0;
             for (uint32_t prev_idx = 0; prev_idx < core_idx; ++prev_idx) {
                 uint32_t prev_pages = pages_per_core + (prev_idx < remainder_pages ? 1 : 0);
                 page_start_offset += prev_pages;
             }
 
-            printf(
-                "RECV CORE %u: pages=%u, start_offset=%u, local_core_idx=%u\n",
-                core_idx,
-                pages_for_this_core,
-                page_start_offset,
-                core_idx);
-
-            // Calculate per-core packet parameters
             uint32_t num_whole_packets = 0, num_pages_remainder = 0;
             if (num_pages_per_packet > 0) {
                 num_whole_packets = pages_for_this_core / num_pages_per_packet;
@@ -198,7 +184,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
         }
     } else {
-        // DRAM mode: Create reader and writer kernels
         std::vector<uint32_t> reader_compile_args = {
             packet_header_cb_index,    // fabric_packet_header_cb_id
             scratch_buffer_cb_index,   // scratch_buffer_cb_id
@@ -227,30 +212,25 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             receiver_core_range_set,
             tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
-        // Set runtime arguments for each core individually
         for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
             const auto& receiver_core_coord = receiver_core_coords[core_idx];
             const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
             const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
 
-            // Calculate pages for this core using local core index within device
             uint32_t pages_for_this_core = pages_per_core + (core_idx < remainder_pages ? 1 : 0);
 
-            // Calculate cumulative start offset: sum of pages assigned to all previous cores within this device
             uint32_t page_start_offset = 0;
             for (uint32_t prev_idx = 0; prev_idx < core_idx; ++prev_idx) {
                 uint32_t prev_pages = pages_per_core + (prev_idx < remainder_pages ? 1 : 0);
                 page_start_offset += prev_pages;
             }
 
-            // Calculate per-core packet parameters
             uint32_t num_whole_packets = 0, num_pages_remainder_core = 0;
             if (num_pages_per_packet > 0) {
                 num_whole_packets = pages_for_this_core / num_pages_per_packet;
                 num_pages_remainder_core = pages_for_this_core % num_pages_per_packet;
             }
 
-            // Calculate blocks for this core (used in DRAM mode)
             uint32_t num_blocks = 0, num_pages_per_block = 0, block_remainder_pages = 0;
             if (num_pages_per_packet > 0) {
                 num_blocks = num_whole_packets;
@@ -288,16 +268,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
             uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
 
-            printf(
-                "RECV CORE %u: pages=%u, start_offset=%u, link=%u, blocks=%u, pages_per_block=%u, block_remainder=%u\n",
-                core_idx,
-                pages_for_this_core,
-                page_start_offset,
-                selected_link_index,
-                num_blocks,
-                num_pages_per_block,
-                block_remainder_pages);
-
             tt::tt_fabric::append_fabric_connection_rt_args(
                 receiver_fabric_node_id,
                 sender_fabric_node_id,
@@ -318,7 +288,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
         }
     }
 
-    if (use_local_storage) {
+    if (!socket_storage_in_dram) {
         auto override_runtime_arguments_callback =
             [receiver_core_coords, writer_kernel](
                 const void* operation,
@@ -328,15 +298,12 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
                 const std::vector<Tensor>& output_tensors) {
                 const auto& mesh_socket = static_cast<const ttnn::RecvAsync*>(operation)->mesh_socket;
 
-                // Update runtime args for all cores
                 for (uint32_t core_idx = 0; core_idx < receiver_core_coords.size(); ++core_idx) {
                     const auto& receiver_core_coord = receiver_core_coords[core_idx];
                     auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel, receiver_core_coord);
 
                     writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
                     writer_runtime_args[1] = input_tensors[0].buffer()->address();
-                    // Note: pages_for_this_core, page_start_offset, num_whole_packets, num_pages_remainder
-                    // remain the same as set during kernel creation
                 }
             };
 
@@ -352,7 +319,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
                 const std::vector<Tensor>& output_tensors) {
                 const auto& mesh_socket = static_cast<const ttnn::RecvAsync*>(operation)->mesh_socket;
 
-                // Update runtime args for all cores
                 for (uint32_t core_idx = 0; core_idx < receiver_core_coords.size(); ++core_idx) {
                     const auto& receiver_core_coord = receiver_core_coords[core_idx];
                     auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel, receiver_core_coord);
@@ -360,7 +326,6 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
                     reader_runtime_args[0] = mesh_socket.get_config_buffer()->address();
                     writer_runtime_args[0] = input_tensors[0].buffer()->address();
-                    // Note: Other runtime args remain unchanged
                 }
             };
 

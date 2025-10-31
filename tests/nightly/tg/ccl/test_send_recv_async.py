@@ -21,16 +21,17 @@ def run_send_recv_test(
     tensor_layout,
 ):
     mesh_shape = send_device.shape
-    sender_logical_coord = ttnn.CoreCoord(0, 0)
-    recv_logical_coord = ttnn.CoreCoord(0, 1)
+    sender_logical_coord = [ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 0)]
+    recv_logical_coord = [ttnn.CoreCoord(0, 1), ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1), ttnn.CoreCoord(3, 1)]
 
     socket_connections = []
     for coord in ttnn.MeshCoordinateRange(mesh_shape):
-        socket_connections.append(
-            ttnn.SocketConnection(
-                ttnn.MeshCoreCoord(coord, sender_logical_coord), ttnn.MeshCoreCoord(coord, recv_logical_coord)
+        for i in range(len(sender_logical_coord)):
+            socket_connections.append(
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(coord, sender_logical_coord[i]), ttnn.MeshCoreCoord(coord, recv_logical_coord[i])
+                )
             )
-        )
 
     socket_mem_config = ttnn.SocketMemoryConfig(socket_storage_type, socket_fifo_size)
     socket_config = ttnn.SocketConfig(socket_connections, socket_mem_config)
@@ -61,6 +62,23 @@ def run_send_recv_test(
     [
         ([1, 1, 32, 4096]),
         ([1, 1, 64, 8192]),
+        ([1, 1, 1, 4096]),
+        ([1, 1, 1, 2048]),
+        ([1, 1, 1, 1]),
+        ([1, 1, 1, 8]),
+        ([1, 32, 2048, 8]),
+        ([1, 32, 2048, 16]),
+        ([1, 32, 4096, 16]),
+        ([1, 32, 2048, 8]),
+        ([1, 32, 2048, 64]),
+        ([1, 1, 32, 32]),
+        ([1, 1, 16, 16]),
+        ([1, 1, 8, 8]),
+        ([1, 32, 4096, 32]),
+        ([1, 32, 4096, 64]),
+        ([1, 1, 1, 16]),
+        ([1, 1, 1, 32]),
+        ([1, 1, 1, 4]),
     ],
 )
 @pytest.mark.parametrize(
@@ -97,8 +115,9 @@ def run_send_recv_test(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
-def test_send_recv(
-    t3k_mesh_device,
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_send_recv_multi_link(
+    mesh_device,
     per_chip_shape,
     layout,
     mem_config,
@@ -106,8 +125,8 @@ def test_send_recv(
     socket_storage_type,
     socket_fifo_size,
 ):
-    sender_mesh_device = t3k_mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
-    receiver_mesh_device = t3k_mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 4))
+    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
+    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(1, 0))
     run_send_recv_test(
         sender_mesh_device,
         receiver_mesh_device,

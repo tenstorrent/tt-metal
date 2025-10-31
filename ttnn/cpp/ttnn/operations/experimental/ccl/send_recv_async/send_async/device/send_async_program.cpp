@@ -30,14 +30,12 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
 
-    // Collect all matching sender-receiver core pairs for this device
     std::vector<CoreCoord> sender_core_coords;
     std::vector<CoreCoord> receiver_core_coords;
     std::vector<tt::tt_fabric::FabricNodeId> sender_fabric_node_ids;
     std::vector<tt::tt_fabric::FabricNodeId> receiver_fabric_node_ids;
-    std::vector<size_t> connection_indices;  // Track original connection indices for proper device/bank lookup
+    std::vector<size_t> connection_indices;
 
-    printf("len of socket_connection_config: %zu\n", socket_connection_config.size());
     for (size_t conn_idx = 0; conn_idx < socket_connection_config.size(); ++conn_idx) {
         const auto& connection = socket_connection_config[conn_idx];
         if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
@@ -48,13 +46,9 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
             receiver_fabric_node_ids.push_back(mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord));
             connection_indices.push_back(conn_idx);
-            printf("pushing conn_idx %zu to connection_indices for device id %d\n", conn_idx, target_device->id());
         }
     }
-
-    TT_FATAL(!sender_core_coords.empty(), "No sender cores found for target device {}", target_device->id());
     uint32_t num_cores = sender_core_coords.size();
-    printf("Found %u sender cores for device %d\n", num_cores, target_device->id());
 
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
@@ -63,8 +57,6 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     auto socket_aligned_page_size = tt::align(input_page_size, max_alignment);
     auto total_num_pages = input_tensor.buffer()->num_pages();
 
-    // Divide workload per device: same work per device, different work per core within device
-    // Each device processes the full tensor, but cores within device divide the work
     uint32_t pages_per_core = total_num_pages / num_cores;
     uint32_t remainder_pages = total_num_pages % num_cores;
 
@@ -75,7 +67,6 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
 
-    // Calculate per-core parameters that will be used for each core
     uint32_t num_whole_packets_per_page = 0, partial_packet_size = 0, aligned_partial_packet_size = 0,
              socket_block_size = 0;
     if (num_pages_per_packet > 0) {
@@ -97,14 +88,12 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         tt::tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, cb_page_size);
 
-    // Create CoreRangeSet from sender cores
     std::set<CoreRange> sender_core_ranges;
     for (const auto& core : sender_core_coords) {
         sender_core_ranges.insert(CoreRange(core));
     }
     CoreRangeSet sender_core_range_set(sender_core_ranges);
 
-    // Create circular buffers for all sender cores
     CreateCircularBuffer(program, sender_core_range_set, cb_src0_config);
 
     uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
@@ -135,7 +124,6 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     };
     reader_compile_args.insert(reader_compile_args.end(), compile_time_args.begin(), compile_time_args.end());
 
-    // Create kernels once for all cores using CoreRangeSet
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/device/kernels/sender_reader.cpp",
@@ -160,29 +148,22 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         sender_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
-    // Set runtime arguments for each core individually
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         const auto& sender_core_coord = sender_core_coords[core_idx];
         const auto& receiver_core_coord = receiver_core_coords[core_idx];
-
-        // Calculate pages for this core using local core index within device
         uint32_t pages_for_this_core = pages_per_core + (core_idx < remainder_pages ? 1 : 0);
 
-        // Calculate cumulative start offset: sum of pages assigned to all previous cores within this device
         uint32_t page_start_offset = 0;
         for (uint32_t prev_idx = 0; prev_idx < core_idx; ++prev_idx) {
             uint32_t prev_pages = pages_per_core + (prev_idx < remainder_pages ? 1 : 0);
             page_start_offset += prev_pages;
         }
 
-        // Calculate per-core packet parameters
         uint32_t num_whole_packets = 0, num_pages_remainder = 0;
         if (num_pages_per_packet > 0) {
             num_whole_packets = pages_for_this_core / num_pages_per_packet;
             num_pages_remainder = pages_for_this_core % num_pages_per_packet;
         }
-
-        // Runtime arguments for reader (vary per core)
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // input_base_addr
             pages_for_this_core,               // num_pages (for this core)
@@ -195,19 +176,15 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         // TODO #24995: These parameters should be derived from the expected tensor/socket configuration
         uint32_t bank_id = 0;
         if (!socket_storage_in_dram) {
-            // Get the receiver device to determine the correct bank ID for the receiver core
             const auto& connection = socket_connection_config[connection_indices[core_idx]];
             auto* receiver_device = socket_mesh_device->get_device(connection.receiver_core.device_coord);
             bank_id = receiver_device->allocator()->get_bank_ids_from_logical_core(
                 mesh_socket.get_config().socket_mem_config.socket_storage_type, receiver_core_coord)[0];
-        }
-
-        else {
+        } else {
             // Assign DRAM banks in round-robin for each receiver core
             auto num_dram_banks = target_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
             bank_id = core_idx % num_dram_banks;
         }
-        // Runtime arguments for writer (vary per core)
         std::vector<uint32_t> writer_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
             bank_id,                                     // bank_id
@@ -220,23 +197,8 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];
         const auto& receiver_fabric_node_id = receiver_fabric_node_ids[core_idx];
         auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
-        TT_FATAL(
-            !link_indices.empty(),
-            "No link indices found {} {} {} {}",
-            sender_fabric_node_id.mesh_id,
-            sender_fabric_node_id.chip_id,
-            receiver_fabric_node_id.mesh_id,
-            receiver_fabric_node_id.chip_id);
 
         uint32_t selected_link_index = link_indices[core_idx % link_indices.size()];
-        printf(
-            "SEND CORE %u: pages=%u, start_offset=%u, link=%u, whole_packets=%u, remainder=%u\n",
-            core_idx,
-            pages_for_this_core,
-            page_start_offset,
-            selected_link_index,
-            num_whole_packets,
-            num_pages_remainder);
         tt::tt_fabric::append_fabric_connection_rt_args(
             sender_fabric_node_id,
             receiver_fabric_node_id,
@@ -257,17 +219,13 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
             const std::vector<Tensor>& output_tensors) {
             const auto& mesh_socket = static_cast<const ttnn::SendAsync*>(operation)->mesh_socket;
 
-            // Update runtime args for all cores
             for (uint32_t core_idx = 0; core_idx < sender_core_coords.size(); ++core_idx) {
                 const auto& sender_core_coord = sender_core_coords[core_idx];
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, sender_core_coord);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, sender_core_coord);
 
-                // Update only the tensor buffer address, keep other runtime args unchanged
                 reader_runtime_args[0] = input_tensors[0].buffer()->address();
                 writer_runtime_args[0] = mesh_socket.get_config_buffer()->address();
-                // Note: pages_for_this_core, page_start_offset, num_whole_packets, num_pages_remainder
-                // remain the same as set during kernel creation
             }
         };
 

@@ -8,7 +8,7 @@
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS (constant across cores)
+// COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
@@ -21,9 +21,8 @@ constexpr uint32_t input_args_cta_idx = 7;
 constexpr uint32_t input_args_crta_idx = 0;
 
 void kernel_main() {
-    DPRINT << "start sender reader\n";
     ///////////////////////////////////////////////////
-    // RUNTIME ARGS (vary per core)
+    // ARGS
     ///////////////////////////////////////////////////
     uint32_t input_base_addr = get_arg_val<uint32_t>(0);
     uint32_t num_pages = get_arg_val<uint32_t>(1);            // pages for this core
@@ -37,7 +36,6 @@ void kernel_main() {
     // TODO #24995: Instead of page by page transfers, we can transfer bank by bank
 
     // Small pages. We pack multiple pages into a single packet.
-    // Start from the page offset assigned to this core
     uint32_t page_index = page_start_offset;
     if constexpr (num_pages_per_packet > 0) {
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
@@ -90,5 +88,4 @@ void kernel_main() {
             page_index++;
         }
     }
-    DPRINT << "end sender reader\n";
 }

@@ -10,7 +10,7 @@
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS (constant across cores)
+// COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t output_page_size = get_compile_time_arg_val(1);  // This is assumed to be aligned
@@ -21,9 +21,8 @@ constexpr uint32_t output_args_cta_idx = 5;
 constexpr uint32_t output_args_crta_idx = 0;
 
 void kernel_main() {
-    DPRINT << "start receiver writer in place\n";
     ///////////////////////////////////////////////////
-    // RUNTIME ARGS (vary per core)
+    // ARGS
     ///////////////////////////////////////////////////
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -51,7 +50,7 @@ void kernel_main() {
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, output_page_size);
 
     // Small pages. We write multiple pages from a single packet.
-    uint32_t page_index = page_start_offset;  // Start from this core's page offset
+    uint32_t page_index = page_start_offset;
 
     if constexpr (num_pages_per_packet > 0) {
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
@@ -97,5 +96,4 @@ void kernel_main() {
     }
     update_socket_config(receiver_socket);
     fabric_connection.close();
-    DPRINT << "end receiver writer in place\n";
 }
