@@ -369,7 +369,7 @@ public:
         std::shared_ptr<MeshBuffer> mesh_buffer;
         tt::tt_metal::UncompressedBufferPageMapping buffer_page_mapping;
         std::vector<uint32_t> data;
-        uint32_t size_bytes;
+        uint32_t size_bytes = 0;
     };
 
     // Start non-blocking read operation
