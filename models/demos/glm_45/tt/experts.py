@@ -321,10 +321,9 @@ class Experts:
         if self.up_proj_bias is not None:
             up = up + self.up_proj_bias
 
-        # GLU activation (SiLU), following smoke3
-        self.alpha = getattr(self, "alpha", 1.702)
-        glu = gate * ttnn.sigmoid(gate * self.alpha)
-        down_in0 = (up + 1) * glu
+        # Activation: match HF SwiGLU behavior -> silu(gate) * up
+        glu = ttnn.silu(gate)
+        down_in0 = ttnn.mul(glu, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(glu)
         ttnn.deallocate(up)
         ttnn.deallocate(gate)
@@ -358,9 +357,8 @@ class Experts:
         if getattr(self, "has_shared", False):
             gate_s = ttnn.linear(hidden_states, self.shared_gate_w, bias=self.shared_gate_b)
             up_s = ttnn.linear(hidden_states, self.shared_up_w, bias=self.shared_up_b)
-            alpha = getattr(self, "alpha", 1.702)
-            glu_s = gate_s * ttnn.sigmoid(gate_s * alpha)
-            down_in_s = (up_s + 1) * glu_s
+            glu_s = ttnn.silu(gate_s)
+            down_in_s = ttnn.mul(glu_s, up_s, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(glu_s)
             ttnn.deallocate(up_s)
             ttnn.deallocate(gate_s)
