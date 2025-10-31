@@ -67,6 +67,7 @@ set(SOURCES
     ops/sdpa_fw_op_test.cpp
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
     ops/layer_norm_op_fused_test.cpp
 >>>>>>> 4bcee3238c (cleaning)
@@ -129,6 +130,10 @@ set(SOURCES
 =======
     ops/layer_norm_op_fused_test.cpp
     ops/layernorm_fw_op_test.cpp
+=======
+    ops/layernorm_bw_fused_op_test.cpp
+    ops/layernorm_fw_fused_op_test.cpp
+>>>>>>> 1856669142 (precision issue fixed, ready for review)
     padding_test_minimal.cpp
 >>>>>>> 2db5011f3c (precision issue fixed, ready for review)
 )
