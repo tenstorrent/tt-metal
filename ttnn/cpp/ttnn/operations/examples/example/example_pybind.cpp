@@ -17,7 +17,15 @@ void bind_example_operation(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::prim::example,
-        R"doc(example(input_tensor: ttnn.Tensor) -> ttnn.Tensor)doc",
+        R"doc(
+        Example operation that demonstrates TTNN operation registration.
+
+        Args:
+            input_tensor (ttnn.Tensor): The input tensor.
+
+        Returns:
+            ttnn.Tensor: The output tensor.
+        )doc",
 
         // Add pybind overloads for the C++ APIs that should be exposed to python
         // There should be no logic here, just a call to `self` with the correct arguments
