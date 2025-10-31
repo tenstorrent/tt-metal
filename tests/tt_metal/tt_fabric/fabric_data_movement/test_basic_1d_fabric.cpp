@@ -2209,7 +2209,7 @@ void FabricUnicastCommon(
             // Allocate interleaved L1 buffer for destination
             uint32_t dst_size = num_packets * worker_mem_map.packet_payload_size_bytes;
             tt_metal::InterleavedBufferConfig dst_buffer_config{
-                .device = sender_device.get(),
+                .device = receiver_devices.back().get(),
                 .size = dst_size,
                 .page_size = worker_mem_map.packet_payload_size_bytes,
                 .buffer_type = tt_metal::BufferType::L1};
@@ -2233,7 +2233,7 @@ void FabricUnicastCommon(
             // For sequential, create a regular buffer and get its TensorAccessorArgs
             uint32_t dst_size = num_packets * worker_mem_map.packet_payload_size_bytes;
             tt_metal::BufferConfig dst_buffer_config{
-                .device = sender_device.get(),
+                .device = receiver_devices.back().get(),
                 .size = dst_size,
                 .page_size = worker_mem_map.packet_payload_size_bytes,
                 .buffer_type = tt_metal::BufferType::L1};
