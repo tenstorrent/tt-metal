@@ -2230,13 +2230,32 @@ void FabricUnicastCommon(
             // Update target_address to use the interleaved buffer
             worker_mem_map.target_address = dst_buffer->address();
         } else {
-            // For sequential, create a regular buffer and get its TensorAccessorArgs
+            // For sequential, create a single-core sharded buffer for truly sequential layout
+            // This ensures all data is allocated on a single L1 bank (the receiver core)
             uint32_t dst_size = num_packets * worker_mem_map.packet_payload_size_bytes;
-            tt_metal::BufferConfig dst_buffer_config{
+
+            // Use receiver's logical core for single-core sharding
+            CoreRangeSet single_core(std::set<CoreRange>({CoreRange(receiver_logical_core, receiver_logical_core)}));
+
+            // Create shard spec: all data on one core, sequential layout
+            // shard_shape: [height, width] where height*width = total size
+            // page_shape: same as page_size layout
+            // tensor2d_shape_in_pages: [num_packets, 1] - one page per packet, stacked vertically
+            tt_metal::ShardSpecBuffer shard_spec(
+                single_core,
+                {dst_size, 1},  // All data in a single "column" on one core
+                tt_metal::ShardOrientation::ROW_MAJOR,
+                {worker_mem_map.packet_payload_size_bytes, 1},  // Each page is packet_size bytes
+                {num_packets, 1}                                // num_packets pages, arranged as a column
+            );
+
+            tt_metal::ShardedBufferConfig dst_buffer_config{
                 .device = receiver_devices.back().get(),
                 .size = dst_size,
                 .page_size = worker_mem_map.packet_payload_size_bytes,
-                .buffer_type = tt_metal::BufferType::L1};
+                .buffer_type = tt_metal::BufferType::L1,
+                .buffer_layout = tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+                .shard_parameters = shard_spec};
             auto dst_buffer = tt_metal::CreateBuffer(dst_buffer_config);
 
             // Get TensorAccessorArgs from the actual buffer
