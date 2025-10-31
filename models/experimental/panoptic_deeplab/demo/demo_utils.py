@@ -9,12 +9,11 @@ import torch
 from loguru import logger
 from scipy.spatial.distance import cdist
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
-
+from models.experimental.panoptic_deeplab.reference.pytorch_model import DEEPLAB_V3_PLUS
 from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_images_path,
     get_panoptic_deeplab_weights_path,
     load_images,
-    DEEPLAB_V3_PLUS,
 )
 
 # Cityscapes dataset configuration
