@@ -20,7 +20,9 @@
 
 #include "distributed.hpp"
 #include "fabric_types.hpp"
+#include "hal/blackhole_impl.hpp"
 #include "hal/lite_fabric_hal.hpp"
+#include "hal/wormhole_impl.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/lite_fabric/host_util.hpp"
@@ -126,7 +128,7 @@ INSTANTIATE_TEST_SUITE_P(
         return name;
     });
 
-TEST(FabricLiteBuild, BuildOnly) {
+TEST(FabricLiteBuild, BuildAllTargets) {
     auto home_dir_string = std::getenv("TT_METAL_HOME");
     if (home_dir_string == nullptr) {
         GTEST_FAIL() << "TT_METAL_HOME not set";
@@ -134,10 +136,14 @@ TEST(FabricLiteBuild, BuildOnly) {
     auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
     auto output_directory = home_directory / "lite_fabric";
 
-    auto lite_fabric_hal = lite_fabric::LiteFabricHal::create();
-
-    EXPECT_EQ(0, lite_fabric::CompileFabricLite(lite_fabric_hal, home_directory, output_directory));
-    EXPECT_NE(std::nullopt, lite_fabric::LinkFabricLite(lite_fabric_hal, home_directory, output_directory));
+    std::vector<std::shared_ptr<lite_fabric::LiteFabricHal>> lite_fabric_hals = {
+        std::make_shared<lite_fabric::WormholeLiteFabricHal>(),
+        std::make_shared<lite_fabric::BlackholeLiteFabricHal>(),
+    };
+    for (const auto& lite_fabric_hal : lite_fabric_hals) {
+        EXPECT_EQ(0, lite_fabric::CompileFabricLite(lite_fabric_hal, home_directory, output_directory));
+        EXPECT_NE(std::nullopt, lite_fabric::LinkFabricLite(lite_fabric_hal, home_directory, output_directory));
+    }
 }
 
 TEST_P(FabricLite, Init) {

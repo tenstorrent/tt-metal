@@ -49,10 +49,6 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
                   - ROW_MAJOR, TILE
                 * - BFLOAT8_B
                   - ROW_MAJOR, TILE
-                * - INT32
-                  - ROW_MAJOR, TILE
-                * - UINT32
-                  - ROW_MAJOR, TILE
 
             The output tensor will match the data type and layout of the input tensor.
 
