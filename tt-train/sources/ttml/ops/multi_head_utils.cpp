@@ -86,41 +86,52 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> heads_
         ttnn::SmallVector<uint32_t>{batch_size, 1, seq_len, embedding_dim * 3},
         ttnn::SmallVector<uint32_t>{1, 1, 1, 1});
 
-    // Reshape: (B, 1, S, E) -> (B, 1, S*H, E/H) -> (B, H, S, E/H)
-    // This works around the ttnn bug by doing reshape instead of nlp_create_qkv_heads
-    auto q_reshaped = ttnn::reshape(q_flat, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
-    auto q = ttnn::reshape(q_reshaped, ttnn::Shape{batch_size, num_heads, seq_len, head_dim});
+    // FIXED: Correct head splitting that preserves token-to-head mapping
+    // Goal: [B, 1, S, E] -> [B, H, S, E/H] where each head gets contiguous dims from each token
+    // Step 1: Remove channel dim: [B, 1, S, E] -> [B, S, E]
+    auto q_no_channel = ttnn::reshape(q_flat, ttnn::Shape{batch_size, seq_len, embedding_dim});
+    // Step 2: Split embedding into heads: [B, S, E] -> [B, S, H, E/H]
+    auto q_with_heads = ttnn::reshape(q_no_channel, ttnn::Shape{batch_size, seq_len, num_heads, head_dim});
+    // Step 3: Transpose to put heads before sequence: [B, S, H, E/H] -> [B, H, S, E/H]
+    auto q = ttnn::transpose(q_with_heads, 1, 2);
 
-    auto k_reshaped = ttnn::reshape(k_flat, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
-    auto k = ttnn::reshape(k_reshaped, ttnn::Shape{batch_size, num_heads, seq_len, head_dim});
+    auto k_no_channel = ttnn::reshape(k_flat, ttnn::Shape{batch_size, seq_len, embedding_dim});
+    auto k_with_heads = ttnn::reshape(k_no_channel, ttnn::Shape{batch_size, seq_len, num_heads, head_dim});
+    auto k = ttnn::transpose(k_with_heads, 1, 2);
 
-    auto v_reshaped = ttnn::reshape(v_flat, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
-    auto v = ttnn::reshape(v_reshaped, ttnn::Shape{batch_size, num_heads, seq_len, head_dim});
+    auto v_no_channel = ttnn::reshape(v_flat, ttnn::Shape{batch_size, seq_len, embedding_dim});
+    auto v_with_heads = ttnn::reshape(v_no_channel, ttnn::Shape{batch_size, seq_len, num_heads, head_dim});
+    auto v = ttnn::transpose(v_with_heads, 1, 2);
 
     auto out_q = autograd::create_tensor(q);
     auto out_k = autograd::create_tensor(k);
     auto out_v = autograd::create_tensor(v);
 
-    autograd::GradFunction grad_q =
-        [out_q, out_k, out_v, qkv, num_heads, batch_size, seq_len, embedding_dim, head_dim]() {
-            auto grad_q = out_q->get_grad();
-            auto grad_k = out_k->get_grad();
-            auto grad_v = out_v->get_grad();
+    autograd::GradFunction grad_q = [out_q, out_k, out_v, qkv, batch_size, seq_len, embedding_dim]() {
+        auto grad_q = out_q->get_grad();
+        auto grad_k = out_k->get_grad();
+        auto grad_v = out_v->get_grad();
 
-            // Reverse the reshape: (B, H, S, E/H) -> (B, 1, S, E)
-            grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
-            grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+        // Reverse the forward transformations: (B, H, S, E/H) -> (B, 1, S, E)
+        // Step 1: Transpose back: [B, H, S, E/H] -> [B, S, H, E/H]
+        grad_q = ttnn::transpose(grad_q, 1, 2);
+        // Step 2: Merge heads: [B, S, H, E/H] -> [B, S, E]
+        grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, seq_len, embedding_dim});
+        // Step 3: Add channel dim back: [B, S, E] -> [B, 1, S, E]
+        grad_q = ttnn::reshape(grad_q, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
 
-            grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
-            grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+        grad_k = ttnn::transpose(grad_k, 1, 2);
+        grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, seq_len, embedding_dim});
+        grad_k = ttnn::reshape(grad_k, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
 
-            grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, 1, seq_len * num_heads, head_dim});
-            grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
+        grad_v = ttnn::transpose(grad_v, 1, 2);
+        grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, seq_len, embedding_dim});
+        grad_v = ttnn::reshape(grad_v, ttnn::Shape{batch_size, 1, seq_len, embedding_dim});
 
-            // Concatenate back to (B, 1, S, E*3)
-            auto result = ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3);
-            qkv->add_grad(result);
-        };
+        // Concatenate back to (B, 1, S, E*3)
+        auto result = ttnn::concat(std::vector<ttnn::Tensor>({grad_q, grad_k, grad_v}), /* dim */ 3);
+        qkv->add_grad(result);
+    };
 
     auto links_q = autograd::get_links(qkv);
     out_q->set_node(autograd::ctx().add_backward_node(std::move(grad_q), links_q));
@@ -139,20 +150,29 @@ autograd::TensorPtr heads_fusion(const autograd::TensorPtr& x) {
     uint32_t batch_size = x_shape[0];
     uint32_t num_heads = x_shape[1];
     uint32_t sequence_length = x_shape[2];
-    uint32_t embedding_dim = x_shape[3];
+    uint32_t head_dim = x_shape[3];
+    uint32_t embedding_dim = num_heads * head_dim;
 
-    // (B, H, S, E/H) -> (B, 1, S, E)
-    auto fused_heads = ttnn::experimental::nlp_concat_heads(x->get_value());
+    // FIXED: Manual head fusion to match the fixed heads_creation format
+    // Goal: [B, H, S, E/H] -> [B, 1, S, E]
+    // Step 1: Transpose to put sequence before heads: [B, H, S, E/H] -> [B, S, H, E/H]
+    auto transposed = ttnn::transpose(x->get_value(), 1, 2);
+    // Step 2: Merge heads into embedding: [B, S, H, E/H] -> [B, S, E]
+    auto merged = ttnn::reshape(transposed, ttnn::Shape{batch_size, sequence_length, embedding_dim});
+    // Step 3: Add channel dimension: [B, S, E] -> [B, 1, S, E]
+    auto fused_heads = ttnn::reshape(merged, ttnn::Shape{batch_size, 1, sequence_length, embedding_dim});
     auto out = autograd::create_tensor(fused_heads);
 
-    autograd::GradFunction grad = [out, x, num_heads, batch_size, sequence_length, embedding_dim]() {
+    autograd::GradFunction grad = [out, x, num_heads, batch_size, sequence_length, embedding_dim, head_dim]() {
         auto grad_output = out->get_grad();
-        // (B, 1, S, E) -> (B, 1, E, S)
-        auto grad_result = ttnn::transpose(grad_output, -2, -1);
-        // (B, 1, E, S) -> (B, H, E/H, S)
-        grad_result = ttnn::reshape(grad_result, ttnn::Shape({batch_size, num_heads, embedding_dim, sequence_length}));
-        // (B, H, E/H, S) -> (B, H, S, E/H)
-        grad_result = ttnn::transpose(grad_result, -2, -1);
+        // Reverse the forward transformations: (B, 1, S, E) -> (B, H, S, E/H)
+        // Step 1: Remove channel dim: [B, 1, S, E] -> [B, S, E]
+        auto grad_no_channel = ttnn::reshape(grad_output, ttnn::Shape{batch_size, sequence_length, embedding_dim});
+        // Step 2: Split embedding into heads: [B, S, E] -> [B, S, H, E/H]
+        auto grad_with_heads =
+            ttnn::reshape(grad_no_channel, ttnn::Shape{batch_size, sequence_length, num_heads, head_dim});
+        // Step 3: Transpose to put heads before sequence: [B, S, H, E/H] -> [B, H, S, E/H]
+        auto grad_result = ttnn::transpose(grad_with_heads, 1, 2);
         x->add_grad(grad_result);
     };
 

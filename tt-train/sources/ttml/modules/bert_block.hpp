@@ -56,6 +56,16 @@ public:
 
     [[nodiscard]] autograd::TensorPtr operator()(
         const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask) override;
+
+    // Intermediate outputs structure for debugging
+    struct IntermediateOutputs {
+        autograd::TensorPtr attention_output;  // After attention + residual + norm
+        autograd::TensorPtr block_output;      // After MLP + residual + norm (final output)
+    };
+
+    // Forward pass with intermediate outputs for debugging/validation
+    [[nodiscard]] IntermediateOutputs forward_with_intermediates(
+        const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask);
 };
 
 }  // namespace ttml::modules

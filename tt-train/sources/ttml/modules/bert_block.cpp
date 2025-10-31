@@ -48,18 +48,24 @@ autograd::TensorPtr BertAttention::operator()(
 BertBlock::BertBlock(const BertBlockConfig& config) {
     m_attention = std::make_shared<BertAttention>(config.embedding_dim, config.num_heads, config.dropout_prob);
 
+    // Disable hardware clamping to use BERT's exact epsilon (1e-12) instead of clamped value (1e-4)
+    // BERT requires precise epsilon matching for accurate inference results
     m_attention_norm = std::make_shared<LayerNormLayer>(
         config.embedding_dim,
         config.layer_norm_eps,  // Pass BERT's epsilon (typically 1e-12)
-        false                   // use_composite_op = false
+        false,                  // use_composite_op = false
+        false                   // enable_hardware_clamp = false (use exact epsilon)
     );
 
     m_mlp = std::make_shared<BertMLP>(config.embedding_dim, config.intermediate_size, config.dropout_prob);
 
+    // Disable hardware clamping to use BERT's exact epsilon (1e-12) instead of clamped value (1e-4)
+    // BERT requires precise epsilon matching for accurate inference results
     m_mlp_norm = std::make_shared<LayerNormLayer>(
         config.embedding_dim,
         config.layer_norm_eps,  // Pass BERT's epsilon (typically 1e-12)
-        false                   // use_composite_op = false
+        false,                  // use_composite_op = false
+        false                   // enable_hardware_clamp = false (use exact epsilon)
     );
 
     create_name("bert_block");
@@ -82,6 +88,25 @@ autograd::TensorPtr BertBlock::operator()(const autograd::TensorPtr& input, cons
     mlp_residual = (*m_mlp_norm)(mlp_residual);
 
     return mlp_residual;
+}
+
+BertBlock::IntermediateOutputs BertBlock::forward_with_intermediates(
+    const autograd::TensorPtr& input, const autograd::TensorPtr& attention_mask) {
+    IntermediateOutputs outputs;
+
+    // Self-attention with residual connection and layer norm
+    auto attention_output = (*m_attention)(input, attention_mask);
+    auto attention_residual = ops::add(attention_output, input);
+    attention_residual = (*m_attention_norm)(attention_residual);
+    outputs.attention_output = attention_residual;
+
+    // Feed-forward with residual connection and layer norm
+    auto mlp_output = (*m_mlp)(attention_residual);
+    auto mlp_residual = ops::add(mlp_output, attention_residual);
+    mlp_residual = (*m_mlp_norm)(mlp_residual);
+    outputs.block_output = mlp_residual;
+
+    return outputs;
 }
 
 }  // namespace ttml::modules

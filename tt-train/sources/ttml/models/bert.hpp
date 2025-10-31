@@ -79,10 +79,36 @@ public:
         return m_pooler != nullptr;
     }
 
-private:
+    // Intermediate outputs structure for layer-by-layer debugging
+    struct IntermediateOutputs {
+        autograd::TensorPtr embeddings;                            // After embedding layer
+        std::vector<autograd::TensorPtr> block_attention_outputs;  // After each block's attention
+        std::vector<autograd::TensorPtr> block_outputs;            // After each complete block
+        autograd::TensorPtr final_output;                          // Final model output
+    };
+
+    // Forward pass with intermediate outputs for debugging/validation
+    [[nodiscard]] IntermediateOutputs forward_with_intermediates(
+        const autograd::TensorPtr& input_ids,
+        const autograd::TensorPtr& attention_mask = nullptr,
+        const autograd::TensorPtr& token_type_ids = nullptr);
+
+    // Public accessors for isolated layer testing
     [[nodiscard]] autograd::TensorPtr get_embeddings(
         const autograd::TensorPtr& input_ids, const autograd::TensorPtr& token_type_ids = nullptr);
 
+    [[nodiscard]] const std::vector<std::shared_ptr<modules::BertBlock>>& get_blocks() const {
+        return m_blocks;
+    }
+
+    [[nodiscard]] std::shared_ptr<modules::BertBlock> get_block(size_t index) const {
+        if (index >= m_blocks.size()) {
+            throw std::out_of_range("Block index out of range");
+        }
+        return m_blocks[index];
+    }
+
+private:
     [[nodiscard]] autograd::TensorPtr process_attention_mask(const autograd::TensorPtr& attention_mask) const;
 };
 

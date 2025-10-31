@@ -123,6 +123,16 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_bert_config.def_rw("runner_type", &models::bert::BertConfig::runner_type, "Runner type");
         py_bert_config.def_rw("use_pooler", &models::bert::BertConfig::use_pooler, "Use pooler");
 
+        // Bind BertBlock class for isolated layer testing
+        nb::class_<ttml::modules::BertBlock>(py_bert_module, "BertBlock")
+            .def(
+                "__call__",
+                static_cast<autograd::TensorPtr (ttml::modules::BertBlock::*)(
+                    const autograd::TensorPtr&, const autograd::TensorPtr&)>(&ttml::modules::BertBlock::operator()),
+                nb::arg("input"),
+                nb::arg("attention_mask"),
+                "BertBlock forward pass with input and attention_mask");
+
         auto py_bert =
             static_cast<nb::class_<models::bert::Bert, models::BaseTransformer>>(py_bert_module.attr("Bert"));
         py_bert.def(nb::init<const models::bert::BertConfig&>());
@@ -133,6 +143,60 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
                 models::bert::load_model_from_safetensors(path, params);
             },
             "Load model weights from safetensors file");
+        // Add three-parameter operator() for BERT-specific forward pass with attention mask
+        py_bert.def(
+            "__call__",
+            static_cast<autograd::TensorPtr (models::bert::Bert::*)(
+                const autograd::TensorPtr&, const autograd::TensorPtr&, const autograd::TensorPtr&)>(
+                &models::bert::Bert::operator()),
+            nb::arg("input_ids"),
+            nb::arg("attention_mask"),
+            nb::arg("token_type_ids"),
+            "BERT forward pass with input_ids, attention_mask, and token_type_ids");
+
+        // Bind IntermediateOutputs structure
+        nb::class_<models::bert::Bert::IntermediateOutputs>(py_bert_module, "IntermediateOutputs")
+            .def(nb::init<>())
+            .def_rw("embeddings", &models::bert::Bert::IntermediateOutputs::embeddings, "Embedding layer output")
+            .def_rw(
+                "block_attention_outputs",
+                &models::bert::Bert::IntermediateOutputs::block_attention_outputs,
+                "Attention outputs from each block")
+            .def_rw(
+                "block_outputs",
+                &models::bert::Bert::IntermediateOutputs::block_outputs,
+                "Final output from each block")
+            .def_rw("final_output", &models::bert::Bert::IntermediateOutputs::final_output, "Final model output");
+
+        // Add forward_with_intermediates for layer-by-layer debugging
+        py_bert.def(
+            "forward_with_intermediates",
+            &models::bert::Bert::forward_with_intermediates,
+            nb::arg("input_ids"),
+            nb::arg("attention_mask") = nullptr,
+            nb::arg("token_type_ids") = nullptr,
+            "BERT forward pass that returns all intermediate layer outputs for debugging");
+
+        // Add methods for isolated layer testing
+        py_bert.def(
+            "get_embeddings",
+            [](models::bert::Bert& self,
+               const autograd::TensorPtr& input_ids,
+               const autograd::TensorPtr& token_type_ids) { return self.get_embeddings(input_ids, token_type_ids); },
+            nb::arg("input_ids"),
+            nb::arg("token_type_ids") = nullptr,
+            "Get embeddings for input_ids and optional token_type_ids");
+
+        py_bert.def(
+            "get_block",
+            [](models::bert::Bert& self, size_t index) { return self.get_block(index); },
+            nb::arg("index"),
+            "Get a specific BERT block by index for isolated testing");
+
+        py_bert.def(
+            "num_blocks",
+            [](const models::bert::Bert& self) { return self.get_config().num_blocks; },
+            "Get the number of blocks in the model");
     }
 
     {
