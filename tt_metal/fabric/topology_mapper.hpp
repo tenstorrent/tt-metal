@@ -220,7 +220,7 @@ private:
      * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
      * to gather the mappings from all ranks.
      */
-    std::unordered_map<MeshHostRankId, HostName> build_host_name_to_mesh_rank_mapping();
+    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, HostName>> build_host_name_to_mesh_rank_mapping();
 
     /**
      * @brief Build logical adjacency maps from mesh graph connectivity
@@ -264,12 +264,15 @@ private:
      * 3. Maintains consistency by ensuring logical edges are present in the physical topology
      * 4. Creates bidirectional mappings in both fabric_node_id_to_asic_id_ and asic_id_to_fabric_node_id_
      *
+     * @param mesh_id Mesh ID
      * @param adjacency_map_physical Physical adjacency maps for each mesh
      * @param adjacency_map_logical Logical adjacency maps for each mesh
+     * @param host_name_to_mesh_rank Mapping of host names to mesh ranks
      */
     void populate_fabric_node_id_to_asic_id_mappings(
-        const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
-        const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical,
+        const MeshId mesh_id,
+        const PhysicalAdjacencyMap& adjacency_map_physical,
+        const LogicalAdjacencyMap& adjacency_map_logical,
         const std::unordered_map<MeshHostRankId, HostName>& host_name_to_mesh_rank);
 
     /**
