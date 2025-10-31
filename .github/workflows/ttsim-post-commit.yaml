@@ -1,0 +1,154 @@
+name: "[impl] TTSim unit tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      timeout:
+        required: false
+        type: number
+        default: 10
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      ttsim-ref:
+        required: false
+        type: string
+        default: "4f05a65a961d4a3ca14f65ff9633030e0a35358e"
+
+jobs:
+  ttsim-cpp-unit-tests:
+    runs-on: tt-ubuntu-2204-small-stable
+    name: "TTSim C++ tests - ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole_b0
+            build_suffix: release_wh
+            soc_desc: wormhole_b0_80_arch.yaml
+          - arch: blackhole
+            build_suffix: release_bh
+            soc_desc: blackhole_140_arch.yaml
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+    steps:
+      - name: Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: ${{ inputs.ttsim-ref }}
+          path: docker-job/ttsim
+          token: ${{ secrets.TTSIM_TOKEN }}
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim/src
+          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: C++ tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
+          ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
+          # BH doesn't work on watcher, triggers: ERROR: decode_and_execute_fence: unsupported fence_mode=0x31
+          if [[ "${{ matrix.arch }}" != "blackhole" ]]; then
+            # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
+            # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
+          fi
+          ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
+          ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
+          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
+          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
+          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
+  ttsim-galaxy-cpp-unit-tests:
+    runs-on: tt-ubuntu-2204-large-stable
+    name: "TTSim Galaxy C++ tests - ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole_b0
+            build_suffix: release_wh
+            cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml
+            soc_desc: wormhole_b0_80_arch.yaml
+          - arch: blackhole
+            build_suffix: release_bh
+            cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
+            soc_desc: blackhole_140_arch.yaml
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
+    steps:
+      - name: Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: ${{ inputs.ttsim-ref }}
+          path: docker-job/ttsim
+          token: ${{ secrets.TTSIM_TOKEN }}
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim/src
+          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: C++ tests
+        run: |
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="*StreamRegWrite*"
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="*InlineWrite*"
