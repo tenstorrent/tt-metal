@@ -95,6 +95,9 @@ static void bind_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("epsilon") = 1e-5,
             py::arg("num_heads_per_device") = 1,
             py::arg("weight") = std::nullopt,
+            py::arg("transformation_mat") = std::nullopt,
+            py::arg("rope_cos") = std::nullopt,
+            py::arg("rope_sin") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("dtype") = std::nullopt});

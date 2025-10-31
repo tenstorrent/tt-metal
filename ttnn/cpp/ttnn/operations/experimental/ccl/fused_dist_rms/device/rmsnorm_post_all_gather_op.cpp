@@ -23,11 +23,17 @@ void FusedRMSNormPostAllGather::validate(
     auto& a = input_tensors.at(0);
     auto& stats = input_tensors.at(1);
 
-    for (const auto& tensor : input_tensors) {
-        TT_FATAL(tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", tensor.layout());
-        TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", tensor.dtype());
-        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to rmsnorm need to be on device!");
-        TT_FATAL(tensor.buffer() != nullptr, "Operands to rmsnorm need to be allocated in buffers on device!");
+    // Helper lambda to assert tensor properties: tilized, bfloat16, on device, allocated
+    auto check_tile_bf16_device_alloc = [](const Tensor& tensor, const std::string& name) {
+        TT_FATAL(tensor.layout() == Layout::TILE, "{} tensor must have TILE layout, got: {}", name, tensor.layout());
+        TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "{} tensor must be BFLOAT16, got: {}", name, tensor.dtype());
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} tensor must be on device!", name);
+        TT_FATAL(tensor.buffer() != nullptr, "{} tensor must be allocated in buffers on device!", name);
+    };
+
+    for (size_t idx = 0; idx < input_tensors.size(); ++idx) {
+        const auto& tensor = input_tensors[idx];
+        check_tile_bf16_device_alloc(tensor, "Input tensor " + std::to_string(idx));
     }
 
     // stats has 1 tile columns per device
@@ -65,13 +71,12 @@ void FusedRMSNormPostAllGather::validate(
     TT_FATAL(a.logical_shape()[1] == 1, "Input dim 1 must be 1, got: {}", a.logical_shape()[1]);
     TT_FATAL(a.logical_shape()[0] == 1, "Expecting input batch dimension to be 1, got: {}", a.logical_shape()[0]);
 
-    TT_FATAL(optional_input_tensors.size() == 1, "Must have 1 optional input tensor");
+    TT_FATAL(optional_input_tensors.size() == 4, "Must have 4 optional input tensors");
     if (optional_input_tensors.at(0).has_value()) {
+        // Gamma is given
         auto& weight = optional_input_tensors.at(0).value();
-        TT_FATAL(weight.layout() == Layout::TILE, "Weight tensor must have TILE layout, got: {}", weight.layout());
-        TT_FATAL(weight.dtype() == DataType::BFLOAT16, "Weight tensor must be BFLOAT16, got: {}", weight.dtype());
-        TT_FATAL(weight.storage_type() == StorageType::DEVICE, "Weight tensor must be on device!");
-        TT_FATAL(weight.buffer() != nullptr, "Weight tensor must be allocated in buffers on device!");
+        check_tile_bf16_device_alloc(weight, "Weight");
+
         TT_FATAL(
             weight.padded_shape().size() == 2,
             "Weight tensor must have 2 dimensions, got: {}",
@@ -85,6 +90,54 @@ void FusedRMSNormPostAllGather::validate(
             weight.logical_shape()[0] == 1,
             "Weight tensor must have batch dimension of 1, got: {}",
             weight.logical_shape()[0]);
+    }
+
+    if (optional_input_tensors.at(1).has_value()) {
+        // ROPE fusion is enabled
+        TT_FATAL(optional_input_tensors.at(2).has_value(), "Rope cos tensor is required when ROPE fusion is enabled");
+        TT_FATAL(optional_input_tensors.at(3).has_value(), "Rope sin tensor is required when ROPE fusion is enabled");
+
+        auto& transformation_mat = optional_input_tensors.at(1).value();
+        auto& rope_cos = optional_input_tensors.at(2).value();
+        auto& rope_sin = optional_input_tensors.at(3).value();
+
+        check_tile_bf16_device_alloc(transformation_mat, "Transformation_mat");
+        check_tile_bf16_device_alloc(rope_cos, "Rope cos");
+        check_tile_bf16_device_alloc(rope_sin, "Rope sin");
+
+        // Ensure transformation_mat has 4 dimensions: [1, 1, 32, 32]
+        TT_FATAL(
+            transformation_mat.padded_shape().size() == 4,
+            "Transformation_mat must have 4 dimensions, got: {}",
+            transformation_mat.padded_shape().size());
+        TT_FATAL(
+            transformation_mat.padded_shape()[0] == 1 && transformation_mat.padded_shape()[1] == 1 &&
+                transformation_mat.padded_shape()[2] == 32 && transformation_mat.padded_shape()[3] == 32,
+            "Transformation_mat must have shape [1, 1, 32, 32], got: [{} {} {} {}]",
+            transformation_mat.padded_shape()[0],
+            transformation_mat.padded_shape()[1],
+            transformation_mat.padded_shape()[2],
+            transformation_mat.padded_shape()[3]);
+
+        // Ensure rope_cos and rope_sin have 4 dimensions: [1, 1, a.padded_shape()[2], head_dim]
+        auto seq_len = a.padded_shape()[2];
+        auto head_dim = a.padded_shape()[3] / this->num_heads;
+        for (const auto& rope_tensor : {std::cref(rope_cos), std::cref(rope_sin)}) {
+            TT_FATAL(
+                rope_tensor.get().padded_shape().size() == 4,
+                "Rope tensor must have 4 dimensions, got: {}",
+                rope_tensor.get().padded_shape().size());
+            TT_FATAL(
+                rope_tensor.get().padded_shape()[0] == 1 && rope_tensor.get().padded_shape()[1] == 1 &&
+                    rope_tensor.get().padded_shape()[2] == seq_len && rope_tensor.get().padded_shape()[3] == head_dim,
+                "Rope tensor must have shape [1, 1, {}, {}], got: [{} {} {} {}]",
+                seq_len,
+                head_dim,
+                rope_tensor.get().padded_shape()[0],
+                rope_tensor.get().padded_shape()[1],
+                rope_tensor.get().padded_shape()[2],
+                rope_tensor.get().padded_shape()[3]);
+        }
     }
 }
 
@@ -110,9 +163,21 @@ tt::tt_metal::operation::ProgramWithCallbacks FusedRMSNormPostAllGather::create_
     const auto& a = input_tensors.at(0);
     const auto& stats = input_tensors.at(1);
     const auto& weight = optional_input_tensors.at(0);
+    const auto& transformation_mat = optional_input_tensors.at(1);
+    const auto& rope_cos = optional_input_tensors.at(2);
+    const auto& rope_sin = optional_input_tensors.at(3);
     auto& output_tensor = output_tensors.at(0);
 
     return fused_rmsnorm_post_allgather_multi_core(
-        a, stats, output_tensor, weight, this->eps, this->num_heads, this->compute_kernel_config);
+        a,
+        stats,
+        output_tensor,
+        weight,
+        transformation_mat,
+        rope_cos,
+        rope_sin,
+        this->eps,
+        this->num_heads,
+        this->compute_kernel_config);
 }
 }  // namespace ttnn::operations::experimental::ccl

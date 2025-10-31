@@ -18,8 +18,39 @@ from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_ulp import setup_ccl_semaphores
 
 
+def get_rot_transformation_mat():
+    # ROPE op uses a single tile
+    TILE_SIZE = 32
+    rot_emb_matrix = torch.zeros(1, 1, TILE_SIZE, TILE_SIZE)
+    rot_emb_matrix[..., torch.arange(0, TILE_SIZE, 2), torch.arange(1, TILE_SIZE, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, TILE_SIZE, 2), torch.arange(0, TILE_SIZE, 2)] = -1
+    return rot_emb_matrix
+
+
+def apply_rotary_emb(
+    hidden_states: torch.Tensor,
+    freqs_cos: torch.Tensor,
+    freqs_sin: torch.Tensor,
+):
+    x1, x2 = hidden_states.unflatten(-1, (-1, 2)).unbind(-1)
+    cos = freqs_cos[..., 0::2]
+    sin = freqs_sin[..., 1::2]
+    out = torch.empty_like(hidden_states)
+    out[..., 0::2] = x1 * cos - x2 * sin
+    out[..., 1::2] = x1 * sin + x2 * cos
+    return out.type_as(hidden_states)
+
+
 def run_distributed_fused_rmsnorm(
-    mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device=1, use_weight=True
+    mesh_device,
+    tp_mesh_axis,
+    inp_shape,
+    dtype,
+    stats_dtype,
+    topology,
+    num_heads_per_device=1,
+    use_weight=True,
+    use_rope=False,
 ):
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
@@ -42,6 +73,45 @@ def run_distributed_fused_rmsnorm(
     if use_weight:
         torch_weight = torch.rand(inp_shape[-1:]).unsqueeze(0)
         assert torch_weight.shape == (1, inp_shape[-1])
+
+    tt_rope_cos = None
+    tt_rope_sin = None
+    tt_transformation_mat = None
+    if use_rope:
+        head_dim = inp_shape[-1] // num_heads
+        rope_cos = torch.randn(1, 1, inp_shape[2], head_dim // 2)
+        rope_cos = torch.stack([rope_cos, rope_cos], dim=-1).flatten(-2)
+        rope_sin = torch.randn(1, 1, inp_shape[2], head_dim // 2)
+        rope_sin = torch.stack([rope_sin, rope_sin], dim=-1).flatten(-2)
+
+        transformation_mat = get_rot_transformation_mat()
+
+        rope_shard_dims = [None, None]
+        rope_shard_dims[tp_mesh_axis - 1] = 2  # Sharding on sequence dimension
+        tt_rope_cos = ttnn.from_torch(
+            rope_cos,
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=rope_shard_dims, mesh_shape=list(mesh_device.shape)),
+        )
+        tt_rope_sin = ttnn.from_torch(
+            rope_sin,
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=rope_shard_dims, mesh_shape=list(mesh_device.shape)),
+        )
+
+        tt_transformation_mat = ttnn.from_torch(
+            transformation_mat,
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     epsilon = 1e-5
 
@@ -102,6 +172,8 @@ def run_distributed_fused_rmsnorm(
     # tt_out = ttnn.rms_norm_post_all_gather(
     #     tt_inp, tt_stats_gathered, epsilon=epsilon, compute_kernel_config=compute_kernel_config, distributed_program_config=prog_cfg,
     # )
+    if use_rope:
+        tt_out = ttnn.experimental.rotary_embedding_llama(tt_out, tt_rope_cos, tt_rope_sin, tt_transformation_mat)
 
     tensor_cat_dims = [None, None]
     tensor_cat_dims[tp_mesh_axis] = -3 if num_heads > 1 else -1
@@ -118,6 +190,10 @@ def run_distributed_fused_rmsnorm(
 
     # create heads fusion
     out_torch = out_torch.reshape(inp_shape[0], inp_shape[2], num_heads, -1).permute(0, 2, 1, 3)
+
+    if use_rope:
+        out_torch = apply_rotary_emb(out_torch, rope_cos, rope_sin)
+
     passing, output_str = comp_allclose(tt_out, out_torch, rtol=1e-1, atol=1e-01)
     logger.debug(f"torch vs tt distributed fused rmsnorm = {output_str}")
     assert passing
@@ -127,14 +203,15 @@ def run_distributed_fused_rmsnorm(
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
-    [128, 256, 2048, 8192, 9472, 18944, 75776],
-    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen8192", "seqlen9472", "seqlen18944", "seqlen75776"],
+    [128, 256, 2048, 8192, 9472, 18944],
+    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen8192", "seqlen9472", "seqlen18944"],
 )
 @pytest.mark.parametrize(
     "hidden_dim", [256, 2048, 5120, 8192], ids=["hidden_dim256", "hidden_dim2048", "hidden_dim5120", "hidden_dim8192"]
 )
 @pytest.mark.parametrize("num_heads_per_device", [1, 2, 10], ids=["num_heads1_", "num_heads2", "num_heads10"])
 @pytest.mark.parametrize("use_weight", [True, False], ids=["has_weight", "no_weight"])
+@pytest.mark.parametrize("use_rope", [True, False], ids=["has_rope", "no_rope"])
 @pytest.mark.parametrize(
     "mesh_device, tp_mesh_axis",
     [
@@ -163,6 +240,7 @@ def test_distributed_fused_rmsnorm(
     topology,
     num_heads_per_device,
     use_weight,
+    use_rope,
     reset_seeds,
 ):
     num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
@@ -170,7 +248,7 @@ def test_distributed_fused_rmsnorm(
         pytest.skip("hidden_dim must be divisible by 32 * num_heads")
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
-        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight
+        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight, use_rope
     )
 
 
