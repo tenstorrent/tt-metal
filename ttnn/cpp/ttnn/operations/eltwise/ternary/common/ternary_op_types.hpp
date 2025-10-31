@@ -5,6 +5,7 @@
 #pragma once
 
 #include <variant>
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::ternary {
 
