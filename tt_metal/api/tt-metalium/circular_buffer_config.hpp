@@ -63,8 +63,6 @@ public:
 
         const Builder& set_data_format(tt::DataFormat data_format) const;
 
-        const Builder& set_total_size(uint32_t total_size) const;
-
         const Builder& set_page_size(uint32_t page_size) const;
 
         const Builder& set_tile_dims(const Tile& tile) const;
