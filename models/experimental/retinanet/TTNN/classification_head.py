@@ -5,6 +5,36 @@ import ttnn
 from typing import List
 from models.experimental.retinanet.TTNN.regression_head import Conv2dNormActivation
 from loguru import logger
+from dataclasses import dataclass
+
+
+@dataclass
+class RetinaNetHeadOptimizer:
+    """Optimization configuration for RetinaNet head conv blocks"""
+
+    conv_blocks: dict  # Config for 4 conv blocks
+    final_conv: dict  # Config for cls_logits
+
+
+# Define optimization profiles
+retinanet_head_optimizations = {
+    "optimized": RetinaNetHeadOptimizer(
+        conv_blocks={
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            "act_block_h_override": 256,  # NEW: Tune this value
+            "act_block_w_div": 1,  # NEW: Tune this value
+        },
+        final_conv={
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+            "deallocate_activation": True,
+            "reallocate_halo_output": True,
+        },
+    ),
+}
 
 
 def ttnn_retinanet_classification_head(
@@ -17,6 +47,7 @@ def ttnn_retinanet_classification_head(
     batch_size: int = 1,
     input_shapes: List[tuple] = None,
     model_config: dict = None,
+    optimization_profile: str = "optimized",
 ) -> ttnn.Tensor:
     """
     TTNN implementation of RetinaNet classification head.
@@ -37,6 +68,14 @@ def ttnn_retinanet_classification_head(
     if input_shapes is None:
         input_shapes = [(fm.shape[1], fm.shape[2]) for fm in feature_maps]
 
+    # Get optimization config from the optimizer class
+    opt_config = retinanet_head_optimizations[optimization_profile]
+
+    # Create Conv2dConfig for conv blocks using optimizer class settings
+    conv_blocks_config = ttnn.Conv2dConfig(**opt_config.conv_blocks)  # Unpack double buffering flags from optimizer
+
+    # Create Conv2dConfig for final cls_logits conv using optimizer class settings
+    final_conv_config = ttnn.Conv2dConfig(**opt_config.final_conv)  # Unpack double buffering flags from optimizer
     # Grid size for GroupNorm
     grid_size = ttnn.CoreGrid(y=8, x=8)
 
@@ -72,6 +111,7 @@ def ttnn_retinanet_classification_head(
             input_mask=input_mask_tensor,
             model_config=model_config,
             compute_config=compute_config,
+            conv_config=conv_blocks_config,
         )
         conv_blocks.append(conv_block)
 
@@ -105,6 +145,7 @@ def ttnn_retinanet_classification_head(
             input_height=H,
             input_width=W,
             compute_config=compute_config,
+            conv_config=final_conv_config,
         )
         logger.info(f"After cls_logits conv: {cls_logits.shape}")
 

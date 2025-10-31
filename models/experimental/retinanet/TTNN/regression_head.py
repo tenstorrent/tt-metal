@@ -2,6 +2,39 @@
 import ttnn
 from typing import List
 from typing import Optional
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass
+class RetinaNetHeadOptimizer:
+    """Optimization configuration for RetinaNet head conv blocks"""
+
+    conv_blocks: dict
+    final_conv: dict
+    groupnorm_config: dict  # NEW: Add GroupNorm-specific config
+
+
+retinanet_head_optimizations = {
+    "optimized": RetinaNetHeadOptimizer(
+        conv_blocks={
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+            "deallocate_activation": False,
+            "reallocate_halo_output": True,
+            "act_block_h_override": 256,  # NEW: Tune this value
+            "act_block_w_div": 1,  # NEW: Tune this value
+        },
+        final_conv={
+            "enable_act_double_buffer": True,
+            "enable_weights_double_buffer": True,
+        },
+        groupnorm_config={  # NEW: GroupNorm optimization
+            "use_sharded_memory": True,
+            "adaptive_grid_size": True,
+        },
+    ),
+}
 
 
 class Conv2dNormActivation:
@@ -28,6 +61,7 @@ class Conv2dNormActivation:
         input_mask: Optional[ttnn.Tensor] = None,
         model_config: dict = None,
         compute_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
+        conv_config: Optional[ttnn.Conv2dConfig] = None,
     ):
         """
         Args:
@@ -51,6 +85,7 @@ class Conv2dNormActivation:
         self.num_groups = num_groups
         self.model_config = model_config
         self.compute_config = compute_config
+        self.conv_config = conv_config
         # Store parameters
         self.conv_weight = parameters["weight"]
         self.norm_weight = parameters["norm_weight"]
@@ -112,6 +147,7 @@ class Conv2dNormActivation:
             input_width=input_width,
             slice_config=self.slice_config,
             compute_config=self.compute_config,
+            conv_config=self.conv_config,
         )
 
         # Get output shape after conv
@@ -170,6 +206,7 @@ class Conv2dNormActivation:
         return x
 
 
+# Usage in ttnn_retinanet_regression_head
 def ttnn_retinanet_regression_head(
     feature_maps: List[ttnn.Tensor],
     parameters: dict,
@@ -179,7 +216,14 @@ def ttnn_retinanet_regression_head(
     batch_size: int = 1,
     input_shapes: List[tuple] = None,
     model_config: dict = None,
+    optimization_profile: str = "optimized",  # ADD THIS
 ) -> ttnn.Tensor:
+    # Get optimization config
+    opt_config = retinanet_head_optimizations[optimization_profile]
+    # Create Conv2dConfig objects using the optimizer settings
+    conv_blocks_config = ttnn.Conv2dConfig(**opt_config.conv_blocks)
+    final_conv_config = ttnn.Conv2dConfig(**opt_config.final_conv)
+
     """
     TTNN implementation of RetinaNet regression head with all 4 conv layers + GroupNorm + ReLU.
 
@@ -230,6 +274,7 @@ def ttnn_retinanet_regression_head(
             input_mask=input_mask_tensor,
             model_config=model_config,
             compute_config=compute_config,
+            conv_config=conv_blocks_config,
         )
         conv_blocks.append(conv_block)
 
@@ -258,6 +303,7 @@ def ttnn_retinanet_regression_head(
             input_width=W,
             slice_config=bbox_reg_slice_config,
             compute_config=compute_config,
+            conv_config=final_conv_config,
         )
 
         # Reshape to (N, H*W*num_anchors, 4)

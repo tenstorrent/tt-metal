@@ -160,6 +160,7 @@ class BackboneTestInfra:
             batch_size=self.batch_size,
             input_shapes=input_shapes,
             model_config=model_config,
+            optimization_profile="optimized",
         )
         # Run classification head
         classification_output = ttnn_retinanet_classification_head(
@@ -171,6 +172,7 @@ class BackboneTestInfra:
             batch_size=self.batch_size,
             input_shapes=input_shapes,
             model_config=model_config,
+            optimization_profile="optimized",
         )
 
         # Combine all outputs
