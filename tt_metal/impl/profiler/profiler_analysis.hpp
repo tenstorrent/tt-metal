@@ -80,23 +80,29 @@ struct AnalysisResultsConfig {
 
 struct AnalysisResults {
     struct SingleResult {
-        tracy::TTDeviceMarker start_marker;
-        tracy::TTDeviceMarker end_marker;
         uint64_t start_timestamp = UINT64_MAX;
         uint64_t end_timestamp = 0;
         uint64_t duration = 0;
 
         bool operator==(const SingleResult& other) const {
             return start_timestamp == other.start_timestamp && end_timestamp == other.end_timestamp &&
-                   duration == other.duration && start_marker == other.start_marker && end_marker == other.end_marker;
+                   duration == other.duration;
         }
 
         bool operator!=(const SingleResult& other) const { return !(*this == other); }
+
+        bool operator<(const SingleResult& other) const {
+            if (start_timestamp != other.start_timestamp) {
+                return start_timestamp < other.start_timestamp;
+            }
+            if (end_timestamp != other.end_timestamp) {
+                return end_timestamp < other.end_timestamp;
+            }
+            return duration < other.duration;
+        }
     };
 
     static inline const SingleResult INVALID_SINGLE_RESULT = {
-        .start_marker = tracy::TTDeviceMarker(),
-        .end_marker = tracy::TTDeviceMarker(),
         .start_timestamp = UINT64_MAX,
         .end_timestamp = 0,
         .duration = 0,

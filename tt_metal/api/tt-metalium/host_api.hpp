@@ -48,6 +48,7 @@ class CircularBuffer;
 struct Event;
 class Buffer;
 class GlobalSemaphore;
+struct OpAnalysisData;
 
 // ==================================================
 //                  HOST API: Device management
@@ -640,6 +641,28 @@ void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
     ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
+
+// clang-format off
+/**
+ * Get performance results for all ops that were read in the most recent call to `ReadMeshDeviceProfilerResults`.
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ *
+ * Return value: std::map<ChipId, std::set<OpAnalysisData>>
+ */
+// clang-format on
+std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData();
+
+// clang-format off
+/**
+ * Get performance results for all ops that have been read so far across all calls to `ReadMeshDeviceProfilerResults`.
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
+ *
+ * Return value: std::map<ChipId, std::set<OpAnalysisData>>
+ */
+// clang-format on
+std::map<ChipId, std::set<OpAnalysisData>> GetAllOpsPerfData();
 
 // clang-format off
 /**

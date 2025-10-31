@@ -22,6 +22,7 @@
 #include "core_coord.hpp"
 #include "thread_pool.hpp"
 #include "profiler_optional_metadata.hpp"
+#include "profiler_analysis.hpp"
 #include "profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
@@ -65,6 +66,23 @@ struct FabricEventMarkers {
     tracy::TTDeviceMarker fabric_routing_fields_marker;
     tracy::TTDeviceMarker local_noc_write_marker;
     std::optional<tracy::TTDeviceMarker> fabric_mux_marker;
+};
+
+struct OpAnalysisData {
+    OpId op_id;
+    std::unordered_map<std::string, AnalysisResults::SingleResult> op_analyses_results;
+
+    bool operator<(const OpAnalysisData& other) const {
+        TT_ASSERT(this->op_analyses_results.find("DEVICE FW DURATION [ns]") != this->op_analyses_results.end());
+        TT_ASSERT(other.op_analyses_results.find("DEVICE FW DURATION [ns]") != other.op_analyses_results.end());
+
+        const AnalysisResults::SingleResult& this_fw_duration_analysis =
+            this->op_analyses_results.at("DEVICE FW DURATION [ns]");
+        const AnalysisResults::SingleResult& other_fw_duration_analysis =
+            other.op_analyses_results.at("DEVICE FW DURATION [ns]");
+
+        return this_fw_duration_analysis < other_fw_duration_analysis;
+    }
 };
 
 class DeviceProfiler {
@@ -182,6 +200,10 @@ private:
 
     // Track the smallest timestamp read
     void updateFirstTimestamp(uint64_t timestamp);
+
+    // Generate ops analysis results for device markers
+    void generateAnalysesForDeviceMarkers(
+        const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const;
 
     // Dump device results to files
     void writeDeviceResultsToFiles() const;

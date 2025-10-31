@@ -35,7 +35,6 @@
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "profiler_state_manager.hpp"
-#include "profiler_analysis.hpp"
 #include "tools/profiler/noc_event_profiler_utils.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt-metalium/profiler_types.hpp"
@@ -1697,6 +1696,8 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
         std::filesystem::remove(ops_perf_report_path);
     }
 
+    tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_ops_perf_analyses_map[this->device_id] = {};
+
     const std::string noc_events_report_path =
         tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
     if (!noc_events_report_path.empty()) {
@@ -1711,10 +1712,27 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
 #endif
 }
 
-void generateAnalysesForDeviceMarkers(
-    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
-    const std::filesystem::path& report_path,
-    ThreadPool& thread_pool) {
+std::set<OpAnalysisData> processOpsPerfResults(const OpsPerfResults& ops_perf_results) {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    std::set<OpAnalysisData> ops_analyses_data;
+    for (const auto& [op_id, op_perf_results] : ops_perf_results.op_id_to_perf_results) {
+        OpAnalysisData op_analysis_data;
+        op_analysis_data.op_id = op_id;
+        TT_ASSERT(op_perf_results.analysis_results.size() == ops_perf_results.analysis_results_configs.size());
+        for (uint32_t i = 0; i < op_perf_results.analysis_results.size(); ++i) {
+            const AnalysisResultsConfig results_config = ops_perf_results.analysis_results_configs[i];
+            op_analysis_data.op_analyses_results[results_config.analysis_name] = op_perf_results.analysis_results[i];
+        }
+        ops_analyses_data.insert(op_analysis_data);
+    }
+    return ops_analyses_data;
+#endif
+}
+
+void DeviceProfiler::generateAnalysesForDeviceMarkers(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -1723,9 +1741,15 @@ void generateAnalysesForDeviceMarkers(
         "tt_metal/tools/profiler/cpp_device_analyses.json";
     const std::vector<AnalysisConfig> analysis_configs = loadAnalysisConfigsFromJSON(analysis_configs_path);
 
-    const OpsPerfResults ops_perf_results = generatePerfResultsForOps(analysis_configs, device_markers, thread_pool);
+    const OpsPerfResults ops_perf_results =
+        generatePerfResultsForOps(analysis_configs, device_markers, *this->thread_pool);
 
-    writeOpsPerfResultsToCSV(ops_perf_results, report_path);
+    std::vector<std::set<OpAnalysisData>>& device_ops_perf_analyses =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager()->device_ops_perf_analyses_map.at(
+            this->device_id);
+    device_ops_perf_analyses.push_back(processOpsPerfResults(ops_perf_results));
+
+    writeOpsPerfResultsToCSV(ops_perf_results, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME);
 #endif
 }
 
@@ -1743,13 +1767,13 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
                                                 ->calculate_optimal_num_threads_for_device_profiler_thread_pool());
     }
 
-    initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
+    this->initializeMissingTracyContexts(/*blocking=*/is_mid_run_dump);
 
     if (!is_mid_run_dump) {
         for (auto& [core, _] : this->device_markers_per_core_risc_map) {
             this->thread_pool->enqueue([this, core]() {
                 for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
-                    processDeviceMarkerData(device_markers);
+                    this->processDeviceMarkerData(device_markers);
                 }
             });
         }
@@ -1761,13 +1785,12 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process()) {
-        generateAnalysesForDeviceMarkers(
-            device_markers_vec, this->device_logs_output_dir / PROFILER_OPS_PERF_REPORT_NAME, *this->thread_pool);
+        this->generateAnalysesForDeviceMarkers(device_markers_vec);
     }
 
     this->thread_pool->enqueue([this]() { writeDeviceResultsToFiles(); });
 
-    pushTracyDeviceResults(device_markers_vec);
+    this->pushTracyDeviceResults(device_markers_vec);
 
     this->thread_pool->wait();
 

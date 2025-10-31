@@ -83,8 +83,10 @@ AnalysisResults parse_duration(
     AnalysisResults analysis_results;
     std::unordered_map<OpId, AnalysisResults::SingleResult, OpIdHasher>& results_per_op_id =
         analysis_results.results_per_op_id;
+    ChipId device_id = -1;
 
-    for (const auto& marker_ref : markers) {
+    for (uint32_t i = 0; i < markers.size(); ++i) {
+        const auto& marker_ref = markers[i];
         const tracy::TTDeviceMarker& marker = marker_ref.get();
         const OpId op_id = {marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
         auto [op_id_results_it, _] = results_per_op_id.try_emplace(op_id, AnalysisResults::INVALID_SINGLE_RESULT);
@@ -93,23 +95,25 @@ AnalysisResults parse_duration(
         if (matches_start_end_config(marker, analysis_config.start_config)) {
             if (op_results == AnalysisResults::INVALID_SINGLE_RESULT) {
                 op_results.start_timestamp = marker.timestamp;
-                op_results.start_marker = marker;
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
             if (op_results != AnalysisResults::INVALID_SINGLE_RESULT) {
                 op_results.end_timestamp = marker.timestamp;
-                op_results.end_marker = marker;
             }
         }
+
+        if (i == 0) {
+            device_id = marker.chip_id;
+        }
+        TT_ASSERT(device_id == marker.chip_id);
     }
 
     for (auto& [_, result] : results_per_op_id) {
         if (result != AnalysisResults::INVALID_SINGLE_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
-            TT_ASSERT(result.start_marker.chip_id == result.end_marker.chip_id);
             const int chip_frequency_mhz =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(result.start_marker.chip_id);
+                tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
             result.duration = static_cast<uint64_t>(
                 std::round((result.end_timestamp - result.start_timestamp) * 1000.0 / chip_frequency_mhz));
         }
