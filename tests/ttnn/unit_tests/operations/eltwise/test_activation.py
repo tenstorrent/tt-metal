@@ -440,3 +440,81 @@ def run_activation_test_threshold(device, h, w, scalar1, scalar2, ttnn_function,
 @pytest.mark.parametrize("w", [128])
 def test_threshold(device, h, w, value, threshold):
     run_activation_test_threshold(device, h, w, value, threshold, ttnn.threshold)
+
+
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", [(ttnn.float32, torch.float32), (ttnn.bfloat16, torch.bfloat16)])
+def test_mish_arange_masking(ttnn_dtype, torch_dtype, device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor_f32 = input_tensor.to(torch.float32)
+
+    # masking to working range
+    # mask = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    mask = torch.isfinite(input_tensor_f32)
+    input_tensor = input_tensor[mask]
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = torch.nn.functional.mish
+    golden = golden_function(input_tensor.to(torch_dtype))
+
+    tt_result = ttnn.mish(tt_in)
+    result = ttnn.to_torch(tt_result).to(torch_dtype)
+    # assert_with_ulp(golden, result, 2)
+    # Use the same rtol PyTorch uses by default unless you set a different one
+    rtol = 1e-5
+
+    # Mask to finite elements only (both tensors)
+    mask = torch.isfinite(golden) & torch.isfinite(result)
+    if not torch.any(mask):
+        raise AssertionError("No finite elements to compare.")
+
+    g32 = golden[mask].to(torch.float32)
+    r32 = result[mask].to(torch.float32)
+    abs_diff = (g32 - r32).abs()
+
+    # Minimal atol needed so that abs_diff <= atol + rtol * abs(golden)
+    needed_atol = (
+        torch.maximum(torch.tensor(0.0, dtype=torch.float32), abs_diff - r32.new_tensor(rtol) * g32.abs()).max().item()
+    )
+    print(f"Minimal atol to pass with rtol={rtol}: {needed_atol:.8g}")
+
+    # For reference: pure max absolute error (rtol=0)
+    max_abs_err = abs_diff.max().item()
+    print(f"Max absolute error (rtol=0): {max_abs_err:.8g}")
+
+    # Report mismatches with input, golden, and result for current tolerance
+    atol = 5e-2
+    close_mask = torch.isclose(golden, result, rtol=rtol, atol=atol, equal_nan=True)
+    mismatch_mask = ~close_mask
+    num_mismatch = int(mismatch_mask.sum().item())
+    total = golden.numel()
+    print(f"Mismatches: {num_mismatch} / {total} (atol={atol}, rtol={rtol})")
+    if num_mismatch:
+        indices = torch.nonzero(mismatch_mask).squeeze(1)
+        max_show = 50
+        indices = indices[:max_show]
+        inp_f32 = input_tensor.to(torch.float32)
+        inp_bits = input_tensor.view(torch.uint16)
+        for i in indices.tolist():
+            g = float(golden[i])
+            r = float(result[i])
+            x = float(inp_f32[i])
+            bits = int(inp_bits[i])
+            abs_err = abs(g - r) if np.isfinite(g) and np.isfinite(r) else float("nan")
+            rel_err = abs_err / (abs(g) + 1e-30) if np.isfinite(abs_err) and abs(g) > 0 else float("nan")
+            print(
+                f"[{i}] x_bf16=0x{bits:04x} x={x:.8g} golden={g:.8g} result={r:.8g} "
+                f"abs_err={abs_err:.8g} rel_err={rel_err:.8g}"
+            )
+        if num_mismatch > max_show:
+            print(f"... and {num_mismatch - max_show} more mismatches")
+
+    assert torch.allclose(golden, result, atol=0.05)

@@ -1009,7 +1009,12 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype) {
     switch (op_type) {
-        case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
+        case UnaryOpType::MISH:
+            if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
+                return fmt::format("{}/{}", compute_root, "mish_sfpu_kernel.cpp");
+            } else {
+                return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
+            }
         case UnaryOpType::TANHSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return fmt::format("{}/{}", compute_root, "tanhshrink_sfpu_kernel.cpp");

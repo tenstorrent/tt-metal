@@ -33,18 +33,18 @@ void MAIN {
             copy_tile_to_dst_init_short(cb_input);
             copy_tile(cb_input, 0, 0);
 
-            exp_tile_init<1u>();
-            exp_tile<1u>(0);
-            log1p_tile_init<true>();
-            log1p_tile<true>(0);
-            // log1p_exp_tile_init<false>();
-            // log1p_exp_tile<false>(0);
-            tanh_tile_init<true>();
-            tanh_tile<true>(0);
+            // exp_tile_init<1u>();
+            // exp_tile<1u>(0);
+            // log1p_tile_init<true>();
+            // log1p_tile<true>(0);
+            log1p_exp_tile_init<false>();
+            log1p_exp_tile<false>(0);
+            tanh_tile_init<false>();
+            tanh_tile<false>(0);
 
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_input);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                cb_input, 0, 0);
+            copy_tile(cb_input, 0, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
 
             tile_regs_commit();
 
