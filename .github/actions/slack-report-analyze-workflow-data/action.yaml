@@ -24,6 +24,7 @@ runs:
         tmp_file="$(mktemp)"
         printf '%s' "$REGRESSED_RAW" > "$tmp_file"
         if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
+          echo "⚠️ Failed to parse regression list JSON. Skipping Slack notification."
           echo "has_regressions=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
@@ -31,9 +32,11 @@ runs:
         # Check if there are any regressions
         REGRESSION_COUNT=$(jq -r 'if (type=="array") then length else 0 end' "$tmp_file")
         if [ "$REGRESSION_COUNT" -eq 0 ]; then
+          echo "✅ No regressions detected. Skipping Slack notification (only posting when there are regressions)."
           echo "has_regressions=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
+        echo "📊 Found $REGRESSION_COUNT regression(s). Preparing Slack notification..."
         echo "has_regressions=true" >> "$GITHUB_OUTPUT"
 
         # Generate the main regression text with detailed information
@@ -102,6 +105,11 @@ runs:
         ')
 
         echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
+
+    - name: Skip Slack notification (no regressions)
+      if: steps.build.outputs.has_regressions != 'true'
+      shell: bash
+      run: echo "ℹ️ Skipping Slack notification because there are no regressions to report."
 
     - name: Report Github Pipeline Status Slack Action
       if: steps.build.outputs.has_regressions == 'true'
