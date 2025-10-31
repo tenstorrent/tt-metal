@@ -440,17 +440,17 @@ public:
         return this->available_space(cmd_ptr);
     }
 
-    // Get new CB pages and release old pages to writer. If we move to next block, we call on_boundary to allow the
-    // caller to handle the orphan data that would otherwise be lost.  The first argument to on_boundary is the size of
-    // the remaining data in the block. The second argument is whether the next block is the first block in the circular
-    // buffer (in which case cmd_ptr is set to the base address after on_boundary is called).
-    // noc_nonposted_writes_num_issued[noc_index] must be updated before on_boundary returns.
+    // Get new CB pages. If getting new pages would require switching the the next block, this will call on_boundary to
+    // handle the orphan data that would otherwise be lost and will then release old pages to writer.
+    // 
+    // The argument is whether the next block is the first block in the circular buffer (in which case cmd_ptr is set to
+    // the base address after on_boundary is called).  noc_nonposted_writes_num_issued[noc_index] must be updated before
+    // on_boundary returns.
     template <typename OnBoundaryFn>
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr, OnBoundaryFn&& on_boundary) {
         if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
-            const uint32_t orphan_size = this->cb_fence_ - cmd_ptr;
             const bool will_wrap = (this->rd_block_idx_ == cb_blocks - 1);
-            on_boundary(orphan_size, will_wrap);
+            on_boundary(will_wrap);
             if (will_wrap) {
                 cmd_ptr = cb_base;
                 this->cb_fence_ = cb_base;
