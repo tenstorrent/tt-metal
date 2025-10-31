@@ -1543,7 +1543,7 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricAddrgenUnicastWrite) {
         FabricApiType::Mesh,
         false,
         true,
-        AddrLayout::InterleavedL1);
+        AddrLayout::Sequential);
 }
 
 }  // namespace fabric_router_tests
