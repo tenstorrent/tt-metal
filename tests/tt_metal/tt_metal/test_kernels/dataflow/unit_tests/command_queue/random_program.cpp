@@ -84,11 +84,11 @@ void kernel_main() {
         }
 
 #pragma unroll(get_compile_time_arg_val(0))
-        for (volatile uint32_t i = 0; i < outer_loop; i++) {
+        for (uint32_t i = 0; i < outer_loop; i++) {
 #pragma unroll(get_compile_time_arg_val(1))
-            for (volatile uint32_t j = 0; j < middle_loop; j++) {
+            for (uint32_t j = 0; j < middle_loop; j++) {
 #pragma unroll(get_compile_time_arg_val(2))
-                for (volatile uint32_t k = 0; k < inner_loop; k++) {
+                for (uint32_t k = 0; k < inner_loop; k++) {
                     // Do nothing
                 }
             }

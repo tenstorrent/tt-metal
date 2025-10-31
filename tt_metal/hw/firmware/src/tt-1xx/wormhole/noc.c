@@ -372,7 +372,7 @@ uint32_t noc_atomic_read_updates_completed() {
     return result;
 }
 
-volatile uint32_t noc_wr_ack_received() {
+uint32_t noc_wr_ack_received() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
     uint32_t result = noc_status_reg(NIU_MST_WR_ACK_RECEIVED);
@@ -380,7 +380,7 @@ volatile uint32_t noc_wr_ack_received() {
     return result;
 }
 
-volatile uint32_t noc_rd_resp_received() {
+uint32_t noc_rd_resp_received() {
     uint32_t save_cmd_buf = noc_get_cmd_buf();
     noc_set_cmd_buf(0);
     uint32_t result = noc_status_reg(NIU_MST_RD_RESP_RECEIVED);

@@ -37,8 +37,8 @@ void kernel_main() {
 
 #endif
     tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
+    tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
+    tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t page_offset = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();

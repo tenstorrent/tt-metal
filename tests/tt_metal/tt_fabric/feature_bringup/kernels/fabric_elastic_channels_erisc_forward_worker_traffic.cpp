@@ -176,7 +176,7 @@ void process_send_side(
         sender_mark_ack_processed(local_src_ch_ack_stream_id);
 
         uint64_t end_cycles = eth_read_wall_clock();
-        timing_stats->release_count++;
+        timing_stats->release_count += 1;
         timing_stats->total_release_cycles += (end_cycles - start_cycles);
         messages_acked++;
         unacked_sends--;
@@ -198,14 +198,14 @@ void process_send_side(
             remote_src_new_chunk_noc_addr, new_chunk_field_for_sender);  // 34 cycles?
         auto end_misc = eth_read_wall_clock();
         timing_stats->total_misc_cycles += (end_misc - start_misc);
-        timing_stats->misc_count++;
+        timing_stats->misc_count += 1;
 
         current_chunk_ptr.reset_to(reinterpret_cast<uint32_t*>(new_chunk_base_address));
 
         open_chunks_cb.push(new_chunk);
         uint64_t end_cycles = eth_read_wall_clock();
         timing_stats->total_acquire_cycles += (end_cycles - start_cycles);
-        timing_stats->acquire_count++;
+        timing_stats->acquire_count += 1;
     }
 }
 
@@ -365,7 +365,7 @@ void main_loop(
                             }
                             auto end_misc = eth_read_wall_clock();
                             timing_stats->total_misc_cycles += (end_misc - start_misc);
-                            timing_stats->misc_count++;
+                            timing_stats->misc_count += 1;
                             send_ack_to_sender(remote_src_ack_stream_id);
                             receiver_wr_ptr.increment();
                             messages_received++;
