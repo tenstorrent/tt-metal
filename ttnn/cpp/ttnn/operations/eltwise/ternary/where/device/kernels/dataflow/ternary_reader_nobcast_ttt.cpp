@@ -6,15 +6,30 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
+
+// For sharded inputs, data is already in CBs via UpdateDynamicCircularBufferAddress
+// Just need to reserve and push to signal data is ready
+#if defined(SRC_SHARDED_A) && SRC_SHARDED_A == 1 && defined(SRC_SHARDED_B) && SRC_SHARDED_B == 1 && \
+    defined(SRC_SHARDED_C) && SRC_SHARDED_C == 1
+    // All inputs sharded - reserve and push CBs without NOC reads
+    uint32_t num_tiles = get_arg_val<uint32_t>(3);
+    cb_reserve_back(cb_id_in0, num_tiles);
+    cb_push_back(cb_id_in0, num_tiles);
+    cb_reserve_back(cb_id_in1, num_tiles);
+    cb_push_back(cb_id_in1, num_tiles);
+    cb_reserve_back(cb_id_in2, num_tiles);
+    cb_push_back(cb_id_in2, num_tiles);
+    return;
+#else
+    // Interleaved path - read from DRAM
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
     uint32_t src1_addr = get_arg_val<uint32_t>(1);
     uint32_t src2_addr = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
     uint32_t start_id = get_arg_val<uint32_t>(4);
-
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(2);
 
     constexpr auto src0_args = TensorAccessorArgs<3>();
     constexpr auto src1_args = TensorAccessorArgs<4>();
@@ -46,4 +61,5 @@ void kernel_main() {
         cb_push_back(cb_id_in1, onetile);
         cb_push_back(cb_id_in2, onetile);
     }
+#endif
 }
