@@ -13,6 +13,7 @@ optimization_dict = {
             "act_block_h": 64,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
+            # "memory_config": ttnn.L1_MEMORY_CONFIG,
         },
         "conv2": {
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -55,6 +56,7 @@ optimization_dict = {
             "act_block_h": 32,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
+            # "memory_config": ttnn.L1_MEMORY_CONFIG,
         },
         "conv2": {
             "shard_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -97,6 +99,7 @@ optimization_dict = {
             "act_block_h": 32,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
+            # "memory_config": ttnn.L1_MEMORY_CONFIG,
         },
         "conv2": {
             "shard_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -139,6 +142,7 @@ optimization_dict = {
             "act_block_h": 32,
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
+            # "memory_config": ttnn.L1_MEMORY_CONFIG,
         },
         "conv2": {
             "shard_layout": ttnn.TensorMemoryLayout.WIDTH_SHARDED,

@@ -39,6 +39,7 @@ class TTRegNetBottleneck:
         self.block_name = block_name
         self.stage_name = stage_name
 
+        print(conv1_config.get("memory_config", ttnn.L1_MEMORY_CONFIG))
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
             kernel_size=1,
@@ -51,7 +52,7 @@ class TTRegNetBottleneck:
             act_block_h=conv1_config.get("act_block_h", None),
             enable_act_double_buffer=conv1_config.get("enable_act_double_buffer", False),
             enable_weights_double_buffer=conv1_config.get("enable_weights_double_buffer", False),
-            memory_config=conv1_config.get("memory_config", None),
+            memory_config=conv1_config.get("memory_config", ttnn.L1_MEMORY_CONFIG),
             deallocate_activation=False,
             reallocate_halo_output=True,
             reshard_if_not_optimal=True,
@@ -75,7 +76,7 @@ class TTRegNetBottleneck:
             act_block_h=conv2_config.get("act_block_h", None),
             enable_act_double_buffer=conv2_config.get("enable_act_double_buffer", False),
             enable_weights_double_buffer=conv2_config.get("enable_weights_double_buffer", False),
-            memory_config=conv2_config.get("memory_config", None),
+            memory_config=conv2_config.get("memory_config", ttnn.L1_MEMORY_CONFIG),
             deallocate_activation=True,
             reallocate_halo_output=True,
             reshard_if_not_optimal=True,
@@ -98,7 +99,7 @@ class TTRegNetBottleneck:
             act_block_h=se_fc1_config.get("act_block_h", None),
             enable_act_double_buffer=se_fc1_config.get("enable_act_double_buffer", False),
             enable_weights_double_buffer=se_fc1_config.get("enable_weights_double_buffer", False),
-            memory_config=se_fc1_config.get("memory_config", None),
+            memory_config=se_fc1_config.get("memory_config", ttnn.L1_MEMORY_CONFIG),
             deallocate_activation=True,
             reallocate_halo_output=True,
             reshard_if_not_optimal=True,
@@ -120,7 +121,7 @@ class TTRegNetBottleneck:
             act_block_h=se_fc2_config.get("act_block_h", None),
             enable_act_double_buffer=se_fc2_config.get("enable_act_double_buffer", False),
             enable_weights_double_buffer=se_fc2_config.get("enable_weights_double_buffer", False),
-            memory_config=se_fc2_config.get("memory_config", None),
+            memory_config=se_fc2_config.get("memory_config", ttnn.L1_MEMORY_CONFIG),
             deallocate_activation=True,
             reallocate_halo_output=True,
             reshard_if_not_optimal=True,
@@ -143,7 +144,7 @@ class TTRegNetBottleneck:
             act_block_h=conv3_config.get("act_block_h", None),
             enable_act_double_buffer=conv3_config.get("enable_act_double_buffer", False),
             enable_weights_double_buffer=conv3_config.get("enable_weights_double_buffer", False),
-            memory_config=conv3_config.get("memory_config", None),
+            memory_config=conv3_config.get("memory_config", ttnn.L1_MEMORY_CONFIG),
             deallocate_activation=True,
             reallocate_halo_output=True,
             reshard_if_not_optimal=True,
@@ -167,7 +168,7 @@ class TTRegNetBottleneck:
                 act_block_h=downsample_config.get("act_block_h", None),
                 enable_act_double_buffer=downsample_config.get("enable_act_double_buffer", False),
                 enable_weights_double_buffer=downsample_config.get("enable_weights_double_buffer", False),
-                memory_config=downsample_config.get("memory_config", None),
+                memory_config=downsample_config.get("memory_config", ttnn.L1_MEMORY_CONFIG),
                 deallocate_activation=True,
                 reallocate_halo_output=True,
                 reshard_if_not_optimal=True,

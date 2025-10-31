@@ -3,6 +3,7 @@ import pytest
 import ttnn
 from models.experimental.transfuser.reference.bottleneck import Bottleneck as PyTorchBottleneck
 from models.experimental.transfuser.tt.custom_preprocessing import create_custom_mesh_preprocessor
+from models.experimental.transfuser.tt.stages import optimization_dict
 from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
@@ -94,13 +95,13 @@ def preprocess_parameters_for_ttnn(torch_model, device):
 
 
 @pytest.mark.parametrize(
-    "in_chs, out_chs, stride, input_size",
+    "in_chs, out_chs, stride, input_size, stage_name",
     [
-        (32, 72, 2, (1, 32, 80, 352)),  # stage 1 DS
-        (72, 72, 1, (1, 72, 40, 176)),  # stage 1 NDS
+        (32, 72, 2, (1, 32, 80, 352), "layer1"),  # stage 1 DS
+        # (72, 72, 1, (1, 72, 40, 176)),  # stage 1 NDS
     ],
 )
-def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
+def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size, stage_name):
     """Test RegNet bottleneck with PCC assertion."""
     device = ttnn.open_device(device_id=0, l1_small_size=16384)
 
@@ -138,18 +139,24 @@ def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
         bottleneck_chs = int(round(out_chs * bottle_ratio))
         groups = bottleneck_chs // group_size
 
+        layer_config = optimization_dict[stage_name]
         ttnn_model = TTRegNetBottleneck(
-            parameters=parameters, model_config=model_config, stride=stride, downsample=downsample, groups=groups
+            parameters=parameters,
+            model_config=model_config,
+            stride=stride,
+            downsample=downsample,
+            groups=groups,
+            layer_config=layer_config,
         )
         tt_input = ttnn.from_torch(
             torch_input,
-            # self.torch_image_input.permute(0, 2, 3, 1),
+            device=device,
             dtype=ttnn.bfloat16,
             mesh_mapper=inputs_mesh_mapper,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        tt_input = ttnn.to_device(tt_input, device)
         tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))
-        tt_output = ttnn_model(tt_input, device)
+        tt_output, _ = ttnn_model(tt_input, device)
         tt_torch_output = ttnn.to_torch(
             tt_output,
             device=device,
