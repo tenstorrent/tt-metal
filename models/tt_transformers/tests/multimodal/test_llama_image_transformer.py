@@ -114,18 +114,18 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     rename_layers = lambda s: [s := s.replace(old, new) for old, new in replacements.items()] and s
     hf_vision_dict = {rename_layers(k[len("model.vision_model.") :]): loaded_hf_weights.pop(k) for k in vision_keys}
 
-    if len(hf_vision_dict.keys() - partial_state_dict.keys() & partial_state_dict.keys() - hf_vision_dict.keys()):
-        logger.info("Layers do not match")
+    assert (
+        len(hf_vision_dict.keys() - partial_state_dict.keys() & partial_state_dict.keys() - hf_vision_dict.keys()) == 0
+    ), f"Layers do not match!"
 
     value_differences = {
         k: torch.max(torch.abs(hf_vision_dict[k] - partial_state_dict[k]))
         for k in hf_vision_dict.keys() & partial_state_dict.keys()
         if torch.max(torch.abs(hf_vision_dict[k] - partial_state_dict[k])) > 0
     }
-    if len(value_differences) > 0:
-        logger.info("weight deviations found")
-        for k, v in value_differences.items():
-            logger.info(f"found in layer {k} and absolute difference {v}")
+    assert (
+        len(value_differences) == 0
+    ), f"weight deviations found, investigate and increase threshold in value_differeneces above for the test to pass"
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageTransformer(
@@ -145,7 +145,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     tt_attention_input = pt_block_input.clone()
 
     # Create PT attention mask
-    mask = build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
+    mask = torch.ones((1, ntok, ntok), dtype=torch.bfloat16)
     pt_block_input = pt_block_input.reshape(batch, -1, dim)
 
     attention_input = model_args.prepare_residual_tensor_prefill(
