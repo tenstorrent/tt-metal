@@ -43,9 +43,9 @@ void MAIN {
 
     cb_wait_front(reduce_scalar_cb, 1);  // comes from the reader
     cb_wait_front(epsilon_cb, 1);        // comes from the reader
-    if constexpr (has_weight) {
-        cb_wait_front(weight_cb, num_tile_cols);
-    }
+    // if constexpr (has_weight) {
+    //     cb_wait_front(weight_cb, num_tile_cols);
+    // }
 
     /**
      * If there is a weight to apply, the result of x * RMS must be stored in an intermediate CB.
@@ -131,7 +131,8 @@ void MAIN {
                 reconfig_data_format(mul_rms_result_cb, weight_cb);
                 pack_reconfig_data_format(output_cb);
                 mul_bcast_rows_init_short(mul_rms_result_cb, weight_cb);
-
+                // cumulative wait
+                cb_wait_front(weight_cb, col_tile + block_size);
                 cb_wait_front(mul_rms_result_cb, block_size);
                 cb_reserve_back(output_cb, block_size);
                 tile_regs_acquire();
