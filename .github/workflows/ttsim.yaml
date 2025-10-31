@@ -184,9 +184,6 @@ jobs:
         run: |
           pytest \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/ \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
             tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py \
