@@ -59,7 +59,7 @@ class YOLOv12xPerformanceRunnerInfra:
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:  # BH
-            core_grid = ttnn.CoreGrid(y=12, x=10)
+            core_grid = ttnn.CoreGrid(y=8, x=8)
 
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 

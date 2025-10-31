@@ -720,9 +720,12 @@ def test_yolov7(device, model_type, res, reset_seeds, model_location_generator):
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 24576, "trace_region_size": 8176640 if is_blackhole() else 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 def test_yolov12x(model_location_generator, device, model_type, reset_seeds):
+    from models.demos.yolov12x.common import load_torch_model
     from models.demos.yolov12x.runner.performant_runner import YOLOv12xPerformantRunner
 
     disable_persistent_kernel_cache()
@@ -741,8 +744,12 @@ def test_yolov12x(model_location_generator, device, model_type, reset_seeds):
             model_location_generator=model_location_generator,
         )
         logger.info("Inferencing [TTNN] Model")
-
-    save_dir = "models/demos/yolov12x/demo"
+    if is_wormhole_b0():
+        save_dir = "models/demos/wormhole/yolov12x/demo"
+    elif is_blackhole():
+        save_dir = "models/demos/blackhole/yolov12x/demo"
+    else:
+        save_dir = "models/demos/yolov12x/demo"
 
     input_dtype = ttnn.bfloat16
     input_layout = ttnn.ROW_MAJOR_LAYOUT

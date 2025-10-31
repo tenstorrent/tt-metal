@@ -6,8 +6,6 @@
 import math
 
 import ttnn
-from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
-from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class TtYOLOv12xConv2D:
@@ -49,7 +47,7 @@ class TtYOLOv12xConv2D:
         if hasattr(self.padding, "__len__"):
             if len(self.padding) == 2:
                 self.padding = (self.padding[0], self.padding[0], self.padding[1], self.padding[1])
-            elif len(padding) == 4:
+            elif len(self.padding) == 4:
                 self.padding = (self.padding[0], self.padding[1], self.padding[2], self.padding[3])
             else:
                 raise ValueError("Padding should be a scalar or a list of 2 or 4 elements")
@@ -77,10 +75,10 @@ class TtYOLOv12xConv2D:
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
-        if self.core_count is not None:
-            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
-            self.conv_config.core_grid = shard_grid
-            self.conv_config.override_sharding_config = True
+        # if self.core_count is not None:
+        #     shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+        #     self.conv_config.core_grid = shard_grid
+        #     self.conv_config.override_sharding_config = True
 
         self.weight = ttnn.from_device(conv_pth.weight)
         self.bias = ttnn.from_device(conv_pth.bias) if "bias" in conv_pth else None
@@ -164,9 +162,11 @@ def interleaved_to_sharded(x, num_cores=None):
     if x.layout == ttnn.TILE_LAYOUT:
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
-    nhw = x.shape[0] * x.shape[1] * x.shape[2]
-    num_cores = determine_num_cores(nhw, x.shape[2])
-    core_grid = get_core_grid_from_num_cores(num_cores)
+    # nhw = x.shape[0] * x.shape[1] * x.shape[2]
+    # num_cores = determine_num_cores(nhw, x.shape[2])
+    # core_grid = get_core_grid_from_num_cores(num_cores)
+    # Enforce 8x8 grid for Blackhole
+    core_grid = ttnn.CoreGrid(x=8, y=8)
     shardspec = ttnn.create_sharded_memory_config_(
         x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
     )

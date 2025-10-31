@@ -20,7 +20,7 @@ def test_perf_yolov12x(batch_size, expected_perf):
     num_iterations = 1
     margin = 0.03
 
-    command = f"pytest models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py::test_yolov12x[pretrained_weight_true-0]"
+    command = f"pytest models/demos/wormhole/yolov12x/tests/pcc/test_ttnn_yolov12x.py::test_yolov12x[pretrained_weight_true-0]"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
