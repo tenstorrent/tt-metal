@@ -43,6 +43,7 @@ class DeepseekV3LMHead(nn.Module):
     "mode, batch_size_per_row",
     [
         ("decode", 32),
+        ("prefill", 1024),
     ],
 )
 def test_forward_pass(
