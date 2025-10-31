@@ -417,6 +417,7 @@ def test_from_numpy_conversion(device, shape, ttnn_dtype, numpy_dtype, ttnn_layo
     [
         (2, 2, 2, 2, 2),
         (2, 2, 2, 2, 2, 2),
+        (2, 2, 255, 255, 37),
     ],
 )
 @pytest.mark.parametrize("with_device", [True, False])

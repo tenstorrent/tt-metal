@@ -859,6 +859,7 @@ struct HostBufferConversionInputHash {
 
 std::optional<TensorPreparedConversion> prepare_tensor_conversion(
     const host_buffer_data_type& host_data_type,
+    const ttnn::Shape& tensor_shape,
     const MemoryConfig& memory_config,
     DataType data_type,
     const std::optional<Tile>& optional_tile,
@@ -868,6 +869,12 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
 
     if (!has_device ||
         // Device is required
+        4 < tensor_shape.rank() ||
+        // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
+        // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
+        // default alignment is used, the tensors of rank 5 and above are squeezed down to the rank 4 in
+        // `build_ndiml_tilize`, which causes the padding loss, and subqequently the failure to validate
+        // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
         memory_config.is_sharded() ||
         // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
         (optional_tile.has_value() && ((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
@@ -1079,8 +1086,8 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     const ttnn::distributed::TensorToMesh* mesh_mapper) {
     ZoneScoped;
 
-    auto strategy =
-        prepare_tensor_conversion(host_data_type, memory_config, data_type, optional_tile, layout, device != nullptr);
+    auto strategy = prepare_tensor_conversion(
+        host_data_type, tensor_shape, memory_config, data_type, optional_tile, layout, device != nullptr);
     Tensor output;
 
     GraphTracker::instance().track_function_start(
@@ -1119,7 +1126,8 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
         auto tensor_layout = TensorLayout(
             strategy->construct_with_data_type,
             PageConfig(strategy->construct_with_layout, optional_tile),
-            memory_config);
+            memory_config,
+            PageConfig(layout, optional_tile).create_default_alignment(data_type, memory_config));
 
         output = create_tt_tensor_from_host_data(
             host_data, tensor_shape, tensor_layout, device, cq_id, pad_value, mesh_mapper);
