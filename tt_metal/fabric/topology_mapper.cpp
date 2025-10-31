@@ -375,6 +375,10 @@ std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency
     return adjacency_map;
 }
 
+// NOTE: This mapping algorithm uses nested lambdas and deep control flow for
+// pruning and search. Refactoring would be non-trivial and risks regressions,
+// so we suppress the cognitive-complexity check for this function.
+// NOLINTBEGIN(readability-function-cognitive-complexity)
 void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
     const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical) {
@@ -984,6 +988,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         }
     }
 }
+
+// NOLINTEND(readability-function-cognitive-complexity)
 
 void TopologyMapper::broadcast_mapping_to_all_hosts() {
     using namespace tt::tt_metal::distributed::multihost;
