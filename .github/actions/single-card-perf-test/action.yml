@@ -15,33 +15,7 @@ inputs:
     required: false
     # Improved regex: PyTest outcomes, perf, warnings, info, and section headers
     default: >-
-      (?ix)
-      ( ^\[gw\d+\]\s+(PASSED|FAILED|SKIPPED|ERROR)\b ) |
-      ( ^(PASSED|FAILED|ERROR|SKIPPED)\b ) |
-      ( ^={3,}.*={3,}$ ) |
-      ( ^- generated xml file: ) |
-      ( ^Average model time= ) |
-      ( ^Average model performance= ) |
-      ( ^Run and measurement data saved ) |
-      ( ^\d+\.\d+s (call|setup|teardown)\s+ ) |
-      ( ^WARNING\b|UserWarning|PydanticDeprecatedSince20|DeprecationWarning ) |
-      ( ^INFO\b ) |
-      ( ^\s*You may be able to resolve this warning ) |
-      ( ^\s*-- Docs: ) |
-      ( ^\s*platform\s+linux ) |
-      ( ^\s*rootdir: ) |
-      ( ^\s*configfile: ) |
-      ( ^\s*plugins: ) |
-      ( ^\s*timeout: ) |
-      ( ^\s*created: ) |
-      ( ^\s*\d+\s+worker ) |
-      ( ^scheduling tests via ) |
-      ( ^\s*test session starts ) |
-      ( ^\s*short test summary info ) |
-      ( ^\s*slowest durations ) |
-      ( ^\s*warnings summary ) |
-      ( ^\s*PCC check was successful ) |
-      ( ^\s*All\ performance\ checks\ passed!$ )
+      (^[gw\d+]\s+(PASSED|FAILED|SKIPPED|ERROR)\b)|(^[A-Z]+(ED|PED|ROR|SKIPPED)\b)|(^={3,}.*={3,}$)|(^Average model time= )|(^Average model performance= )|(^Run and measurement data saved )|(^\d+\.\d+s (call|setup|teardown)\s+)|(^\s*short test summary info )|(^\s*PCC check was successful )|(^\s*All\ performance\ checks\ passed!$)
     description: "EGREP regex for lines to keep in the compact summary"
   summary_context:
     required: false
@@ -128,10 +102,10 @@ runs:
         sed -r 's/\x1B\[[0-9;]*[mK]//g' "$CI_LOG_FILE" > "$nolog"
 
         # Fail-first extract (short, only on failure):
-        if [[ "${{ job.status }}" != "success" ]]; then
-          grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,|WARNING|UserWarning)' "$nolog" \
-            | head -n 150 > fail-first.txt || true
-        fi
+
+        grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$nolog" \
+          | head -n 150 > fail-first.txt || true
+
 
         # Main compact summary:
         grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
@@ -139,10 +113,6 @@ runs:
 
         echo "Log file:"
         cat "$CI_LOG_FILE"
-        echo "########################################################"
-
-        echo "NoLog file:"
-        cat "$nolog"
         echo "########################################################"
 
         echo "Failed logs:"
