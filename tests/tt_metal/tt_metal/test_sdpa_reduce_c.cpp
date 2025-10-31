@@ -98,7 +98,7 @@ static float compare_first_col_mse(
 }
 
 static bool test_sdpa_reduce_c(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t q_chunk_size,
     uint32_t k_chunk_size,
     uint32_t head_dim,
@@ -343,8 +343,6 @@ int main(int argc, char** argv) {
             }
         }
     }
-
-    mesh_device.reset();
 
     if (pass) {
         log_info(LogTest, "Test Passed");

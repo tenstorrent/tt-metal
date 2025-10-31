@@ -154,8 +154,7 @@ inline void llk_unpack_AB_reduce_row_max_init() {
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
-    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);        // Unpack a single face of a scaler
-    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);  // Unpack a whole tile of an operand
+    _llk_unpack_AB_reduce_row_max_set_x_dim_();
     _llk_unpack_AB_reduce_row_max_mop_config_();  // Unpack operand and scaler
 }
 
