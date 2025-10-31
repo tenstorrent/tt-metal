@@ -84,45 +84,30 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
         with:
-          fetch-depth: 1
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Compute tags
         id: tags
         run: |
-          HASH=$(cat \
-            .github/workflows/build-docker-artifact.yaml \
-            dockerfile/Dockerfile \
-            docs/requirements-docs.txt \
-            install_dependencies.sh \
-            tests/sweep_framework/requirements-sweeps.txt \
-            tt_metal/python_env/requirements-dev.txt \
-            tt_metal/sfpi-info.sh \
-            tt_metal/sfpi-version \
-            scripts/ttexalens_ref.txt \
-            tools/triage/requirements.txt \
-            | sha1sum | cut -d' ' -f1)
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-
-          BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -d' ' -f1)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
-          BASIC_TTNN_RUNTIME_HASH=$(cat \
-            dockerfile/Dockerfile.basic-dev \
-            install_dependencies.sh \
-            tt_metal/sfpi-info.sh \
-            tt_metal/sfpi-version \
-            | sha1sum | cut -d' ' -f1)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
-
-          MANYLINUX_HASH=$(cat \
-            .github/workflows/build-docker-artifact.yaml \
-            dockerfile/Dockerfile.manylinux \
-            install_dependencies.sh \
-            tt_metal/sfpi-info.sh \
-            tt_metal/sfpi-version \
-            | sha1sum | cut -d' ' -f1)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          # Get the latest semantic version tag matching v[0-9]+.[0-9]+.0 pattern
+          LATEST_VERSION=$(git tag | grep -E '^v[0-9]+\.[0-9]+\.0$' | sort -V | tail -n 1)
+          
+          # Fallback to git describe if no matching tag is found
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "No semantic version tag found, using git describe"
+            LATEST_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          fi
+          
+          echo "Using version: $LATEST_VERSION"
+          
+          # Use semantic version for all tags
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
