@@ -13,7 +13,7 @@ autograd::TensorPtr layernorm(
 autograd::TensorPtr composite_layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta);
 
-autograd::TensorPtr layernorm_bw_fused(
+autograd::TensorPtr layernorm_fused(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta);
 
 }  // namespace ttml::ops

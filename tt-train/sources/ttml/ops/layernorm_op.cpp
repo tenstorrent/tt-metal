@@ -78,7 +78,7 @@ autograd::TensorPtr layernorm(
     return out;
 }
 
-autograd::TensorPtr layernorm_bw_fused(
+autograd::TensorPtr layernorm_fused(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
     auto tensor_shape = tensor->get_value().logical_shape();
     auto mean = core::empty(
@@ -96,47 +96,10 @@ autograd::TensorPtr layernorm_bw_fused(
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
-        // auto host_tensor = ttml::core::to_vector(tensor->get_value());
-        // std::cout << "tensor->get_value() shape: " << tensor->get_value().logical_shape() << std::endl;
-        // std::cout << "tensor->get_value() elements: ";
-        // for(int j = 0; j < host_tensor.size(); j++) {
-        //     std::cout << host_tensor[j] << " ";
-        // }
-        // std::cout << std::endl;
-        // host_tensor = ttml::core::to_vector(mean);
-        // std::cout << "mean elements: ";
-        // for(int j = 0; j < host_tensor.size(); j++) {
-        //     std::cout << host_tensor[j] << " ";
-        // }
-        // std::cout << std::endl;
-        // host_tensor = ttml::core::to_vector(rstd);
-        // std::cout << "rstd elements: ";
-        // for(int j = 0; j < host_tensor.size(); j++) {
-        //     std::cout << host_tensor[j] << " ";
-        // }
         auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
-
-        // host_tensor = ttml::core::to_vector(res[0].value());
-        // std::cout << "res[0] elements: ";
-        // for(int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
-        //     std::cout << host_tensor[j] << " ";
-        // }
-        // std::cout << std::endl;
-        // host_tensor = ttml::core::to_vector(res[1].value());
-        // std::cout << "res[1] elements: ";
-        // for(int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
-        //     std::cout << host_tensor[j] << " ";
-        // }
-        // std::cout << std::endl;
-        // host_tensor = ttml::core::to_vector(res[2].value());
-        // std::cout << "res[2] elements: ";
-        // for(int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
-        //     std::cout << host_tensor[j] << " ";
-        // }
-        // std::cout << std::endl;
     };
 
     auto links = autograd::get_links(tensor);
