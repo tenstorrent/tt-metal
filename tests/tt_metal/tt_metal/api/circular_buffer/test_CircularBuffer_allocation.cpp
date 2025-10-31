@@ -185,13 +185,13 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
         std::vector<uint8_t> buffer_indices = {16, 24};
 
         uint32_t expected_cb_addr = l1_buffer->address();
-        CircularBufferConfig config1 =
-            CircularBufferConfig(
-                cb_config.page_size,
-                {{buffer_indices[0], cb_config.data_format}, {buffer_indices[1], cb_config.data_format}},
-                *l1_buffer)
-                .set_page_size(buffer_indices[0], cb_config.page_size)
-                .set_page_size(buffer_indices[1], cb_config.page_size);
+        CircularBufferConfig config1 = CircularBufferConfig(CircularBufferConfigImpl(
+                                                                cb_config.page_size,
+                                                                {{buffer_indices[0], cb_config.data_format},
+                                                                 {buffer_indices[1], cb_config.data_format}},
+                                                                *l1_buffer))
+                                           .set_page_size(buffer_indices[0], cb_config.page_size)
+                                           .set_page_size(buffer_indices[1], cb_config.page_size);
         CreateCircularBuffer(program_, cr_set, config1);
 
         std::map<CoreCoord, std::map<uint8_t, uint32_t>> golden_addresses_per_core;

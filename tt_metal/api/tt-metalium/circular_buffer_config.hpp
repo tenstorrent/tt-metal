@@ -38,25 +38,8 @@ public:
     // User is expected to use the builder here.
     CircularBufferConfig(uint32_t total_size);
 
-    // Dynamic circular buffer spec
-    CircularBufferConfig(
-        uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer);
-
-    // For flatbuffer deserialization, set all private members.
-    CircularBufferConfig(
-        uint32_t total_size,
-        std::optional<uint32_t> globally_allocated_address,
-        const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
-        const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
-        const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
-        const std::unordered_set<uint8_t>& buffer_indices,
-        const std::unordered_set<uint8_t>& local_buffer_indices,
-        const std::unordered_set<uint8_t>& remote_buffer_indices,
-        bool dynamic_cb,
-        uint32_t max_size,
-        uint32_t buffer_size);
-
-    CircularBufferConfig(const CBDescriptor& descriptor);
+    // Internal Constructor (takes ownership)
+    CircularBufferConfig(CircularBufferConfigImpl&& impl);
 
     // Copy constructor
     CircularBufferConfig(const CircularBufferConfig& other);
