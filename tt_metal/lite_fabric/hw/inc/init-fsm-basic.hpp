@@ -18,11 +18,10 @@
 #include "ethernet/dataflow_api.h"
 #include "dataflow_api.h"
 #include "ethernet/tunneling.h"
-#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
+#include "lf_dev_mem_map.hpp"
 #include "risc_common.h"
 #include "host_interface.hpp"
-#include "tt_metal/lite_fabric/hw/inc/risc_interface.hpp"
-#include "hw/inc/tt-1xx/risc_common.h"
+#include "risc_interface.hpp"
 
 namespace lite_fabric {
 
@@ -108,11 +107,11 @@ inline void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) 
                 config_struct->routing_enabled = lite_fabric::RoutingEnabledState::ENABLED;
                 config_struct->current_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
                 config_struct->initial_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
-                ConnectedRisc1Interface::assert_connected_dm1_reset();
-                ConnectedRisc1Interface::set_pc(LITE_FABRIC_TEXT_START);
+                ConnectedRiscInterface::assert_connected_dm1_reset();
+                ConnectedRiscInterface::set_pc(LITE_FABRIC_TEXT_START);
                 eth_send_config();
                 eth_send_binary();
-                ConnectedRisc1Interface::deassert_connected_dm1_reset();
+                ConnectedRiscInterface::deassert_connected_dm1_reset();
                 break;
             }
             case lite_fabric::InitState::ETH_HANDSHAKE_LOCAL: {
