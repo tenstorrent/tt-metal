@@ -60,6 +60,8 @@ verify_llama_dir_() {
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
 
+    verify_llama_dir_
+
     # TODO: remove me , just testing this out
     pip3 install -r models/tt_transformers/requirements.txt
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
@@ -67,6 +69,8 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 
 test_suite_bh_single_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH upstream Llama demo model tests"
+
+    verify_llama_dir_
 
     # TODO: remove me , just testing this out
     pip3 install -r models/tt_transformers/requirements.txt
@@ -119,6 +123,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
 
 test_suite_bh_multi_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH multi-pcie upstream Llama demo model tests for topology: $hw_topology"
+    verify_llama_dir_
 
     if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
@@ -138,6 +143,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 
 test_suite_bh_multi_pcie_llama_stress_tests() {
     echo "[upstream-tests] Running BH multi-pcie upstream Llama stress model tests for topology: $hw_topology"
+    verify_llama_dir_
 
     if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
