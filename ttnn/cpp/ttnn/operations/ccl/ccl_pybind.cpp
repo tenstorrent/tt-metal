@@ -30,7 +30,6 @@ void py_bind_common(pybind11::module& module) {
 void py_module(py::module& module) {
     ccl::py_bind_common(module);
     ccl::py_bind_mesh_partition(module);
-    ccl::py_bind_barrier(module);
     ccl::py_bind_all_broadcast(module);
     ccl::py_bind_all_gather(module);
     ccl::py_bind_all_to_all_combine(module);
