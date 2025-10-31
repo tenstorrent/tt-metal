@@ -41,6 +41,8 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+
+    // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);

@@ -166,10 +166,10 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         }
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),  // input_base_addr
-            pages_for_this_core,               // num_pages (for this core)
+            pages_for_this_core,               // num_pages
             page_start_offset,                 // page_start_offset
-            num_whole_packets,                 // num_whole_packets (for this core)
-            num_pages_remainder,               // num_pages_remainder (for this core)
+            num_whole_packets,                 // num_whole_packets
+            num_pages_remainder,               // num_pages_remainder
         };
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, sender_core_coord, reader_rt_args);
 
@@ -188,10 +188,10 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         std::vector<uint32_t> writer_rt_args = {
             mesh_socket.get_config_buffer()->address(),  // socket_config_addr
             bank_id,                                     // bank_id
-            pages_for_this_core,                         // num_pages (for this core)
-            page_start_offset,                           // page_start_offset (for this core)
-            num_whole_packets,                           // num_whole_packets (for this core)
-            num_pages_remainder,                         // num_pages_remainder (for this core)
+            pages_for_this_core,                         // num_pages
+            page_start_offset,                           // page_start_offset
+            num_whole_packets,                           // num_whole_packets
+            num_pages_remainder,                         // num_pages_remainder
         };
 
         const auto& sender_fabric_node_id = sender_fabric_node_ids[core_idx];

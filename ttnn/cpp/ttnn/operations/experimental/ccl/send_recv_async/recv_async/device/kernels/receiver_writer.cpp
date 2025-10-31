@@ -24,7 +24,7 @@ void kernel_main() {
     // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset for this core
+    uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset
     uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);         // pages for this core
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();

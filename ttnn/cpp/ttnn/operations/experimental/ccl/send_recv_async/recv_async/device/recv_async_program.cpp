@@ -160,10 +160,10 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             std::vector<uint32_t> writer_rt_args = {
                 mesh_socket.get_config_buffer()->address(),  // socket_config_addr
                 output_tensor.buffer()->address(),           // output_base_addr
-                pages_for_this_core,                         // num_pages (for this core)
-                page_start_offset,                           // page_start_offset (for this core)
-                num_whole_packets,                           // num_whole_packets (for this core)
-                num_pages_remainder,                         // num_pages_remainder (for this core)
+                pages_for_this_core,                         // num_pages
+                page_start_offset,                           // page_start_offset
+                num_whole_packets,                           // num_whole_packets
+                num_pages_remainder,                         // num_pages_remainder
             };
 
             auto link_indices =
@@ -255,7 +255,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
             std::vector<uint32_t> reader_rt_args = {
                 mesh_socket.get_config_buffer()->address(),  // socket_config_addr
                 bank_id,                                     // bank_id
-                num_blocks,                                  // num_blocks (for this core)
+                num_blocks,                                  // num_blocks
                 num_pages_per_block,                         // num_pages_per_block
                 block_remainder_pages,                       // block_remainder_pages
             };
@@ -278,8 +278,8 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
             std::vector<uint32_t> writer_rt_args = {
                 output_tensor.buffer()->address(),  // output_base_addr
-                page_start_offset,                  // start_page_index (for this core)
-                pages_for_this_core,                // num_pages (for this core)
+                page_start_offset,                  // start_page_index
+                pages_for_this_core,                // num_pages
             };
 
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, receiver_core_coord, writer_rt_args);
