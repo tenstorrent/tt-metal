@@ -730,44 +730,82 @@ void ControlPlane::order_ethernet_channels() {
         for (auto& [direction, eth_chans] : eth_chans_by_dir) {
             auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
-            auto neighbor_fabric_node_id =
-                FabricNodeId(fabric_node_id.mesh_id, this->get_intra_chip_neighbors(fabric_node_id, direction)[0]);
-            auto neighbor_physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(neighbor_fabric_node_id);
-
-            if (phys_chip_id > neighbor_physical_chip_id) {
+            const auto src_asic_id = tt::tt_metal::AsicID{
+                tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(phys_chip_id)};
+            const auto& asic_neighbors = physical_system_descriptor_->get_asic_neighbors(src_asic_id);
+            tt::tt_metal::AsicID neighbor_asic_id = asic_neighbors[0];
+            std::vector<tt::tt_metal::EthConnection> eth_connections;
+            for (const auto& asic_neighbor : asic_neighbors) {
+                eth_connections = physical_system_descriptor_->get_eth_connections(src_asic_id, asic_neighbor);
+                for (const auto& eth_connection : eth_connections) {
+                    if (std::find(eth_chans.begin(), eth_chans.end(), eth_connection.src_chan) != eth_chans.end()) {
+                        log_info(
+                            tt::LogTest,
+                            "eth_connections size: {}, eth_chans size: {}",
+                            eth_connections.size(),
+                            eth_chans.size());
+                        log_info(tt::LogTest, "eth_connection: {}", eth_connection.src_chan);
+                        log_info(tt::LogTest, "eth_chans: {}", eth_chans[eth_connection.src_chan]);
+                        for (const auto& eth_chan : eth_chans) {
+                            log_info(tt::LogTest, "eth_chan: {}", eth_chan);
+                        }
+                        for (const auto& eth_connection : eth_connections) {
+                            log_info(tt::LogTest, "eth_connection: {}", eth_connection.src_chan);
+                        }
+                        log_info(tt::LogTest, "phys_chip_id: {}", phys_chip_id);
+                        assert(eth_connections.size() == eth_chans.size());
+                        neighbor_asic_id = asic_neighbor;
+                        break;
+                    } else {
+                        continue;
+                    }
+                }
+            }
+            if (src_asic_id > neighbor_asic_id) {
                 std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
                     auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
                     auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
                     return translated_coords_a.x < translated_coords_b.x;
                 });
             } else {
-                auto inverted_direction = direction;
-                if (inverted_direction == RoutingDirection::N) {
-                    inverted_direction = RoutingDirection::S;
-                } else if (inverted_direction == RoutingDirection::S) {
-                    inverted_direction = RoutingDirection::N;
-                } else if (inverted_direction == RoutingDirection::E) {
-                    inverted_direction = RoutingDirection::W;
-                } else if (inverted_direction == RoutingDirection::W) {
-                    inverted_direction = RoutingDirection::E;
+                std::sort(eth_connections.begin(), eth_connections.end(), [&soc_desc](const auto& a, const auto& b) {
+                    auto translated_coords_a = soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
+                    auto translated_coords_b = soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
+                    return translated_coords_a.x < translated_coords_b.x;
+                });
+                for (uint32_t i = 0; i < eth_connections.size(); i++) {
+                    eth_chans[i] = eth_connections[i].dst_chan;
                 }
-                auto neighbor_eth_channels =
-                    this->router_port_directions_to_physical_eth_chan_map_[neighbor_fabric_node_id][inverted_direction];
-                std::unordered_map<chan_id_t, chan_id_t> eth_chan_map;
-                for (uint32_t i = 0; i < eth_chans.size(); i++) {
-                    eth_chan_map[neighbor_eth_channels[i]] = eth_chans[i];
-                }
-                std::sort(
-                    neighbor_eth_channels.begin(),
-                    neighbor_eth_channels.end(),
-                    [&soc_desc](const auto& a, const auto& b) {
-                        auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
-                        auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
-                        return translated_coords_a.x < translated_coords_b.x;
-                    });
-                for (uint32_t i = 0; i < neighbor_eth_channels.size(); i++) {
-                    eth_chans[i] = eth_chan_map[neighbor_eth_channels[i]];
-                }
+                // auto inverted_direction = direction;
+                // if (inverted_direction == RoutingDirection::N) {
+                //     inverted_direction = RoutingDirection::S;
+                // } else if (inverted_direction == RoutingDirection::S) {
+                //     inverted_direction = RoutingDirection::N;
+                // } else if (inverted_direction == RoutingDirection::E) {
+                //     inverted_direction = RoutingDirection::W;
+                // } else if (inverted_direction == RoutingDirection::W) {
+                //     inverted_direction = RoutingDirection::E;
+                // }
+                // const auto dst_asic_id =
+                // tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(neighbor_physical_chip_id);
+
+                // auto neighbor_eth_channels =
+                //     this->router_port_directions_to_physical_eth_chan_map_[neighbor_fabric_node_id][inverted_direction];
+                // std::unordered_map<chan_id_t, chan_id_t> eth_chan_map;
+                // for (uint32_t i = 0; i < eth_chans.size(); i++) {
+                //     eth_chan_map[neighbor_eth_channels[i]] = eth_chans[i];
+                // }
+                // std::sort(
+                //     neighbor_eth_channels.begin(),
+                //     neighbor_eth_channels.end(),
+                //     [&soc_desc](const auto& a, const auto& b) {
+                //         auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
+                //         auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
+                //         return translated_coords_a.x < translated_coords_b.x;
+                //     });
+                // for (uint32_t i = 0; i < neighbor_eth_channels.size(); i++) {
+                //     eth_chans[i] = eth_chan_map[neighbor_eth_channels[i]];
+                // }
             }
         }
     }
