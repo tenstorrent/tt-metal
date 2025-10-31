@@ -5,4 +5,4 @@
 
 .. _ttnn.cosh:
 
-.. autodata:: ttnn.cosh
+.. autooperation:: ttnn.cosh

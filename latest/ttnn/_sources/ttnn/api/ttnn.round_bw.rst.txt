@@ -5,4 +5,4 @@
 
 .. _ttnn.round_bw:
 
-.. autodata:: ttnn.round_bw
+.. autooperation:: ttnn.round_bw

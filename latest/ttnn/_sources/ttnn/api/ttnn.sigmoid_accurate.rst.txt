@@ -5,4 +5,4 @@
 
 .. _ttnn.sigmoid_accurate:
 
-.. autodata:: ttnn.sigmoid_accurate
+.. autooperation:: ttnn.sigmoid_accurate

@@ -5,4 +5,4 @@
 
 .. _ttnn.logical_and:
 
-.. autodata:: ttnn.logical_and
+.. autooperation:: ttnn.logical_and

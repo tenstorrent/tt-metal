@@ -5,4 +5,4 @@
 
 .. _ttnn.sigmoid_bw:
 
-.. autodata:: ttnn.sigmoid_bw
+.. autooperation:: ttnn.sigmoid_bw

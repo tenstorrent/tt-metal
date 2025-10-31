@@ -5,4 +5,4 @@
 
 .. _ttnn.addcdiv:
 
-.. autodata:: ttnn.addcdiv
+.. autooperation:: ttnn.addcdiv

@@ -5,4 +5,4 @@
 
 .. _ttnn.ne_:
 
-.. autodata:: ttnn.ne_
+.. autooperation:: ttnn.ne_

@@ -5,4 +5,4 @@
 
 .. _ttnn.acosh_bw:
 
-.. autodata:: ttnn.acosh_bw
+.. autooperation:: ttnn.acosh_bw

@@ -5,4 +5,4 @@
 
 .. _ttnn.relu6_bw:
 
-.. autodata:: ttnn.relu6_bw
+.. autooperation:: ttnn.relu6_bw

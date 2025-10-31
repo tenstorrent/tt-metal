@@ -5,4 +5,4 @@
 
 .. _ttnn.fmod_bw:
 
-.. autodata:: ttnn.fmod_bw
+.. autooperation:: ttnn.fmod_bw

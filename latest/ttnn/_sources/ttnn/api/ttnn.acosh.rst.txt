@@ -5,4 +5,4 @@
 
 .. _ttnn.acosh:
 
-.. autodata:: ttnn.acosh
+.. autooperation:: ttnn.acosh

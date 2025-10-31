@@ -5,4 +5,4 @@
 
 .. _ttnn.gt_:
 
-.. autodata:: ttnn.gt_
+.. autooperation:: ttnn.gt_

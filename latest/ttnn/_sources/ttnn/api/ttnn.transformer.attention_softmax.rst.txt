@@ -5,4 +5,4 @@
 
 .. _ttnn.transformer.attention_softmax:
 
-.. autodata:: ttnn.transformer.attention_softmax
+.. autooperation:: ttnn.transformer.attention_softmax

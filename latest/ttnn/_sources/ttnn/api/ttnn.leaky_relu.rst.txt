@@ -5,4 +5,4 @@
 
 .. _ttnn.leaky_relu:
 
-.. autodata:: ttnn.leaky_relu
+.. autooperation:: ttnn.leaky_relu

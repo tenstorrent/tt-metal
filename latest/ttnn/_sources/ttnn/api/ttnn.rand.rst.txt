@@ -5,4 +5,4 @@
 
 .. _ttnn.rand:
 
-.. autodata:: ttnn.rand
+.. autooperation:: ttnn.rand

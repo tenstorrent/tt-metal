@@ -5,4 +5,4 @@
 
 .. _ttnn.alt_complex_rotate90:
 
-.. autodata:: ttnn.alt_complex_rotate90
+.. autooperation:: ttnn.alt_complex_rotate90

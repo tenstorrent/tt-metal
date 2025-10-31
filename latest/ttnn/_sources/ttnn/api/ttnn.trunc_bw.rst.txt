@@ -5,4 +5,4 @@
 
 .. _ttnn.trunc_bw:
 
-.. autodata:: ttnn.trunc_bw
+.. autooperation:: ttnn.trunc_bw

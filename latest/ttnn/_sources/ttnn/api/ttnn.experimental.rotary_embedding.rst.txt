@@ -5,4 +5,4 @@
 
 .. _ttnn.experimental.rotary_embedding:
 
-.. autodata:: ttnn.experimental.rotary_embedding
+.. autooperation:: ttnn.experimental.rotary_embedding

@@ -5,4 +5,4 @@
 
 .. _ttnn.cos:
 
-.. autodata:: ttnn.cos
+.. autooperation:: ttnn.cos

@@ -5,4 +5,4 @@
 
 .. _ttnn.remainder_bw:
 
-.. autodata:: ttnn.remainder_bw
+.. autooperation:: ttnn.remainder_bw

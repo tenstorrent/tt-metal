@@ -5,4 +5,4 @@
 
 .. _ttnn.argmax:
 
-.. autodata:: ttnn.argmax
+.. autooperation:: ttnn.argmax

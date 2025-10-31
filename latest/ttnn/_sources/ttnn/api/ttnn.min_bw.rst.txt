@@ -5,4 +5,4 @@
 
 .. _ttnn.min_bw:
 
-.. autodata:: ttnn.min_bw
+.. autooperation:: ttnn.min_bw

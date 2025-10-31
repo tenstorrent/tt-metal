@@ -5,4 +5,4 @@
 
 .. _ttnn.identity:
 
-.. autodata:: ttnn.identity
+.. autooperation:: ttnn.identity

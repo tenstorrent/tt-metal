@@ -141,9 +141,9 @@
   <section id="ttnn-experimental-conv3d">
 <h1>ttnn.experimental.conv3d<a class="headerlink" href="#ttnn-experimental-conv3d" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py data">
+<span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.experimental.conv3d">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">conv3d</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.experimental.conv3d',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.experimental.conv3d_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.experimental.conv3d" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">conv3d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Conv3dConfig</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DeviceComputeKernelConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.experimental.conv3d" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Applies a 3D convolution over an input signal composed of several input planes. Expects Input Tensor in [N, D, H, W, C] format.  Expects Weight Tensor in [1, 1, kD * kH * kW * C_in, C_out] format. Expects Bias Tensor in [1, 1, 1, 32, C_out] format. Input must be in row major interleaved format. Output will be in row major interleaved format.</p>
@@ -154,21 +154,22 @@
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor.</p></li>
 <li><p><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>) – Weight tensor.</p></li>
-<li><p><strong>bias_tensor</strong> (<em>ttnn.Tensor</em>) – Bias tensor.</p></li>
 <li><p><strong>config</strong> (<em>ttnn.Conv3dConfig</em>) – Configuration for the Conv3D operation.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em>) – Memory configuration for the output of the Conv3D operation.</p></li>
-<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em>) – Compute kernel configuration for the Conv3D operation.</p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p>Output tensor after applying the Conv3D operation.</p>
+<ul class="simple">
+<li><p><strong>bias_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Bias tensor.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the output of the Conv3D operation.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Compute kernel configuration for the Conv3D operation.</p></li>
+</ul>
 </dd>
-<dt class="field-odd">Return type<span class="colon">:</span>
+<dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p>ttnn.Tensor</p>
+<p><em>ttnn.Tensor</em> – Output tensor after applying the Conv3D operation.</p>
 </dd>
 </dl>
 </dd>

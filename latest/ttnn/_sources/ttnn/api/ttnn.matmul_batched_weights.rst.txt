@@ -5,4 +5,4 @@
 
 .. _ttnn.matmul_batched_weights:
 
-.. autodata:: ttnn.matmul_batched_weights
+.. autooperation:: ttnn.matmul_batched_weights

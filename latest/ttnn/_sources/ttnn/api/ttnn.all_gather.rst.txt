@@ -5,4 +5,4 @@
 
 .. _ttnn.all_gather:
 
-.. autodata:: ttnn.all_gather
+.. autooperation:: ttnn.all_gather

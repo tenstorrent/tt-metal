@@ -5,4 +5,4 @@
 
 .. _ttnn.matmul:
 
-.. autodata:: ttnn.matmul
+.. autooperation:: ttnn.matmul

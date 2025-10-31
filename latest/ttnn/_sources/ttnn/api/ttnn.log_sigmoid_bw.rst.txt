@@ -5,4 +5,4 @@
 
 .. _ttnn.log_sigmoid_bw:
 
-.. autodata:: ttnn.log_sigmoid_bw
+.. autooperation:: ttnn.log_sigmoid_bw

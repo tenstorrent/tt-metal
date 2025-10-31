@@ -5,4 +5,4 @@
 
 .. _ttnn.softmax:
 
-.. autodata:: ttnn.softmax
+.. autooperation:: ttnn.softmax

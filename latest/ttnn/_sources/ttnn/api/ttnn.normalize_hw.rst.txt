@@ -5,4 +5,4 @@
 
 .. _ttnn.normalize_hw:
 
-.. autodata:: ttnn.normalize_hw
+.. autooperation:: ttnn.normalize_hw

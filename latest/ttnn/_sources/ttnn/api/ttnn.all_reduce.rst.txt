@@ -5,4 +5,4 @@
 
 .. _ttnn.all_reduce:
 
-.. autodata:: ttnn.all_reduce
+.. autooperation:: ttnn.all_reduce

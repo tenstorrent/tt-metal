@@ -5,4 +5,4 @@
 
 .. _ttnn.min:
 
-.. autodata:: ttnn.min
+.. autooperation:: ttnn.min

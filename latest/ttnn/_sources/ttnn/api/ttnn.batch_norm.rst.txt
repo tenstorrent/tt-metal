@@ -5,4 +5,4 @@
 
 .. _ttnn.batch_norm:
 
-.. autodata:: ttnn.batch_norm
+.. autooperation:: ttnn.batch_norm

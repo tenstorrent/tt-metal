@@ -5,4 +5,4 @@
 
 .. _ttnn.sin:
 
-.. autodata:: ttnn.sin
+.. autooperation:: ttnn.sin

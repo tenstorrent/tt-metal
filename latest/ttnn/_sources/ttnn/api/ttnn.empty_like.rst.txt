@@ -5,4 +5,4 @@
 
 .. _ttnn.empty_like:
 
-.. autodata:: ttnn.empty_like
+.. autooperation:: ttnn.empty_like

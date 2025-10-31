@@ -5,4 +5,4 @@
 
 .. _ttnn.swish:
 
-.. autodata:: ttnn.swish
+.. autooperation:: ttnn.swish

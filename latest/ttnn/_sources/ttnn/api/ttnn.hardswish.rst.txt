@@ -5,4 +5,4 @@
 
 .. _ttnn.hardswish:
 
-.. autodata:: ttnn.hardswish
+.. autooperation:: ttnn.hardswish

@@ -5,4 +5,4 @@
 
 .. _ttnn.exp:
 
-.. autodata:: ttnn.exp
+.. autooperation:: ttnn.exp

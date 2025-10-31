@@ -5,4 +5,4 @@
 
 .. _ttnn.frac_bw:
 
-.. autodata:: ttnn.frac_bw
+.. autooperation:: ttnn.frac_bw

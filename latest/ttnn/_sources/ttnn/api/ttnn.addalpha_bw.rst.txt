@@ -5,4 +5,4 @@
 
 .. _ttnn.addalpha_bw:
 
-.. autodata:: ttnn.addalpha_bw
+.. autooperation:: ttnn.addalpha_bw

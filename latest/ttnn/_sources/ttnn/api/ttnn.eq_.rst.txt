@@ -5,4 +5,4 @@
 
 .. _ttnn.eq_:
 
-.. autodata:: ttnn.eq_
+.. autooperation:: ttnn.eq_

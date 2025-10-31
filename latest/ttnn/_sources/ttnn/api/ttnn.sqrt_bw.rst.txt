@@ -5,4 +5,4 @@
 
 .. _ttnn.sqrt_bw:
 
-.. autodata:: ttnn.sqrt_bw
+.. autooperation:: ttnn.sqrt_bw

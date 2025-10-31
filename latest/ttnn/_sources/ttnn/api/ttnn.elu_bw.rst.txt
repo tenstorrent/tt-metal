@@ -5,4 +5,4 @@
 
 .. _ttnn.elu_bw:
 
-.. autodata:: ttnn.elu_bw
+.. autooperation:: ttnn.elu_bw

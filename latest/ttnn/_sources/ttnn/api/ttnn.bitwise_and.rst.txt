@@ -5,4 +5,4 @@
 
 .. _ttnn.bitwise_and:
 
-.. autodata:: ttnn.bitwise_and
+.. autooperation:: ttnn.bitwise_and

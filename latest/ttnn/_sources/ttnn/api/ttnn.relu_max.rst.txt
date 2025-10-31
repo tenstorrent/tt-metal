@@ -5,4 +5,4 @@
 
 .. _ttnn.relu_max:
 
-.. autodata:: ttnn.relu_max
+.. autooperation:: ttnn.relu_max

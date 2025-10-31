@@ -5,4 +5,4 @@
 
 .. _ttnn.cbrt:
 
-.. autodata:: ttnn.cbrt
+.. autooperation:: ttnn.cbrt

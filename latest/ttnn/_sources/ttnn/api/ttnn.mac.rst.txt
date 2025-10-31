@@ -5,4 +5,4 @@
 
 .. _ttnn.mac:
 
-.. autodata:: ttnn.mac
+.. autooperation:: ttnn.mac

@@ -5,4 +5,4 @@
 
 .. _ttnn.pow:
 
-.. autodata:: ttnn.pow
+.. autooperation:: ttnn.pow

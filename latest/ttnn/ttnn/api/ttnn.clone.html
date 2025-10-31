@@ -320,36 +320,49 @@
   <section id="ttnn-clone">
 <h1>ttnn.clone<a class="headerlink" href="#ttnn-clone" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py data">
+<span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.clone">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">clone</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.clone',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.data_movement.clone_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.clone" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">clone</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.ComputeKernelConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.clone" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Tensor, dtype: DataType, memory_config: MemoryConfig) -&gt; Tensor</p>
-<p>Clones the input, creating a copy with the specified <cite>memory_config</cite> and converting its data type to <cite>dtype</cite>.
-This operation does not alter the tensor’s layout.</p>
-<ul class="simple">
-<li><p>ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.</p></li>
-<li><p>TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.</p></li>
-</ul>
-<p>If the input’s current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.</p>
+<p>Clones the input tensor, creating a copy with the specified memory configuration and converting its data type to dtype. This operation does not alter the tensor’s layout.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<ul class="simple">
-<li><p><strong>input</strong> – The tensor to be cloned.</p></li>
-<li><p><strong>dtype</strong> – The target data type of the cloned tensor.</p></li>
-<li><p><strong>memory_config</strong> – The memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.</p></li>
-<li><p><strong>compute_kernel_config</strong> – The configuration for the compute kernel.</p></li>
-</ul>
+<p><strong>input</strong> (<em>ttnn.Tensor</em>) – the input tensor to be cloned.</p>
 </dd>
-<dt class="field-even">Type<span class="colon">:</span>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p>clone(input</p>
+<ul class="simple">
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – the target data type of the cloned tensor. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.ComputeKernelConfig</em><em>, </em><em>optional</em>) – the configuration for the compute kernel. Defaults to <cite>None</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><em>ttnn.Tensor</em> – the cloned output tensor.</p>
 </dd>
 </dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<ul class="simple">
+<li><p>ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.</p></li>
+<li><p>TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.</p></li>
+<li><p>If the input’s current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.</p></li>
+</ul>
+</div>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">clone</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DRAM_MEMORY_CONFIG</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
 </dd>
 </dl>
 

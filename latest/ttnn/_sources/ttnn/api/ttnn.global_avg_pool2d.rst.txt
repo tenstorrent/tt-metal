@@ -5,4 +5,4 @@
 
 .. _ttnn.global_avg_pool2d:
 
-.. autodata:: ttnn.global_avg_pool2d
+.. autooperation:: ttnn.global_avg_pool2d

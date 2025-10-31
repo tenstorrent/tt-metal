@@ -5,4 +5,4 @@
 
 .. _ttnn.unary_chain:
 
-.. autodata:: ttnn.unary_chain
+.. autooperation:: ttnn.unary_chain

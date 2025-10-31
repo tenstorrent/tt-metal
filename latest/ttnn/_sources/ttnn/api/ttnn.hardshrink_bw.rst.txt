@@ -5,4 +5,4 @@
 
 .. _ttnn.hardshrink_bw:
 
-.. autodata:: ttnn.hardshrink_bw
+.. autooperation:: ttnn.hardshrink_bw

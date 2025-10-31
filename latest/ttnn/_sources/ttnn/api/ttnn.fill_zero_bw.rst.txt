@@ -5,4 +5,4 @@
 
 .. _ttnn.fill_zero_bw:
 
-.. autodata:: ttnn.fill_zero_bw
+.. autooperation:: ttnn.fill_zero_bw

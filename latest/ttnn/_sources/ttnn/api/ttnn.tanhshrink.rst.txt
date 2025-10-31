@@ -5,4 +5,4 @@
 
 .. _ttnn.tanhshrink:
 
-.. autodata:: ttnn.tanhshrink
+.. autooperation:: ttnn.tanhshrink

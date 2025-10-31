@@ -5,4 +5,4 @@
 
 .. _ttnn.ones:
 
-.. autodata:: ttnn.ones
+.. autooperation:: ttnn.ones

@@ -5,4 +5,4 @@
 
 .. _ttnn.ge_:
 
-.. autodata:: ttnn.ge_
+.. autooperation:: ttnn.ge_

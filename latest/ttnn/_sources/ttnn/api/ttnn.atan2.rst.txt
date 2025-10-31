@@ -5,4 +5,4 @@
 
 .. _ttnn.atan2:
 
-.. autodata:: ttnn.atan2
+.. autooperation:: ttnn.atan2

@@ -5,4 +5,4 @@
 
 .. _ttnn.arange:
 
-.. autodata:: ttnn.arange
+.. autooperation:: ttnn.arange

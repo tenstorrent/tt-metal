@@ -5,4 +5,4 @@
 
 .. _ttnn.logaddexp:
 
-.. autodata:: ttnn.logaddexp
+.. autooperation:: ttnn.logaddexp

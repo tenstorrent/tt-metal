@@ -5,4 +5,4 @@
 
 .. _ttnn.reduce_scatter:
 
-.. autodata:: ttnn.reduce_scatter
+.. autooperation:: ttnn.reduce_scatter

@@ -5,4 +5,4 @@
 
 .. _ttnn.where_bw:
 
-.. autodata:: ttnn.where_bw
+.. autooperation:: ttnn.where_bw

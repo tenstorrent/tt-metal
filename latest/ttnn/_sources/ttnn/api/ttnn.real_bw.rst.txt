@@ -5,4 +5,4 @@
 
 .. _ttnn.real_bw:
 
-.. autodata:: ttnn.real_bw
+.. autooperation:: ttnn.real_bw

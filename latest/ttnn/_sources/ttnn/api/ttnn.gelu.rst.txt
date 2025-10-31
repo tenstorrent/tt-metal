@@ -5,4 +5,4 @@
 
 .. _ttnn.gelu:
 
-.. autodata:: ttnn.gelu
+.. autooperation:: ttnn.gelu

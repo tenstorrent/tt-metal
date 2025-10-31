@@ -5,4 +5,4 @@
 
 .. _ttnn.bias_gelu_bw:
 
-.. autodata:: ttnn.bias_gelu_bw
+.. autooperation:: ttnn.bias_gelu_bw

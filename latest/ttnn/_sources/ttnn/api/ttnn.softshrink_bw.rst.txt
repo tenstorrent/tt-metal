@@ -5,4 +5,4 @@
 
 .. _ttnn.softshrink_bw:
 
-.. autodata:: ttnn.softshrink_bw
+.. autooperation:: ttnn.softshrink_bw

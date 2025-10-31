@@ -5,4 +5,4 @@
 
 .. _ttnn.sparse_matmul:
 
-.. autodata:: ttnn.sparse_matmul
+.. autooperation:: ttnn.sparse_matmul

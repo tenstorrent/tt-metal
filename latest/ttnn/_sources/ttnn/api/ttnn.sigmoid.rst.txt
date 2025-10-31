@@ -5,4 +5,4 @@
 
 .. _ttnn.sigmoid:
 
-.. autodata:: ttnn.sigmoid
+.. autooperation:: ttnn.sigmoid

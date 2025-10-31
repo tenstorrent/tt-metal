@@ -5,4 +5,4 @@
 
 .. _ttnn.transformer.split_query_key_value_and_split_heads:
 
-.. autodata:: ttnn.transformer.split_query_key_value_and_split_heads
+.. autooperation:: ttnn.transformer.split_query_key_value_and_split_heads

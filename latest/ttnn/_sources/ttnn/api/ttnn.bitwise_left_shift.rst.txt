@@ -5,4 +5,4 @@
 
 .. _ttnn.bitwise_left_shift:
 
-.. autodata:: ttnn.bitwise_left_shift
+.. autooperation:: ttnn.bitwise_left_shift

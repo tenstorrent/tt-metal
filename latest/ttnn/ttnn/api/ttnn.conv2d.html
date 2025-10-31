@@ -141,9 +141,9 @@
   <section id="ttnn-conv2d">
 <h1>ttnn.conv2d<a class="headerlink" href="#ttnn-conv2d" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py data">
+<span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.conv2d">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv2d</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.conv2d',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.conv.conv2d_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.conv2d" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MeshDevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_height</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kernel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tuple[int,</span> <span class="pre">int]</span> <span class="pre">or</span> <span class="pre">tuple[int,</span> <span class="pre">int,</span> <span class="pre">int,</span> <span class="pre">int]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dilation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conv_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><span class="pre">ttnn.Conv2dConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DeviceComputeKernelConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><span class="pre">ttnn.Conv2dSliceConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_output_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_weights_and_bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">The</span> <span class="pre">output</span> <span class="pre">tensor,</span> <span class="pre">output</span> <span class="pre">height</span> <span class="pre">and</span> <span class="pre">width,</span> <span class="pre">and</span> <span class="pre">the</span> <span class="pre">preprocessed</span> <span class="pre">weights</span> <span class="pre">and</span> <span class="pre">bias.</span></span></span><a class="headerlink" href="#ttnn.conv2d" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Applies a 2D convolution over an input signal composed of several input planes.</p>
@@ -154,8 +154,7 @@
 <dd class="field-odd">
 <ul class="simple">
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.</p></li>
-<li><p><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>) – The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w</p></li>
-<li><p><strong>bias_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>None</em>) – Optional bias tensor. Default: None</p></li>
+<li><p><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>) – The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width].</p></li>
 <li><p><strong>device</strong> (<em>ttnn.MeshDevice</em>) – The device to use.</p></li>
 <li><p><strong>in_channels</strong> (<em>int</em>) – Number of input channels.</p></li>
 <li><p><strong>out_channels</strong> (<em>int</em>) – Number of output channels.</p></li>
@@ -164,42 +163,37 @@
 <li><p><strong>input_width</strong> (<em>int</em>) – Width of the input tensor.</p></li>
 <li><p><strong>kernel_size</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Size of the convolving kernel.</p></li>
 <li><p><strong>stride</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Stride of the cross-correlation.</p></li>
-<li><p><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em><em>)</em>) – Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</p></li>
+<li><p><strong>padding</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>] or </em><em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>, </em><em>int</em><em>]</em>) – Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].</p></li>
 <li><p><strong>dilation</strong> (<em>tuple</em><em>[</em><em>int</em><em>, </em><em>int</em><em>]</em>) – Spacing between kernel elements.</p></li>
 <li><p><strong>groups</strong> (<em>int</em>) – Number of blocked connections from input channels to output channels.</p></li>
-<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>None</em>) – The data type of the output tensor. Default: None (inferred from input tensor).</p></li>
-<li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>None</em>) – Configuration for convolution. Default: None</p></li>
-<li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>None</em>) – Configuration for compute kernel. Default: None</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>None</em>) – Output Tensor’s Memory Configuration. Default: None</p></li>
-<li><p><strong>slice_config</strong> (<a class="reference internal" href="ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><em>ttnn.Conv2dSliceConfig</em></a><em>, </em><em>None</em>) – Configuration for slicing the input &amp; output tensors when they are in DRAM. If this is set to None, and the input is in DRAM, DRAM Slicing will be automatically enabled. Default: None</p></li>
-<li><p><strong>return_output_dim</strong> (<em>bool</em>) – If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,</p></li>
-<li><p><strong>return_weights_and_bias</strong> (<em>bool</em>) – If true, the op also returns the preprocessed weight and bias on device .</p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
+<ul class="simple">
+<li><p><strong>bias_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Optional bias tensor. Default: None</p></li>
+<li><p><strong>dtype</strong> (<em>ttnn.DataType</em><em>, </em><em>optional</em>) – The data type of the output tensor. Default: None (inferred from input tensor).</p></li>
+<li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>optional</em>) – Configuration for convolution. Default: None</p></li>
+<li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Configuration for compute kernel. Default: None</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output Tensor’s Memory Configuration. Default: None</p></li>
+<li><p><strong>slice_config</strong> (<a class="reference internal" href="ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><em>ttnn.Conv2dSliceConfig</em></a><em>, </em><em>optional</em>) – Configuration for slicing the input &amp; output tensors when they are in DRAM. If this is set to None, and the input is in DRAM, DRAM Slicing will be automatically enabled. Default: None</p></li>
+<li><p><strong>return_output_dim</strong> (<em>bool</em><em>, </em><em>optional</em>) – If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False</p></li>
+<li><p><strong>return_weights_and_bias</strong> (<em>bool</em><em>, </em><em>optional</em>) – If true, the op also returns the preprocessed weight and bias on device. Default: False</p></li>
+</ul>
+</dd>
+<dt class="field-odd">Returns<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p></p>
 <p>The output tensor, output height and width, and the preprocessed weights and bias.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>[ttnn.Tensor]: The output tensor, when return_output_dim = False and return_weights_and_bias = False</p>
-</dd>
-<dt class="field-even">Return type<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<p>[ttnn.Tensor, Tuple[int, int]]: The output tensor, and it’s height and width, if return_output_dim = True</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p>[ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it’s height and width, if return_weights_and_bias = True</p>
-</dd>
-<dt class="field-even">Return type<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<p>[ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it’s height and width, if return_output_dim = True and return_weights_and_bias = True</p>
+<ul class="simple">
+<li><p>ttnn.Tensor: The output tensor, when return_output_dim = False and return_weights_and_bias = False</p></li>
+<li><p>tuple[ttnn.Tensor, tuple[int, int]]: The output tensor, and its height and width, if return_output_dim = True</p></li>
+<li><p>tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_weights_and_bias = True</p></li>
+<li><p>tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_output_dim = True and return_weights_and_bias = True</p></li>
+</ul>
+
 </dd>
 </dl>
 </dd>

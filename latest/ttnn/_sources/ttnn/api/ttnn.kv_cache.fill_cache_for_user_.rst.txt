@@ -5,4 +5,4 @@
 
 .. _ttnn.kv_cache.fill_cache_for_user_:
 
-.. autodata:: ttnn.kv_cache.fill_cache_for_user_
+.. autooperation:: ttnn.kv_cache.fill_cache_for_user_

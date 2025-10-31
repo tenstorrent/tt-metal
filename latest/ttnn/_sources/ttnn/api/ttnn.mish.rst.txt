@@ -5,4 +5,4 @@
 
 .. _ttnn.mish:
 
-.. autodata:: ttnn.mish
+.. autooperation:: ttnn.mish

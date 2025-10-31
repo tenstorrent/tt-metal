@@ -5,4 +5,4 @@
 
 .. _ttnn.embedding:
 
-.. autodata:: ttnn.embedding
+.. autooperation:: ttnn.embedding

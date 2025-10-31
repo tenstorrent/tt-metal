@@ -5,4 +5,4 @@
 
 .. _ttnn.atanh:
 
-.. autodata:: ttnn.atanh
+.. autooperation:: ttnn.atanh

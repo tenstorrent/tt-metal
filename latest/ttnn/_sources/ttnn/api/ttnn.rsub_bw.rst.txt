@@ -5,4 +5,4 @@
 
 .. _ttnn.rsub_bw:
 
-.. autodata:: ttnn.rsub_bw
+.. autooperation:: ttnn.rsub_bw

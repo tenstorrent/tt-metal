@@ -5,4 +5,4 @@
 
 .. _ttnn.square_bw:
 
-.. autodata:: ttnn.square_bw
+.. autooperation:: ttnn.square_bw

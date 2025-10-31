@@ -5,4 +5,4 @@
 
 .. _ttnn.logical_xor_:
 
-.. autodata:: ttnn.logical_xor_
+.. autooperation:: ttnn.logical_xor_

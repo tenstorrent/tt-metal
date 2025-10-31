@@ -5,4 +5,4 @@
 
 .. _ttnn.logit:
 
-.. autodata:: ttnn.logit
+.. autooperation:: ttnn.logit

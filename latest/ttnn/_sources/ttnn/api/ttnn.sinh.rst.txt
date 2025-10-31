@@ -5,4 +5,4 @@
 
 .. _ttnn.sinh:
 
-.. autodata:: ttnn.sinh
+.. autooperation:: ttnn.sinh

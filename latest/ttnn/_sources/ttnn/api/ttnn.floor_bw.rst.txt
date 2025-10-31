@@ -5,4 +5,4 @@
 
 .. _ttnn.floor_bw:
 
-.. autodata:: ttnn.floor_bw
+.. autooperation:: ttnn.floor_bw

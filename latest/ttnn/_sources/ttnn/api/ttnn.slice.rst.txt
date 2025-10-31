@@ -5,4 +5,4 @@
 
 .. _ttnn.slice:
 
-.. autodata:: ttnn.slice
+.. autooperation:: ttnn.slice

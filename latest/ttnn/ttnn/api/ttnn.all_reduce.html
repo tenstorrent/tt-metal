@@ -134,40 +134,37 @@
   <section id="ttnn-all-reduce">
 <h1>ttnn.all_reduce<a class="headerlink" href="#ttnn-all-reduce" title="Permalink to this heading"></a>
 </h1>
-<span class="target" id="id1"></span><dl class="py data">
+<span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.all_reduce">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">all_reduce</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.all_reduce',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.ccl.all_reduce_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=None,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.all_reduce" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">all_reduce</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_axis</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subdevice_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.SubDeviceId</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_links</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">topology</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Topology</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.all_reduce" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>ttnn.Tensor, cluster_axis: Optional[int] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, memory_config: Optional[ttnn.MemoryConfig] = None, num_links: Optional[int] = None, topology: Optional[ttnn.Topology] = None) -&gt; ttnn.Tensor</p>
-<blockquote>
-<div>
 <p>All-reduce operation across devices with Sum reduction. If cluster axis is specified, the all-reduce is performed on tensor shards along the cluster axis, resulting in identical tensor shards across all devices along the cluster axis. If it is not specified, then we reduce across all devices in the mesh. All-reduce is a collective operation that reduces data from all devices using the Sum operation and returns the result to all devices.</p>
-<dl class="simple">
-<dt>Args:</dt>
-<dd>
-<p>input_tensor (ttnn.Tensor): Input tensor to be reduced.</p>
-</dd>
-<dt>Keyword Args:</dt>
-<dd>
-<p>cluster_axis (int, optional): The axis on the mesh device to reduce across. Defaults to <cite>None</cite>.
-subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
-memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
-num_links (int, optional): Number of links to use for the all_reduce operation. Defaults to <cite>None</cite>.
-topology (ttnn.Topology, optional): Fabric topology. Defaults to <cite>None</cite>.</p>
-</dd>
-</dl>
-</div>
-</blockquote>
 <dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – Input tensor to be reduced.</p>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>cluster_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – The axis on the mesh device to reduce across. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>subdevice_id</strong> (<em>ttnn.SubDeviceId</em><em>, </em><em>optional</em>) – Subdevice id for worker cores.</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory configuration.</p></li>
+<li><p><strong>num_links</strong> (<em>int</em><em>, </em><em>optional</em>) – Number of links to use for the all_reduce operation. Defaults to <cite>None</cite>.</p></li>
+<li><p><strong>topology</strong> (<em>ttnn.Topology</em><em>, </em><em>optional</em>) – Fabric topology. Defaults to <cite>None</cite>.</p></li>
+</ul>
+</dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p></p>
 <p><em>ttnn.Tensor</em> – The reduced tensor with the same shape as the input tensor. The output tensor is identical across all devices along the cluster axis if specified, otherwise it is identical across all devices in the mesh.</p>
-<dl>
-<dt>Example:</dt>
-<dd>
+</dd>
+</dl>
+<div class="admonition-example admonition">
+<p class="admonition-title">Example</p>
 <div class="doctest highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">full_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">256</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">mesh_device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_mesh_device</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">MeshShape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
@@ -183,16 +180,7 @@ topology (ttnn.Topology, optional): Fabric topology. Defaults to <cite>None</cit
 <span class="go">[1, 1, 32, 256]</span>
 </pre></div>
 </div>
-</dd>
-</dl>
-
-</dd>
-<dt class="field-even">Type<span class="colon">:</span>
-</dt>
-<dd class="field-even">
-<p>all_reduce(input_tensor</p>
-</dd>
-</dl>
+</div>
 </dd>
 </dl>
 
