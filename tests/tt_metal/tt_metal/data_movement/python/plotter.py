@@ -120,6 +120,10 @@ class Plotter:
             elif "Virtual Channels" in test_name:
                 self.plot_bandwidth_virtual_channels(axes[0], plot_data[test_id], noc_index=0)
                 self.plot_bandwidth_virtual_channels(axes[1], plot_data[test_id], noc_index=1)
+            elif "Transaction ID" in test_name:
+                # For Transaction ID tests, plot both data size vs bandwidth and transaction ID count vs bandwidth
+                self.plot_data_size_vs_bandwidth(axes[0], plot_data[test_id])
+                self.plot_transaction_id_count_vs_bandwidth(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
@@ -272,6 +276,56 @@ class Plotter:
             xbase=2,
             add_theoretical_max_bw=True,
         )
+
+    # Transaction ID: Transaction ID Count vs Bandwidth (grouped by transaction size)
+    def plot_transaction_id_count_vs_bandwidth(self, ax, data):
+        # Flatten data and add riscv to each run, also compute transaction_id_count
+        all_runs = []
+        for riscv, runs in data.items():
+            for run in runs:
+                new_run = run.copy()
+                new_run["riscv"] = riscv
+                # Calculate transaction_id_count as num_of_transactions / 2
+                new_run["transaction_id_count"] = run["num_transactions"] / 2
+                all_runs.append(new_run)
+
+        if not all_runs:
+            return
+
+        # Group by transaction_size for plotting
+        transaction_sizes = sorted(list(set(run["transaction_size"] for run in all_runs)))
+
+        risc_to_kernel_map = RISC_TO_KERNEL_MAP
+
+        for transaction_size in transaction_sizes:
+            # Filter runs for this transaction size
+            size_runs = [run for run in all_runs if run["transaction_size"] == transaction_size]
+
+            # Group by riscv
+            for riscv in set(run["riscv"] for run in size_runs):
+                riscv_runs = [run for run in size_runs if run["riscv"] == riscv]
+
+                # Sort by transaction_id_count for proper line plotting
+                riscv_runs.sort(key=lambda r: r["transaction_id_count"])
+
+                x_vals = [run["transaction_id_count"] for run in riscv_runs]
+                y_vals = [run["bandwidth"] for run in riscv_runs]
+
+                label = f"{risc_to_kernel_map[riscv]} (Transaction Size={transaction_size}B)"
+
+                ax.plot(x_vals, y_vals, label=label, marker="o")
+
+        # Adjust the plot area to leave space for the legend
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+        # Place the legend outside the plot
+        ax.legend(loc="center left", bbox_to_anchor=(1.0, 0.5), borderaxespad=0, fontsize=8)
+
+        ax.set_xlabel("Transaction ID Count")
+        ax.set_ylabel("Bandwidth (bytes/cycle)")
+        ax.set_title("Transaction ID Count vs Bandwidth")
+        ax.grid()
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth
     def plot_bandwidth_multicast(self, ax, data, riscv, noc_index):
