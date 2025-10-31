@@ -249,52 +249,242 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, layout, rs_input_dtype, use_new",
+    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers",
     [
         # Dim 1 tests
-        ([2, 24, 256, 256], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([2, 16, 56, 56], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([2, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),  # use batching when fused
+        (
+            [2, 24, 256, 256],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            True,
+        ),  # perf, barrier_with_persistent
+        (
+            [2, 16, 56, 56],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            False,
+        ),  # check, barrier_without_persistent
+        (
+            [2, 8, 512, 512],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+            False,
+            True,
+        ),  # perf, no_barrier_with_persistent
         # Dim 2 tests
-        ([2, 4, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([4, 1, 1024, 340], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),  # use batching when fused
-        ([1, 1, 512, 512], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (
+            [2, 4, 1024, 1024],
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            True,
+        ),  # check, barrier_with_persistent
+        (
+            [4, 1, 1024, 340],
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+            True,
+            False,
+        ),  # perf, barrier_without_persistent
+        (
+            [1, 1, 512, 512],
+            2,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            False,
+            True,
+        ),  # check, no_barrier_with_persistent
         # Dim 3 tests
-        ([2, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),  # use batching when fused
-        ([3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),  # use batching when fused
-        ([4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),  # use batching when fused
-        ([1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        ([2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),  # use batching when fused
-        ([1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (
+            [2, 4, 1024, 1024],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            True,
+        ),  # perf, barrier_with_persistent
+        (
+            [1, 1, 13, 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            True,
+            False,
+        ),  # check, barrier_without_persistent
+        (
+            [3, 1, 41, 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            False,
+            True,
+        ),  # perf, no_barrier_with_persistent
+        (
+            [8, 1, 512, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            True,
+            True,
+        ),  # check, barrier_with_persistent
+        (
+            [4, 1, 1024, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            False,
+        ),  # perf, barrier_without_persistent
+        (
+            [1, 1, 1024, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            False,
+            True,
+        ),  # check, no_barrier_with_persistent
+        (
+            [1, 1, 352, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            True,
+        ),  # perf, barrier_with_persistent
+        (
+            [2, 1, 2048, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            True,
+            False,
+        ),  # check, barrier_without_persistent
+        (
+            [1, 1, 4096, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            False,
+            True,
+        ),  # perf, no_barrier_with_persistent
         # Composite-RS tests
-        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([2, 32, 2048, 64], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, False),
-        ([1, 1, 29, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
+        (
+            [1, 1, 1, 8],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            True,
+            True,
+        ),  # check, barrier_with_persistent
+        (
+            [2, 32, 2048, 64],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            False,
+        ),  # perf, barrier_without_persistent
+        (
+            [1, 1, 1, 16],
+            3,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat8_b,
+            False,
+            False,
+            1,
+            False,
+            True,
+        ),  # check, no_barrier_with_persistent
+        (
+            [1, 1, 29, 32],
+            3,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+            True,
+            True,
+        ),  # perf, barrier_with_persistent
     ],
     ids=[
-        "scatter_dim_1_test_one",
-        "scatter_dim_1_test_two",
-        "scatter_dim_1_test_three",
-        "scatter_dim_2_test_one",
-        "scatter_dim_2_test_two",
-        "scatter_dim_2_test_three",
-        "non_zero_dim_1",
-        "padded_dim_2_test_one",
-        "padded_dim_2_test_two",
-        "batch_8",
-        "batch_4",
-        "batch_1_sd35_spatial",
-        "batch_1_sd35_prompt",
-        "batch_2",
-        "batch_1",
-        "composite_rs_test_one",
-        "composite_rs_test_two",
-        "composite_rs_test_three",
-        "composite_rs_test_four",
+        "scatter_dim_1_test_one-perf-barrier_with_persistent",
+        "scatter_dim_1_test_two-check-barrier_without_persistent",
+        "scatter_dim_1_test_three-perf-no_barrier_with_persistent",
+        "scatter_dim_2_test_one-check-barrier_with_persistent",
+        "scatter_dim_2_test_two-perf-barrier_without_persistent",
+        "scatter_dim_2_test_three-check-no_barrier_with_persistent",
+        "non_zero_dim_1-perf-barrier_with_persistent",
+        "padded_dim_2_test_one-check-barrier_without_persistent",
+        "padded_dim_2_test_two-perf-no_barrier_with_persistent",
+        "batch_8-check-barrier_with_persistent",
+        "batch_4-perf-barrier_without_persistent",
+        "batch_1_sd35_spatial-check-no_barrier_with_persistent",
+        "batch_1_sd35_prompt-perf-barrier_with_persistent",
+        "batch_2-check-barrier_without_persistent",
+        "batch_1-perf-no_barrier_with_persistent",
+        "composite_rs_test_one-check-barrier_with_persistent",
+        "composite_rs_test_two-perf-barrier_without_persistent",
+        "composite_rs_test_three-check-no_barrier_with_persistent",
+        "composite_rs_test_four-perf-barrier_with_persistent",
     ],
 )
 @pytest.mark.parametrize(
@@ -307,28 +497,11 @@ def run_reduce_scatter_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
-)
-@pytest.mark.parametrize(
     "ones_tensor",
     [
         False,
     ],
     ids=["random"],
-)
-@pytest.mark.parametrize(
-    "use_barrier, use_persistent_buffers",
-    [
-        (True, True),
-        (True, False),
-        (False, True),
-    ],
-    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -346,15 +519,15 @@ def test_reduce_scatter_async(
     dim,
     layout,
     rs_input_dtype,
-    mem_config_input,
-    mem_config_rs,
+    use_new,
     enable_trace,
     num_iters,
-    ones_tensor,
     use_barrier,
     use_persistent_buffers,
+    mem_config_input,
+    mem_config_rs,
+    ones_tensor,
     rs_topology,
-    use_new,
 ):
     run_reduce_scatter_impl(
         mesh_device,
@@ -380,38 +553,38 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, layout, rs_input_dtype, use_new",
+    "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters",
     [
         # Scatter on dim 0
-        ([16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        ([16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
+        ([16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, False, 1),  # check
         # Scatter on dim 1
-        ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        ([1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
+        ([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10),  # perf
         # Scatter on dim 2
-        ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, False, 1),  # check
+        ([16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, False, 1),  # check
         # Scatter on dim 3
-        ([1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
-        ([16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
-        ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        ([1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
+        ([16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, False, 1),  # check
+        ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, True, 10),  # perf
     ],
     ids=[
-        "tt_training_test_one",
-        "tt_training_test_two",
-        "tt_training_test_three",
-        "tt_training_test_four",
-        "tt_training_test_five",
-        "tt_training_test_six",
-        "tt_training_test_seven",
-        "tt_training_test_eight",
-        "tt_training_test_nine",
-        "tt_training_test_ten",
-        "tt_training_test_eleven",
-        "tt_training_test_twelve",
+        "tt_training_test_one-check",
+        "tt_training_test_two-perf",
+        "tt_training_test_three-check",
+        "tt_training_test_four-perf",
+        "tt_training_test_five-check",
+        "tt_training_test_six-perf",
+        "tt_training_test_seven-check",
+        "tt_training_test_eight-perf",
+        "tt_training_test_nine-check",
+        "tt_training_test_ten-perf",
+        "tt_training_test_eleven-check",
+        "tt_training_test_twelve-perf",
     ],
 )
 @pytest.mark.parametrize(
@@ -422,14 +595,6 @@ def test_reduce_scatter_async(
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace,num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "ones_tensor",
@@ -449,18 +614,18 @@ def test_reduce_scatter_async(
 )
 def test_reduce_scatter_async_training_shapes(
     mesh_device,
+    num_links,
     rs_input_shape,
     dim,
-    num_links,
-    rs_input_dtype,
     layout,
+    rs_input_dtype,
+    use_new,
+    enable_trace,
+    num_iters,
     mem_config_input,
     mem_config_rs,
-    enable_trace,
-    rs_topology,
-    num_iters,
     ones_tensor,
-    use_new,
+    rs_topology,
 ):
     run_reduce_scatter_impl(
         mesh_device,
@@ -492,7 +657,7 @@ def test_reduce_scatter_async_training_shapes(
     ],
 )
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_new",
+    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_new, enable_trace, num_iters",
     [
         (
             [1, 1, 32, 3072],
@@ -508,6 +673,8 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
             True,
+            True,
+            10,  # perf
         ),
         (
             [4, 1, 384, 1024],
@@ -523,6 +690,8 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
             False,
+            False,
+            1,  # check
         ),
         (
             [4, 1, 384, 3072],
@@ -538,6 +707,8 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
             False,
+            True,
+            10,  # perf
         ),
         # Composite RS
         (
@@ -554,16 +725,10 @@ def test_reduce_scatter_async_training_shapes(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             False,
+            False,
+            1,  # check
         ),
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -591,10 +756,10 @@ def test_reduce_scatter_async_sharded_to_sharded(
     output_shard_grid,
     output_mem_layout,
     buffer_type,
+    use_new,
     enable_trace,
     num_iters,
     rs_topology,
-    use_new,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
@@ -650,7 +815,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
     ],
 )
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_new",
+    "rs_input_shape, dim, intermediate_shard_shape, intermediate_shard_grid, intermediate_mem_layout, output_shard_shape, output_shard_grid, output_mem_layout, buffer_type, use_new, enable_trace, num_iters",
     [
         (
             [4, 1, 256, 3072],
@@ -663,6 +828,8 @@ def test_reduce_scatter_async_sharded_to_sharded(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
             False,
+            False,
+            1,  # check
         ),
         (
             [4, 1, 384, 1024],
@@ -675,6 +842,8 @@ def test_reduce_scatter_async_sharded_to_sharded(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
             False,
+            True,
+            10,  # perf
         ),
         # Composite RS
         (
@@ -688,16 +857,10 @@ def test_reduce_scatter_async_sharded_to_sharded(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             True,
+            False,
+            1,  # check
         ),
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -722,10 +885,10 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     output_shard_grid,
     output_mem_layout,
     buffer_type,
+    use_new,
     enable_trace,
     num_iters,
     rs_topology,
-    use_new,
 ):
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
@@ -776,7 +939,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     ],
 )
 @pytest.mark.parametrize(
-    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, buffer_type, use_new",
+    "rs_input_shape, dim, input_shard_shape, input_shard_grid, input_mem_layout, buffer_type, use_new, enable_trace, num_iters",
     [
         (
             [4, 1, 256, 3072],
@@ -786,6 +949,8 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
             False,
+            True,
+            10,  # perf
         ),
         (
             [4, 1, 384, 1024],
@@ -795,6 +960,8 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
             True,
+            False,
+            1,  # check
         ),
         # Composite RS
         (
@@ -805,16 +972,10 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             False,
+            True,
+            10,  # perf
         ),
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -836,10 +997,10 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     input_shard_grid,
     input_mem_layout,
     buffer_type,
+    use_new,
     enable_trace,
     num_iters,
     rs_topology,
-    use_new,
 ):
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
@@ -1130,3 +1291,40 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    indirect=True,
+    ids=["fabric_linear", "fabric_2d_dynamic"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
+def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(520)
+    devices = mesh_device.get_num_devices()
+    input_shape[-1] *= devices
+
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for _ in range(devices)]
+
+    torch_reference = torch.zeros_like(torch_inputs_per_device[0])
+    for i in range(devices):
+        torch_reference += torch_inputs_per_device[i]
+
+    tt_input = ttnn.from_torch(
+        torch.cat(torch_inputs_per_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )  # [2, 2, 32, 32*devices] per device
+
+    tt_output = ttnn.reduce_scatter(tt_input, dim=3)  # [2, 2, 32, 32] per device
+    torch_output = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    )  # [2, 2, 32, 32*devices]
+
+    assert torch.allclose(
+        torch_reference, torch_output, atol=1e-1, rtol=1e-2
+    ), "Output mismatch between torch and ttnn reduce-scatter"
