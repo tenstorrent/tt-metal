@@ -61,7 +61,7 @@ template <
     uint32_t scale_cb,
     uint32_t rows,
     int vector_mode = (int)VectorMode::RC,
-    bool fp32_dest_acc_en = true>
+    bool fp32_dest_acc_en = false>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced (row–major).
     // Precondition: scale_cb has 1 produced.

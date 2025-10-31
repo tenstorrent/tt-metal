@@ -99,9 +99,8 @@ def run_reference_op(
     Returns:
         out: Output tensor
     """
-    b, nh, _, _ = Q.shape  # b, nh, 1, d
-    _, nkv, _, _ = K.shape
-
+    _, b, nh, _ = Q.shape  # b, nh, 1, d
+    _, nkv, _, _ = K.shape  # b, nkv, S, d
     Q_slice = Q[:, :, :nh, :].permute(1, 2, 0, 3)  # b, nh, 1, d
     K_slice = K[:, :, :padded_seq_len, :]  # b, nkv, S, d
     K_slice = torch.cat(
@@ -153,6 +152,7 @@ def create_cur_pos_tensor(
     is_sharded: bool,
     sub_core_grids: ttnn.CoreRangeSet,
     use_cur_pos_tensor: bool,
+    grid_size: tuple[int, int],
     device: ttnn.MeshDevice,
 ) -> tuple[ttnn.Tensor, torch.Tensor]:
     """
@@ -184,9 +184,17 @@ def create_cur_pos_tensor(
         cur_pos = torch.tensor([seq_len // 2 for _ in range(batch_size)], dtype=torch.int32)
     else:
         raise ValueError(f"Invalid position type: {pos_type}")
-    cur_pos = cur_pos.repeat(sub_core_grids.num_cores(), 1) if is_sharded else cur_pos
+
+    if sub_core_grids is None:
+        shard_grid = ttnn.CoreRangeSet({num_to_corerange(grid_size.x * grid_size.y)})
+        num_cores = grid_size.x * grid_size.y
+    else:
+        shard_grid = sub_core_grids
+        num_cores = sub_core_grids.num_cores()
+
+    pt_cur_pos = cur_pos.repeat(num_cores, 1) if is_sharded else cur_pos
     cur_pos_shard_spec = (
-        ttnn.ShardSpec(sub_core_grids, (batch_size,), ttnn.ShardOrientation.ROW_MAJOR) if is_sharded else None
+        ttnn.ShardSpec(shard_grid, (1, batch_size), ttnn.ShardOrientation.ROW_MAJOR) if is_sharded else None
     )
     cur_pos_memory_config = (
         ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec)
@@ -195,13 +203,17 @@ def create_cur_pos_tensor(
     )
     tt_cur_pos = (
         ttnn.as_tensor(
-            cur_pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=cur_pos_memory_config, device=device
+            pt_cur_pos,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=cur_pos_memory_config,
+            device=device,
         )
         if use_cur_pos_tensor
         else None
     )
-    cur_pos_pt = cur_pos.tolist()
-    return tt_cur_pos, cur_pos_pt
+    cur_pos = cur_pos.tolist()
+    return tt_cur_pos, cur_pos
 
 
 def create_page_table_tensor(
@@ -209,6 +221,7 @@ def create_page_table_tensor(
     config: PagedAttentionConfig,
     is_sharded: bool,
     sub_core_grids: ttnn.CoreRangeSet,
+    grid_size: tuple[int, int],
     device: ttnn.MeshDevice,
 ) -> tuple[ttnn.Tensor, torch.Tensor]:
     """
@@ -230,13 +243,22 @@ def create_page_table_tensor(
     # Torch page table tensor
     page_table = torch.randperm(max_num_blocks, dtype=torch.int32)
     page_table = page_table.reshape(batch_size, max_num_blocks // batch_size)
-    page_table = page_table.repeat(sub_core_grids.num_cores(), 1) if is_sharded else page_table
+
+    if sub_core_grids is None:
+        shard_grid = ttnn.CoreRangeSet({num_to_corerange(grid_size.x * grid_size.y)})
+        num_cores = grid_size.x * grid_size.y
+    else:
+        shard_grid = sub_core_grids
+        num_cores = sub_core_grids.num_cores()
+
+    pt_page_table = page_table.repeat(num_cores, 1) if is_sharded else page_table
 
     # Memory config / Layout / Shard spec for the TTNN page table tensor
     page_table_dtype = ttnn.uint16 if is_sharded else ttnn.int32
+    # Note: When the page table is sharded, we use a smaller dtype (uint16) to save memory in L1
     page_table_layout = ttnn.ROW_MAJOR_LAYOUT
     page_table_shard_spec = (
-        ttnn.ShardSpec(sub_core_grids, (batch_size, max_num_blocks // batch_size), ttnn.ShardOrientation.ROW_MAJOR)
+        ttnn.ShardSpec(shard_grid, (batch_size, max_num_blocks // batch_size), ttnn.ShardOrientation.ROW_MAJOR)
         if is_sharded
         else None
     )
@@ -247,7 +269,7 @@ def create_page_table_tensor(
     )
     # TTNN page table tensor
     tt_page_table = ttnn.as_tensor(
-        page_table,
+        pt_page_table,
         dtype=page_table_dtype,
         layout=page_table_layout,
         memory_config=page_table_memory_config,
@@ -340,7 +362,14 @@ def from_paged_cache(
 
 
 def create_attention_mask(
-    b: int, nh: int, seq_len: int, cur_pos_list: int, sliding_window_size: Optional[int], mask_type: str
+    b: int,
+    nh: int,
+    seq_len: int,
+    cur_pos_list: int,
+    sliding_window_size: Optional[int],
+    mask_type: str,
+    is_causal: bool,
+    device: ttnn.MeshDevice,
 ):
     """
     Create attention mask for the given mask type.
@@ -356,7 +385,7 @@ def create_attention_mask(
         cur_pos_list: list of current positions for each batch
         sliding_window_size: sized of the sliding window to perform attention on
         mask_type: type of mask to create
-
+        is_causal: whether to create a causal mask
     Returns:
         attn_mask: [b, 1, nh, seq_len] mask with -inf for positions outside window
     """
@@ -366,9 +395,13 @@ def create_attention_mask(
         for i in range(b):
             cur_pos = cur_pos_list[i]
             attn_mask[i, :, :, cur_pos + 1 :] = torch.finfo(torch.float32).min
+        torch_attn_mask = attn_mask
     elif mask_type == "non_causal":
-        attn_mask = torch.bernoulli(torch.full((batch, nh, 1, seq_len), 0.25))
+        attn_mask = torch.bernoulli(torch.full((b, nh, 1, seq_len), 0.25))
         attn_mask = attn_mask * torch.finfo(torch.float32).min
+        torch_attn_mask = attn_mask.transpose(1, 2).contiguous()
+        # For torch sdpa, the attn_mask is expected to be [b, nh, 1, seq_len]
+        # We only transpose the attn_mask to [b, 1, nh, seq_len] for the TTNN OP
     elif mask_type == "sliding_window":
         assert (
             sliding_window_size is not None and sliding_window_size > 0
@@ -381,24 +414,36 @@ def create_attention_mask(
             if window_start > 0:
                 attn_mask[i, :, :, :window_start] = torch.finfo(torch.float32).min
             if cur_pos < seq_len:
-                attn_mask[i, :, :, cur_pos : cur_pos + 1 + 1 :] = torch.finfo(torch.float32).min
+                attn_mask[i, :, :, cur_pos + 1 :] = torch.finfo(torch.float32).min
+        torch_attn_mask = attn_mask
     else:
         raise ValueError(f"Invalid mask type: {mask_type}. Only causal, non-causal and sliding window are supported")
-    return attn_mask
+    tt_attn_mask = (
+        ttnn.as_tensor(
+            torch_attn_mask,
+            device=device,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if not is_causal
+        else None
+    )
+    return tt_attn_mask, attn_mask
 
 
 def run_scaled_dot_product_attention_decode(
     device: ttnn.MeshDevice,
-    b: int,
-    s: int,
-    nh: int,
-    nkv: int,
-    d: int,
-    q_dtype: ttnn.DataType,
-    q_layout: ttnn.TensorMemoryLayout,
-    kv_dtype: ttnn.DataType,
-    q_chunk_size=None,
-    k_chunk_size=None,
+    b: int = 32,
+    s: int = 8192,
+    nh: int = 32,
+    nkv: int = 8,
+    d: int = 128,
+    q_dtype: ttnn.DataType = ttnn.bfloat16,
+    q_layout: ttnn.TensorMemoryLayout = ttnn.TILE_LAYOUT,
+    kv_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    q_chunk_size: Optional[int] = None,
+    k_chunk_size: Optional[int] = None,
     grid_size: tuple[int, int] = (8, 8),
     sliding_window_size: Optional[int] = None,
     use_cur_pos_tensor: bool = False,
@@ -433,12 +478,17 @@ def run_scaled_dot_product_attention_decode(
     logger.debug(f"Is Output Sharded: {sharded_out}")
     logger.debug(f"Q chunk size: {q_chunk_size}")
     logger.debug(f"K chunk size: {k_chunk_size}")
-    logger.debug(f"Is Causal Attention: {k_chunk_size}")
+    logger.debug(f"Is Causal Attention: {is_causal}")
     logger.debug(f"Is Paged Attention: {use_paged_attention}")
+    logger.debug(f"Is Cur Position Sharded: {cur_pos_is_sharded}")
+    logger.debug(f"Is Page Table Sharded: {page_table_is_sharded}")
     logger.debug(f"Is Single Iter: {is_single_iter}")
     logger.debug(f"Block Size: {block_size}")
+    logger.debug(f"Cur Position Type: {cur_pos_type}")
+    logger.debug(f"Cur Position ID: {cur_pos_id}")
     logger.debug(f"Sliding Window Size: {sliding_window_size}")
     logger.debug(f"Number of repeated iterations of same position: {num_repeat_iters}")
+
     compute_grid_size = device.compute_with_storage_grid_size()
     grid_height, grid_width = grid_size
     num_grid_cores = math.prod(grid_size)
@@ -462,7 +512,7 @@ def run_scaled_dot_product_attention_decode(
     # Set min pcc based on q_dtype, kv_dtype, and number of cores per batch
     min_pcc = get_min_pcc(q_dtype, kv_dtype, num_cores // b)
 
-    # Prepare KV
+    # Prepare KV torch tensors
     K = fa_rand(b, nkv, s, d)
     V = fa_rand(b, nkv, s, d)
 
@@ -477,7 +527,7 @@ def run_scaled_dot_product_attention_decode(
             max_num_blocks=max_num_blocks,
         )
         tt_page_table, page_table = create_page_table_tensor(
-            b, paged_attention_cfg, page_table_is_sharded, sub_core_grids, device
+            b, paged_attention_cfg, page_table_is_sharded, sub_core_grids, compute_grid_size, device
         )
 
         # Paged K and V tensors
@@ -491,6 +541,7 @@ def run_scaled_dot_product_attention_decode(
         assert torch.allclose(K, K_unshuffled)
         assert torch.allclose(V, V_unshuffled)
 
+    # Create TTNN K and V tensors
     tt_K = ttnn.as_tensor(
         K_paged if use_paged_attention else K,
         device=device,
@@ -509,6 +560,7 @@ def run_scaled_dot_product_attention_decode(
     # Default SDPA Program Config
     q_chunk_size = nearest_pow_2(nearest_n(nh, n=32)) if q_chunk_size is None else q_chunk_size
     k_chunk_size = get_chunk_size(cur_pos_id + 1, s) if k_chunk_size is None else k_chunk_size
+
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         sub_core_grids=compute_sub_core_grids,
@@ -529,7 +581,15 @@ def run_scaled_dot_product_attention_decode(
     scale = d**-0.5
     # Prepare current position tensor
     tt_cur_pos, cur_pos = create_cur_pos_tensor(
-        b, s, cur_pos_id, cur_pos_type, cur_pos_is_sharded, sub_core_grids, use_cur_pos_tensor, device
+        b,
+        s,
+        cur_pos_id,
+        cur_pos_type,
+        cur_pos_is_sharded,
+        sub_core_grids,
+        use_cur_pos_tensor,
+        compute_grid_size,
+        device,
     )
 
     # Defining TTNN OP
@@ -544,14 +604,18 @@ def run_scaled_dot_product_attention_decode(
     all_pcc_values = []
     all_pos_pass = True
     tolerance = 0.95
+    active_users = torch.tensor(cur_pos) != -1
     max_cur_pos = max(cur_pos)
     max_num_iters = 1 if is_single_iter else num_repeat_iters
 
     # Iterate over seq len
-    assert (
-        is_multi_pos and step_size > 0
-    ), f"Step size must be greater than 0 for multi-position testing, got {step_size}"
-    pos_range = range(max_cur_pos, s, step_size)
+    if is_multi_pos:
+        assert (
+            step_size > 0
+        ), f"Step size must be greater than 0 for multi-position testing, got step size of {step_size}"
+        pos_range = range(max_cur_pos, s, step_size)
+    else:
+        pos_range = [max_cur_pos]
 
     for pos_idx in pos_range:
         all_iters_pass = True
@@ -582,13 +646,8 @@ def run_scaled_dot_product_attention_decode(
             )
 
             # Update Attention Mask
-            attn_mask = create_attention_mask(b, nh, padded_seq_len, cur_pos, sliding_window_size, mask_type)
-            tt_attn_mask = ttnn.as_tensor(
-                attn_mask,
-                device=device,
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            tt_attn_mask, attn_mask = create_attention_mask(
+                b, nh, padded_seq_len, cur_pos, sliding_window_size, mask_type, is_causal, device
             )
 
             # SDPA Decode Args
@@ -597,20 +656,23 @@ def run_scaled_dot_product_attention_decode(
                 "cur_pos_tensor": tt_cur_pos,
                 "page_table_tensor": tt_page_table,
                 "sliding_window_size": sliding_window_size,
-                "attn_mask": None if is_causal else tt_attn_mask,
+                "attn_mask": tt_attn_mask,
                 "scale": scale,
+                "is_causal": is_causal,
                 "program_config": sdpa_program_config,
                 "compute_kernel_config": compute_kernel_config,
                 "memory_config": out_memory_config,
             }
             sdpa_kwargs.pop("cur_pos_tensor") if not use_cur_pos_tensor else sdpa_kwargs.pop("cur_pos")
+            if not use_paged_attention:
+                sdpa_kwargs.pop("page_table_tensor")
 
             # ==== Run TTNN Scaled Dot Product Attention Decode ====
             tt_out = run_sdpa_decode(tt_Q, tt_K, tt_V, **sdpa_kwargs)
-            tt_out = ttnn.to_torch(tt_out)[:, :, :nh, :]
+            tt_out = ttnn.to_torch(tt_out)[:, active_users, :nh, :]
 
             # ==== Run Torch Scaled Dot Product Attention Decode ====
-            ref_out = run_reference_op(Q, K, V, padded_seq_len, scale, attn_mask)
+            ref_out = run_reference_op(Q, K, V, padded_seq_len, scale, attn_mask)[:, active_users]
 
             # ==== Perform PCC Validation Check ====
             out_pass, out_pcc, pcc_val = comp_and_get_pcc(ref_out, tt_out, min_pcc)
@@ -618,10 +680,10 @@ def run_scaled_dot_product_attention_decode(
                 f"TTNN vs PyTorch Output PCC Check: {out_pcc} for current position idx {pos_idx} for iters = {iters}"
             )
 
-            # Check for ND PCC (all iterations with same Q must have same PCC)
+            # Optional: Check for ND PCC (all iterations with same Q must have same PCC)
             all_iters_pass = all_iters_pass and out_pass
             if prev_pcc is not None:
-                assert out_pcc == prev_pcc, f"Iteration {iters}: pcc changed from {prev_pcc} to {out_pcc}"
+                assert pcc_val == prev_pcc, f"Iteration {iters}: pcc changed from {prev_pcc} to {out_pcc}"
             prev_pcc = pcc_val
 
             # Store failures
@@ -652,12 +714,12 @@ def run_scaled_dot_product_attention_decode(
     if len(failures) > 0:
         for f in failures:
             logger.debug(f"PCC Check FAILED with the following configuration:")
-            logger.debug(f"max_cur_pos = {f['max_cur_pos']}")
+            logger.debug(f"current_position_idx = {f['current_position_idx']}")
             logger.debug(f"repeat_iteration = {f['repeat_iteration']}")
-            logger.debug(f"tt_output = {f['tt_output']}")
-            logger.debug(f"torch_output = {f['torch_output']}")
+            logger.debug(f"pcc_value = {f['pcc_value']}")
+
     else:
-        logger.debug("All decode iterations and iterations PASSED")
+        logger.debug("All decode iterations PASSED")
 
     def tolerance_pcc_pass(pcc_values, min_pcc, tolerance):
         pcc_values = torch.as_tensor(pcc_values)
@@ -665,7 +727,7 @@ def run_scaled_dot_product_attention_decode(
 
     assert tolerance_pcc_pass(
         all_pcc_values, min_pcc, tolerance
-    ), f"At least {tolerance*100}% of the PCC values must be greater than or equal to {min_pcc}"
+    ), f"At least {tolerance*100}% of the PCC values must be greater than or equal to target PCC of {min_pcc}"
 
 
 @pytest.mark.parametrize(
@@ -682,44 +744,67 @@ def run_scaled_dot_product_attention_decode(
     ],
 )
 @pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(0, 0), (32, 32), (128, 128), (256, 256), (512, 512)])
-@pytest.mark.parametrize("start_core", [ttnn.CoreCoord(1, 0)])
-@pytest.mark.parametrize("sub_core_grids", [None])
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(None, None), (32, 32), (128, 128), (256, 256), (512, 512)])
+@pytest.mark.parametrize(
+    "start_core, sub_core_grids",
+    [
+        (
+            ttnn.CoreCoord(0, 0),
+            None,
+        )(
+            ttnn.CoreCoord(1, 0),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                ]
+            ),
+        ),
+        (
+            ttnn.CoreCoord(0, 0),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+                ]
+            ),
+        ),
+    ],
+)
 @pytest.mark.parametrize("use_paged_attention", [True, False])
-@pytest.mark.parametrize("cur_pos_is_sharded", [False])
-@pytest.mark.parametrize("page_table_is_sharded", [False])
+@pytest.mark.parametrize("cur_pos_is_sharded, page_table_is_sharded", [(True, True)])
 @pytest.mark.parametrize("block_size", [32])
-@pytest.mark.parametrize("sliding_window_size", [None])
-@pytest.mark.parametrize("num_repeat_iters", [1])
+@pytest.mark.parametrize("num_repeat_iters", [10])
+@pytest.mark.parametrize("sharded_in", [True, False])
+@pytest.mark.parametrize("sharded_out", [True, False])
 @pytest.mark.parametrize(
     "is_causal, mask_type, use_cur_pos_tensor, cur_pos_type, cur_pos_id, is_multi_pos, step_size, sliding_window_size",
     [
         (True, "causal", True, "constant", 0, True, 31, 0),
-        (True, "causal", True, "half_seq_len", -1, False, 0, 0),
-        (True, "causal", True, "random", None, False, 0, 0),
-        (True, "causal", True, "linear", None, False, 0, 0),
-        (True, "causal", True, "drop_users", None, False, 0, 0),
-        (False, "non_causal", False, "half_seq_len", None, False, 0, 0),
-        (True, "sliding_window", False, "constant", 0, True, 31, 64),
-        (True, "sliding_window", False, "constant", 0, True, 31, 128),
-        (True, "sliding_window", False, "constant", 0, True, 31, 256),
-        (True, "sliding_window", False, "constant", 0, True, 31, 512),
-        (True, "sliding_window", False, "constant", 0, True, 31, 1024),
+        (True, "causal", True, "constant", 127, False, 0, 0),
+        (True, "causal", True, "random", -1, False, 0, 0),
+        (True, "causal", True, "linear", -1, False, 0, 0),
+        (True, "causal", True, "drop_users", -1, False, 0, 0),
+        (False, "non_causal", False, "half_seq_len", -1, False, 0, 0),
+        (True, "sliding_window", True, "half_seq_len", -1, False, 0, 64),
+        (True, "sliding_window", True, "constant", 0, True, 31, 128),
+        (True, "sliding_window", True, "constant", 0, True, 31, 256),
+        (True, "sliding_window", True, "constant", 0, True, 31, 512),
+        (True, "sliding_window", True, "constant", 0, True, 31, 1024),
     ],
 )
 @pytest.mark.parametrize(
-    "b, nh, nkv, s, d, grid_size, is_single_iter, sharded_in, sharded_out",
+    "b, nh, nkv, s, d, grid_size, is_single_iter",
     [
-        [32, 32, 8, 8192, 128, (8, 8), True, True, False],
-        # [32, 32, 8, 4224, 128, (8, 8), True, True, False ],
-        # [32, 8, 1, 32768, 128, (8, 6), True, True, False ],
-        # [8, 8, 1, 32768, 128, (8, 6), True, True, False ],
-        # [8, 16, 4, 4096, 128, (8, 2), True, True, False ],
-        # [4, 32, 8, 8192, 128, (8, 8), True, True, False ],
-        # [4, 16, 4, 32768, 128, (8, 8),True, True, False ],
-        # [1, 8, 1, 128 * 1024, 128, (8, 4), True, True, False],
-        # [1, 32, 8, 128 * 1024, 128, (8, 1), True, True, False],
-        # [1, 4, 2, 128 * 1024, 128, (8, 8), True, True, False]
+        [32, 32, 8, 8192, 128, (8, 8), True],
+        [32, 32, 8, 4224, 128, (8, 8), True],
+        [32, 8, 1, 32768, 128, (8, 6), True],
+        [32, 4, 1, 32768, 128, (8, 6), False],
+        [8, 16, 4, 4096, 128, (8, 2), True],
+        [4, 32, 8, 8192, 128, (8, 8), True],
+        [4, 16, 4, 32768, 128, (8, 8), True],
+        [1, 8, 1, 128 * 1024, 128, (8, 4), True],
+        [1, 32, 8, 128 * 1024, 128, (8, 1), True],
+        [1, 4, 2, 128 * 1024, 128, (8, 8), True],
     ],
 )
 def test_sdpa_decode_core(
@@ -754,8 +839,28 @@ def test_sdpa_decode_core(
     num_repeat_iters,
     step_size,
 ):
+    if use_paged_attention and not is_causal:
+        pytest.skip("Paged attention is only supported for causal attention.")
+
     if nkv > 1 and q_dtype != ttnn.bfloat16:
-        pytest.skip("For Grouped Query Attention (nkv > 1)we require q_dtype to be bfloat16")
+        pytest.skip("For Grouped Query Attention (nkv > 1)we require q_dtype to be bfloat16.")
+
+    if not is_causal and (sharded_in or sharded_out):
+        pytest.skip("Sharded input and output are only supported for causal attention.")
+
+    if q_layout == ttnn.ROW_MAJOR_LAYOUT and not (sharded_in and sharded_out):
+        # TILE LAYOUT Q allows for either sharded input , output or both.
+        pytest.skip("Row major Layout is only supported for both sharded input and output.")
+
+    if use_paged_attention and not use_cur_pos_tensor:
+        # Causal attention supports using both the cur_pos_tensor or cur_pos arguments.
+        pytest.skip(
+            "cur_pos_tensor is a required argument for paged attention op, cur_pos is only a supported argument for non-paged attention op."
+        )
+
+    if not use_paged_attention and (cur_pos_is_sharded or page_table_is_sharded):
+        pytest.skip("Non-paged attention is not supported for sharded cur_pos or page table.")
+
     run_scaled_dot_product_attention_decode(
         device,
         b,
@@ -788,121 +893,6 @@ def test_sdpa_decode_core(
         num_repeat_iters,
         step_size,
     )
-
-
-# @pytest.mark.parametrize(
-#     "kv_dtype, q_dtype",
-#     [
-#         [ttnn.bfloat8_b, ttnn.bfloat16],
-#     ],
-# )
-# @pytest.mark.parametrize("sharded_in, sharded_out", [
-#     (True, False),
-#     (True, True),
-#     (False, False),
-# ])
-# @pytest.mark.parametrize("cur_pos_is_sharded", [True, False])
-# @pytest.mark.parametrize("page_table_is_sharded", [True, False])
-# @pytest.mark.parametrize("use_paged_attention", [True])
-# @pytest.mark.parametrize("is_single_iter", [True])
-# @pytest.mark.parametrize("block_size", [32])
-# @pytest.mark.parametrize("mask_type", ["causal"])
-# @pytest.mark.parametrize("num_repeat_iters", [1])
-# @pytest.mark.parametrize("sliding_window_size", [None])
-# @pytest.mark.parametrize("cur_pos_tensor", [True])
-# @pytest.mark.parametrize("cur_pos_type", ["half_seq_len"])
-# @pytest.mark.parametrize("cur_pos_id", [-1])
-# @pytest.mark.parametrize("q_chunk_size", [None])
-# @pytest.mark.parametrize("k_chunk_size", [None])
-# @pytest.mark.parametrize("grid_size", [(8, 8)])
-# @pytest.mark.parametrize(
-#     "start_core, sub_core_grids",
-#     [
-#         (
-#             ttnn.CoreCoord(1, 0),
-#             ttnn.CoreRangeSet(
-#                 [
-#                     ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-#                     ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-#                 ]
-#             ),
-#         ),
-#         (
-#             ttnn.CoreCoord(0, 0),
-#             ttnn.CoreRangeSet(
-#                 [
-#                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
-#                 ]
-#             ),
-#         )
-#     ],
-#     ids=[
-#         "glx_subcoregrid",
-#         'n150_subcoregrid',
-#     ]
-# )
-# def test_sdpa_decode_sharded(
-#     device,
-#     b,
-#     nh,
-#     nkv,
-#     s,
-#     d,
-#     grid_size,
-#     single_iter,
-#     q_dtype,
-#     q_layout,
-#     kv_dtype,
-#     q_chunk_size,
-#     k_chunk_size,
-#     cur_pos_tensor,
-#     cur_pos_type,
-#     cur_pos_id,
-#     cur_pos_is_sharded,
-#     page_table_is_sharded,
-#     sharded_in,
-#     sharded_out,
-#     start_core,
-#     sub_core_grids,
-#     is_causal,
-#     use_paged_attention,
-#     is_single_iter,
-#     block_size,
-#     mask_type,
-#     num_repeat_iters,
-#     sliding_window_size
-# ):
-#     run_scaled_dot_product_attention_decode(
-#         device,
-#         b,
-#         s,
-#         nh,
-#         nkv,
-#         d,
-#         q_dtype,
-#         q_layout,
-#         kv_dtype,
-#         q_chunk_size,
-#         k_chunk_size,
-#         grid_size,
-#         use_cur_pos_tensor,
-#         cur_pos_type,
-#         cur_pos_id,
-#         cur_pos_is_sharded,
-#         page_table_is_sharded,
-#         sharded_in,
-#         sharded_out,
-#         start_core,
-#         sub_core_grids,
-#         is_causal,
-#         use_paged_attention,
-#         single_iter,
-#         block_size,
-#         mask_type,
-#         num_repeat_iters,
-#         sliding_window_size,
-#         pos_step,
-#     )
 
 
 # test_sdpa_decode
