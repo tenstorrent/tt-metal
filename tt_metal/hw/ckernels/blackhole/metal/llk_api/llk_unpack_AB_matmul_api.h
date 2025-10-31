@@ -116,8 +116,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandA_id);  // In0/InA -> srcB
 
     // TODO: Review RT, use partial_face_b
-    const bool partial_face_a = get_operand_partial_face(operandA_id);
-    const bool partial_face_b = get_operand_partial_face(operandB_id);
+    const bool partial_face_a = get_operand_partial_face(operandB_id);
+    const bool partial_face_b = get_operand_partial_face(operandA_id);
 
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
