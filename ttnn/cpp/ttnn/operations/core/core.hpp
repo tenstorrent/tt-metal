@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/core/get_tensor_id/get_tensor_id_op.hpp"
 #include "ttnn/operations/core/set_tensor_id/set_tensor_id_op.hpp"
+#include "ttnn/operations/core/fetch_and_increment_tensor_id/fetch_and_increment_tensor_id_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -57,5 +58,7 @@ constexpr auto to_memory_config =
 constexpr auto to_layout = ttnn::register_operation<"ttnn::to_layout", ttnn::operations::core::ToLayout>();
 constexpr auto get_tensor_id = ttnn::register_operation<"ttnn::get_tensor_id", ttnn::operations::core::GetTensorId>();
 constexpr auto set_tensor_id = ttnn::register_operation<"ttnn::set_tensor_id", ttnn::operations::core::SetTensorId>();
+constexpr auto fetch_and_increment_tensor_id = ttnn::
+    register_operation<"ttnn::fetch_and_increment_tensor_id", ttnn::operations::core::FetchAndIncrementTensorId>();
 
 }  // namespace ttnn

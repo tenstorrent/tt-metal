@@ -18,6 +18,7 @@ target_sources(
             to_memory_config/to_memory_config_op.hpp
             get_tensor_id/get_tensor_id_op.hpp
             set_tensor_id/set_tensor_id_op.hpp
+            fetch_and_increment_tensor_id/fetch_and_increment_tensor_id_op.hpp
     PRIVATE
         compute_kernel/compute_kernel_config.cpp
         core.cpp
@@ -25,6 +26,7 @@ target_sources(
         to_dtype/to_dtype_op.cpp
         get_tensor_id/get_tensor_id_op.cpp
         set_tensor_id/set_tensor_id_op.cpp
+        fetch_and_increment_tensor_id/fetch_and_increment_tensor_id_op.cpp
 )
 
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})

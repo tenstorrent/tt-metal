@@ -38,6 +38,7 @@ namespace operations {
 namespace core {
 struct GetTensorId;
 struct SetTensorId;
+struct FetchAndIncrementTensorId;
 }  // namespace core
 }  // namespace operations
 }  // namespace ttnn
@@ -274,6 +275,7 @@ public:
 
     friend struct ttnn::operations::core::GetTensorId;
     friend struct ttnn::operations::core::SetTensorId;
+    friend struct ttnn::operations::core::FetchAndIncrementTensorId;
 
 private:
     static std::atomic<std::uint64_t> tensor_id_counter;

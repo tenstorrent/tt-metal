@@ -650,8 +650,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
         return tensor;
     }
     auto output = tensor;
-    output.tensor_id = ttnn::operations::core::GetTensorId::invoke();
-    ttnn::operations::core::SetTensorId::invoke(output.tensor_id + 1);
+    output.tensor_id = ttnn::operations::core::FetchAndIncrementTensorId::invoke();
     return output;
 };
 

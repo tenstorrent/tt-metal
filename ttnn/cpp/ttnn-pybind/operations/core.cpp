@@ -404,6 +404,22 @@ void py_module(py::module& module) {
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::set_tensor_id)& self, std::uint64_t id) -> std::uint64_t { return self(id); },
             py::arg("id")});
+
+    bind_registered_operation(
+        module,
+        ttnn::fetch_and_increment_tensor_id,
+        R"doc(fetch_and_increment_tensor_id() -> int
+
+            Atomically fetch the current tensor ID counter and increment it.
+
+            Returns:
+                int: The tensor ID value before incrementing.
+
+            Example:
+                >>> tensor_id = ttnn.fetch_and_increment_tensor_id()
+        )doc",
+        ttnn::pybind_overload_t{
+            [](const decltype(ttnn::fetch_and_increment_tensor_id)& self) -> std::uint64_t { return self(); }});
 }
 
 }  // namespace ttnn::operations::core
