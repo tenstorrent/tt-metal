@@ -192,7 +192,7 @@ static std::vector<Tensor> pool2d_invoke(
              input_tensor_shape[2],
              input_tensor_width_snapped_to_channels_alignment});
 
-        input_tensor_flattened = input_tensor_flattened.reshape(input_tensor_shape, input_padded_shape);
+        input_tensor_flattened = ttnn::reshape(input_tensor_flattened, input_tensor_shape, input_padded_shape);
 
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
