@@ -45,8 +45,10 @@ Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape);
 Tensor tensor_reshape(
     const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape);
 
-Tensor tensor_view(const Tensor& input_tensor, const ttnn::Shape& new_shape);
+Tensor tensor_view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor tensor_view(
-    const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape);
+    const Tensor& input_tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
 
 }  // namespace tt::tt_metal::tensor_ops

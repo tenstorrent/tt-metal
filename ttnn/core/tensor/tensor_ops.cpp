@@ -157,8 +157,7 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& out
 // ======================================================================================
 //                                  .tensor_view()
 // ======================================================================================
-Tensor tensor_view(
-    const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) {
+Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
     /*
     It is a view reshape, so no data is copied.
     Requirements:
@@ -268,7 +267,7 @@ Tensor tensor_view(
     return output;
 }
 
-Tensor tensor_view(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
+Tensor tensor_view(const Tensor& input_tensor, const Shape& new_shape) {
     return tensor_view(input_tensor, new_shape, new_shape);
 }
 

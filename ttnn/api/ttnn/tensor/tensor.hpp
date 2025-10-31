@@ -318,8 +318,9 @@ void write_tensor(
 Tensor set_tensor_id(const Tensor& tensor);
 
 namespace operations {
-Tensor view(const Tensor& input_tensor, const ttnn::Shape& new_shape, const ttnn::Shape& new_padded_shape);
-Tensor view(const Tensor& input_tensor, const ttnn::Shape& new_shape);
+Tensor view(
+    const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape, const tt::tt_metal::Shape& new_padded_shape);
+Tensor view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 }  // namespace operations
 
 }  // namespace tt_metal
