@@ -9,9 +9,9 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import click
 import yaml
@@ -251,6 +251,52 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     return config
 
 
+DEFAULT_TRACY_BASE_PORT = 8087
+
+
+@dataclass
+class TracyConfig:
+    output_root: Path
+    base_port: int
+    passthrough_args: List[str]
+
+
+def parse_tracy_args(raw: str) -> TracyConfig:
+    """Parse a raw tracy argument string, extracting port and output root for per-rank handling.
+
+    Recognises -t/--port and -o/--output-folder from python -m tracy's interface.
+    Those two values are consumed (they become per-rank); everything else is
+    forwarded verbatim so that new tracy options work without ttrun changes.
+    """
+    tokens = shlex.split(raw) if raw else []
+    base_port = DEFAULT_TRACY_BASE_PORT
+    output_root: Optional[Path] = None
+    passthrough: List[str] = []
+
+    i = 0
+    while i < len(tokens):
+        if tokens[i] in ("-t", "--port") and i + 1 < len(tokens):
+            base_port = int(tokens[i + 1])
+            i += 2
+        elif tokens[i] in ("-o", "--output-folder") and i + 1 < len(tokens):
+            output_root = Path(tokens[i + 1])
+            i += 2
+        else:
+            passthrough.append(tokens[i])
+            i += 1
+
+    if output_root is None:
+        output_root = Path(os.environ.get("TT_METAL_HOME", str(Path.home()))) / "generated/profiler/ttrun"
+
+    output_root = output_root.expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    if base_port <= 0:
+        raise ValueError("Tracy base port must be a positive integer")
+
+    return TracyConfig(output_root=output_root, base_port=base_port, passthrough_args=passthrough)
+
+
 # Environment variable prefixes that should be automatically passed through to MPI processes
 ENV_PASSTHROUGH_PREFIXES = (
     "TT_",  # TT-Metal/TTNN variables
@@ -291,7 +337,11 @@ ENV_BLOCKLIST = frozenset(
 )
 
 
-def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
+def get_rank_environment(
+    binding: RankBinding,
+    config: TTRunConfig,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
 
     Args:
@@ -378,10 +428,17 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Rank-specific overrides last (higher precedence)
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
 
+    if extra_env:
+        env.update(extra_env)
+
     return env
 
 
-def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> List[str]:
+def build_rank_environment_args(
+    binding: RankBinding,
+    config: TTRunConfig,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> List[str]:
     """Build environment variable arguments for mpirun.
 
     Args:
@@ -392,7 +449,7 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
         List of ["-x", "KEY=value"] arguments for mpirun
     """
     env_args = []
-    env = get_rank_environment(binding, config)
+    env = get_rank_environment(binding, config, extra_env)
 
     for key, value in env.items():
         env_args.extend(["-x", f"{key}={value}"])
@@ -401,7 +458,11 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
 
 
 def build_mpi_command(
-    config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None, debug_gdbserver: bool = False
+    config: TTRunConfig,
+    program: List[str],
+    mpi_args: Optional[List[str]] = None,
+    debug_gdbserver: bool = False,
+    tracy_config: Optional[TracyConfig] = None,
 ) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
     # Check if running in SLURM interactive session
@@ -441,18 +502,72 @@ def build_mpi_command(
             cmd.append(":")
 
         cmd.extend(["-np", "1"])
-        cmd.extend(build_rank_environment_args(binding, config))
-        program_to_run = program
+        tracy_env: Dict[str, str] = {}
+        rank_program = program
+        if tracy_config:
+            rank_program, tracy_env = wrap_program_with_tracy(program, binding, tracy_config)
+        cmd.extend(build_rank_environment_args(binding, config, tracy_env))
         if debug_gdbserver:
             port = 20000 + binding.rank
             echo_part = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}";'
             gdbserver_part = f"exec gdbserver :{port}"
-            quoted_program_args = " ".join(shlex.quote(arg) for arg in program)
+            quoted_program_args = " ".join(shlex.quote(arg) for arg in rank_program)
             cmd_str = f"{echo_part} {gdbserver_part} {quoted_program_args}"
-            program_to_run = ["bash", "-c", cmd_str]
-        cmd.extend(program_to_run)
+            rank_program = ["bash", "-c", cmd_str]
+        cmd.extend(rank_program)
 
     return cmd
+
+
+def _strip_python_interpreter(program: List[str]) -> List[str]:
+    """Strip a leading python interpreter from a command list.
+
+    `python -m tracy` already runs inside Python, so an explicit interpreter
+    prefix (e.g. ``python3 script.py``) is redundant and causes tracy to try
+    to open the interpreter name as a script file.
+    """
+    if not program:
+        return program
+    first = Path(program[0]).name
+    if first in ("python", "python3") or first.startswith("python3."):
+        return program[1:]
+    if Path(program[0]).resolve() == Path(sys.executable).resolve():
+        return program[1:]
+    return program
+
+
+def wrap_program_with_tracy(
+    program: List[str], binding: RankBinding, tracy_config: TracyConfig
+) -> Tuple[List[str], Dict[str, str]]:
+    """Return the tracy-wrapped command and any extra env for a rank.
+
+    Only --port and -o are injected per-rank; every other tracy flag comes
+    from the user's original --tracy string via passthrough_args.
+    """
+    rank_output_dir = (tracy_config.output_root / f"rank{binding.rank}").resolve()
+    rank_output_dir.mkdir(parents=True, exist_ok=True)
+    port = tracy_config.base_port + binding.rank
+
+    tracy_cmd = [
+        sys.executable,
+        "-m",
+        "tracy",
+        "--port",
+        str(port),
+        "-o",
+        str(rank_output_dir),
+    ]
+
+    if tracy_config.passthrough_args:
+        tracy_cmd.extend(tracy_config.passthrough_args)
+
+    tracy_cmd.extend(_strip_python_interpreter(program))
+
+    extra_env = {
+        "TT_METAL_PROFILER_DIR": str(rank_output_dir),
+    }
+
+    return tracy_cmd, extra_env
 
 
 def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
@@ -523,6 +638,20 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     default=None,
     help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
 )
+@click.option(
+    "--tracy",
+    "tracy_args",
+    type=str,
+    default=None,
+    help=(
+        "Enable Tracy profiling for every rank. "
+        "Accepts the full `python -m tracy` argument string (quoted). "
+        "--port/-t and -o/--output-folder are automatically made per-rank "
+        f"(default base port {DEFAULT_TRACY_BASE_PORT}, output $TT_METAL_HOME/generated/profiler/ttrun). "
+        "All other tracy flags are forwarded verbatim. "
+        'Examples: --tracy "-r -v --no-device" or --tracy "" for defaults.'
+    ),
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -535,6 +664,7 @@ def main(
     skip_executable_check: bool,
     bare: bool,
     tcp_interface: Optional[str],
+    tracy_args: Optional[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -756,9 +886,8 @@ def main(
         tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
         Section 2.4: Distributed Process Launch with tt-run
     """
-    program = ctx.args
+    program = list(ctx.args)
 
-    # Log diagnostic information for path resolution debugging
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} Path Resolution Diagnostics:")
         logger.info(f"{TT_RUN_PREFIX}   Original CWD (at launch): {ORIGINAL_CWD}")
@@ -832,8 +961,19 @@ def main(
             logger.info(f"{TT_RUN_PREFIX} Using multihost MPI args: {' '.join(multihost_args)}")
 
     # Build MPI command
+    tracy_config = None
+    if tracy_args is not None:
+        try:
+            tracy_config = parse_tracy_args(tracy_args)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+
     mpi_cmd = build_mpi_command(
-        config, program, effective_mpi_args if effective_mpi_args else None, debug_gdbserver=debug_gdbserver
+        config,
+        program,
+        effective_mpi_args if effective_mpi_args else None,
+        debug_gdbserver=debug_gdbserver,
+        tracy_config=tracy_config,
     )
 
     if verbose or dry_run:

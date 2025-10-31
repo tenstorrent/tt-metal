@@ -616,7 +616,7 @@ public:
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
-        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+        return !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint) && !profiler_enabled;
     }
     bool get_fast_dispatch() const { return fast_dispatch; }
 
