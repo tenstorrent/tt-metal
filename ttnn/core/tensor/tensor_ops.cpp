@@ -170,7 +170,7 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
     auto infer_output_memory_config = [](const MemoryConfig& input_memory_config,
-                                         const ttnn::Shape& output_padded_shape) -> MemoryConfig {
+                                         const tt::tt_metal::Shape& output_padded_shape) -> MemoryConfig {
         if (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             auto shard_spec = input_memory_config.shard_spec().value();
             shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
@@ -186,7 +186,7 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
     }
 
     const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_padded_shape);
-    auto new_spec = ttnn::TensorSpec(
+    auto new_spec = tt::tt_metal::TensorSpec(
         new_logical_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
@@ -231,7 +231,7 @@ Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, c
 
                         MemoryConfig mem_config = input_tensor.memory_config().with_shard_spec(shard_spec);
 
-                        auto upd_spec = ttnn::TensorSpec(
+                        auto upd_spec = tt::tt_metal::TensorSpec(
                             new_logical_shape,
                             TensorLayout::fromPaddedShape(
                                 input_tensor.dtype(),
