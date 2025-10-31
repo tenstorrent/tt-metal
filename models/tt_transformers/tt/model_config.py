@@ -449,6 +449,7 @@ class ModelArgs:
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
+        "olmOCR-2-7B-1025": "models/tt_transformers/model_params/olmOCR-2-7B-1025",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -592,6 +593,7 @@ class ModelArgs:
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
+                "olmOCR-2-7B-1025": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2364,6 +2366,7 @@ class ModelArgs:
                 "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
                 "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
                 "Phi-3-mini-128k-instruct": "microsoft/Phi-3-mini-128k-instruct",
+                "olmOCR-2-7B-1025": "allenai/olmOCR-2-7B-1025",
             }
 
             logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
