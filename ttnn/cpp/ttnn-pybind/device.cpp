@@ -19,6 +19,7 @@
 
 #include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "tools/profiler/op_profiler.hpp"
+#include "ttnn-pybind/json_class.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
@@ -516,6 +517,22 @@ void device_module(py::module& m_device) {
         | device           | Device to read profiling data of | ttnn.Device           |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
+
+    // tt_serializable_class<tt::tt_metal::OpAnalysisData>(m_device, "OpAnalysisData", R"doc(
+    //     Class defining op analysis data
+    // )doc").
+    // m_device.def(
+    //     "GetLatestOpsPerfData",
+    //     &tt::tt_metal::GetLatestOpsPerfData,
+    //     R"doc(
+    //     Get the latest profiling data for all devices.
+    //     )doc");
+    // m_device.def(
+    //     "GetAllOpsPerfData",
+    //     &tt::tt_metal::GetAllOpsPerfData,
+    //     R"doc(
+    //     Get all profiling data for all devices.
+    //     )doc");
 
     m_device.def(
         "get_arch_name",

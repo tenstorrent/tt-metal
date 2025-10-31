@@ -853,6 +853,11 @@ bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
            state == ProfilerReadState::NORMAL;
 }
 
+bool getOpsPerfDataMidRun() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
+           tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_cpp_post_process();
+}
+
 void ProcessDeviceProfilerResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -1054,6 +1059,52 @@ void ReadMeshDeviceProfilerResults(
     }
 
     mesh_device.wait_for_thread_pool();
+#endif
+}
+
+std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData() {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    if (!getDeviceProfilerState() || !detail::getOpsPerfDataMidRun()) {
+        return {};
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
+    std::map<ChipId, std::set<OpAnalysisData>> latest_ops_perf_data;
+
+    for (const auto& [device_id, device_ops_perf_analyses] : profiler_state_manager->device_ops_perf_analyses_map) {
+        TT_ASSERT(!device_ops_perf_analyses.empty());
+        latest_ops_perf_data[device_id] = device_ops_perf_analyses.back();
+    }
+
+    return latest_ops_perf_data;
+#endif
+}
+
+std::map<ChipId, std::set<OpAnalysisData>> GetAllOpsPerfData() {
+#if defined(TRACY_ENABLE)
+    ZoneScoped;
+
+    if (!getDeviceProfilerState() || !detail::getOpsPerfDataMidRun()) {
+        return {};
+    }
+
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        tt::tt_metal::MetalContext::instance().profiler_state_manager();
+
+    std::map<ChipId, std::set<OpAnalysisData>> all_ops_perf_data;
+
+    for (const auto& [device_id, device_ops_perf_analyses] : profiler_state_manager->device_ops_perf_analyses_map) {
+        std::set<OpAnalysisData>& device_all_ops_perf_data = all_ops_perf_data[device_id];
+        for (const auto& ops_perf_analysis : device_ops_perf_analyses) {
+            device_all_ops_perf_data.insert(ops_perf_analysis.begin(), ops_perf_analysis.end());
+        }
+    }
+
+    return all_ops_perf_data;
 #endif
 }
 
