@@ -3,7 +3,7 @@
 
 import ttnn
 from models.demos.glm_45.utils.general_utils import get_cache_file_name
-from models.experimental.stable_diffusion_35_large.tt.substate import substate
+from models.demos.glm_45.utils.substate import substate
 
 from .attention import Attention
 from .mlp import MLP

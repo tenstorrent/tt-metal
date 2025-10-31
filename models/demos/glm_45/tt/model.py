@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
+from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeRotaryEmbedding
 
 import ttnn
-from models.demos.gpt_oss.config import MeshConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_decode_mask
-from models.demos.gpt_oss.utils.substate import substate
+from models.demos.glm_45.config import MeshConfig
+from models.demos.glm_45.utils.general_utils import get_cache_file_name, get_decode_mask
+from models.demos.glm_45.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 
 from .layer import DecoderLayer
@@ -17,14 +17,15 @@ from .rope import ApplyRotaryPosEmb
 
 class Model:
     """
-    GPT-OSS TTNN Model Implementation
+    GLM-4.5 TTNN Model Implementation
 
-    This class implements the GPT-OSS model using TTNN tensors and operations.
-    It supports both prefill and decode modes with sliding window attention.
+    Implements GLM-4.5 using TTNN tensors and operations, supporting both prefill and
+    decode passes. The model includes MoE (Mixture of Experts) layers and uses GLM’s
+    rotary embeddings and masking. It is compatible with the tt_transformers generator.
 
     Key Features:
     - MoE (Mixture of Experts) architecture with router and experts
-    - Sliding window attention for efficient long sequences
+    - Optional sliding window attention depending on config
     - Paged attention support for memory efficiency
     - Compatible with tt_transformers generator interface
     """
@@ -42,7 +43,7 @@ class Model:
         create_kv_cache=True,
     ):
         """
-        Initialize GPT-OSS model
+        Initialize GLM-4.5 model
 
         Args:
             mesh_device: TTNN mesh device for computation
@@ -66,8 +67,8 @@ class Model:
         # Use MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
-        # Initialize rope embeddings for generator compatibility
-        self.rope_embeddings = GptOssRotaryEmbedding(hf_config)
+        # Initialize rope embeddings for generator compatibility (GLM-4.5)
+        self.rope_embeddings = Glm4MoeRotaryEmbedding(hf_config)
         self.apply_rope = ApplyRotaryPosEmb(hf_config)
         embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
         embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
@@ -136,8 +137,8 @@ class Model:
         create_kv_cache=True,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
-        # Create a dummy CCL manager for GPT-OSS
-        from models.demos.gpt_oss.tt.ccl import CCLManager
+        # Create a CCL manager for GLM-4.5
+        from models.demos.glm_45.tt.ccl import CCLManager
 
         ccl_manager = CCLManager(mesh_device)
 
