@@ -13,7 +13,7 @@ from models.common.utility_functions import skip_for_n_or_less_dev, skip_for_wor
 
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     run_all_to_all_dispatch_test,

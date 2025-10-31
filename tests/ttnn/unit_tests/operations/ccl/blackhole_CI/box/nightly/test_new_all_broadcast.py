@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 import torch
 import pytest

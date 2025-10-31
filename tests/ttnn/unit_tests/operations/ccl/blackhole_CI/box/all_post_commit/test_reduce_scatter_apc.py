@@ -10,7 +10,7 @@ from models.common.utility_functions import (
     skip_for_n_dev,
     skip_for_n_or_less_dev,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
