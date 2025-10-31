@@ -5,6 +5,8 @@
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 
+#include "impl/buffers/circular_buffer_config.hpp"
+
 namespace tt::tt_metal {
 
 BufferType from_flatbuffer(flatbuffer::BufferType type) {

@@ -8,6 +8,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 
+#include "impl/buffers/circular_buffer_config.hpp"
+
 namespace tt::tt_metal {
 
 class CircularBufferImpl {
