@@ -79,9 +79,9 @@ ALWI void process_tile(
             copy_tile(tensor_cb, 0, 2);
         }
 
-        // Perform the where operation
-        where_tile_init();
-        WHERE_LLK(0, 1, 2, 0);  // where(predicate, true, false)
+        // Perform the ternary operation
+        TERNARY_SFPU_OP_INIT();
+        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0);
 
         tile_regs_commit();
 
