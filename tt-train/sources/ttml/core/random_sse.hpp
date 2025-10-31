@@ -176,15 +176,17 @@ public:
 
     [[nodiscard]]
     __attribute__((target("aes,sse4.2"))) result_type operator()() noexcept {
-        thread_local int idx = simd_float_batch_size;
+        thread_local int idx = 0;
         thread_local uint32_t buffer[simd_float_batch_size];
         thread_local AesRng* last_rng = nullptr;
+        thread_local bool first_use = true;
 
-        if (idx >= simd_float_batch_size || last_rng != this) {
+        if (first_use || idx >= simd_float_batch_size || last_rng != this) {
             __m128i rand = generate_128bit();
             _mm_storeu_si128((__m128i*)buffer, rand);
             idx = 0;
             last_rng = this;
+            first_use = false;
         }
         return buffer[idx++];
     }
