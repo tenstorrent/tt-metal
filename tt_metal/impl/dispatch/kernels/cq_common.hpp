@@ -344,7 +344,7 @@ public:
 
     // Return availabe space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
     // wrap around.
-    uint32_t available_space(uint32_t data_ptr) const {
+    uint32_t available_bytes(uint32_t data_ptr) const {
         return cb_fence_ - data_ptr;
     }
 
@@ -435,7 +435,7 @@ public:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
     FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uint32_t& cmd_ptr) {
-        if (this->available_space(cmd_ptr) == 0) {
+        if (this->available_bytes(cmd_ptr) == 0) {
             if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
                 if (this->rd_block_idx_ == cb_blocks - 1) {
                     cmd_ptr = cb_base;
@@ -445,7 +445,7 @@ public:
             }
             this->acquire_pages();
         }
-        return this->available_space(cmd_ptr);
+        return this->available_bytes(cmd_ptr);
     }
 
     // Get new CB pages. If getting new pages would require switching the the next block, this will call on_boundary to
@@ -535,11 +535,11 @@ public:
     }
 
     // Returns how much data is available. Will block until data is available.
-    FORCE_INLINE uint32_t wait_for_availabe_data(uint32_t& cmd_ptr) {
-        if (this->available_space(cmd_ptr) == 0) {
+    FORCE_INLINE uint32_t wait_for_available_data(uint32_t& cmd_ptr) {
+        if (this->available_bytes(cmd_ptr) == 0) {
             get_cb_page(cmd_ptr);
         }
-        return this->available_space(cmd_ptr);
+        return this->available_bytes(cmd_ptr);
     }
 
     // Advance cmd_ptr by length. If we wrap around, wrap the fence (should only happen if we hit the end exactly).

@@ -219,7 +219,7 @@ void completion_queue_reserve_back(uint32_t num_pages) {
     uint32_t completion_rd_ptr_and_toggle;
     uint32_t completion_rd_ptr;
     uint32_t completion_rd_toggle;
-    uint32_t available_space;
+    uint32_t available_bytes;
     do {
         invalidate_l1_cache();
         completion_rd_ptr_and_toggle = *get_cq_completion_read_ptr();
@@ -229,11 +229,11 @@ void completion_queue_reserve_back(uint32_t num_pages) {
         // so available space is distance from write ptr to read ptr
         // Toggles are equal means write ptr is ahead of read ptr
         // so available space is total space minus the distance from read to write ptr
-        available_space =
+        available_bytes =
             completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle
                 ? completion_rd_ptr - cq_write_interface.completion_fifo_wr_ptr
                 : (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
-    } while (data_size_16B > available_space);
+    } while (data_size_16B > available_bytes);
 
     WAYPOINT("QRBD");
 }
@@ -365,7 +365,7 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
 
     // First page should be valid since it has the command
     ASSERT(data_ptr <= dispatch_cb_end - dispatch_cb_page_size);
-    ASSERT(dispatch_cb_page_size <= dispatch_cb_reader.available_space(data_ptr));
+    ASSERT(dispatch_cb_page_size <= dispatch_cb_reader.available_bytes(data_ptr));
 
     // regular write, inline writes, and atomic writes use different cmd bufs, so we can init state for each
     // TODO: Add support for stateful atomics. We can preserve state once cb_acquire_pages is changed to a free running
@@ -401,11 +401,11 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
                 ASSERT(downstream_cb_data_ptr < downstream_cb_end);
             }
             // Get a page if needed
-            if (xfer_size > dispatch_cb_reader.available_space(data_ptr)) {
+            if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
                 dispatch_cb_reader.get_cb_page_and_release_pages(
                     data_ptr,
                     [&](bool will_wrap) {
-                        uint32_t orphan_size = dispatch_cb_reader.available_space(data_ptr);
+                        uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
                         if (orphan_size != 0) {
                             relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
                                 data_ptr,
@@ -626,14 +626,14 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         sub_cmd_ptr++;
         uint64_t dst = get_noc_addr_helper(dst_noc, dst_addr);
         // Get a page if needed
-        if (xfer_size > dispatch_cb_reader.available_space(data_ptr)) {
+        if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
             // Check for block completion and issue orphan writes for this block
             // before proceeding to next block
             uint32_t orphan_size = 0;
             dispatch_cb_reader.get_cb_page_and_release_pages(
                 data_ptr,
                 [&](bool will_wrap) {
-                    orphan_size = dispatch_cb_reader.available_space(data_ptr);
+                    orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
                     if (os != 0) {
                         wait_for_barrier();
                         cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, os, num_dests);
@@ -757,7 +757,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
         while (length != 0) {
             // More data needs to be written, but we've exhausted the CB. Acquire more pages.
-            if (dispatch_cb_reader.available_space(data_ptr) == 0) {
+            if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
                 dispatch_cb_reader.get_cb_page_and_release_pages(
                     data_ptr,
                     [&](bool /*will_wrap*/) {
@@ -768,7 +768,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
                     });
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
-            uint32_t available_data = dispatch_cb_reader.available_space(data_ptr);
+            uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
             uint32_t xfer_size;
             if (length > available_data) {
                 xfer_size = available_data;
@@ -807,7 +807,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
         writes = 0;
 
         // Handle padded size and potential wrap
-        if (pad_size > dispatch_cb_reader.available_space(data_ptr)) {
+        if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
             dispatch_cb_reader.get_cb_page_and_release_pages(
                 data_ptr,
                 [&](bool will_wrap) {
@@ -1162,7 +1162,7 @@ re_run_command:
             break;
 
         default:
-            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_space(cmd_ptr) << " "
+            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr) << " "
                    << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
@@ -1204,7 +1204,7 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
             break;
 
         default:
-            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_space(cmd_ptr) << " "
+            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr) << " "
                    << " " << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();

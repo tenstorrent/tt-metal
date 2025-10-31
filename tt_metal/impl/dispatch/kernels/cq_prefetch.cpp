@@ -1715,7 +1715,7 @@ inline void relay_raw_data_to_downstream(
 
     while (remaining > 0) {
         // Ensure at least one upstream page is available
-        uint32_t available_data = h_cmddat_q_reader.wait_for_availabe_data(data_ptr);
+        uint32_t available_data = h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
         uint32_t can_read_now = available_data;
         if (can_read_now > remaining) {
@@ -1769,7 +1769,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
     while (true) {
         // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
         // ENDL();
-        h_cmddat_q_reader.wait_for_availabe_data(data_ptr);
+        h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
             (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)data_ptr;
@@ -1788,7 +1788,7 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
             relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
         } else {
             // Ensure the entire command payload is present before returning
-            uint32_t pages_ready = h_cmddat_q_reader.available_space(data_ptr) >> cmddat_q_log_page_size;
+            uint32_t pages_ready = h_cmddat_q_reader.available_bytes(data_ptr) >> cmddat_q_log_page_size;
             uint32_t pages_needed = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
             int32_t pages_pending = pages_needed - pages_ready;
             int32_t npages = 0;
