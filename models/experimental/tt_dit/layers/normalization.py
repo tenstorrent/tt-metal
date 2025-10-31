@@ -178,6 +178,14 @@ class DistributedRMSNorm(Module):
             )
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+        expected_dim = self.embedding_dim // self.mesh_width
+        if x.shape[-1] != expected_dim:
+            msg = (
+                f"last dimension of input tensor with shape {tuple(x.shape)} should match "
+                f"embedding_dim / mesh_width = {expected_dim}"
+            )
+            raise ValueError(msg)
+
         stats = ttnn.rms_norm_pre_all_gather(x)
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
