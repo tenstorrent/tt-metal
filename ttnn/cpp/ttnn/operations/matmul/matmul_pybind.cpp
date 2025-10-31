@@ -439,8 +439,6 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul,
         R"doc(
-        ``ttnn.matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, transpose_a: bool = False, transpose_b: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
-
         Returns the matrix product of two tensors.
 
         The input tensors need to be tiled and at least 1-dimensional.
@@ -669,8 +667,6 @@ void py_module(py::module& module) {
         module,
         ::ttnn::linear,
         R"doc(
-        ``ttnn.linear(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, bias: Optional[ttnn.Tensor] = None, transpose_a: bool = False, transpose_b: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
-
         Returns the linear transformation of the inputs.
 
         The limitations and behaviours are the same as for matmul.
@@ -787,8 +783,6 @@ void py_module(py::module& module) {
         module,
         ::ttnn::matmul_batched_weights,
         R"doc(
-        ``ttnn.matmul_batched_weights(input_tensor_a: ttnn.Tensor, input_tensors_b: list[ttnn.Tensor], transpose_a: bool = False, transpose_b: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, activation: Optional[str] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> list[ttnn.Tensor]``
-
         performs matrix multiplication for a single input tensor a with multiple tensors b, return a vector of output tensors.
 
         Args:
@@ -883,8 +877,6 @@ void py_module(py::module& module) {
         module,
         ::ttnn::addmm,
         R"doc(
-        ``ttnn.addmm(input_tensor: ttnn.Tensor, mat1_tensor: ttnn.Tensor, mat2_tensor: ttnn.Tensor, alpha: float = 1.0, beta: float = 1.0, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
-
         Returns a matrix products of tensors mat1_tensor and mat2_tensor. Tensor input_tensor is added to the final result.
 
         - If mat1_tensor has shape (n, m) and mat2_tensor has shape (m, p), input_tensor needs to be of shape (n, p) and
@@ -996,8 +988,6 @@ void py_module(py::module& module) {
         module,
         ::ttnn::sparse_matmul,
         R"doc(
-        ``ttnn.sparse_matmul(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, sparsity: ttnn.Tensor, nnz: Optional[int] = None, is_input_a_sparse: bool = False, is_input_b_sparse: bool = True, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, program_config: Optional[ttnn.MatmulProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, core_grid: Optional[ttnn.CoreGrid] = None, output_tile: Optional[list[int]] = None, optional_output_tensor: Optional[ttnn.Tensor] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, sub_device_id: Optional[ttnn.SubDeviceId] = None) -> ttnn.Tensor``
-
         Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.
 
         Args:
