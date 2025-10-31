@@ -9,7 +9,7 @@
 #include "socket_api.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS (constant across cores)
+// COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t data_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(1);
@@ -38,9 +38,9 @@ FORCE_INLINE void write_data_to_remote_core(
 
 void kernel_main() {
     ///////////////////////////////////////////////////
-    // RUNTIME ARGS (vary per core)
+    // ARGS
     ///////////////////////////////////////////////////
-    DPRINT << "start sender writer\n";
+    // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
@@ -89,9 +89,6 @@ void kernel_main() {
         if (num_pages_remainder > 0) {
             socket_reserve_pages(sender_socket, 1);
             uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
-            // For remainder packet, we need to handle variable size at runtime
-            // This is more complex and may require a different approach
-            // For now, let's handle this case by reading the exact remainder size
             cb_wait_front(data_cb_id, 1);
             auto l1_read_addr = get_read_ptr(data_cb_id);
             data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, remainder_packet_size);
@@ -126,5 +123,4 @@ void kernel_main() {
     }
     update_socket_config(sender_socket);
     fabric_connection.close();
-    DPRINT << "end sender writer\n";
 }

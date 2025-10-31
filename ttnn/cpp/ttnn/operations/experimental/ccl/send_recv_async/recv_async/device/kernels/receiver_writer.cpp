@@ -9,7 +9,7 @@
 #include "tt_metal/hw/inc/accessor/tensor_accessor.h"
 
 ///////////////////////////////////////////////////
-// COMPILE TIME ARGS (constant across cores)
+// COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t scratch_buffer_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
@@ -18,9 +18,8 @@ constexpr uint32_t output_args_crta_idx = 0;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
-    // RUNTIME ARGS (vary per core)
+    // ARGS
     ///////////////////////////////////////////////////
-    DPRINT << "start receiver writer\n";
     size_t rt_args_idx = 0;
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset for this core
@@ -38,5 +37,4 @@ void kernel_main() {
         cb_pop_front(scratch_buffer_cb_id, 1);
     }
     noc_async_write_barrier();
-    DPRINT << "end receiver writer\n";
 }
