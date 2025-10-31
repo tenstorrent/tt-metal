@@ -2,34 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from time import sleep
 
-import torch
 import pytest
-from loguru import logger
 
-from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 import ttnn
-from tracy import signpost
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
-from models.common.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import (
+    skip_for_wormhole_b0,
+    skip_for_n_or_less_dev,
+)
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,
 )
 
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
-    gen_tokens,
-    gen_expert_mapping,
-    get_metadata_tensor,
-    get_expert_indices,
-    get_output_tensor as get_sparse_tokens,
-)
-
 
 @skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -41,9 +29,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("num_devices", [4])
-@pytest.mark.parametrize("mesh_shape", [(4, 1)])
-@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("num_devices,cluster_axis, mesh_shape", [[4, 0, (4, 1)], [8, 1, (1, 8)]])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -59,7 +45,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_trace(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     mesh_shape,
     num_devices,
     cluster_axis,
@@ -77,10 +63,9 @@ def test_all_to_all_combine_trace(
     input_memory_config,
     output_memory_config,
 ):
-    validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
     batch = batches_per_device * num_devices
     experts = experts_per_device * num_devices
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     trace_all_to_all_combine(
         submesh_device,
@@ -104,8 +89,9 @@ def test_all_to_all_combine_trace(
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
-    "device_params, axis, num_links, test_skew,topology",
+    "device_params, num_links, test_skew,topology",
     [
         # FABRIC_1D LINE
         pytest.param(
@@ -114,7 +100,6 @@ def test_all_to_all_combine_trace(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "trace_region_size": 500000,
             },
-            0,
             1,
             False,
             ttnn.Topology.Linear,
@@ -127,7 +112,6 @@ def test_all_to_all_combine_trace(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
                 "trace_region_size": 500000,
             },
-            0,
             1,
             False,
             ttnn.Topology.Ring,
@@ -136,7 +120,7 @@ def test_all_to_all_combine_trace(
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("num_devices, mesh_shape", [(4, (4, 1)), (8, (8, 1))])
+@pytest.mark.parametrize("num_devices, mesh_shape,axis", [(4, (4, 1), 0), (8, (1, 8), 1)])
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -149,7 +133,7 @@ def test_all_to_all_combine_trace(
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_no_trace(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     mesh_shape,
     num_devices,
     axis,
@@ -168,13 +152,14 @@ def test_all_to_all_combine_no_trace(
     dtype,
     test_skew,
 ):
-    validate_test(num_devices, topology, bh_1d_mesh_device.shape, axis)
+    if topology == ttnn.Topology.Ring:
+        pytest.skip("Galaxy is currently mesh only")
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
     experts = experts_per_device * devices
 
-    bh_1d_mesh_device.disable_and_clear_program_cache()
-    submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
+    bh_2d_mesh_device.disable_and_clear_program_cache()
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     run_all_to_all_combine_test(
         submesh_device,

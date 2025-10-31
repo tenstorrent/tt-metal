@@ -9,12 +9,11 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.common.utility_functions import (
-    skip_for_blackhole,
     skip_for_wormhole_b0,
     skip_for_n_dev,
     skip_for_n_or_less_dev,
 )
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -46,8 +45,6 @@ def run_reduce_scatter_impl(
     num_buffers_per_channel=None,
 ):
     torch.manual_seed(0)
-
-    tile = (32, 32)
 
     # Set the default config
     if mem_config_intermediate is None:

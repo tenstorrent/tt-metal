@@ -9,11 +9,11 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_n_or_less_dev
+from models.common.utility_functions import skip_for_n_or_less_dev, skip_for_wormhole_b0
 
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     run_all_to_all_dispatch_test,
@@ -21,6 +21,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
 from tracy import signpost
 
 
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(7)
 @pytest.mark.parametrize(
     "device_params",
@@ -101,6 +102,8 @@ def test_all_to_all_dispatch_broken(
     )
 
 
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -179,6 +182,8 @@ def test_all_to_all_dispatch_no_trace(
     )
 
 
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "device_params",
     [
