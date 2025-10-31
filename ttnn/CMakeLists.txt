@@ -452,7 +452,6 @@ target_sources(
             cpp/ttnn/operations/compute_throttle_utils.hpp
             cpp/ttnn/operations/cb_utils.hpp
             cpp/ttnn/operations/math.hpp
-            cpp/ttnn/operations/sharding_utilities.hpp
             cpp/ttnn/operations/trace.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -461,7 +460,6 @@ target_sources(
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
-        cpp/ttnn/operations/sharding_utilities.cpp
         cpp/ttnn/operations/trace.cpp
         cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
         cpp/ttnn/operations/generic/generic_op.cpp
