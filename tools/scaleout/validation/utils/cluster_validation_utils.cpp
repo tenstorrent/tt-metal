@@ -20,6 +20,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/control_plane.hpp>
 
 namespace tt::scaleout_tools {
 
@@ -1244,6 +1245,8 @@ void reset_cross_node_ethernet_links(
             cluster.read_core(reset, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1EFC);
         }
     }
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    distributed_context.barrier();
 }
 
 void reset_ethernet_links(

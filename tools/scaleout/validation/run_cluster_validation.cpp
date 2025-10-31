@@ -38,6 +38,10 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
+    std::optional<std::string> reset_host = std::nullopt;
+    std::optional<uint32_t> reset_tray_id = std::nullopt;
+    std::optional<uint32_t> reset_asic_location = std::nullopt;
+    std::optional<uint32_t> reset_channel = std::nullopt;
 };
 
 std::filesystem::path generate_output_dir() {
@@ -108,6 +112,19 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     input_args.help = test_args::has_command_option(args_vec, "--help");
     input_args.validate_connectivity =
         input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
+
+    if (test_args::has_command_option(args_vec, "--reset_host")) {
+        input_args.reset_host = test_args::get_command_option(args_vec, "--reset_host");
+    }
+    if (test_args::has_command_option(args_vec, "--reset_tray_id")) {
+        input_args.reset_tray_id = std::stoi(test_args::get_command_option(args_vec, "--reset_tray_id"));
+    }
+    if (test_args::has_command_option(args_vec, "--reset_asic_location")) {
+        input_args.reset_asic_location = std::stoi(test_args::get_command_option(args_vec, "--reset_asic_location"));
+    }
+    if (test_args::has_command_option(args_vec, "--reset_channel")) {
+        input_args.reset_channel = std::stoi(test_args::get_command_option(args_vec, "--reset_channel"));
+    }
 
     return input_args;
 }
@@ -195,11 +212,75 @@ AsicTopology validate_connectivity(const InputArgs& input_args, PhysicalSystemDe
     return generate_asic_topology_from_connections(missing_physical_connections, physical_system_descriptor);
 }
 
+tt::tt_metal::AsicTopology build_reset_topology(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+
+    log_output_rank0("Building reset topology for specific link:");
+    log_output_rank0("  Host: " + reset_host);
+    log_output_rank0("  Tray ID: " + std::to_string(reset_tray_id));
+    log_output_rank0("  ASIC Location: " + std::to_string(reset_asic_location));
+    log_output_rank0("  Channel: " + std::to_string(reset_channel));
+
+    tt::tt_metal::AsicID src_asic_id = physical_system_descriptor.get_asic_id(
+        reset_host,
+        tt::tt_metal::TrayID(reset_tray_id),
+        tt::tt_metal::ASICLocation(reset_asic_location));
+    uint8_t src_channel = static_cast<uint8_t>(reset_channel);
+
+    log_output_rank0("  Resolved Source ASIC ID: " + std::to_string(*src_asic_id));
+
+    auto [dst_asic_id, dst_channel] = physical_system_descriptor.get_connected_asic_and_channel(
+        src_asic_id, src_channel);
+
+    log_output_rank0("  Discovered Destination ASIC ID: " + std::to_string(*dst_asic_id));
+    log_output_rank0("  Discovered Destination Channel: " + std::to_string(dst_channel));
+
+    std::string src_host = reset_host;
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+    TT_FATAL(
+        asic_descriptors.find(dst_asic_id) != asic_descriptors.end(),
+        "Could not find ASIC descriptor for destination ASIC ID: {}", dst_asic_id);
+    std::string dst_host = asic_descriptors.at(dst_asic_id).host_name;
+    bool is_local = (src_host == dst_host);
+
+    log_output_rank0("  Destination Host: " + dst_host);
+    log_output_rank0("  Connection Type: " + std::string(is_local ? "Local" : "Remote"));
+
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    if (!is_local && *distributed_context.size() < 2) {
+        TT_THROW("Cross-node link reset requires running with both hosts.");
+    }
+
+    tt::tt_metal::AsicTopology asic_topology;
+
+    tt::tt_metal::EthConnection src_to_dst_conn;
+    src_to_dst_conn.src_chan = src_channel;
+    src_to_dst_conn.dst_chan = dst_channel;
+    src_to_dst_conn.is_local = is_local;
+
+    tt::tt_metal::EthConnection dst_to_src_conn;
+    dst_to_src_conn.src_chan = dst_channel;
+    dst_to_src_conn.dst_chan = src_channel;
+    dst_to_src_conn.is_local = is_local;
+
+    asic_topology[src_asic_id].push_back({dst_asic_id, {src_to_dst_conn}});
+    asic_topology[dst_asic_id].push_back({src_asic_id, {dst_to_src_conn}});
+
+    log_output_rank0("Reset topology built successfully");
+
+    return asic_topology;
+}
+
 void print_usage_info() {
     std::cout << "Utility to validate Ethernet Links and Connections for a Multi-Node TT Cluster" << std::endl;
     std::cout << "Compares live system state against the requested Cabling and Deployment Specifications" << std::endl
               << std::endl;
     std::cout << "Arguments:" << std::endl;
+    // validation mode
     std::cout << "  --cabling-descriptor-path: Path to cabling descriptor" << std::endl;
     std::cout << "  --deployment-descriptor-path: Path to deployment descriptor" << std::endl;
     std::cout << "  --factory-descriptor-path: Path to factory descriptor" << std::endl;
@@ -216,7 +297,37 @@ void print_usage_info() {
                  "testing)"
               << std::endl;
     std::cout << "  --help: Print usage information" << std::endl << std::endl;
+    // add separate command for that, liek commit in git commit
+    std::cout << "  --reset_host: Host name of the source ASIC" << std::endl;
+    std::cout << "  --reset_tray_id: Tray ID of the source ASIC" << std::endl;
+    std::cout << "  --reset_asic_location: ASIC location of the source ASIC" << std::endl;
+    std::cout << "  --reset_channel: Channel ID to reset" << std::endl << std::endl;
     std::cout << "To run on a multi-node cluster, use mpirun with a --hostfile option" << std::endl;
+}
+
+void perform_link_reset(
+    const std::string& reset_host,
+    uint32_t reset_tray_id,
+    uint32_t reset_asic_location,
+    uint32_t reset_channel,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    
+    log_output_rank0("Operating in reset mode for specific link");
+
+    // loop over input args and make sure they arent specified
+
+    bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    TT_FATAL(
+        link_retrain_supported,
+        "Link reset is only supported on WORMHOLE_B0 architecture");
+
+    AsicTopology reset_topology = build_reset_topology(
+        reset_host, reset_tray_id, reset_asic_location, reset_channel, physical_system_descriptor);
+
+    reset_ethernet_links(physical_system_descriptor, reset_topology);
+
+    // print appropriate, please run again to send traffic
+    log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
 }
 
 void set_config_vars() {
@@ -253,6 +364,29 @@ int main(int argc, char* argv[]) {
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
 
+    bool is_reset_mode = input_args.reset_host.has_value() ||
+                         input_args.reset_tray_id.has_value() ||
+                         input_args.reset_asic_location.has_value() ||
+                         input_args.reset_channel.has_value();
+
+    if (is_reset_mode) {
+        TT_FATAL(
+            input_args.reset_host.has_value() && 
+            input_args.reset_tray_id.has_value() &&
+            input_args.reset_asic_location.has_value() &&
+            input_args.reset_channel.has_value(),
+            "All reset parameters must be specified: --reset_host, --reset_tray_id, --reset_asic_location, --reset_channel");
+        
+        perform_link_reset(
+            input_args.reset_host.value(),
+            input_args.reset_tray_id.value(),
+            input_args.reset_asic_location.value(),
+            input_args.reset_channel.value(),
+            physical_system_descriptor);
+        return 0;
+    }
+
+
     AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     bool links_reset = false;
     // Ethernet Link Retraining through SW is currently only supported for Wormhole
@@ -261,10 +395,13 @@ int main(int argc, char* argv[]) {
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
     while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
-        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
+        reset_ethernet_links(
+            physical_system_descriptor,
+            physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
         links_reset = true;
         num_retrains++;
-        physical_system_descriptor.run_discovery(true, true);
+
+        physical_system_descriptor.run_discovery(true);
         missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     }
 
