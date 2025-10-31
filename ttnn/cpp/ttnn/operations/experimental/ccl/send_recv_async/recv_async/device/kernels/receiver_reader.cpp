@@ -39,7 +39,7 @@ FORCE_INLINE void read_data_from_remote_core(
 
 void kernel_main() {
     ///////////////////////////////////////////////////
-    // RUNTIME ARGS (vary per core)
+    // ARGS
     ///////////////////////////////////////////////////
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -65,36 +65,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_blocks; ++i) {
         read_data_from_remote_core<socket_page_size, scratch_buffer_cb_id, is_dram>(
             receiver_socket, fabric_connection, bank_id, socket_packet_header_addr, num_pages_per_block);
-        /*
-        socket_wait_for_pages(receiver_socket, 1);
-        cb_reserve_back(scratch_buffer_cb_id, num_pages_per_block);
-        auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
-        auto l1_write_addr = get_write_ptr(scratch_buffer_cb_id);
-        uint32_t block_size = num_pages_per_block * socket_page_size;
-        noc_async_read(remote_read_addr, l1_write_addr, block_size);
-        noc_async_read_barrier();
-        cb_push_back(scratch_buffer_cb_id, num_pages_per_block);
-        socket_pop_pages(receiver_socket, 1);
-        fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        */
     }
 
     if (block_remainder_pages > 0) {
         read_data_from_remote_core<socket_page_size, scratch_buffer_cb_id, is_dram>(
             receiver_socket, fabric_connection, bank_id, socket_packet_header_addr, block_remainder_pages);
-        /*
-        socket_wait_for_pages(receiver_socket, 1);
-        cb_reserve_back(scratch_buffer_cb_id, block_remainder_pages);
-        auto remote_read_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, receiver_socket.read_ptr);
-
-        auto l1_write_addr = get_write_ptr(scratch_buffer_cb_id);
-        uint32_t remainder_size = block_remainder_pages * socket_page_size;
-        noc_async_read(remote_read_addr, l1_write_addr, remainder_size);
-        noc_async_read_barrier();
-        cb_push_back(scratch_buffer_cb_id, block_remainder_pages);
-        socket_pop_pages(receiver_socket, 1);
-        fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
-        */
     }
     update_socket_config(receiver_socket);
     fabric_connection.close();
