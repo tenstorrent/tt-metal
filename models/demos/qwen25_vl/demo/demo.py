@@ -442,7 +442,9 @@ def test_demo(
             pad_embedding=reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
+            inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id
+        )
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
@@ -468,7 +470,7 @@ def test_demo(
             prompt_lens=decoding_pos,
         )
         # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
-        generator.update_cos_sin(cos_matrix_pt=cos, sin_matrix_pt=sin)
+        generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
         # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)

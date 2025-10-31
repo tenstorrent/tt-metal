@@ -214,7 +214,7 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             pad_embedding=self.reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id)),
         )
         # Get user-specific rotary position embeddings
-        cos, sin = multimodal_rope_from_hf(
+        cos, sin, rope_deltas = multimodal_rope_from_hf(
             inputs, input_embeds, self.reference_model, self.model_args, pad_token_id=pad_token_id
         )
         rot_mats = (cos, sin)
@@ -226,13 +226,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
-        return logits, rot_mats
+        return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
-        rot_mats_list: list = kwargs.pop(
-            "rot_mats_all_users", None
+        rope_deltas_list: list = kwargs.pop(
+            "rope_deltas_all_users", None
         )  # [INFO] update the cos/sin matrices for the current users in the batch
-        if rot_mats_list is not None:
-            super().update_cos_sin_rows(rot_mats_list)
+        if rope_deltas_list is not None:
+            super().update_rope_deltas(rope_deltas_list)
 
         return super().decode_forward_text(*args, **kwargs)
