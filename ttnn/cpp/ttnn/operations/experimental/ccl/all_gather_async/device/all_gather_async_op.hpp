@@ -126,7 +126,7 @@ struct AllGatherAsync {
 };
 
 struct AllGatherProgramArtifacts {
-    std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
+    tt::tt_metal::KernelHandle reader_kernel_id;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     std::vector<tt::tt_metal::CoreCoord> all_cores;
     uint32_t num_directions_per_link;
@@ -162,7 +162,7 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
 // Runtime argument override function
 void all_gather_async_minimal_default_helper_override_runtime_arguments(
     tt::tt_metal::Program& program,
-    const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
+    tt::tt_metal::KernelHandle reader_kernel_id,
     const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
     const std::vector<tt::tt_metal::CoreCoord>& all_cores,
     uint32_t num_links,
