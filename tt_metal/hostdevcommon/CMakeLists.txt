@@ -15,6 +15,7 @@ target_sources(
             api/hostdevcommon/flags.hpp
             api/hostdevcommon/fabric_common.h
             api/hostdevcommon/tensor_accessor/arg_config.hpp
+            api/hostdevcommon/fabric_telemetry_common.h
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS api
@@ -26,6 +27,7 @@ target_sources(
             api/hostdevcommon/flags.hpp
             api/hostdevcommon/fabric_common.h
             api/hostdevcommon/tensor_accessor/arg_config.hpp
+            api/hostdevcommon/fabric_telemetry_common.h
 )
 
 target_include_directories(ttmetalium_hostdevcommon INTERFACE "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>")
