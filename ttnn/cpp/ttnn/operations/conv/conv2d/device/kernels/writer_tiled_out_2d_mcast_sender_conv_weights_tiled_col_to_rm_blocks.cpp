@@ -79,8 +79,11 @@ void kernel_main() {
 
 
     constexpr bool transpose_mcast = get_compile_time_arg_val(36) == 1;
-    const uint32_t act_mcast_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(37));
-    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(38));
+    constexpr uint32_t act_mcast_reserve_done_semaphore_id = get_compile_time_arg_val(37);
+    const uint32_t act_mcast_reserve_done_semaphore_addr = get_semaphore(act_mcast_reserve_done_semaphore_id);
+    // DPRINT << "ACT_MCAST_RESERVE_DONE_SEMaphore ID: " << act_mcast_reserve_done_semaphore_id << ENDL();
+    constexpr uint32_t act_mcast_receiver_second_semaphore_id = get_compile_time_arg_val(38);
+    const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(act_mcast_receiver_second_semaphore_id);
     constexpr uint32_t act_cb_id = get_compile_time_arg_val(39);
     constexpr uint32_t act_tilized_cb = get_compile_time_arg_val(40);
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(41);
@@ -137,7 +140,7 @@ void kernel_main() {
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
     const bool is_receiver_core = get_arg_val<uint32_t>(i++) > 0;
     const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
-
+    // DPRINT << "skip_work: " << (skip_work ? "true" : "false") << ENDL();
     uint32_t act_mcast_dest_noc_start_x = 0;
     uint32_t act_mcast_dest_noc_start_y = 0;
     uint32_t act_mcast_dest_noc_end_x = 0;
@@ -271,9 +274,6 @@ void kernel_main() {
                     } else{
                         act_write_offset_current = act_mcast_write_offset_sum - act_write_offset_current;
                     }
-                    if (skip_work) {
-                        continue;
-                    }
                 }
                 // Compute height block offset once per outer loop iteration
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
@@ -344,7 +344,10 @@ void kernel_main() {
                             uint64_t act_address = base_act_address + act_write_offset_current;
                             uint64_t act_multicast_data_addr = act_multicast_noc_addr | act_address;
 
+                            // DPRINT << "WAIT RESERVE"
+                            // << reinterpret_cast<uint32_t>(act_mcast_reserve_done_semaphore_addr_ptr) << ENDL();
                             wait_reserve_done(act_mcast_reserve_done_semaphore_addr_ptr);
+                            // DPRINT << "WAIT RESERVE DONE" << ENDL();
                             cb_wait_front(act_tilized_cb, act_block_num_tiles_split_last);
                             if (is_receiver_core) {
                                 if constexpr (act_mcast_num_cores) {
@@ -384,6 +387,7 @@ void kernel_main() {
                             noc_async_writes_flushed();
 #endif
 
+                            // DPRINT << "SET MULTICAST LOOPBACK SRC" << ENDL();
                             if (is_receiver_core) {
                                 // We should also multicast VALID flag to destinations for receiver semaphore
                                 if constexpr (act_mcast_num_cores) {

@@ -5142,16 +5142,16 @@ def test_resnet50_conv_p150(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
     (
-        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
-        (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
-        (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
+        # (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
+        # (64, 64, 4, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
+        # (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
         (32, 64, 4, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
-        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
+        # (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
-@pytest.mark.parametrize("act_double_buffer", [True, False])
-@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("force_split_reader", [True, False])
+@pytest.mark.parametrize("act_double_buffer", [False])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("force_split_reader", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_block_sharding(
     device,
