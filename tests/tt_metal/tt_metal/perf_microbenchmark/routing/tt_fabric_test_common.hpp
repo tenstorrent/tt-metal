@@ -176,6 +176,10 @@ public:
     }
 
     void run_programs() {
+        if (mesh_workload_->get_programs().empty()) {
+            return;
+        }
+
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, false);
     }
 
@@ -364,12 +368,21 @@ public:
         return mesh_buffer;
     }
 
-    // Data reading helpers
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+    // Structure to hold read operation state
+    struct ReadBufferOperation {
+        std::shared_ptr<MeshBuffer> mesh_buffer;
+        tt::tt_metal::UncompressedBufferPageMapping buffer_page_mapping;
+        std::vector<uint32_t> data;
+        uint32_t size_bytes = 0;
+    };
+
+    // Start non-blocking read operation
+    ReadBufferOperation initiate_read_buffer_from_cores(
         const MeshCoordinate& device_coord,
         const std::vector<CoreCoord>& cores,
         uint32_t address,
-        uint32_t size_bytes) const override {
+        uint32_t size_bytes) const {
+
         auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
 
         const auto& buffer_distribution_spec =
@@ -377,18 +390,33 @@ public:
         TT_FATAL(buffer_distribution_spec.has_value(), "Buffer distribution spec is not set");
         const auto buffer_page_mapping = buffer_distribution_spec->compute_page_mapping();
 
+        // Preallocate data buffer
         auto total_size = size_bytes * buffer_page_mapping.all_cores.size();
-        std::vector<uint32_t> data;
-        data.resize(total_size / sizeof(uint32_t));
-        tt::tt_metal::distributed::ReadShard(mesh_device_->mesh_command_queue(), data, mesh_buffer, device_coord);
+        std::vector<uint32_t> data(total_size / sizeof(uint32_t));
 
-        // splice up data into map
+        // Start non-blocking read
+        tt::tt_metal::distributed::ReadShard(
+            mesh_device_->mesh_command_queue(),
+            data,
+            mesh_buffer,
+            device_coord,
+            false  // blocking=false
+        );
+
+        return {mesh_buffer, buffer_page_mapping, std::move(data), size_bytes};
+    }
+
+    // Process results after barrier_reads() has been called
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> complete_read_buffer_from_cores(
+        const ReadBufferOperation& op) const {
+
+        // Process results (existing splice logic)
         std::unordered_map<CoreCoord, std::vector<uint32_t>> results;
-        auto num_words_per_core = size_bytes / sizeof(uint32_t);
+        auto num_words_per_core = op.size_bytes / sizeof(uint32_t);
 
-        for (auto i = 0; i < buffer_page_mapping.all_cores.size(); i++) {
-            const auto& core = buffer_page_mapping.all_cores[i];
-            const auto& page_indices = buffer_page_mapping.core_host_page_indices[i];
+        for (auto i = 0; i < op.buffer_page_mapping.all_cores.size(); i++) {
+            const auto& core = op.buffer_page_mapping.all_cores[i];
+            const auto& page_indices = op.buffer_page_mapping.core_host_page_indices[i];
             std::vector<uint32_t> core_data;
             core_data.reserve(page_indices.size() * num_words_per_core);
             for (const auto& page_idx : page_indices) {
@@ -397,12 +425,23 @@ public:
                 }
                 auto start_idx = page_idx * num_words_per_core;
                 auto end_idx = start_idx + num_words_per_core;
-                core_data.insert(core_data.end(), data.begin() + start_idx, data.begin() + end_idx);
+                core_data.insert(core_data.end(), op.data.begin() + start_idx, op.data.begin() + end_idx);
             }
             results.emplace(core, core_data);
         }
 
         return results;
+    }
+
+    // Data reading helpers - preserve backward compatibility
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
+        const MeshCoordinate& device_coord,
+        const std::vector<CoreCoord>& cores,
+        uint32_t address,
+        uint32_t size_bytes) const override {
+        auto op = initiate_read_buffer_from_cores(device_coord, cores, address, size_bytes);
+        barrier_reads();  // Wait for read to complete
+        return complete_read_buffer_from_cores(op);
     }
 
     // When blocking is enabled, results_out must be pre-allocated for each core
@@ -433,7 +472,7 @@ public:
         }
     }
 
-    void barrier_reads() {
+    void barrier_reads() const {
         mesh_device_->mesh_command_queue().finish();
     }
 

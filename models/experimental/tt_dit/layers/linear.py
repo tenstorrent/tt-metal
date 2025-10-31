@@ -8,6 +8,7 @@ import torch
 import ttnn
 
 from .module import Module, Parameter
+from ..utils.matmul import get_matmul_config
 
 
 class Linear(Module):
@@ -24,6 +25,10 @@ class Linear(Module):
             # Double out features for fused swiglu activation
             self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
+        self.fused_activation_fn = None
+        if self.activation_fn == "gelu":
+            self.activation_fn = None
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
         self.mesh_device = mesh_device
 
         """
@@ -34,7 +39,7 @@ class Linear(Module):
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -47,12 +52,16 @@ class Linear(Module):
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 
-    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
-        output = ttnn.linear(
-            x,
-            self.weight.data,
-            bias=self.bias.data if self.bias is not None else None,
-            core_grid=core_grid,
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+        M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        matmul_config = get_matmul_config(M, K, N, core_grid)
+        output = ttnn.experimental.minimal_matmul(
+            input_tensor=x,
+            weight_tensor=self.weight.data,
+            bias_tensor=self.bias.data if self.bias is not None else None,
+            config=matmul_config,
+            fused_activation=self.fused_activation_fn,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
@@ -94,6 +103,10 @@ class ColParallelLinear(Module):
         if activation_fn == "swiglu":
             # Double out features for fused swiglu activation
             self.out_features = self.out_features * 2
+        self.fused_activation_fn = None
+        if self.activation_fn == "gelu":
+            self.activation_fn = None
+            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
@@ -107,7 +120,7 @@ class ColParallelLinear(Module):
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -146,7 +159,7 @@ class ColParallelLinear(Module):
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
@@ -161,11 +174,15 @@ class ColParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        output = ttnn.linear(
-            x,
-            weight,
-            bias=self.bias.data if self.bias is not None else None,
-            core_grid=core_grid,
+        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        matmul_config = get_matmul_config(M, K, N, core_grid)
+        output = ttnn.experimental.minimal_matmul(
+            input_tensor=x,
+            weight_tensor=weight,
+            bias_tensor=self.bias.data if self.bias is not None else None,
+            config=matmul_config,
+            fused_activation=self.fused_activation_fn,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
@@ -182,7 +199,6 @@ class RowParallelLinear(Module):
         in_features,
         out_features,
         bias=True,
-        activation_fn=None,
         mesh_device=None,
         mesh_axis=0,
         fsdp_mesh_axis=None,
@@ -192,7 +208,6 @@ class RowParallelLinear(Module):
 
         self.in_features = in_features
         self.out_features = out_features
-        self.activation_fn = activation_fn
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
@@ -205,7 +220,7 @@ class RowParallelLinear(Module):
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -234,7 +249,7 @@ class RowParallelLinear(Module):
                 bias = torch.cat([bias, zero_bias], dim=-1)
             state["bias"] = bias
 
-    def forward(self, x: ttnn.Tensor, core_grid=None, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
         Return output fractured on columns.
@@ -249,11 +264,14 @@ class RowParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        output = ttnn.linear(
-            x,
-            weight,
-            bias=self.bias.data if self.bias is not None else None,
-            core_grid=core_grid,
+        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        matmul_config = get_matmul_config(M, K, N, core_grid)
+        output = ttnn.experimental.minimal_matmul(
+            input_tensor=x,
+            weight_tensor=weight,
+            bias_tensor=self.bias.data if self.bias is not None else None,
+            config=matmul_config,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
@@ -279,7 +297,7 @@ class RowParallelLinear(Module):
             if needs_reshape:
                 output = ttnn.squeeze(output, 0)
 
-        return _apply_activation_fn(output, self.activation_fn)
+        return output
 
 
 def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tensor:
@@ -287,8 +305,6 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return t
     if activation_fn == "silu":
         return ttnn.silu(t)
-    if activation_fn == "gelu":
-        return ttnn.gelu(t)
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":

@@ -330,9 +330,9 @@ class Attention:
         x = self.gather_if_sharded(x)
 
         # output will be bxhxwx(num_heads*head_dims)
-        q = self.to_q(x, core_grid=self.mesh_device.core_grid)
-        k = self.to_k(x, core_grid=self.mesh_device.core_grid)
-        v = self.to_v(x, core_grid=self.mesh_device.core_grid)
+        q = self.to_q(x)
+        k = self.to_k(x)
+        v = self.to_v(x)
         inner_dim = k.shape[-1]
         head_dim = inner_dim // self.num_heads
 
@@ -344,7 +344,7 @@ class Attention:
         x = ttnn.reshape(ttnn.permute(x, (0, 2, 1, 3)), (b, h, w, inner_dim))
 
         for to_out in self.to_out:
-            x = to_out(x, core_grid=self.mesh_device.core_grid)
+            x = to_out(x)
 
         x = x + residual
 
