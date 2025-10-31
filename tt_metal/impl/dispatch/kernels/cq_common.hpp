@@ -395,7 +395,6 @@ protected:
         rd_block_idx &= cb_blocks - 1;
     }
 
-
 private:
     // Last value read from the upstream semaphore (producer credits). Cached snapshot for availability checks.
     uint32_t upstream_count_{0};
@@ -426,8 +425,8 @@ public:
         this->move_rd_to_next_block();
     }
 
-    // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until the fence.
-    // Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
+    // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until
+    // the fence. Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr) {
         if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
             if (this->rd_block_idx == cb_blocks - 1) {
@@ -465,7 +464,6 @@ private:
         }
         this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
     }
-
 
     bool released_prev_block_{false};
     // Snapshot of nonposted write requests issued at block entry; used to wait/clear before releasing credits.
