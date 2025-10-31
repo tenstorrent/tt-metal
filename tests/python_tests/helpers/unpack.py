@@ -3,8 +3,8 @@
 
 # unpack.py
 
-import struct
-
+import ml_dtypes
+import numpy as np
 import torch
 from helpers.format_config import DataFormat
 
@@ -12,43 +12,39 @@ from .llk_params import format_dict, format_tile_sizes
 
 
 def unpack_fp16(packed_list):
-    return [val[0] for val in struct.iter_unpack("<e", bytes(packed_list))]
+    return np.frombuffer(bytes(packed_list), dtype=np.float16).tolist()
 
 
 def unpack_bfp16(packed_list):
-    # Step 1: Promote each 2-byte bfloat16 to 4-byte float32
-    # Place bfloat16 in high 2 bytes (little-endian)
-    padded_bytes = bytearray()
-    for i in range(0, len(packed_list), 2):
-        hi, lo = packed_list[i], packed_list[i + 1]
-        padded_bytes.extend([0x00, 0x00, hi, lo])  # float32 = [LSB, ..., MSB]
-
-    # Use iter_unpack with "<f" to read float32
-    return [val[0] for val in struct.iter_unpack("<f", padded_bytes)]
+    return (
+        np.frombuffer(bytes(packed_list), dtype=ml_dtypes.bfloat16)
+        .astype(np.float32)
+        .tolist()
+    )
 
 
 def unpack_fp32(packed_list):
-    return [val[0] for val in struct.iter_unpack("<f", bytes(packed_list))]
+    return np.frombuffer(bytes(packed_list), dtype=np.float32).tolist()
 
 
 def unpack_int32(packed_list):
-    return [val[0] for val in struct.iter_unpack("<i", bytes(packed_list))]
+    return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
 
 
 def unpack_uint32(packed_list):
-    return [val[0] for val in struct.iter_unpack("<I", bytes(packed_list))]
+    return np.frombuffer(bytes(packed_list), dtype=np.uint32).tolist()
 
 
 def unpack_uint16(packed_list):
-    return [val[0] for val in struct.iter_unpack("<H", bytes(packed_list))]
+    return np.frombuffer(bytes(packed_list), dtype=np.uint16).tolist()
 
 
 def unpack_int8(packed_list):
-    return [val[0] for val in struct.iter_unpack("<b", bytes(packed_list))]
+    return np.frombuffer(bytes(packed_list), dtype=np.int8).tolist()
 
 
 def unpack_uint8(packed_list):
-    return [val[0] for val in struct.iter_unpack("<B", bytes(packed_list))]
+    return np.frombuffer(bytes(packed_list), dtype=np.uint8).tolist()
 
 
 def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):
