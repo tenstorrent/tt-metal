@@ -236,13 +236,9 @@ CircularBufferConfig::CircularBufferConfig(
 CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
     impl_(std::make_unique<CircularBufferConfigImpl>(total_size)) {}
 
-// Dynamic circular buffer spec
-CircularBufferConfig::CircularBufferConfig(
-    uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer) :
-    impl_(std::make_unique<CircularBufferConfigImpl>(total_size, data_format_spec, buffer)) {}
-
-CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) :
-    impl_(std::make_unique<CircularBufferConfigImpl>(descriptor)) {}
+// Constructor from CircularBufferConfigImpl (takes ownership)
+CircularBufferConfig::CircularBufferConfig(CircularBufferConfigImpl&& impl) :
+    impl_(std::make_unique<CircularBufferConfigImpl>(impl)) {}
 
 // Copy constructor
 CircularBufferConfig::CircularBufferConfig(const CircularBufferConfig& other) :
@@ -255,32 +251,6 @@ CircularBufferConfig& CircularBufferConfig::operator=(const CircularBufferConfig
     }
     return *this;
 }
-
-// For flatbuffer deserialization, set all private members.
-CircularBufferConfig::CircularBufferConfig(
-    uint32_t total_size,
-    std::optional<uint32_t> globally_allocated_address,
-    const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
-    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
-    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
-    const std::unordered_set<uint8_t>& buffer_indices,
-    const std::unordered_set<uint8_t>& local_buffer_indices,
-    const std::unordered_set<uint8_t>& remote_buffer_indices,
-    bool dynamic_cb,
-    uint32_t max_size,
-    uint32_t buffer_size) :
-    impl_(std::make_unique<CircularBufferConfigImpl>(
-        total_size,
-        globally_allocated_address,
-        data_formats,
-        page_sizes,
-        tiles,
-        buffer_indices,
-        local_buffer_indices,
-        remote_buffer_indices,
-        dynamic_cb,
-        max_size,
-        buffer_size)) {}
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
     impl_->set_page_size(buffer_index, page_size);
