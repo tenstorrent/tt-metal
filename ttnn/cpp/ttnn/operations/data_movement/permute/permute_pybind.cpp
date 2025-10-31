@@ -16,8 +16,7 @@ namespace py = pybind11;
 
 void bind_permute(py::module& module) {
     auto doc =
-        R"doc(permute(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt)) -> ttnn.Tensor
-
+        R"doc(
             Permutes the dimensions of the input tensor according to the specified permutation.
 
             Args:

@@ -10,8 +10,7 @@ namespace py = pybind11;
 
 void py_bind_llama_rs_create_heads(py::module& module) {
     auto doc =
-        R"doc(llama_rs_create_heads(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
-
+        R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 
             Args:
