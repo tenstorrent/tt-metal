@@ -486,11 +486,23 @@ inline std::string op_meta_data_serialized_json(
 
 #define TracyOpTTNNDevice(                                                                                    \
     operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)      \
-    std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                         \
-        operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
-    std::string op_text = fmt::format("id:{}", operation_id);                                                 \
-    ZoneText(op_text.c_str(), op_text.size());                                                                \
-    TracyMessage(op_message.c_str(), op_message.size());
+    do {                                                                                                       \
+        /* Filter by MODNN_NPU_PROFILING_DEVICE_ID if set (same as device profiler) */                        \
+        bool should_profile = true;                                                                            \
+        if (const char* env_device_id = std::getenv("MODNN_NPU_PROFILING_DEVICE_ID")) {                       \
+            int target_device_id = std::atoi(env_device_id);                                                  \
+            if (target_device_id >= 0 && static_cast<int>(device_id) != target_device_id) {                   \
+                should_profile = false;                                                                        \
+            }                                                                                                  \
+        }                                                                                                      \
+        if (should_profile) {                                                                                  \
+            std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                 \
+                operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
+            std::string op_text = fmt::format("id:{}", operation_id);                                         \
+            ZoneText(op_text.c_str(), op_text.size());                                                        \
+            TracyMessage(op_message.c_str(), op_message.size());                                              \
+        }                                                                                                      \
+    } while (0)
 
 #define TracyOpTTNNExternal(op, input_tensors, base_op_id)                                                      \
     /* This op runs entirely on host, but its ID must be generated using the same data-path as device-side */   \
@@ -512,8 +524,15 @@ inline std::string op_meta_data_serialized_json(
             if (!mesh_device->is_local(coord)) {                                                               \
                 continue;                                                                                      \
             }                                                                                                  \
-            ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
             auto device_id = mesh_device->get_device(coord)->id();                                             \
+            /* Filter by MODNN_NPU_PROFILING_DEVICE_ID if set (same as device profiler) */                     \
+            if (const char* env_device_id = std::getenv("MODNN_NPU_PROFILING_DEVICE_ID")) {                    \
+                int target_device_id = std::atoi(env_device_id);                                               \
+                if (target_device_id >= 0 && static_cast<int>(device_id) != target_device_id) {                \
+                    continue;                                                                                  \
+                }                                                                                              \
+            }                                                                                                  \
+            ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
             auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
             std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
                 operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \

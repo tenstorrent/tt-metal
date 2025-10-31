@@ -306,7 +306,10 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
         for device in devicesOps:
-            assert device in deviceData["devices"]
+            # Skip devices that are not in device log (e.g., when MODNN_NPU_PROFILING_DEVICE_ID filters them)
+            if device not in deviceData["devices"]:
+                logger.warning(f"Device {device} not found in device profiling log, skipping...")
+                continue
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
             deviceDispatchOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["dispatch_ops"]
             deviceOpsTime.sort(key=device_op_compare_time)
