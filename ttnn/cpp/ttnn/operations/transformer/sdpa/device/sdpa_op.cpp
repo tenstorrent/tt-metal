@@ -25,8 +25,8 @@ void ScaledDotProductAttention::validate(
         TT_FATAL(input_tensors.size() == 3, "Must have 3 input tensors (Q, K, V)");
     }
     TT_FATAL(
-        optional_input_tensors.size() == 1 or optional_input_tensors.size() == 2,
-        "Must have 1 or 2 optional tensors (mask/page_table)");
+        optional_input_tensors.size() == 1 or optional_input_tensors.size() == 2 or optional_input_tensors.size() == 3,
+        "Must have 1, 2, or 3 optional tensors (mask/page_table/attention_sink)");
 
     for (auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to SDPA need to be on device");
@@ -253,15 +253,50 @@ void ScaledDotProductAttention::validate(
             chunk_start_idx.value());
     };
 
+    auto validate_attention_sink = [&]() {
+        // Validate attention sink if provided (optional_input_tensors[2])
+        if (optional_input_tensors.size() > 2 && optional_input_tensors.at(2).has_value()) {
+            const auto& attention_sink = optional_input_tensors.at(2).value();
+            TT_FATAL(attention_sink.storage_type() == StorageType::DEVICE, "Attention sink tensor must be on device");
+            TT_FATAL(
+                input_tensors.at(0).device() == attention_sink.device(),
+                "Attention sink must be on the same device as the input tensors");
+            TT_FATAL(attention_sink.layout() == Layout::TILE, "Attention sink must be tilized");
+            TT_FATAL(
+                attention_sink.dtype() == DataType::BFLOAT16 || attention_sink.dtype() == DataType::BFLOAT8_B ||
+                    attention_sink.dtype() == DataType::BFLOAT4_B,
+                "Attention sink must be in BF16, BFP8, or BFP4 dataformat");
+            TT_FATAL(
+                attention_sink.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "Attention sink must be in DRAM");
+
+            const auto& sink_shape = attention_sink.logical_shape();
+            const auto q_shape = input_tensors.at(0).logical_shape();
+
+            // Attention sink should have shape [B, NH, 1, TILE_WIDTH] - single value per head (broadcast to all
+            // queries)
+            TT_FATAL(sink_shape[0] == q_shape[0], "Attention sink batch dim must match Q batch dim");
+            TT_FATAL(sink_shape[1] == q_shape[1], "Attention sink num_heads must match Q num_heads");
+            // The sequence dimension should be 1 (single value per head)
+            TT_FATAL(
+                sink_shape[2] == TILE_HEIGHT,
+                "Attention sink sequence dimension must be TILE_HEIGHT (32). Got {}, expected {}",
+                sink_shape[2],
+                TILE_HEIGHT);
+            TT_FATAL(sink_shape[3] == TILE_WIDTH, "Attention sink last dimension must be TILE_WIDTH (32)");
+        }
+    };
+
     auto check_conditions = [&]() {
         bool has_chunk_start = chunk_start_idx.has_value();
-        bool has_two_optional_inputs = optional_input_tensors.size() == 2;
+        bool has_gt_one_optional_inputs = optional_input_tensors.size() > 1;
         bool has_page_table = optional_input_tensors.size() > 1 && optional_input_tensors.at(1).has_value();
-        TT_FATAL(
-            has_chunk_start == has_two_optional_inputs, "chunk_start_idx and number of optional inputs must match");
-        TT_FATAL(
-            has_two_optional_inputs == has_page_table,
-            "page_table must be provided if and only if there are two optional inputs");
+
+        // For chunked mode, we need at least 2 optional inputs (mask placeholder and page_table)
+        if (has_chunk_start) {
+            TT_FATAL(has_gt_one_optional_inputs, "chunk_start_idx requires at least 2 optional input slots");
+            TT_FATAL(has_page_table, "page_table must be provided when chunk_start_idx is set");
+        }
     };
 
     check_conditions();
@@ -273,6 +308,9 @@ void ScaledDotProductAttention::validate(
     } else {
         validate_regular_mode();
     }
+
+    // Validate attention sink if provided
+    validate_attention_sink();
 
     // Check padding: Only the sequence dimension may be padded. For all other dims, logical shape must be equal to
     // legacy shape
@@ -320,6 +358,9 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
     // get page table if chunked
     const auto page_table = this->chunk_start_idx.has_value() ? optional_input_tensors.at(1) : std::nullopt;
 
+    // get attention sink if provided
+    const auto attention_sink = (optional_input_tensors.size() > 2) ? optional_input_tensors.at(2) : std::nullopt;
+
     return detail::sdpa_multi_core(
         input_tensor_q,
         input_tensor_k,
@@ -327,6 +368,7 @@ operation::ProgramWithCallbacks ScaledDotProductAttention::create_program(
         output_tensor,
         attn_mask,
         page_table,
+        attention_sink,
         this->chunk_start_idx,
         scale,
         this->is_causal,

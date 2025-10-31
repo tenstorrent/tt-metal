@@ -27,12 +27,14 @@ void kernel_main() {
     constexpr uint32_t is_chunked = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t block_size_t = get_compile_time_arg_val(18);
     constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(19);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(20) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<20>();
+    constexpr auto q_args = TensorAccessorArgs<21>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -40,6 +42,7 @@ void kernel_main() {
     const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t attention_sink_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t core_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_batch_end = get_arg_val<uint32_t>(argidx++);
@@ -70,6 +73,7 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_id_page_table = tt::CBIndex::c_6;
 
     constexpr uint32_t onetile = 1;
@@ -77,6 +81,7 @@ void kernel_main() {
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
+    constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
     constexpr uint32_t q_heads_per_kv = NQH / NKH;
 
@@ -86,11 +91,14 @@ void kernel_main() {
     const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
     const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
+    const auto attention_sink_reader =
+        TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
 
     const auto q_tile_shape = TensorTileShape(B, NQH, valid_Sqt, DHt);
     const auto k_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     const auto v_tile_shape = TensorTileShape(B, NKH, valid_Skt, DHt);
     const auto mask_tile_shape = TensorTileShape(B, 1, valid_Sqt, valid_Skt);
+    const auto attention_sink_tile_shape = TensorTileShape(B, NQH, 1, 1);
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
 
@@ -133,6 +141,25 @@ void kernel_main() {
                     When non-causal, read all of K and V.
                     */
                     uint32_t q_chunk;
+
+                    // Read attention sink for this Q chunk if enabled
+                    if constexpr (use_attention_sink) {
+                        cb_reserve_back(cb_attention_sink, Sq_chunk_t);
+                        uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
+                        // Attention sink has shape [B, NH, 1, 1] - single value per head
+                        // Read the single tile for this batch and head, then broadcast to all query positions
+                        const uint32_t sink_tile_id = attention_sink_tile_shape.id_of(nb, nq, 0, 0);
+                        noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
+                        noc_async_read_barrier();
+                        // Broadcast: replicate the same tile Sq_chunk_t times
+                        uint32_t first_tile_ptr = attention_sink_write_ptr;
+                        for (uint32_t row = 1; row < Sq_chunk_t; ++row) {
+                            attention_sink_write_ptr += attention_sink_tile_bytes;
+                            noc_async_read_tile(sink_tile_id, attention_sink_reader, attention_sink_write_ptr);
+                        }
+                        noc_async_read_barrier();
+                        cb_push_back(cb_attention_sink, Sq_chunk_t);
+                    }
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
                 if (q_iter < q_chunk_div_2) {  // bottom half
