@@ -6,14 +6,12 @@ import os
 import pytest
 from loguru import logger
 
-from models.tt_transformers.tt.common import get_hf_tt_cache_path
-
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
 @pytest.mark.parametrize(
     "model_weights",
     [
-        "Qwen/Qwen2.5-VL-3B-Instruct",
+        "/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct",
     ],
     ids=[
         "qwen25_vl-3B",
@@ -21,8 +19,11 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
 )
 def test_ci_dispatch(model_weights):
     logger.info(f"Running fast dispatch tests for {model_weights}")
+    if os.getenv("HF_MODEL"):
+        del os.environ["HF_MODEL"]
+        del os.environ["TT_CACHE_PATH"]
     os.environ["HF_MODEL"] = model_weights
-    os.environ["TT_CACHE_PATH"] = get_hf_tt_cache_path(model_weights)
+    os.environ["TT_CACHE_PATH"] = model_weights
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
