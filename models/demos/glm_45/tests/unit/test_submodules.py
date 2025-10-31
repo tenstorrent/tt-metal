@@ -7,7 +7,7 @@ Minimal utility component tests - RoPE and SDPA only
 
 
 import torch
-from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding, apply_rotary_pos_emb
+from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeRotaryEmbedding, apply_rotary_pos_emb
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -48,7 +48,7 @@ def test_rope_embeddings(mesh_device, batch_size, seq_len, reset_seeds):
 
     # Create position IDs and RoPE embeddings like original
     position_ids = torch.arange(seq_len).unsqueeze(0)
-    rope_embeddings = GptOssRotaryEmbedding(config)
+    rope_embeddings = Glm4MoeRotaryEmbedding(config)
     torch_inputs = torch.randn(batch_size, seq_len, config.hidden_size)
     cos, sin = rope_embeddings(torch_inputs, position_ids)
 

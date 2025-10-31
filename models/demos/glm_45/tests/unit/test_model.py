@@ -143,7 +143,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
     """Test full model with accuracy testing using new abstractions"""
 
     # Cache file for reference tokens
-    cache_dir = "models/demos/gpt_oss/tests/unit/"
+    cache_dir = "models/demos/glm_45/tests/unit/"
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = os.path.join(cache_dir, "reference_tokens.pkl")
 
@@ -173,14 +173,14 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         logger.info("Generating reference tokens (this may take a while)...")
 
         # Create reference model for comparison (use full model like demo)
-        from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
+        from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeForCausalLM
 
         # Load the same weights that the TTNN model uses
         logger.info("Loading reference model weights...")
         reference_weights = setup["model_args"].load_state_dict()
 
         # Create reference model and load the real weights
-        reference_model = GptOssForCausalLM(config)
+        reference_model = Glm4MoeForCausalLM(config)
         reference_model.load_state_dict(reference_weights, strict=False)
         reference_model.eval()
 
@@ -188,7 +188,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         tokenizer = setup["model_args"].tokenizer
 
         # Use the same setup as simple_text_demo
-        from models.demos.gpt_oss.demo.simple_text_demo import prepare_gpt_oss_generator_args
+        from models.demos.glm_45.demo.simple_text_demo import prepare_glm_45_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()
@@ -206,7 +206,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             tokenizer,
             processor,
             paged_attention_config,
-        ) = prepare_gpt_oss_generator_args(
+        ) = prepare_glm_45_generator_args(
             num_devices=num_devices,
             data_parallel=data_parallel,
             mesh_device=setup["mesh_device"],
@@ -291,7 +291,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         tokenizer = setup["model_args"].tokenizer
 
         # Use the same setup as simple_text_demo
-        from models.demos.gpt_oss.demo.simple_text_demo import prepare_gpt_oss_generator_args
+        from models.demos.glm_45.demo.simple_text_demo import prepare_glm_45_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()
@@ -309,7 +309,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
             tokenizer,
             processor,
             paged_attention_config,
-        ) = prepare_gpt_oss_generator_args(
+        ) = prepare_glm_45_generator_args(
             num_devices=num_devices,
             data_parallel=data_parallel,
             mesh_device=setup["mesh_device"],

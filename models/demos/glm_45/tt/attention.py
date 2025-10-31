@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import nearest_y
@@ -432,13 +431,6 @@ class Attention:
                         pads = [last_row] * pad_bs
                         page_table = ttnn.concat([page_table] + pads, dim=0)
 
-            # KV update: v_heads already in proper sharded layout
-            try:
-                logger.info(
-                    f"Decode KV update (fused): q={q_heads_1BQD.shape} k={k_heads_1BKD.shape} v={v_heads_1BKD.shape} pt_shape={getattr(page_table,'shape',None)} pos_shape={getattr(position_idx,'shape',None)}"
-                )
-            except Exception:
-                pass
             ttnn.experimental.paged_update_cache(
                 k_cache,
                 k_heads_1BKD,
@@ -453,13 +445,6 @@ class Attention:
             )
             ttnn.deallocate(v_heads_1BKD)
 
-            # Decode SDPA
-            try:
-                logger.info(
-                    f"SDPA decode call: q={q_heads_1BQD.shape} cacheK_mc={k_cache.memory_config()} cacheV_mc={v_cache.memory_config()} pt_shape={getattr(page_table,'shape',None)} pos={getattr(position_idx,'shape',None)}"
-                )
-            except Exception:
-                pass
             if page_table is not None:
                 tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                     q_heads_1BQD,
@@ -490,39 +475,22 @@ class Attention:
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             ttnn.deallocate(q_heads_1BQD)
-            try:
-                logger.info(f"SDPA output shape={tt_sdpa_tensor.shape}")
-            except Exception:
-                pass
-
             # SDPA output: use precreated memcfg (static batch)
             # Move SDPA output to explicit height-sharded memcfg, then concat heads
             attn_output_11BH = ttnn.to_memory_config(tt_sdpa_tensor, self.sdpa_decode_out_memcfg)
-            try:
-                logger.info(f"Post-SDPA to_memcfg attn_output_11BH={attn_output_11BH.shape}")
-            except Exception:
-                pass
             attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
                 attn_output_11BH, num_heads=self.num_local_heads
             )
-            try:
-                logger.info(f"Post-concat heads attn_output_cat={attn_output_cat.shape}")
-            except Exception:
-                pass
             ttnn.deallocate(attn_output_11BH)
             ttnn.deallocate(tt_sdpa_tensor)
             # Move to DRAM TILE for output matmul
             tt_sdpa_out = ttnn.to_memory_config(attn_output_cat, ttnn.DRAM_MEMORY_CONFIG)
-            try:
-                logger.info(f"Post-to-DRAM tt_sdpa_out={tt_sdpa_out.shape}")
-            except Exception:
-                pass
             ttnn.deallocate(attn_output_cat)
             # Set logical batch dimension to actual batch_size (physical remains 32)
             try:
                 feat_in = self.num_local_heads * self.head_dim
                 tt_sdpa_out = ttnn.reshape(tt_sdpa_out, (1, 1, batch_size, feat_in), (1, 1, ttnn.TILE_SIZE, feat_in))
-                logger.info(f"After logical reshape tt_sdpa_out={tt_sdpa_out.shape}")
+                # logger.info(f"After logical reshape tt_sdpa_out={tt_sdpa_out.shape}")
             except Exception:
                 pass
         else:
@@ -615,10 +583,6 @@ class Attention:
             tt_v.deallocate(True)
 
         tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16)
-        try:
-            logger.info(f"Post-o_proj matmul tt_out={tt_out.shape}")
-        except Exception:
-            pass
         tt_sdpa_out.deallocate(True)
         tt_out = ttnn.add(tt_out, self.o_proj_bias, output_tensor=tt_out)
 

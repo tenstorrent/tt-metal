@@ -173,6 +173,98 @@ class Experts:
         self.up_proj_bias = _squeeze_leading1(self.up_proj_bias)
         self.down_proj_bias = _squeeze_leading1(self.down_proj_bias)
 
+        # Optional shared expert MLP (dense path)
+        # Expect weights under shared_experts.(gate_proj|up_proj|down_proj).weight
+        # Shapes follow DenseGLU: gate/up (H, I_shared), down (I_shared, H)
+        self.has_shared = False
+        n_shared = getattr(hf_config, "n_shared_experts", 0) or 0
+        if n_shared > 0 and shared_state_dict is not None and len(shared_state_dict) > 0:
+            required_shared = ["gate_proj.weight", "up_proj.weight", "down_proj.weight"]
+            missing_shared = [k for k in required_shared if k not in shared_state_dict]
+            if missing_shared:
+                raise ValueError(
+                    f"Missing shared_experts weights: {missing_shared}. n_shared_experts={n_shared} requires them."
+                )
+
+            # Transpose HF weights to (in_dim, out_dim)
+            se_gate = shared_state_dict["gate_proj.weight"].transpose(0, 1)
+            se_up = shared_state_dict["up_proj.weight"].transpose(0, 1)
+            se_down = shared_state_dict["down_proj.weight"].transpose(0, 1)
+
+            # Optional biases
+            se_gate_b = shared_state_dict.get("gate_proj.bias")
+            se_up_b = shared_state_dict.get("up_proj.bias")
+            se_down_b = shared_state_dict.get("down_proj.bias")
+
+            # Map weights like other experts: col-parallel for gate/up, row-parallel for down
+            self.shared_gate_w = ttnn.as_tensor(
+                se_gate,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=weight_dtype,
+                mesh_mapper=col_mesh_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "shared_gate_proj"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.shared_up_w = ttnn.as_tensor(
+                se_up,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=weight_dtype,
+                mesh_mapper=col_mesh_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "shared_up_proj"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self.shared_down_w = ttnn.as_tensor(
+                se_down,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=weight_dtype,
+                mesh_mapper=row_mesh_mapper,
+                cache_file_name=get_cache_file_name(tensor_cache_path, "shared_down_proj"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Bias tensors if present; keep 2D with leading batch dim for broadcast
+            self.shared_gate_b = (
+                ttnn.as_tensor(
+                    se_gate_b.unsqueeze(0),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=weight_dtype,
+                    cache_file_name=get_cache_file_name(tensor_cache_path, "shared_gate_proj_bias"),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if se_gate_b is not None
+                else None
+            )
+            self.shared_up_b = (
+                ttnn.as_tensor(
+                    se_up_b.unsqueeze(0),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=weight_dtype,
+                    cache_file_name=get_cache_file_name(tensor_cache_path, "shared_up_proj_bias"),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if se_up_b is not None
+                else None
+            )
+            self.shared_down_b = (
+                ttnn.as_tensor(
+                    se_down_b.unsqueeze(0),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=weight_dtype,
+                    cache_file_name=get_cache_file_name(tensor_cache_path, "shared_down_proj_bias"),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if se_down_b is not None
+                else None
+            )
+
+            self.has_shared = True
+
     def __call__(self, hidden_states, routing_weights):
         # hidden_states: [B, S, H] in TILE layout (keep 3D)
         # routing_weights: [B*S, E] (from router), TILE or ROW_MAJOR
@@ -262,7 +354,24 @@ class Experts:
         next_states = ttnn.mul(next_states, rw, output_tensor=next_states)
         next_states = ttnn.sum(next_states, dim=1, keepdim=True)
 
-        # EP allreduce then TP allreduce
+        # Add shared experts dense path before allreduce (single combined allreduce)
+        if getattr(self, "has_shared", False):
+            gate_s = ttnn.linear(hidden_states, self.shared_gate_w, bias=self.shared_gate_b)
+            up_s = ttnn.linear(hidden_states, self.shared_up_w, bias=self.shared_up_b)
+            alpha = getattr(self, "alpha", 1.702)
+            glu_s = gate_s * ttnn.sigmoid(gate_s * alpha)
+            down_in_s = (up_s + 1) * glu_s
+            ttnn.deallocate(glu_s)
+            ttnn.deallocate(up_s)
+            ttnn.deallocate(gate_s)
+
+            shared_out = ttnn.linear(down_in_s, self.shared_down_w, bias=self.shared_down_b)
+            ttnn.deallocate(down_in_s)
+            # Match next_states pre-allreduce shape: [B, 1, S, H]
+            shared_out = ttnn.reshape(shared_out, (batch_size, 1, seq_len, self.hidden_size))
+            next_states = next_states + shared_out
+
+        # EP allreduce then TP allreduce (single path for routed + shared)
         if self.mesh_config.ep > 1:
             next_states = self.mesh_config.allreduce(next_states, self.ccl_manager, axis=self.mesh_config.ep_axis)
         next_states = self.mesh_config.allreduce(

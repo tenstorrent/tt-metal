@@ -191,7 +191,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
         (1, 128),
     ]
 )
-@pytest.mark.parametrize("mesh_shape", [(1, 8), (4, 8)])
+@pytest.mark.parametrize("mesh_shape", [(1, 4)])
 def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
     """Test complete decoder layer - combines attention + MLP + norms"""
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
@@ -203,9 +203,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     config._attn_implementation = "eager"
 
     # Create reference model
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssDecoderLayer
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeDecoderLayer
 
-    reference_layer = GptOssDecoderLayer(config, layer_idx=0)
+    reference_layer = Glm4MoeDecoderLayer(config, layer_idx=0)
 
     with torch.no_grad():
         for name, param in reference_layer.named_parameters():
@@ -236,15 +236,15 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     # Handle decode mode for TT model like original
     if seq_len == 1:  # decode
-        from models.demos.gpt_oss.utils.general_utils import get_decode_mask
+        from models.demos.glm_45.utils.general_utils import get_decode_mask
 
         sliding_window = 0  # No sliding window for this test
         mask = get_decode_mask(position_ids[0].item(), sliding_window)
 
     # Create position embeddings for reference model
-    from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
+    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeDecoderLayer
 
-    rope_embeddings = GptOssRotaryEmbedding(config)
+    rope_embeddings = Glm4MoeRotaryEmbedding(config)
     cos, sin = rope_embeddings(hidden_states, position_ids)
     position_embeddings = (cos, sin)
 
@@ -260,7 +260,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         sin.unsqueeze(-2), device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    from models.demos.gpt_oss.tt.rope import ApplyRotaryPosEmb
+    from models.demos.glm_45.tt.rope import ApplyRotaryPosEmb
 
     apply_rope = ApplyRotaryPosEmb(config)
     rope_mats = (apply_rope, tt_cos, tt_sin)
