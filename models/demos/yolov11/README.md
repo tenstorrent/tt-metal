@@ -1,7 +1,7 @@
 # Yolov11n
 
 ## Platforms:
-    Wormhole (n150, n300)
+    Wormhole (n150, n300), Blackhole (p150)
 
 ## Introduction
 **YOLOv11n** is the smallest variant in the YOLOV11 series, it offers improvements in accuracy, speed, and efficiency for real-time object detection. It features enhanced architecture and optimized training methods, suitable for various computer vision tasks.

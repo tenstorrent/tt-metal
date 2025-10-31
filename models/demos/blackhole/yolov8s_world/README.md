@@ -20,9 +20,15 @@ pytest --disable-warnings models/demos/blackhole/yolov8s_world/tests/pcc/test_tt
 
 ### Model Performant with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `105` FPS.
+- For `640x640`, end-2-end perf is `186` FPS (**On P150**)
   ```bash
   pytest --disable-warnings models/demos/blackhole/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world
+  ```
+
+#### Multi Device (DP=2):
+- For `640x640`:
+  ```bash
+  pytest --disable-warnings models/demos/blackhole/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world_dp
   ```
 
 ### Demo with Trace+2CQs
@@ -39,6 +45,19 @@ Note: To test the demo with your own images, replace images with `models/demos/b
 - Use the following command to run the performant Demo:
   ```
   pytest --disable-warnings models/demos/blackhole/yolov8s_world/demo/demo.py::test_demo_dataset
+  ```
+
+#### Multi Device (DP=2)
+##### Custom Images:
+- Use the following command to run the performant Demo:
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov8s_world/demo/demo.py::test_demo_dp
+  ```
+
+##### Dataset Images:
+- Use the following command to run the performant Demo:
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov8s_world/demo/demo.py::test_demo_dataset_dp
   ```
 
 ### Web Demo

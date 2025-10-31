@@ -12,7 +12,6 @@
 Yolov12 has an attention-centric architecture that moves away from the traditional CNN-based approaches of previous YOLO models while preserving the real-time inference speed crucial for many applications. This model leverages innovative attention mechanisms and a redesigned network architecture to achieve state-of-the-art object detection accuracy without compromising real-time performance.
 
 ## How to Run:
-
 Use the following command to run the Yolo12x model with pre-trained weights :
 ```sh
 pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yolov12x.py::test_yolov12x[pretrained_weight_true-0]
@@ -21,7 +20,6 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 ### Model performant running with Trace+2CQ
 
 #### Single Device (BS=1):
-
 - For `640x640`, end-2-end perf is `64` FPS :
 
   ```
@@ -29,8 +27,7 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
   ```
 
 #### Multi Device (DP=2):
-
-- For `640x640`, end-2-end perf is `--` FPS : #need to update
+- For `640x640`:
 
   ```
   pytest --disable-warnings models/demos/blackhole/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
@@ -43,7 +40,6 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 #### Single Device (BS=1):
 
 #### Custom Images:
-
 - Use the following command to run demo for `640x640` resolution :
 
     ```bash
@@ -53,17 +49,15 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/blackhole/yolov12x/demo/images`.
 
 #### COCO-2017 dataset:
-
 - Use the following command to run demo for `640x640` resolution :
 
   ```
   pytest --disable-warnings models/demos/blackhole/yolov12x/demo/demo.py::test_demo_dataset
   ```
 
-#### Multi Device (DP=2, N300):
+#### Multi Device (DP=2):
 
 #### Custom Images:
-
 - Use the following command to run demo for `640x640` resolution :
 
   ```bash
@@ -73,16 +67,13 @@ pytest --disable-warnings models/demos/blackhole/yolov12x/tests/pcc/test_ttnn_yo
 - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/blackhole/yolov12x/demo/images`.
 
 #### COCO-2017 dataset:
-
 - Use the following command to run demo for `640x640` resolution :
 
   ```
   pytest --disable-warnings models/demos/blackhole/yolov12x/demo/demo.py::test_demo_dataset_dp
   ```
 
-
 ### Performant evaluation with Trace+2CQ
-
 - Use the following command to run the performant evaluation with Trace+2CQs:
 
   ```

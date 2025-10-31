@@ -26,6 +26,13 @@ pytest --disable-warnings models/demos/blackhole/yolov5x/tests/pcc/test_ttnn_yol
   pytest --disable-warnings models/demos/blackhole/yolov5x/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
 
+#### Multi Device (DP=2, N300) :
+- For `640x640`:
+
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov5x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
+  ```
+
 ### Demo:
 
 #### Single Device (BS=1):
@@ -40,6 +47,22 @@ pytest --disable-warnings models/demos/blackhole/yolov5x/tests/pcc/test_ttnn_yol
 - Use the following command to run demo for `640x640` resolution :
   ```
   pytest --disable-warnings models/demos/blackhole/yolov5x/demo/demo.py::test_demo_dataset
+  ```
+
+#### Multi Device (DP=2):
+
+##### Custom Images:
+- Use the following command to run demo for `640x640` resolution :
+
+  ```bash
+  pytest --disable-warnings models/demos/blackhole/yolov5x/demo/demo.py::test_demo_dp
+  ```
+
+##### Coco-2017 dataset:
+- Use the following command to run demo for `640x640` resolution :
+
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov5x/demo/demo.py::test_demo_dataset_dp
   ```
 
 ## Details

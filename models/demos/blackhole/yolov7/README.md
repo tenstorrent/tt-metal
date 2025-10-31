@@ -23,6 +23,12 @@ pytest --disable-warnings models/demos/blackhole/yolov7/tests/pcc/test_ttnn_yolo
   pytest --disable-warnings models/demos/blackhole/yolov7/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
 
+#### Multi Device (DP=2):
+- For `640x640`:
+  ```bash
+  pytest --disable-warnings models/demos/blackhole/yolov7/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
+  ```
+
 ### Demo
 
 ### Single Device (BS=1)
@@ -40,6 +46,19 @@ pytest --disable-warnings models/demos/blackhole/yolov7/tests/pcc/test_ttnn_yolo
   pytest --disable-warnings models/demos/blackhole/yolov7/demo/demo.py::test_demo_dataset
   ```
 Note: Output images will be saved in the `models/demos/blackhole/yolov7/demo/runs` folder.
+
+### Multi Device (DP=2)
+#### Custom Images:
+- Use the following command to run demo for `640x640` resolution :
+  ```bash
+  pytest --disable-warnings models/demos/blackhole/yolov7/demo/demo.py::test_demo_dp
+  ```
+
+#### Coco-2017 dataset:
+- Use the following command to run demo for `640x640` resolution :
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov7/demo/demo.py::test_demo_dataset_dp
+  ```
 
 ## Testing
 

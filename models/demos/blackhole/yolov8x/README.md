@@ -18,9 +18,15 @@ pytest --disable-warnings models/demos/blackhole/yolov8x/tests/pcc/test_yolov8x.
 
 ## Model performant running with Trace+2CQ
 ### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `--` FPS (**On P150**)
+- For `640x640`, end-2-end perf is `127` FPS (**On P150**)
   ```
   pytest --disable-warnings models/demos/blackhole/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant
+  ```
+
+### Multi Device (DP=2, n300):
+- For `640x640`:
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant_dp
   ```
 
 ### Demo
@@ -38,6 +44,20 @@ Note: Output images will be saved in the `models/demos/blackhole/yolov8x/demo/ru
 - Use the following command to run demo for `640x640` resolution:
   ```
   pytest --disable-warnings models/demos/blackhole/yolov8x/demo/demo.py::test_demo_dataset
+  ```
+
+### Multi Device (DP=2)
+#### Custom Images:
+- Use the following command to run demo for `640x640` resolution :
+  ```bash
+  pytest --disable-warnings models/demos/blackhole/yolov8x/demo/demo.py::test_demo_dp
+  ```
+  - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov8x/demo/images` and run the same command.
+
+#### Coco-2017 dataset:
+- Use the following command to run demo for `640x640` resolution :
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov8x/demo/demo.py::test_demo_dataset_dp
   ```
 
 ### Performant evaluation with Trace+2CQ

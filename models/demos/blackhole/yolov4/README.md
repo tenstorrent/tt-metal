@@ -22,13 +22,23 @@ pytest models/demos/blackhole/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `320x320`, end-2-end perf is `--` FPS (**On P150**)
+- For `320x320`, end-2-end perf is `250` FPS (**On P150**)
   ```
   pytest models/demos/blackhole/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution0-125-1-act_dtype0-weight_dtype0-device_params0]
   ```
-- For `640x640`, end-2-end perf is `--` FPS  (**On P150**)
+- For `640x640`, end-2-end perf is `130` FPS  (**On P150**)
   ```
   pytest models/demos/blackhole/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant[resolution1-65-1-act_dtype0-weight_dtype0-device_params0]
+  ```
+
+#### Multi Device (DP=2):
+- For `320x320`
+  ```
+  pytest models/demos/blackhole/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution0-250-1-act_dtype0-weight_dtype0-device_params0]
+  ```
+- For `640x640`
+  ```
+  pytest models/demos/blackhole/yolov4/tests/perf/test_e2e_performant.py::test_e2e_performant_dp[wormhole_b0-resolution1-113-1-act_dtype0-weight_dtype0-device_params0]
   ```
 
 ### Demo
@@ -54,6 +64,31 @@ pytest models/demos/blackhole/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[
 - Use the following command to run demo for `640x640` resolution :
   ```
   pytest models/demos/blackhole/yolov4/demo.py::test_yolov4_coco[resolution1-1-act_dtype0-weight_dtype0-device_params0]
+  ```
+
+#### Multi Device (DP=2):
+##### Custom Images:
+- Use the following command to run demo for `320x320` resolution :
+  ```
+  pytest models/demos/blackhole/yolov4/demo.py::test_yolov4_dp[wormhole_b0-resolution0-1-act_dtype0-weight_dtype0-models/demos/yolov4/resources-device_params0]
+  ```
+- Use the following command to run demo for `640x640` resolution :
+  ```
+  pytest models/demos/blackhole/yolov4/demo.py::test_yolov4_dp[wormhole_b0-resolution1-1-act_dtype0-weight_dtype0-models/demos/yolov4/resources-device_params0]
+  ```
+- To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov4/resources/` and run:
+  ```
+  pytest models/demos/blackhole/yolov4/demo.py::test_yolov4_dp[wormhole_b0-resolution1-1-act_dtype0-weight_dtype0-models/demos/yolov4/resources-device_params0]
+  ```
+
+##### Coco-2017 dataset:
+- Use the following command to run demo for `320x320` resolution :
+  ```
+  pytest models/demos/yolov4/demo.py::test_yolov4_coco_dp[wormhole_b0-resolution0-1-act_dtype0-weight_dtype0-device_params0]
+  ```
+- Use the following command to run demo for `640x640` resolution :
+  ```
+  pytest models/demos/yolov4/demo.py::test_yolov4_coco_dp[wormhole_b0-resolution1-1-act_dtype0-weight_dtype0-device_params0]
   ```
 
 #### Web Demo

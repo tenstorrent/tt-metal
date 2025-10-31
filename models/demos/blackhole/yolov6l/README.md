@@ -26,6 +26,12 @@ pytest --disable-warnings models/demos/blackhole/yolov6l/tests/pcc/test_ttnn_yol
   pytest --disable-warnings models/demos/blackhole/yolov6l/tests/perf/test_e2e_performant.py::test_perf_yolov6l
   ```
 
+#### Multi Device (DP=2) :
+
+- For `640x640`:
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov6l/tests/perf/test_e2e_performant.py::test_perf_yolov6l_dp
+  ```
 
 ### Demo:
 
@@ -37,13 +43,27 @@ pytest --disable-warnings models/demos/blackhole/yolov6l/tests/pcc/test_ttnn_yol
     pytest --disable-warnings models/demos/blackhole/yolov6l/demo/demo.py::test_demo
     ```
 
-
 ##### Coco-2017 dataset:
 - Use the following command to run demo for `640x640` resolution :
   ```
   pytest --disable-warnings models/demos/blackhole/yolov6l/demo/demo.py::test_demo_dataset
   ```
 
+#### Multi Device (DP=2, N300):
+
+##### Custom Images:
+- Use the following command to run demo for `640x640` resolution :
+
+  ```bash
+  pytest --disable-warnings models/demos/blackhole/yolov6l/demo/demo.py::test_demo_dp
+  ```
+
+##### Coco-2017 dataset:
+- Use the following command to run demo for `640x640` resolution :
+
+  ```
+  pytest --disable-warnings models/demos/blackhole/yolov6l/demo/demo.py::test_demo_dataset_dp
+  ```
 
 ### Performant evaluation with Trace+2CQ
 - Use the following command to run the performant evaluation with Trace+2CQs:

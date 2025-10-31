@@ -12,6 +12,7 @@ YOLOv6-L is a large variant of the YOLOv6 family—an advanced real-time object 
 
 
 ### How to Run:
+
 Find yolov6l instructions for the following devices:
 
 - Wormhole (n150, n300): [models/demos/wormhole/yolov6l](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/yolov6l)
