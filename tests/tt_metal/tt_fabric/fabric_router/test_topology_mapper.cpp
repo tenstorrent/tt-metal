@@ -291,7 +291,7 @@ TEST_F(TopologyMapperTest, BHQB4x4MeshGraphTest) {
 
     // Check that the rank bindings line up
     auto host_ranks = mesh_graph.get_host_ranks(mesh_id);
-    auto tp_host_ranks = topology_mapper.get_host_ranks(mesh_id);
+    const auto& tp_host_ranks = topology_mapper.get_host_ranks(mesh_id);
     EXPECT_EQ(host_ranks, tp_host_ranks);
 
     // Check coord range of host ranks are right
