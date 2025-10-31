@@ -4,11 +4,6 @@
 
 #pragma once
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wundefined-inline"
-#pragma GCC diagnostic ignored "-Wdeprecated-volatile"
-#pragma GCC diagnostic ignored "-Wdeprecated-this-capture"
-
 #include <hostdevcommon/common_values.hpp>                                                                 // NOLINT
 #include <tt-metalium/base_types.hpp>                                                                      // NOLINT
 #include <tt-metalium/bfloat16.hpp>                                                                        // NOLINT
@@ -88,4 +83,3 @@
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>                                                        // NOLINT
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>                                                    // NOLINT
 #include <ttnn/types.hpp>                                                                                  // NOLINT
-#pragma GCC diagnostic pop
