@@ -23,11 +23,6 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-      tracy:
-        required: false
-        type: boolean
-        default: false
-        description: "Build with tracy enabled"
       command:
         required: true
         type: string
@@ -57,7 +52,6 @@ jobs:
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.tracy }}
       version: ${{ inputs.version }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
