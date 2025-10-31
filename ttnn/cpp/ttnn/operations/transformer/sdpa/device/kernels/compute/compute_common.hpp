@@ -113,6 +113,7 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
         // reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
         sfpu_reduce_max_sdpa_init();
         for (uint32_t j = 0; j < cols; j++) {
             // reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);

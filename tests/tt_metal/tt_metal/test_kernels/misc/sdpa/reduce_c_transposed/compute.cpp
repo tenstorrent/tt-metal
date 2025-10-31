@@ -7,6 +7,8 @@
 #include "compute_kernel_api.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"
 
+#include "debug/dprint.h"
+
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t qk_im_cb = get_compile_time_arg_val(0);
@@ -31,6 +33,8 @@ void MAIN {
     pack_reconfig_data_format(out_max_cb);
 
     reduce_c_transposed<qk_im_cb, scale_cb, Sq_chunk_t, Sk_chunk_t>(out_max_cb, prev_max_cb, do_eltwise);
+
+    DPRINT << "FINISHED REDUCE" << ENDL();
 
     // Ensure outputs are produced before exiting
     cb_wait_front(out_max_cb, Sq_chunk_t);

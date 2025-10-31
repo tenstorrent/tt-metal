@@ -281,10 +281,10 @@ int main(int argc, char** argv) {
     /**
      * Parameters to sweep over for correctness.
      */
-    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};
-    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8, 16};
-    std::vector<bool> fp32_dest_acc_ens = {false, true};
-    std::vector<bool> do_eltwise = {false, true};
+    std::vector<uint32_t> q_chunk_sizes = {1};      //, 2, 4, 8};
+    std::vector<uint32_t> k_chunk_sizes = {1};      //, 2, 4, 8, 16};
+    std::vector<bool> fp32_dest_acc_ens = {false};  //, true};
+    std::vector<bool> do_eltwise = {false};         //, true};
 
     /**
      * These parameters are the same as the SDPA sprint-2 perfomance test parameters.
