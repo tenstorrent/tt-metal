@@ -131,20 +131,48 @@ static std::string get_cluster_wide_telemetry_path(const Metric& metric) {
     return path;
 }
 
+// Helper function to update a collection of metrics with exception handling
+template <typename MetricType>
+static size_t update_metrics_with_exception_handling(
+    std::vector<std::unique_ptr<MetricType>>& metrics,
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    std::chrono::steady_clock::time_point start_of_update_cycle,
+    std::string_view metric_type_name) {
+    size_t failed_count = 0;
+
+    for (auto& metric : metrics) {
+        try {
+            metric->update(cluster, start_of_update_cycle);
+        } catch (const std::exception& e) {
+            failed_count++;
+            log_debug(
+                tt::LogAlways,
+                "Failed to update {} metric {} (will skip): {}",
+                metric_type_name,
+                metric->telemetry_path_string(),
+                e.what());
+        }
+    }
+
+    return failed_count;
+}
+
 static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     log_info(tt::LogAlways, "Starting telemetry readout...");
     std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
 
-    for (auto& metric : bool_metrics_) {
-        metric->update(cluster, start_of_update_cycle);
-    }
+    // Track failed metrics to report summary at end of cycle
+    size_t failed_metrics = 0;
 
-    for (auto& metric : uint_metrics_) {
-        metric->update(cluster, start_of_update_cycle);
-    }
+    failed_metrics += update_metrics_with_exception_handling(bool_metrics_, cluster, start_of_update_cycle, "bool");
+    failed_metrics += update_metrics_with_exception_handling(uint_metrics_, cluster, start_of_update_cycle, "uint");
+    failed_metrics += update_metrics_with_exception_handling(double_metrics_, cluster, start_of_update_cycle, "double");
 
-    for (auto& metric : double_metrics_) {
-        metric->update(cluster, start_of_update_cycle);
+    if (failed_metrics > 0) {
+        log_warning(
+            tt::LogAlways,
+            "Skipped {} metrics due to read failures (likely device busy or inaccessible)",
+            failed_metrics);
     }
 
     std::chrono::steady_clock::time_point end_of_update_cycle = std::chrono::steady_clock::now();
