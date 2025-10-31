@@ -10,7 +10,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -89,7 +89,7 @@ Tensor ExecuteMinimum::invoke(
 
 Tensor ExecuteMinimum::invoke(
     const Tensor& input_a,
-    const std::variant<int32_t, float> value,
+    unary::ScalarVariant value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -99,9 +99,8 @@ Tensor ExecuteMinimum::invoke(
     std::optional<bool> use_legacy) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::
-                ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
-                    input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MINIMUM>::
+                invoke(input_a, input_b, memory_config, optional_output_tensor);
         },
         value);
 }
@@ -130,7 +129,7 @@ Tensor ExecuteMaximum::invoke(
 
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_a,
-    const std::variant<int32_t, float> value,
+    unary::ScalarVariant value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -140,9 +139,8 @@ Tensor ExecuteMaximum::invoke(
     std::optional<bool> use_legacy) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::
-                ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM>::invoke(
-                    input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MAXIMUM>::
+                invoke(input_a, input_b, memory_config, optional_output_tensor);
         },
         value);
 }

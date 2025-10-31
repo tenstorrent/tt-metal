@@ -38,7 +38,6 @@ const std::
 };
 
 int main(int argc, char** argv) {
-    log_info(tt::LogTest, "Starting Test");
     std::vector<std::string> input_args(argv, argv + argc);
 
     auto fixture = std::make_shared<TestFixture>();
@@ -53,30 +52,49 @@ int main(int argc, char** argv) {
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
+    bool use_dynamic_policies = true;  // Default to dynamic
+
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser;
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
         raw_test_configs = std::move(parsed_yaml.test_configs);
+
+        // Check if YAML explicitly provided allocation_policies
         if (parsed_yaml.allocation_policies.has_value()) {
             allocation_policies = parsed_yaml.allocation_policies.value();
+            use_dynamic_policies = false;  // User provided explicit policies
         }
+
         if (parsed_yaml.physical_mesh_config.has_value()) {
             physical_mesh_config = parsed_yaml.physical_mesh_config;
         }
     } else {
-        raw_test_configs = cmdline_parser.generate_default_configs();
+        log_error(
+            tt::LogTest,
+            "No YAML config file path specified. Please use --test_config <file_path> to specify the test config. Use "
+            "--help for more information.");
+        return 1;
     }
+
+    log_info(tt::LogTest, "Starting Test");
 
     fixture->init(physical_mesh_config);
 
     TestContext test_context;
-    test_context.init(fixture, allocation_policies);
+    test_context.init(fixture, allocation_policies, use_dynamic_policies);
 
-    bool benchmark_mode = std::any_of(raw_test_configs.begin(), raw_test_configs.end(),
-        [](const auto& config) {
-            return config.benchmark_mode;
-        }
-    );
+    // Configure progress monitoring from cmdline flags
+    if (cmdline_parser.show_progress()) {
+        ProgressMonitorConfig progress_config;
+        progress_config.enabled = true;
+        progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
+        progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
+
+        test_context.enable_progress_monitoring(progress_config);
+    }
+
+    bool benchmark_mode = std::any_of(
+        raw_test_configs.begin(), raw_test_configs.end(), [](const auto& config) { return config.benchmark_mode; });
 
     // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
     if (benchmark_mode) {
@@ -163,20 +181,19 @@ int main(int argc, char** argv) {
 
             // Set code profiling enabled based on rtoptions
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-            test_context.set_code_profiling_enabled(
-                rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
+            test_context.set_code_profiling_enabled(rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
 
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
+
+                // Prepare allocator and memory maps for this specific test
+                test_context.prepare_for_test(built_test);
 
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");
 
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
-
-                // Initialize sync memory if line sync is enabled
-                test_context.initialize_sync_memory();
 
                 // Clear code profiling buffers before test execution
                 if (test_context.get_code_profiling_enabled()) {
@@ -190,11 +207,14 @@ int main(int argc, char** argv) {
                 log_info(tt::LogTest, "Compiling programs");
                 test_context.compile_programs();
 
+                // multi-host barrier to synchronize before starting the test (as we could be clearing out addresses)
+                fixture->barrier();
+
                 log_info(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
 
                 log_info(tt::LogTest, "Waiting for programs");
-                test_context.wait_for_programs();
+                test_context.wait_for_programs_with_progress();
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);

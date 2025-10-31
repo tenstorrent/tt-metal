@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 import torch
@@ -58,6 +59,106 @@ class Generator:
         self.tokenizer = tokenizer
         self.data_parallel = len(self.model)
         self.prev_page_table = None
+        self.trace_id_prefill = defaultdict(lambda: None)
+        self.trace_inputs_prefill = defaultdict(lambda: None)
+        self.trace_output_prefill = defaultdict(lambda: None)
+
+    def _capture_trace_prefill(
+        self,
+        prefill_ids,
+        page_table=None,
+        kv_cache=None,
+        model_id=-1,
+    ):
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        # These matrices will actually be pointing to the whole cos_matrix and sin_matrix that was allocated on device in the RotarySetup class
+        tt_rot_mats_prefill_global = host_inputs[1]
+        tt_rot_mats_prefill_local = host_inputs[2]
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
+            kv_cache=kv_cache,
+        )
+        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+        logger.info("Done Compiling Model")
+
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+        trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+            x=transformed_inputs[0],
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
+            page_table=transformed_inputs[1],
+            chunk_page_table=transformed_inputs[2],
+            kv_cache=kv_cache,
+        )
+        ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+        logger.info("Done Capturing Prefill Trace")
+        return trace_id, tt_out_trace, *device_inputs
+
+    def _easy_trace_prefill(
+        self,
+        prefill_ids,
+        page_table=None,
+        user_id=0,
+        last_token_idx=None,
+        kv_cache=None,
+        model_id=-1,
+        prefill_seq_len=None,
+        **kwargs,
+    ):
+        trace_key = f"{prefill_seq_len}_{model_id}"
+        if self.trace_id_prefill[trace_key] is None:
+            trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
+                prefill_ids,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                model_id=model_id,
+            )
+            self.trace_id_prefill[trace_key] = trace_id
+            self.trace_inputs_prefill[trace_key] = device_inputs
+            self.trace_output_prefill[trace_key] = tt_out_trace
+
+        tt_out_trace = self._prefill_forward_trace(
+            self.trace_id_prefill[trace_key],
+            self.trace_inputs_prefill[trace_key],
+            self.trace_output_prefill[trace_key],
+            prefill_ids,
+            page_table=page_table,
+            model_id=model_id,
+        )
+
+        return tt_out_trace
+
+    def _prefill_forward_trace(
+        self,
+        trace_id,
+        device_inputs,
+        tt_out_trace,
+        prefill_ids,
+        user_id=0,
+        page_table=None,
+        model_id=-1,
+    ):
+        host_inputs = self.model[model_id].prepare_prefill_inputs_trace(prefill_ids, page_table=page_table)
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
+
+        device_inputs = copy_host_to_device(
+            host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
+        )
+
+        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return tt_out_trace
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
@@ -67,10 +168,14 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
+        enable_trace=True,
         **kwargs,
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
+        else:
+            # Only paged attention is supported for prefill
+            enable_trace = False
 
         batch_size, batch_seq_len = tokens.shape
         max_batch_size_per_model = self.model_args[0].max_batch_size
@@ -98,8 +203,21 @@ class Generator:
             prefill_ids = torch.cat(
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
+
+            enable_trace_current_prompt = enable_trace and self.model_args[model_id].can_enable_trace(prefill_seq_len)
+
+            logger.info(
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
+            )
+
             page_table_user = (
-                self._get_prefill_user_page_table(page_table[idx : idx + 1], kv_cache[model_id], seq_len)
+                self._get_prefill_user_page_table(
+                    page_table[idx : idx + 1],
+                    kv_cache[model_id],
+                    seq_len,
+                    trace_enabled=enable_trace_current_prompt,
+                    prefill_seq_len=prefill_seq_len,
+                )
                 if page_table is not None
                 else None
             )
@@ -111,15 +229,33 @@ class Generator:
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
-            logits = self.prefill_forward_single_user_text(
-                prefill_ids,
-                page_table=page_table_user,
-                user_id=group_user_id,
-                last_token_idx=last_token_idx,
-                kv_cache=model_kv_cache,
-                model_id=model_id,
-                **local_kwargs,
-            )
+            if enable_trace_current_prompt:
+                logits = self._easy_trace_prefill(
+                    prefill_ids,
+                    page_table=page_table_user,
+                    user_id=group_user_id,
+                    last_token_idx=last_token_idx,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
+                    prefill_seq_len=prefill_seq_len,
+                    **local_kwargs,
+                )
+            else:
+                logits = self.prefill_forward_single_user_text(
+                    prefill_ids,
+                    page_table=page_table_user,
+                    user_id=group_user_id,
+                    last_token_idx=last_token_idx,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
+                    **local_kwargs,
+                )
+            if enable_trace_current_prompt:
+                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+                # We need to do this here, because we can't do this part in forward() if we have trace enabled
+                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
+                logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+
             # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
             # otherwise, we can process the logits after prefill immediately
             if self.data_parallel > 1:
@@ -311,11 +447,6 @@ class Generator:
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
             tt_page_table.append(tt_page_table_i)
-            if (
-                hasattr(self.model[i], "device_decode_sliding_mask")
-                and self.model[i].device_decode_sliding_mask is not None
-            ):
-                self.model[i].update_attention_masks(current_pos[i])
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -361,11 +492,6 @@ class Generator:
             )
 
             device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
-            if (
-                hasattr(self.model[i], "device_decode_sliding_mask")
-                and self.model[i].device_decode_sliding_mask is not None
-            ):
-                self.model[i].update_attention_masks(current_pos[i])
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
@@ -416,13 +542,6 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_text[i],
                 )
-
-        for i in range(self.data_parallel):
-            if (
-                hasattr(self.model[i], "device_decode_sliding_mask")
-                and self.model[i].device_decode_sliding_mask is not None
-            ):
-                self.model[i].update_attention_masks(current_pos[i])
 
         for i, trace_id in self.trace_ids_text.items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
@@ -1416,10 +1535,21 @@ class Generator:
 
         return generation
 
-    def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
+    def _get_prefill_user_page_table(
+        self, page_table, kv_cache, prefill_len, trace_enabled=False, prefill_seq_len=None
+    ):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly
         block_size = get_block_size(kv_cache)
-        num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        num_blocks = 0
+        if trace_enabled:
+            num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+        else:
+            num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        if trace_enabled:
+            if page_table.shape[1] < num_blocks:
+                # If page table is too short, pad it with -1
+                padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+                page_table = torch.cat([page_table, padding], dim=1)
         return page_table[:, :num_blocks]
 
     ## Destructor

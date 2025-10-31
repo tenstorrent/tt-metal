@@ -15,6 +15,9 @@ class RMSNorm(Module):
     def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
         super().__init__()
 
+        # https://github.com/tenstorrent/tt-metal/issues/31216
+        assert embedding_dim % 32 == 0, "embedding_dim must be divisible by tile size"
+
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
@@ -56,6 +59,8 @@ class LayerNorm(Module):
         use_row_major_workaround=False,  # Issue #20789
     ):
         super().__init__()
+
+        assert embedding_dim % 32 == 0, "embedding_dim must be divisible by tile size"
 
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
@@ -149,6 +154,9 @@ class DistributedRMSNorm(Module):
 
         n = self.TILE_SIZE * self.mesh_width
 
+        # https://github.com/tenstorrent/tt-metal/issues/31216
+        assert embedding_dim % n == 0, "embedding_dim must be divisible by tile size times mesh width"
+
         self.weight = (
             Parameter(
                 total_shape=[embedding_dim // n, n],
@@ -236,6 +244,8 @@ class DistributedLayerNorm(Module):
 
         n = self.TILE_SIZE * self.mesh_width
         shape = [embedding_dim // n, n]
+
+        assert embedding_dim % n == 0, "embedding_dim must be divisible by tile size times mesh width"
 
         self.weight = (
             Parameter(total_shape=shape, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=[None, mesh_axis], device=mesh_device)
@@ -336,6 +346,17 @@ class GroupNorm(Module):
     ):
         super().__init__()
 
+        """
+        Args:
+            num_channels: Number of channels in the input tensor.
+            num_groups: Number of groups.
+            eps: Epsilon value for numerical stability.
+            mesh_device: The device to use.
+            mesh_axis: The mesh axis to use for sharding.
+            core_grid: The core grid to use.
+            num_out_blocks: The number of output blocks to use.
+            torch_ref: The torch reference layer.
+        """
         self.eps = eps or torch_ref.eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
@@ -409,7 +430,6 @@ class GroupNorm(Module):
         return torch.cat(torch_sharded_lst, dim=0)
 
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1) -> ttnn.Tensor:
-        self.num_out_blocks = num_out_blocks
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(
@@ -421,7 +441,7 @@ class GroupNorm(Module):
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
-            num_out_blocks=self.num_out_blocks,
+            num_out_blocks=num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
         x = x.reshape([batch_size, height, width, channels])

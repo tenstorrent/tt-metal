@@ -18,6 +18,7 @@
 #include <tt-metalium/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -48,8 +49,7 @@ struct ParsedTrafficPatternConfig {
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<ParsedDestinationConfig> destination;
-    std::optional<uint16_t> atomic_inc_val;
-    std::optional<uint16_t> atomic_inc_wrap;
+    std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
 };
 
@@ -69,22 +69,32 @@ struct DestinationConfig {
     std::optional<uint32_t> atomic_inc_address;
 };
 
+// Credit flow structures for bidirectional sender-receiver communication
+struct SenderCreditInfo {
+    uint32_t expected_receiver_count{};        // How many receivers to wait for
+    uint32_t credit_reception_address_base{};  // Base L1 address for credit chunk (mcast support)
+    uint32_t initial_credits{};                // Initial credit capacity (based on receiver buffer size)
+};
+
 struct TrafficPatternConfig {
     std::optional<ChipSendType> ftype;
     std::optional<NocSendType> ntype;
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<DestinationConfig> destination;
-    std::optional<uint16_t> atomic_inc_val;
-    std::optional<uint16_t> atomic_inc_wrap;
+    std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
+
+    // Credit info
+    std::optional<SenderCreditInfo> sender_credit_info;  // For sender
+    std::optional<uint32_t> credit_return_batch_size;    // For receivers
 };
 
 struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
     std::vector<TrafficPatternConfig> patterns;
-    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+    uint32_t link_id = 0;  // Link ID for multi-link tests
 };
 
 enum class RoutingType {
@@ -102,6 +112,7 @@ enum class HighLevelTrafficPattern {
     FullRing,
     HalfRing,
     AllDevicesUniformPattern,
+    SequentialAllToAll,
 };
 
 struct TestFabricSetup {
@@ -137,6 +148,7 @@ struct ParsedTestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
+    bool enable_flow_control = false;  // Enable flow control for all patterns in this test
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;  // Number of times to repeat a built test
 };
@@ -144,7 +156,7 @@ struct ParsedTestConfig {
 struct TestConfig {
     std::string name;               // Original base name for golden lookup
     std::string parametrized_name;  // Enhanced name for debugging and logging
-    uint32_t iteration_number = 0; // For multi-iteration tests, notes the specific iteration of this test
+    uint32_t iteration_number = 0;  // For multi-iteration tests, notes the specific iteration of this test
     TestFabricSetup fabric_setup;
     std::optional<std::string> on_missing_param_policy;
     std::optional<TrafficPatternConfig> defaults;
@@ -160,6 +172,7 @@ struct TestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
+    bool enable_flow_control = false;  // Enable flow control for all patterns in this test
     uint32_t seed{};
 };
 
@@ -243,8 +256,9 @@ struct AllocatorPolicies {
             this->default_payload_chunk_size = default_payload_chunk_size.value();
         } else {
             // derive a reasonable default based on the number of configs served per receiver core
-            this->default_payload_chunk_size =
-                detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
+            auto payload_chunk_size = detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
+            // since L1 alignment is not available here, align to 64 bytes as a safe minimum
+            this->default_payload_chunk_size = tt::align(payload_chunk_size, 64);
         }
     }
 };
@@ -253,7 +267,7 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<EthCoord>> eth_coord_mapping;
 
-    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+    PhysicalMeshConfig() : eth_coord_mapping({}) {
         // Default path to the mesh descriptor.
     }
 };

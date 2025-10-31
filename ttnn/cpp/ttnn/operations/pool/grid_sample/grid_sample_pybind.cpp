@@ -18,8 +18,6 @@ namespace py = pybind11;
 
 void bind_grid_sample(py::module& module) {
     const auto doc = R"doc(
-        grid_sample(input_tensor: ttnn.Tensor, grid: ttnn.Tensor, *, mode: str = "bilinear", padding_mode: str = "zeros", use_precomputed_grid: bool = False, batch_output_channels: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
         Performs grid sampling on the input tensor using the provided sampling grid.
 
         Grid sample uses bilinear interpolation to sample input values at arbitrary
@@ -138,8 +136,6 @@ void bind_prepare_grid_sample_grid(py::module& module) {
         py::arg("padding_mode") = "zeros",
         py::arg("output_dtype") = std::nullopt,
         R"doc(
-        prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, padding_mode: str = "zeros", output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
         Precomputes grid sample data for optimized kernel execution.
 
         This function takes a normalized grid tensor and precomputes the pixel coordinates
