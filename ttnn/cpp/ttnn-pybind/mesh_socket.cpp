@@ -21,8 +21,6 @@ void py_module_types(py::module& module) {
     py::class_<
         tt::tt_metal::distributed::multihost::DistributedContext,
         std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>(module, "DistributedContext")
-        // .def_static("create", &tt::tt_metal::distributed::multihost::DistributedContext::create,
-        // py::arg("argc"), py::arg("argv"))
         .def_static("get_current_world", &tt::tt_metal::distributed::multihost::DistributedContext::get_current_world)
         .def_static(
             "set_current_world",
