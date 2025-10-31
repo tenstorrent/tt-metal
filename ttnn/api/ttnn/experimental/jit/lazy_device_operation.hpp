@@ -16,6 +16,11 @@
 
 namespace ttnn::experimental::jit {
 
+template <typename operation_t>
+constexpr tt::stl::hash::hash_t get_operation_type_id() {
+    return tt::stl::hash::type_hash<operation_t>;
+}
+
 // Generic wrapper that adapts any device operation to IDeviceOperation
 template <typename operation_t>
     requires ttnn::device_operation::DeviceOperationConcept<operation_t>
@@ -28,8 +33,6 @@ public:
     LazyDeviceOperation(operation_attributes_t attributes, tensor_args_t tensor_args, const std::string& name) :
         attributes_(std::move(attributes)),
         tensor_args_(tensor_args),  // Copy tensor_args (shallow copy since Tensor is shallow-copyable)
-        field_tensor_counts_(extract_field_tensor_counts(tensor_args)),  // Extract tensor counts from parameter
-        field_vector_sizes_(extract_field_vector_sizes(tensor_args)),    // Extract vector sizes from parameter
         name_(name) {
         // Compute and cache output specs once at construction time
         if constexpr (requires { operation_t::compute_output_specs(attributes_, tensor_args_); }) {
@@ -41,22 +44,13 @@ public:
     // TODO: Can we cache validation result?
     void validate(const std::vector<Tensor>& input_tensors) const {
         TT_FATAL(false, "Not implemented");
-        // // Need to make a mutable copy to get non-const iterators for reference binding
-        // // TODO: fix from_range_pfr to accept const iterators
-        // std::vector<Tensor> mutable_tensors = input_tensors;
-
-        // // Construct tensor_args from input_tensors with proper reference binding
-        // // Pass field_tensor_counts_ and field_vector_sizes_ for proper reconstruction
-        // auto temp_tensor_args = from_range_pfr<tensor_args_t>(
-        //     mutable_tensors.begin(), mutable_tensors.end(), field_tensor_counts_, field_vector_sizes_);
-
-        // // Call the operation's validation method if it exists
-        // // Use validate_on_program_cache_miss for comprehensive validation
-        // // TODO: Should we choose validate_on_program_cache_miss or validate_on_program_cache_hit based on the cache
-        // somehow? if constexpr (requires { operation_t::validate_on_program_cache_miss(attributes_, temp_tensor_args);
-        // }) {
-        //     operation_t::validate_on_program_cache_miss(attributes_, temp_tensor_args);
-        // }
+        // Call the operation's validation method if it exists
+        // Use validate_on_program_cache_miss for comprehensive validation
+        // TODO: Should we choose validate_on_program_cache_miss or validate_on_program_cache_hit based on the cache
+        // somehow?
+        if constexpr (requires { operation_t::validate_on_program_cache_miss(attributes_, tensor_args_); }) {
+            operation_t::validate_on_program_cache_miss(attributes_, tensor_args_);
+        }
     }
 
     std::vector<ttnn::TensorSpec> compute_output_specs() const {
@@ -66,31 +60,21 @@ public:
 
     std::string_view name() const override { return std::string_view(name_.c_str()); }
 
-    std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(
-        const std::vector<tt::tt_metal::metal_tensor::Tensor>& input_tensors) override {
-        // Construct tensor_args from input_tensors with proper reference binding
-        // Pass field_tensor_counts_ and field_vector_sizes_ for proper reconstruction
-        // TODO: Once Tensor is in metal, we should make all device operations accept metal tensor, not tnn::Tensor
-        std::vector<ttnn::Tensor> mutable_tensors;
-        mutable_tensors.reserve(input_tensors.size());
-        for (const auto& tensor : input_tensors) {
-            mutable_tensors.push_back(ttnn::Tensor(tensor));
-        }
-
-        // TODO: fix from_range_pfr to accept const iterators
-        auto tensor_args = from_range_pfr<tensor_args_t>(
-            mutable_tensors.begin(), mutable_tensors.end(), field_tensor_counts_, field_vector_sizes_);
-
+    std::vector<tt::tt_metal::metal_tensor::Tensor> invoke() override {
         // Use the standard device operation eager execution path
-        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args);
+        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args_);
 
         // Convert result to vector
         return convert_result_to_vector(result);
     }
 
-    const operation_attributes_t& get_attributes() const { return attributes_; }
+    const operation_attributes_t& attributes() const { return attributes_; }
 
-    // TODO: Verify vibecoded to_hash and attributes()
+    const tensor_args_t& tensor_args() const { return tensor_args_; }
+
+    tt::stl::hash::hash_t operation_type_id() const override { return tt::stl::hash::type_hash<operation_t>; }
+
+    // TODO: Verify vibecoded to_hash
     // Required for hashing support
     tt::stl::hash::hash_t to_hash() const {
         // Hash based on the operation type and attributes
@@ -106,8 +90,6 @@ private:
     operation_attributes_t attributes_;
     tensor_args_t tensor_args_;
     std::vector<ttnn::TensorSpec> cached_output_specs_;
-    std::vector<size_t> field_tensor_counts_;  // Number of tensors each field consumes
-    std::vector<size_t> field_vector_sizes_;   // Total size of vector fields (for vector<optional<T>>)
     std::string name_;
     // Helper to convert any spec type to vector
     template <typename SpecType>
