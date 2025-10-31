@@ -67,7 +67,7 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, ChipId chip_id, bool using_mock_cluster_desc) {
+    const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
     auto cluster_desc = cluster->get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
@@ -80,6 +80,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
+        tt::ARCH arch = cluster_desc->get_arch(chip_id);
         if (arch == tt::ARCH::WORMHOLE_B0) {
             // Derive ASIC Location based on the tunnel depth for Wormhole systems
             // TODO: Remove this once UMD populates the ASIC Location for WH systems.
@@ -253,7 +254,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] =
-            get_asic_position(cluster_, cluster_desc_->get_arch(), src_chip_id, target_device_type_ != TargetDevice::Silicon);
+            get_asic_position(cluster_, src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
