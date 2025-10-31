@@ -159,6 +159,7 @@ jobs:
           run_args: |
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
+        id: save-environment-data
         if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
         uses: ./.github/actions/docker-run
         with:
@@ -169,9 +170,16 @@ jobs:
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
           install_wheel: true
-          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          run_args: |
+            if [ -d "generated/benchmark_data" ]; then
+              echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+              python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+            else
+              echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+              echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+            fi
       - name: Upload benchmark data
-        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

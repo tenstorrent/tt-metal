@@ -103,14 +103,22 @@ jobs:
         run: |
           tt-smi -s
       - name: Save environment data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        id: save-environment-data
+        if: ${{ !cancelled() }}
         timeout-minutes: 15
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
-        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -184,14 +192,22 @@ jobs:
           ${{ matrix.test-group.cmd }}
 
       - name: Save environment data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        id: save-environment-data
+        if: ${{ !cancelled() }}
         timeout-minutes: 15
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
-        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
