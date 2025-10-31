@@ -19,6 +19,23 @@
 namespace ttnn {
 namespace ccl {
 
+bool is_fabric_2d() {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    return (
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+}
+
+tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
+    if (topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Linear) {
+        return tt::tt_fabric::Topology::Linear;
+    } else if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
+        return tt::tt_fabric::Topology::Ring;
+    }
+    return topology;
+}
+
 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis) {
     auto mesh_shape = tensor.device()->shape();

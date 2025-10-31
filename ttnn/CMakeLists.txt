@@ -214,7 +214,6 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/argmax/argmax_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reshape/view_${PY_BINDING}.cpp
@@ -453,7 +452,6 @@ target_sources(
             cpp/ttnn/operations/compute_throttle_utils.hpp
             cpp/ttnn/operations/cb_utils.hpp
             cpp/ttnn/operations/math.hpp
-            cpp/ttnn/operations/sharding_utilities.hpp
             cpp/ttnn/operations/trace.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -462,7 +460,6 @@ target_sources(
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
-        cpp/ttnn/operations/sharding_utilities.cpp
         cpp/ttnn/operations/trace.cpp
         cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
         cpp/ttnn/operations/generic/generic_op.cpp
