@@ -252,10 +252,10 @@ def test_pipeline_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         expected_metrics = {
-            "text_encoding_time": 10000,
-            "denoising_time": 10000,
-            "vae_decoding_time": 10000,
-            "total_time": 10000,
+            "text_encoding_time": 9.15,
+            "denoising_time": 502,
+            "vae_decoding_time": 39.6,
+            "total_time": 556,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
