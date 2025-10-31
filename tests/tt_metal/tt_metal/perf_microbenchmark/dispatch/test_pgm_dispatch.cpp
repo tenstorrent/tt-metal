@@ -1108,7 +1108,7 @@ int main(int argc, char** argv) {
                 .brisc_enabled = false,
                 .ncrisc_enabled = false,
                 .trisc_enabled = false,
-                .erisc_enabled = true,
+                .erisc_enabled = false,
                 .use_trace = true,
                 .dispatch_from_eth = true})
             ->Apply(Max8192Args)
