@@ -401,7 +401,7 @@ TEST_F(TopologyMapperTest, PinningHonorsFixedAsicPositionOnDualGalaxyMesh_2pins)
 
     // Choose a real ASIC on this host and pin its (tray, location) to logical node (mesh 0, chip 0)
     auto pinned_asic = AsicPosition{1, 1};
-    auto pinned_asic2 = AsicPosition{1, 2};
+    auto pinned_asic2 = AsicPosition{1, 5};
 
     std::vector<std::pair<AsicPosition, FabricNodeId>> pins = {
         {pinned_asic, FabricNodeId(MeshId{0}, 0)},
