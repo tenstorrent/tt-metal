@@ -290,9 +290,11 @@ class TtTransfuserBackbone:
         # Process layer1 blocks
         for block in self.image_layer1:
             image_out, image_shape = block(image_out, device, image_shape)
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"lidar_encoder_layer1")
         for block in self.lidar_layer1:
             lidar_out, lidar_shape = block(lidar_out, device, lidar_shape)
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"img_avgpool")
         image_embd_layer1 = ttnn.adaptive_avg_pool2d(
             input_tensor=image_out,
@@ -318,6 +320,7 @@ class TtTransfuserBackbone:
         image_features_layer1, lidar_features_layer1 = self.transformer1(
             image_embd_layer1, lidar_embd_layer1, velocity, 72
         )
+        ttnn.ReadDeviceProfiler(device)
         image_features_layer1 = ttnn.permute(image_features_layer1, (0, 2, 3, 1))
         lidar_features_layer1 = ttnn.permute(lidar_features_layer1, (0, 2, 3, 1))
 
@@ -355,9 +358,11 @@ class TtTransfuserBackbone:
         logger.info(f"image_encoder_layer2")
         for block in self.image_layer2:
             image_features, image_shape = block(image_features, device, image_shape)
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"lidar_encoder_layer2")
         for block in self.lidar_layer2:
             lidar_features, lidar_shape = block(lidar_features, device, lidar_shape)
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"img2_avgpool")
         image_embd_layer2 = ttnn.adaptive_avg_pool2d(
             input_tensor=image_features,
@@ -384,6 +389,7 @@ class TtTransfuserBackbone:
         image_features_layer2, lidar_features_layer2 = self.transformer2(
             image_embd_layer2, lidar_embd_layer2, velocity, 216
         )
+        ttnn.ReadDeviceProfiler(device)
         image_features_layer2 = ttnn.permute(image_features_layer2, (0, 2, 3, 1))
         lidar_features_layer2 = ttnn.permute(lidar_features_layer2, (0, 2, 3, 1))
 
@@ -413,6 +419,8 @@ class TtTransfuserBackbone:
         logger.info("layer2 Image and lidar - add")
         image_features = ttnn.reshape(image_features, image_features_layer2.shape)
         lidar_features = ttnn.reshape(lidar_features, lidar_features_layer2.shape)
+        if image_features.memory_config().buffer_type != ttnn.BufferType.DRAM:
+            image_features = ttnn.to_memory_config(image_features, ttnn.DRAM_MEMORY_CONFIG)
         image_features = ttnn.add(image_features, image_features_layer2)
         lidar_features = ttnn.add(lidar_features, lidar_features_layer2)
         image_shape = image_features.shape
@@ -421,10 +429,12 @@ class TtTransfuserBackbone:
         for block in self.image_layer3:
             image_features, image_shape = block(image_features, device, image_shape)
 
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"lidar_encoder_layer3")
         for block in self.lidar_layer3:
             lidar_features, lidar_shape = block(lidar_features, device, lidar_shape)
 
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"img3_avgpool")
         image_embd_layer3 = ttnn.adaptive_avg_pool2d(
             input_tensor=image_features,
@@ -452,6 +462,7 @@ class TtTransfuserBackbone:
         image_features_layer3, lidar_features_layer3 = self.transformer3(
             image_embd_layer3, lidar_embd_layer3, velocity, 576
         )
+        ttnn.ReadDeviceProfiler(device)
         image_features_layer3 = ttnn.permute(image_features_layer3, (0, 2, 3, 1))
         lidar_features_layer3 = ttnn.permute(lidar_features_layer3, (0, 2, 3, 1))
 
@@ -483,10 +494,12 @@ class TtTransfuserBackbone:
         for block in self.image_layer4:
             image_features, image_shape = block(image_features, device, image_shape)
 
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"lidar_encoder_layer4")
         for block in self.lidar_layer4:
             lidar_features, lidar_shape = block(lidar_features, device, lidar_shape)
 
+        ttnn.ReadDeviceProfiler(device)
         logger.info(f"img4_avgpool")
         image_embd_layer4 = ttnn.adaptive_avg_pool2d(
             input_tensor=image_features,
@@ -514,6 +527,7 @@ class TtTransfuserBackbone:
         image_features_layer4, lidar_features_layer4 = self.transformer4(
             image_embd_layer4, lidar_embd_layer4, velocity, 1512
         )
+        ttnn.ReadDeviceProfiler(device)
         image_features_layer4 = ttnn.permute(image_features_layer4, (0, 2, 3, 1))
         lidar_features_layer4 = ttnn.permute(lidar_features_layer4, (0, 2, 3, 1))
 

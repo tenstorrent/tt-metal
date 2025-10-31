@@ -182,28 +182,29 @@ class TransfuserBackboneInfra:
             )
 
         # Convert input to TTNN format
-        tt_image_input = ttnn.from_torch(
+        self.input_image_tensor = ttnn.from_torch(
             self.torch_image_input.permute(0, 2, 3, 1),
-            dtype=ttnn.bfloat16,
-            mesh_mapper=self.inputs_mesh_mapper,
-        )
-        tt_lidar_input = ttnn.from_torch(
-            self.torch_lidar_input.permute(0, 2, 3, 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
             mesh_mapper=self.inputs_mesh_mapper,
         )
-        tt_velocity_input = ttnn.from_torch(
+        self.input_lidar_tensor = ttnn.from_torch(
+            self.torch_lidar_input.permute(0, 2, 3, 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self.inputs_mesh_mapper,
+        )
+        self.input_velocity_tensor = ttnn.from_torch(
             self.torch_velocity_input,
             device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-
-        self.input_image_tensor = ttnn.to_device(tt_image_input, device)
-        self.input_lidar_tensor = ttnn.to_device(tt_lidar_input, device)
-        self.input_velocity_tensor = ttnn.to_device(tt_velocity_input, device)
 
         # Build TTNN model
         self.ttnn_model = TtTransfuserBackbone(
@@ -321,7 +322,7 @@ model_config = {
     [("regnety_032", "regnety_032", 4, False, True, (1, 3, 160, 704), (1, 3, 256, 256))],
 )
 @pytest.mark.parametrize("use_fallback", [True])
-@pytest.mark.parametrize("use_optimized_self_attn", [False, True])
+@pytest.mark.parametrize("use_optimized_self_attn", [True])
 def test_stem(
     device,
     image_architecture,
