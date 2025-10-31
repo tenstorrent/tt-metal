@@ -20,13 +20,25 @@ void NlpCreateHeadsSegformerDeviceOperation::validate(const std::vector<Tensor>&
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE, "Input tensor layout must be TILE but got {}", input_tensor.layout());
 
-    TT_FATAL(input_shape[2] % tt::constants::TILE_HEIGHT == 0, "Error");
-    TT_FATAL(input_shape[3] % tt::constants::TILE_HEIGHT == 0, "Error");
+    TT_FATAL(
+        input_shape[2] % tt::constants::TILE_HEIGHT == 0,
+        "Input shape[2] ({}) must be divisible by TILE_HEIGHT ({})",
+        input_shape[2],
+        tt::constants::TILE_HEIGHT);
+    TT_FATAL(
+        input_shape[3] % tt::constants::TILE_HEIGHT == 0,
+        "Input shape[3] ({}) must be divisible by TILE_HEIGHT ({})",
+        input_shape[3],
+        tt::constants::TILE_HEIGHT);
     // TT_FATAL((input_shape == tt::tt_metal::LegacyShape({input_shape[0], 1, input_shape[2], 2304})), "Unsupported
     // input shape");
-    TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+    TT_FATAL(
+        this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "Output memory config layout must be INTERLEAVED but got {}",
+        this->output_mem_config.memory_layout());
 }
 
 std::vector<ttnn::TensorSpec> NlpCreateHeadsSegformerDeviceOperation::compute_output_specs(

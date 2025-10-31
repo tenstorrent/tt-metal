@@ -18,13 +18,10 @@ from queue import Empty
 from typing import Optional
 
 # third party
-from elasticsearch import Elasticsearch, NotFoundError
 import enlighten
 from faster_fifo import Queue
 
 # tt
-from tracy.common import PROFILER_LOGS_DIR
-from tracy.process_ops_logs import get_device_data_generate_report
 from framework.device_fixtures import default_device
 from framework.elastic_config import *
 from framework.statuses import VectorValidity, TestStatus
@@ -33,7 +30,7 @@ from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from sweep_utils.roofline_utils import get_updated_message
+from sweep_utils.perf_utils import run_with_cache_comparison, run_single
 
 
 @dataclass
@@ -48,6 +45,7 @@ class SweepsConfig:
     result_destination: str = "elastic"
     watcher: bool = False
     measure_perf: bool = False
+    measure_perf_with_cache: bool = False
     measure_device_perf: bool = False
     dry_run: bool = False
     sweeps_tag: Optional[str] = None
@@ -74,7 +72,9 @@ def create_config_from_args(args) -> SweepsConfig:
         vector_id=args.vector_id,
         result_destination=args.result_dest,
         watcher=args.watcher,
+        # E2E perf measurement disabled until kernel cache clearing is available
         measure_perf=args.perf,
+        measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
         dry_run=args.dry_run,
         sweeps_tag=args.tag,
@@ -153,6 +153,14 @@ def validate_arguments(args, parser):
         logger.error("Skip modules is only supported when running all modules.")
         exit(1)
 
+    # Validate performance measurement flags
+    # Disabled while e2e perf measurement is disabled
+    if getattr(args, "perf_with_cache", False) and args.perf:
+        logger.error(
+            "Cannot use both --perf and --perf-with-cache flags simultaneously. Use --perf-with-cache to get both cached and uncached performance measurements."
+        )
+        exit(1)
+
     logger.info("All argument validations passed successfully.")
 
 
@@ -191,7 +199,7 @@ def get_timeout(test_module_name):
 
 
 def sanitize_inputs(test_vectors):
-    info_field_names = ["sweep_name", "suite_name", "vector_id", "input_hash"]
+    info_field_names = ["sweep_name", "suite_name", "input_hash"]
     header_info = []
     for vector in test_vectors:
         header = dict()
@@ -211,38 +219,6 @@ def get_devices(test_module):
         return test_module.mesh_device_fixture()
     except:
         return default_device()
-
-
-def gather_single_test_perf(device, test_passed):
-    if device is None or device.get_num_devices() > 1:
-        logger.error("Multi-device perf is not supported. Failing.")
-        return None
-    # Read profiler data from device
-    opPerfData = get_device_data_generate_report(
-        PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
-    )
-    if not test_passed:
-        return None
-    elif opPerfData == []:
-        logger.error("No profiling data available. Ensure you are running with the profiler build.")
-        return None
-    elif len(opPerfData) > 1:
-        logger.info("Composite op detected in device perf measurement. Will aggregate results.")
-        try:
-            for key in opPerfData[0].keys():
-                value = opPerfData[0][key]
-                for i in range(1, len(opPerfData)):
-                    if key in opPerfData[i]:
-                        if type(value) == str:
-                            opPerfData[0][key] = str(float(value) + float(opPerfData[i][key]))
-                        else:
-                            opPerfData[0][key] = value + opPerfData[i][key]
-            return opPerfData[0]
-        except Exception as e:
-            logger.info(e)
-            return None
-    else:
-        return opPerfData[0]
 
 
 def get_hostname():
@@ -333,23 +309,19 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                 return
             test_vector = deserialize_vector_structured(test_vector)
             try:
-                results = test_module.run(**test_vector, device=device)
-                if type(results) == list:
-                    status, message = results[0]
-                    e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
+                if config.measure_perf_with_cache:
+                    status, message, e2e_perf, device_perf = run_with_cache_comparison(
+                        test_module, test_vector, device, config
+                    )
+                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
                 else:
-                    status, message = results
-                    e2e_perf = None
+                    status, message, e2e_perf, device_perf = run_single(test_module, test_vector, device, config)
+                    output_queue.put([status, message, e2e_perf, device_perf if config.measure_device_perf else None])
             except Exception as e:
                 if config.main_proc_verbose:
                     logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
-            if config.measure_device_perf:
-                perf_result = gather_single_test_perf(device, status)
-                message = get_updated_message(message, perf_result)
-                output_queue.put([status, message, e2e_perf, perf_result])
-            else:
                 output_queue.put([status, message, e2e_perf, None])
 
 
@@ -363,13 +335,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    # child_mode is True unless we are in a dry run, with no vector_id, and not in verbose mode.
-    # In other words, child_mode is False only if all of the following are True:
-    #   - config.dry_run is True
-    #   - config.vector_id is falsy (None or False)
-    #   - config.main_proc_verbose is False
-    dry_run_no_vector_no_verbose = config.dry_run and not config.vector_id and not config.main_proc_verbose
-    child_mode = not dry_run_no_vector_no_verbose
+    # child_mode is False if any of dry_run, vector_id, or main_proc_verbose are truthy
+    child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     timeout_before_rejoin = 5
 
     if child_mode:
@@ -377,8 +344,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         p.start()
 
     for i, test_vector in enumerate(test_vectors):
-        vector_id = header_info[i].get("vector_id", "N/A")
-        logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
+        input_hash = header_info[i].get("input_hash", "N/A")
+        logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Input Hash='{input_hash}'")
         if config.dry_run:
             logger.info(f"Would have executed test for vector {test_vector}")
             suite_pbar.update()
@@ -387,8 +354,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
-        result["start_time_ts"] = dt.datetime.now()
-        result["input_hash"] = vector_id
+        result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
+        result["input_hash"] = input_hash
         validity = deserialize(test_vector["validity"]).split(".")[-1]
         if validity == VectorValidity.INVALID:
             invalid_vectors_count += 1
@@ -407,19 +374,6 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             test_vector.pop("validity")
 
             try:
-                if config.measure_perf:
-                    # Run one time before capturing result to deal with compile-time slowdown of perf measurement
-                    # Ensure a worker process is running if we're in child mode
-                    if child_mode and (p is None or not p.is_alive()):
-                        p = Process(target=run, args=(module_name, input_queue, output_queue, config))
-                        p.start()
-                    input_queue.put(test_vector)
-                    if p is None:
-                        logger.info(
-                            "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
-                        )
-                        run(module_name, input_queue, output_queue, config)
-                    output_queue.get(block=True, timeout=timeout)
                 if child_mode and (p is None or not p.is_alive()):
                     p = Process(target=run, args=(module_name, input_queue, output_queue, config))
                     p.start()
@@ -440,6 +394,11 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 # Set base result message
                 result["message"] = message
 
+                logger.info(f"Test status: {status}")
+                logger.info(f"Test message: {message}")
+                logger.info(f"Test e2e perf: {e2e_perf}")
+                logger.info(f"Test device perf: {device_perf}")
+
                 # Determine test status
                 if status:
                     # Test passed - check device perf requirements
@@ -448,7 +407,14 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                             result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
                         else:
                             result["status"] = TestStatus.PASS
-                            result["device_perf"] = device_perf
+                            # Handle both single run and cached/uncached device perf
+                            if config.measure_perf_with_cache and isinstance(device_perf, dict):
+                                # Store both cached and uncached device perf
+                                result["device_perf_uncached"] = device_perf.get("uncached")
+                                result["device_perf_cached"] = device_perf.get("cached")
+                            else:
+                                # Single run device perf
+                                result["device_perf"] = device_perf
                     else:
                         result["status"] = TestStatus.PASS
                 else:
@@ -476,7 +442,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         # Test passed but was expected to fail - this is unexpected
                         result["status"] = TestStatus.XPASS
                         logger.warning(
-                            f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {vector_id}"
+                            f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {input_hash}"
                         )
                     elif result["status"] in [
                         TestStatus.FAIL_ASSERT_EXCEPTION,
@@ -487,13 +453,22 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         # Test failed as expected in XFail suite
                         result["status"] = TestStatus.XFAIL
                         logger.info(
-                            f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {vector_id}"
+                            f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {input_hash}"
                         )
                     # Note: FAIL_CRASH_HANG is still treated as a real failure even in XFail suites
                     # since crashes/hangs are infrastructure issues, not test logic failures
 
                 # Set performance metrics if available
-                result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
+                if config.measure_perf_with_cache and e2e_perf:
+                    # Handle cache performance measurement results
+                    result["e2e_perf"] = e2e_perf  # Dictionary with 'cached' and 'uncached' keys
+                    result["e2e_perf_uncached"] = e2e_perf.get("uncached") if isinstance(e2e_perf, dict) else None
+                    result["e2e_perf_cached"] = e2e_perf.get("cached") if isinstance(e2e_perf, dict) else None
+                elif config.measure_perf and e2e_perf:
+                    # Handle regular performance measurement
+                    result["e2e_perf"] = e2e_perf
+                else:
+                    result["e2e_perf"] = None
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
@@ -509,8 +484,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
                 result["original_vector_data"] = original_vector_data
-                result["end_time_ts"] = dt.datetime.now()
-                result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
                 result["host"] = get_hostname()
                 result["user"] = get_username()
 
@@ -525,13 +500,14 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     for j in range(i + 1, len(test_vectors)):
                         remaining_vector = test_vectors[j]
                         skipped_result = dict()
-                        skipped_result["start_time_ts"] = dt.datetime.now()
+                        skipped_result["input_hash"] = header_info[j].get("input_hash", "N/A")
+                        skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
                         skipped_result["original_vector_data"] = remaining_vector.copy()
                         skipped_result["status"] = TestStatus.NOT_RUN
                         skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
                         skipped_result["e2e_perf"] = None
-                        skipped_result["end_time_ts"] = dt.datetime.now()
-                        skipped_result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                        skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
                         skipped_result["host"] = get_hostname()
                         skipped_result["user"] = get_username()
                         results.append(skipped_result)
@@ -547,8 +523,8 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data
-        result["end_time_ts"] = dt.datetime.now()
-        result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+        result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()
 
@@ -617,7 +593,7 @@ def run_sweeps(
             "git_branch_name": get_git_branch(),
             "git_commit_sha": git_hash(),
             "github_pipeline_id": get_github_pipeline_id(),
-            "run_start_ts": dt.datetime.now(),
+            "run_start_ts": dt.datetime.now(dt.timezone.utc),
             "status": "success",
         }
         run_id = result_dest.initialize_run(run_metadata)
@@ -651,7 +627,7 @@ def run_sweeps(
                 suites = vector_source.get_available_suites(module_name)
 
             for suite in suites:
-                suite_start_time = dt.datetime.now()
+                suite_start_time = dt.datetime.now(dt.timezone.utc)
 
                 vectors = vector_source.load_vectors(module_name, suite, config.vector_id)
                 # Update summary counters
@@ -675,7 +651,7 @@ def run_sweeps(
                 )
                 total_invalid_vectors += invalid_vectors_count
 
-                suite_end_time = dt.datetime.now()
+                suite_end_time = dt.datetime.now(dt.timezone.utc)
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
                 # Export results
@@ -811,20 +787,24 @@ def enable_watcher():
 
 def disable_watcher():
     logger.info("Disabling Watcher")
-    os.environ.pop("TT_METAL_WATCHER")
-    os.environ.pop("TT_METAL_WATCHER_APPEND")
+    os.environ.pop("TT_METAL_WATCHER", None)
+    os.environ.pop("TT_METAL_WATCHER_APPEND", None)
 
 
 def enable_profiler():
     logger.info("Enabling Device Profiler")
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     os.environ["ENABLE_TRACY"] = "1"
+    os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
+    os.environ["TT_METAL_PROFILER_SYNC"] = "1"
 
 
 def disable_profiler():
     logger.info("Disabling Device Profiler")
-    os.environ.pop("TT_METAL_DEVICE_PROFILER")
-    os.environ.pop("ENABLE_TRACY")
+    os.environ.pop("TT_METAL_DEVICE_PROFILER", None)
+    os.environ.pop("ENABLE_TRACY", None)
+    os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
+    os.environ.pop("TT_METAL_PROFILER_SYNC", None)
 
 
 if __name__ == "__main__":
@@ -858,18 +838,29 @@ if __name__ == "__main__":
     parser.add_argument(
         "--result-dest",
         required=True,
-        choices=["elastic", "postgres", "results_export", "superset"],
-        help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export', 'superset']",
+        choices=["elastic", "results_export", "superset"],
+        help="Specify test result destination. Available presets are ['elastic', 'results_export', 'superset']",
     )
 
     parser.add_argument(
         "--watcher", action="store_true", required=False, help="Add this flag to run sweeps with watcher enabled."
     )
+    # E2E performance measurement is inaccurate due to default kernel caching
+    # The kernel compilation cache cannot be cleared from Python, leading to misleading results
+    # where initial tests show ~900ms compilation time but subsequent tests show ~4ms due to
+    # kernel cache hits. This will be re-enabled once something like ttnn.ClearKernelCache() is available.
     parser.add_argument(
         "--perf",
         action="store_true",
         required=False,
         help="Add this flag to measure e2e perf, for op tests with performance markers.",
+    )
+
+    parser.add_argument(
+        "--perf-with-cache",
+        action="store_true",
+        required=False,
+        help="Add this flag to measure e2e perf with and without program cache. Runs each test twice to capture both cached and uncached performance.",
     )
 
     parser.add_argument(
@@ -924,7 +915,7 @@ if __name__ == "__main__":
         "--main-proc-verbose",
         action="store_true",
         required=False,
-        help="Run tests on main process and print test exceptions to stdout",
+        help="Run tests in parent process (disables hang detection). Required for Tracy profiling and debugging. Prints test exceptions to stdout.",
     )
 
     args = parser.parse_args(sys.argv[1:])
@@ -947,6 +938,16 @@ if __name__ == "__main__":
     logger.info(
         f"Running current sweeps with tag: {config.sweeps_tag} using {config.vector_source} test vector source, outputting to {config.result_destination}."
     )
+
+    # Log performance measurement configuration
+    if config.measure_perf_with_cache:
+        logger.info(
+            "Performance measurement: Enabled with cache measurement (runs each test twice to capture both cached and uncached performance)"
+        )
+    elif config.measure_perf:
+        logger.info("Performance measurement: Enabled (single run, uncached performance only)")
+    else:
+        logger.info("Performance measurement: Disabled")
 
     if config.skip_on_timeout:
         logger.info("Timeout behavior: Skip remaining tests in suite when a test times out.")

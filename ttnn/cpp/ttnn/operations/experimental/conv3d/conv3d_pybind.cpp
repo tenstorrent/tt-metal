@@ -29,15 +29,18 @@ void py_bind_conv3d(py::module& module) {
         Input must be in row major interleaved format. \
         Output will be in row major interleaved format.
 
-        :param ttnn.Tensor input_tensor: Input tensor.
-        :param ttnn.Tensor weight_tensor: Weight tensor.
-        :param ttnn.Tensor bias_tensor: Bias tensor.
-        :param ttnn.Conv3dConfig config: Configuration for the Conv3D operation.
-        :param ttnn.MemoryConfig memory_config: Memory configuration for the output of the Conv3D operation.
-        :param ttnn.DeviceComputeKernelConfig compute_kernel_config: Compute kernel configuration for the Conv3D operation.
+        Args:
+            input_tensor (ttnn.Tensor): Input tensor.
+            weight_tensor (ttnn.Tensor): Weight tensor.
+            config (ttnn.Conv3dConfig): Configuration for the Conv3D operation.
 
-        :return: Output tensor after applying the Conv3D operation.
-        :rtype: ttnn.Tensor
+        Keyword Args:
+            bias_tensor (ttnn.Tensor, optional): Bias tensor.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output of the Conv3D operation.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the Conv3D operation.
+
+        Returns:
+            ttnn.Tensor: Output tensor after applying the Conv3D operation.
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::experimental::conv3d)& self,
