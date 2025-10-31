@@ -51,7 +51,12 @@ void kernel_main() {
         cb_reserve_back(weight_cb, num_tile_cols);
         uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile++) {
-            noc_async_read_tile(col_tile, weight_accessor, weight_wr_ptr);
+            uint64_t weight_noc_addr = get_noc_addr(col_tile, weight_accessor);
+            // noc_async_read_tile(col_tile, weight_accessor, weight_wr_ptr);
+            // weight_wr_ptr += weight_tile_bytes;
+
+            noc_async_read(weight_noc_addr, weight_wr_ptr, 16 * 2 /*one face row*/);
+            noc_async_read(weight_noc_addr + 512, weight_wr_ptr + 512, 16 * 2 /*one face row*/);
             weight_wr_ptr += weight_tile_bytes;
         }
         noc_async_read_barrier();
