@@ -192,7 +192,7 @@ class TtPanopticDeepLab:
         logger.debug(f"Semantic segmentation output shape: {semantic_logits.shape}")
 
         if self.model_category == DEEPLAB_V3_PLUS:
-            center_heatmap, offset_map, _, _ = None, None, None, None
+            center_heatmap, offset_map = None, None
             logger.debug("Instance embedding head skipped for DeeplabV3Plus model category")
         else:
             # Get instance embedding predictions

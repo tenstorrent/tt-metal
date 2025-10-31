@@ -42,7 +42,7 @@ def run_panoptic_deeplab_demo(
     resnet_dtype_config: str = "all_bfloat16",
     center_threshold: float = 0.05,
     use_imagenet_norm: bool = True,
-    model_category="panoptic_deeplab",
+    model_category=PANOPTIC_DEEPLAB,
 ):
     """
     Run Panoptic DeepLab inference on a single image.
@@ -68,7 +68,6 @@ def run_panoptic_deeplab_demo(
     sem_seg_head_channels = config["sem_seg_head_channels"]
     ins_embed_head_channels = config["ins_embed_head_channels"]
     common_stride = config["common_stride"]
-    # model_category = "deeplabV3Plus"
 
     # Preprocess image
     logger.info("Preprocessing image...")
@@ -214,7 +213,7 @@ def run_panoptic_deeplab_demo(
         if ttnn_model.model_category == PANOPTIC_DEEPLAB
         else None
     )
-    # breakpoint()
+
     if ttnn_model.model_category == PANOPTIC_DEEPLAB:
         panoptic_vis_ttnn, panoptic_info_ttnn = create_panoptic_visualization(
             semantic_np_ttnn,

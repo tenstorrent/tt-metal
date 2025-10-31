@@ -221,7 +221,7 @@ class PytorchPanopticDeepLab(nn.Module):
 
         if self.model_category == DEEPLAB_V3_PLUS:
             # Get instance embedding predictions
-            center_heatmap, offset_map, _, _ = None, None, None, None
+            center_heatmap, offset_map = None, None
         else:
             center_heatmap, offset_map, _, _ = self.instance_head(features)
 
