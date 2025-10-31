@@ -10,7 +10,7 @@ inputs:
   alert_all_message:
     description: "Optional Slack-ready alert text from analyze step output 'alert_all_message'"
     required: false
-  runs:
+runs:
   using: "composite"
   steps:
     - name: Build Slack message from regressions
