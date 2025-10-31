@@ -42,6 +42,7 @@ def run_adaptive_pool2d(
     if dtype == ttnn.bfloat16 and in_n == 1 and in_c == 64 and in_h == 224 and in_w == 224:
         pytest.skip(f"Skipping memory-intensive case [1, 64, 224, 224] -> [{out_h}, {out_w}] with {dtype} due to OOM")
 
+    torch.manual_seed(0)
     torch_input = randomize_tensor(tensor_map, input_shape)
 
     # Convert to TTNN format [1, 1, NHW, C]

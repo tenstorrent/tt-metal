@@ -36,22 +36,8 @@ inline void write_debug_waypoint(volatile tt_l1_ptr uint32_t* debug_waypoint) {
     *debug_waypoint = x;
 }
 
-#if defined(COMPILE_FOR_BRISC)
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET 0
-#elif defined(COMPILE_FOR_NCRISC)
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET 1
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET (COMPILE_FOR_IDLE_ERISC)
-#elif defined(COMPILE_FOR_AERISC)
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET (COMPILE_FOR_AERISC)
-#elif defined(COMPILE_FOR_ERISC)
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET 0
-#else
-#define WATCHER_WAYPOINT_MAILBOX_OFFSET (2 + COMPILE_FOR_TRISC)
-#endif
-
 #define WATCHER_WAYPOINT_MAILBOX \
-    (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint))[WATCHER_WAYPOINT_MAILBOX_OFFSET])
+    (volatile tt_l1_ptr uint32_t*)&((*GET_MAILBOX_ADDRESS_DEV(watcher.debug_waypoint))[PROCESSOR_INDEX])
 
 #define WAYPOINT(x) write_debug_waypoint<helper(x)>(WATCHER_WAYPOINT_MAILBOX)
 

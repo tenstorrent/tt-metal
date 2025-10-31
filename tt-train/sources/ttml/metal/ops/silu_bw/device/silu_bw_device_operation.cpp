@@ -24,11 +24,6 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_hit(
 void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
-            "SiLUBackward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
-            enchantum::to_string(tensor.device()->arch()),
-            name);
 
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,

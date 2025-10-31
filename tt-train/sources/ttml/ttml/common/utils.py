@@ -42,25 +42,29 @@ def initialize_device(yaml_config: dict):
     from ttml.common.config import DeviceConfig
 
     device_config = DeviceConfig(yaml_config)
-    ttml.core.distributed.enable_fabric(device_config.total_devices())
+    if device_config.total_devices() > 1:
+        ttml.core.distributed.enable_fabric(device_config.total_devices())
     ttml.autograd.AutoContext.get_instance().open_device(device_config.mesh_shape, device_config.device_ids)
 
 
 def create_optimizer(model, yaml_config: dict):
-    """Create AdamW optimizer from configuration.
+    """Create AdamW or MorehAdamW optimizer from configuration.
 
     Args:
         model: Model to optimize
         yaml_config: Dictionary containing optimizer configuration
 
     Returns:
-        AdamW optimizer instance
+        AdamW or MorehAdamW optimizer instance based on configuration
     """
-    lr = yaml_config.get("learning_rate", 0.0003)
-    beta1 = yaml_config.get("beta1", 0.9)
-    beta2 = yaml_config.get("beta2", 0.999)
-    eps = yaml_config.get("eps", 1e-8)
-    weight_decay = yaml_config.get("weight_decay", 0.01)
+    optimizer_config = yaml_config.get("training_config", {})
+
+    lr = optimizer_config.get("learning_rate", 0.0003)
+    beta1 = optimizer_config.get("beta1", 0.9)
+    beta2 = optimizer_config.get("beta2", 0.999)
+    eps = optimizer_config.get("eps", 1e-8)
+    weight_decay = optimizer_config.get("weight_decay", 0.01)
+    use_moreh_adamw = optimizer_config.get("use_moreh_adamw", False)
 
     adamw_cfg = ttml.optimizers.AdamWConfig.make(
         float(lr),
@@ -69,7 +73,11 @@ def create_optimizer(model, yaml_config: dict):
         float(eps),
         float(weight_decay),
     )
-    return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
+
+    if use_moreh_adamw:
+        return ttml.optimizers.MorehAdamW(model.parameters(), adamw_cfg)
+    else:
+        return ttml.optimizers.AdamW(model.parameters(), adamw_cfg)
 
 
 class PerformanceMeter:

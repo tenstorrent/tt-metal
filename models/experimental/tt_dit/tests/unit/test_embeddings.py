@@ -6,7 +6,9 @@
 import pytest
 import torch
 import ttnn
-import math
+from diffusers.models.embeddings import (
+    CombinedTimestepGuidanceTextProjEmbeddings as TorchCombinedTimestepGuidanceTextProjEmbeddings,
+)
 
 from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
@@ -18,6 +20,7 @@ from ...layers.embeddings import (
     PatchEmbed,
     MochiPatchEmbed,
     WanPatchEmbed,
+    CombinedTimestepGuidanceTextProjEmbeddings,
 )
 from ....stable_diffusion_35_large.reference import SD3Transformer2DModel as TorchSD3Transformer2DModel
 from diffusers.models.transformers.transformer_mochi import MochiTransformer3DModel
@@ -190,9 +193,8 @@ def test_timestep_embedding(
         in_channels=in_channels,
         time_embed_dim=time_embed_dim,
         mesh_device=mesh_device,
-        init=True,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
@@ -244,9 +246,8 @@ def test_pixart_alpha_text_projection(
         in_features=in_features,
         hidden_size=hidden_size,
         mesh_device=mesh_device,
-        init=True,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
@@ -298,9 +299,8 @@ def test_combined_timestep_text_proj_embeddings(
         embedding_dim=embedding_dim,
         pooled_projection_dim=pooled_projection_dim,
         mesh_device=mesh_device,
-        init=True,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
     torch.manual_seed(0)
@@ -324,6 +324,53 @@ def test_combined_timestep_text_proj_embeddings(
     assert_quality(
         torch_output, tt_output_torch, pcc=0.99984, relative_rmse=0.019
     )  # Slightly lower PCC due to sinusoidal ops
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    ("batch_size", "embedding_dim", "pooled_projection_dim"),
+    [
+        (10, 3072, 768),  # Flux.1 [schnell]
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_combined_timestep_guidance_text_proj_embeddings(
+    mesh_device: ttnn.MeshDevice,
+    batch_size: int,
+    embedding_dim: int,
+    pooled_projection_dim: int,
+) -> None:
+    torch_model = TorchCombinedTimestepGuidanceTextProjEmbeddings(embedding_dim, pooled_projection_dim)
+    torch_model.eval()
+
+    tt_model = CombinedTimestepGuidanceTextProjEmbeddings(
+        embedding_dim=embedding_dim,
+        pooled_projection_dim=pooled_projection_dim,
+        mesh_device=mesh_device,
+    )
+    tt_model.load_state_dict(torch_model.state_dict())
+
+    torch.manual_seed(0)
+    timestep = torch.full([batch_size], fill_value=500)
+    guidance = torch.full([batch_size], fill_value=3)
+    pooled = torch.randn([batch_size, pooled_projection_dim])
+
+    torch_output = torch_model.forward(timestep, guidance, pooled)
+
+    tt_timestep = ttnn.from_torch(
+        timestep.unsqueeze(-1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device
+    )
+    tt_guidance = bf16_tensor(guidance.unsqueeze(-1), device=mesh_device)
+    tt_pooled = bf16_tensor(pooled, device=mesh_device)
+
+    tt_output = tt_model(
+        timestep=tt_timestep,
+        guidance=tt_guidance,
+        pooled_projection=tt_pooled,
+    )
+
+    tt_output_torch = ttnn.to_torch(tt_output)
+    assert_quality(torch_output, tt_output_torch, pcc=0.9971, relative_rmse=0.076)
 
 
 @pytest.mark.parametrize(
@@ -383,9 +430,8 @@ def test_patch_embed_sd35(
         mesh_device=mesh_device,
         tp_mesh_axis=tp_mesh_axis,
         sp_mesh_axis=sp_mesh_axis,
-        init=False,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors - NHWC format for TT model
     torch.manual_seed(0)
@@ -466,9 +512,8 @@ def test_patch_embed_mochi(
         in_channels=in_channels,
         embed_dim=embed_dim,
         mesh_device=mesh_device,
-        init=False,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors - NHWC format for TT model
     torch.manual_seed(0)
@@ -550,9 +595,8 @@ def test_wan_patch_embed(
         in_channels=in_channels,
         embed_dim=embed_dim,
         mesh_device=mesh_device,
-        init=False,
     )
-    tt_model.load_state_dict(substate(torch_model.state_dict(), "proj"))
+    tt_model.load_torch_state_dict(substate(torch_model.state_dict(), "proj"))
 
     # Create input tensors
     torch.manual_seed(0)

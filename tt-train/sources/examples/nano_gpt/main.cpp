@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <CLI/CLI.hpp>
@@ -6,7 +7,6 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
-#include <wandbcpp.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -38,14 +38,6 @@ namespace {
 constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
 }
 
-/* WANDB BLocks this signal.
- Control+C didn't work.
-*/
-void signal_handler(int signum) {
-    std::cout << "\nInterrupt signal (" << signum << ") received.\n";
-    wandbcpp::finish();
-    exit(signum);
-}
 
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
@@ -459,13 +451,11 @@ int main(int argc, char **argv) {
     std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
-    bool enable_wandb = false;
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
-    app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
         ->default_val(save_and_exit_path);
@@ -485,8 +475,6 @@ int main(int argc, char **argv) {
         auto distributed_ctx = ctx.get_distributed_context();
         fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
 
-        // disable wandb for now in case of mpi example
-        enable_wandb = false;
     }
 
     if (device_config.enable_ddp || device_config.enable_tp) {
@@ -504,14 +492,6 @@ int main(int argc, char **argv) {
         fmt::print("  socket_type: {}\n", config.socket_type == SocketType::MPI ? "MPI" : "FABRIC");
     }
 
-    if (enable_wandb) {
-        auto result = signal(SIGINT, signal_handler);
-        if (result == SIG_ERR) {
-            std::cerr << "Failed to set signal handler\n";
-            return -1;
-        }
-    }
-
     if (device_config.enable_tp) {
         if (!config.model_path.empty()) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
@@ -520,57 +500,6 @@ int main(int argc, char **argv) {
         if (is_eval) {
             throw std::runtime_error("Evaluation is not supported with Tensor Parallel model");
         }
-    }
-
-    if (enable_wandb) {
-        auto positional_embedding_type = std::visit(
-            [](auto &&arg) -> std::string {
-                if constexpr (requires { arg.positional_embedding_type; }) {
-                    return arg.positional_embedding_type == ttml::models::gpt2::PositionalEmbeddingType::Trainable
-                               ? "trainable"
-                               : "fixed";
-                } else {
-                    return "n/a";
-                }
-            },
-            config.transformer_config);
-
-        wandbcpp::init({.project = config.project_name, .name = generate_run_name(run_name, config, add_time_to_name)});
-        wandbcpp::update_config({
-            {"model", "transformer"},
-            {"num_heads",
-             static_cast<int>(std::visit([](auto &&arg) { return arg.num_heads; }, config.transformer_config))},
-            {"num_groups",
-             static_cast<int>(std::visit(
-                 [](auto &&arg) {
-                     if constexpr (requires { arg.num_groups; }) {
-                         return arg.num_groups;
-                     } else {
-                         return arg.num_heads;
-                     }
-                 },
-                 config.transformer_config))},
-            {"embedding_dim",
-             static_cast<int>(std::visit([](auto &&arg) { return arg.embedding_dim; }, config.transformer_config))},
-            {"num_blocks",
-             static_cast<int>(std::visit([](auto &&arg) { return arg.num_blocks; }, config.transformer_config))},
-            {"dropout_prob", std::visit([](auto &&arg) { return arg.dropout_prob; }, config.transformer_config)},
-            {"learning_rate", config.learning_rate},
-            {"weight_decay", config.weight_decay},
-            {"batch_size", static_cast<int>(config.batch_size)},
-            {"sequence_length",
-             static_cast<int>(
-                 std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config))},
-            {"max_steps", static_cast<int>(config.max_steps)},
-            {"seed", static_cast<int>(config.seed)},
-            {"tokenizer_type", config.tokenizer_type},
-            {"use_kahan_summation", config.use_kahan_summation},
-            {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
-            {"positional_embedding_type", positional_embedding_type},
-            {"scheduler_type", config.scheduler_type},
-            {"using_clip_grad_norm", config.use_clip_grad_norm},
-            {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
-        });
     }
 
     // set seed
@@ -655,7 +584,7 @@ int main(int argc, char **argv) {
         ttml::core::from_vector(mask, ttnn::Shape({1U, 1U, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -873,11 +802,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    auto get_samples_count = [&config](uint32_t global_step) {
-        return global_step * config.batch_size * config.gradient_accumulation_steps;
-    };
-
-    auto get_loss_value = [device](const TensorPtr &loss) {
+    auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
@@ -955,15 +880,6 @@ int main(int argc, char **argv) {
                 }
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
-                if (enable_wandb && global_step % 10 == 0 && needs_to_call_loss) {
-                    wandbcpp::log(
-                        {{"Step", (int)global_step},
-                         {"Samples", (int)get_samples_count(global_step)},
-                         {"Loss", loss_meter.average()},
-                         {"Learning rate", optimizer->get_lr()}});
-                    loss_meter.reset();
-                }
-
                 if (!config.enable_mpi) {
                     // save training state if it's not 3 tier training
                     if (!config.model_path.empty() && global_step % config.model_save_interval == 0) {
@@ -1018,10 +934,6 @@ int main(int argc, char **argv) {
         auto distributed_ctx = ctx.get_distributed_context();
         distributed_ctx->barrier();
         fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank());
-    }
-
-    if (enable_wandb) {
-        wandbcpp::finish();
     }
 
     ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);

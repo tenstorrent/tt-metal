@@ -37,7 +37,7 @@ jobs:
             name: "llama3-8b performance",
             arch: blackhole,
             # I think we can get rid of TT_CACHE_PATH here by using a NFS export
-            cmd:  LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
+            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           { # This should be moved to a BH perf regression pipeline in the future
@@ -72,7 +72,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

@@ -20,6 +20,9 @@
 
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/web_server.hpp>
+#include <server/prom_formatter.hpp>
+#include <unistd.h>
+#include <climits>
 
 using json = nlohmann::json;
 
@@ -33,6 +36,7 @@ private:
     std::atomic<bool> running_{false};
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     std::string metal_home_;
+    std::string hostname_;
 
     // Accumulated telemetry data
     TelemetrySnapshot telemetry_state_;
@@ -147,8 +151,18 @@ private:
         return buffer.str();
     }
 
+    static std::string get_hostname() {
+        char hostname[HOST_NAME_MAX + 1];
+        if (gethostname(hostname, sizeof(hostname)) != 0) {
+            return "unknown";
+        }
+        hostname[HOST_NAME_MAX] = '\0';  // Ensure null termination
+        return std::string(hostname);
+    }
+
 public:
-    WebServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
+    WebServer(const std::string& metal_home = "") :
+        started_at_(std::chrono::steady_clock::now()), hostname_(get_hostname()) {
         if (!metal_home.empty()) {
             metal_home_ = metal_home;
         } else {
@@ -204,15 +218,30 @@ public:
                 }
             } else {
                 // If file not found, serve index.html for SPA routing
-                std::string index_content =
-                    read_file(join_paths(metal_home_, "tt_telemetry/frontend/static/index.html"));
+                std::string full_path = join_paths(metal_home_, "tt_telemetry/frontend/static/index.html");
+                std::string index_content = read_file(full_path);
                 if (!index_content.empty()) {
                     res.set_content(index_content, "text/html");
                 } else {
                     res.status = 404;
-                    res.set_content(
-                        "<html><body><h1>Telemetry Server Running</h1><p>404: File not found</p></body></html>",
-                        "text/html");
+                    std::string error_html =
+                        "<html><body>"
+                        "<h1>Telemetry Server 404</h1>"
+                        "<p>404: Page not found: " +
+                        path +
+                        "</p>"
+                        "<p>Local path: " +
+                        full_path +
+                        "</p>"
+                        "<p>Metal home: " +
+                        metal_home_ +
+                        "</p>"
+                        "<p>Make sure Metal home (set via either TT_METAL_HOME or --metal-src-dir) points to the "
+                        "tt_metal repository and contains " +
+                        full_path +
+                        ".</p>"
+                        "</body></html>";
+                    res.set_content(error_html, "text/html");
                 }
             }
         });
@@ -226,6 +255,18 @@ public:
                 {"uptime_seconds", uptime_seconds.count()}
             };
             res.set_content(response.dump(), "application/json");
+        });
+
+        // Prometheus metrics endpoint
+        server_.Get("/api/metrics", [this](const httplib::Request&, httplib::Response& res) {
+            std::lock_guard<std::mutex> lock(snapshot_mutex_);
+            try {
+                auto prometheus_output = tt::telemetry::format_snapshot_as_prometheus(telemetry_state_);
+                res.set_content(prometheus_output, "text/plain; version=0.0.4; charset=utf-8");
+            } catch (const std::exception& e) {
+                res.status = 500;
+                res.set_content(std::string("Error formatting metrics: ") + e.what(), "text/plain; charset=utf-8");
+            }
         });
 
         // Server-Sent Events endpoint for real-time telemetry
@@ -288,6 +329,7 @@ public:
         log_info(tt::LogAlways, "  GET  /<path>          - Static assets (serves static/<path>)");
         log_info(tt::LogAlways, "  GET  /api/status      - Server status");
         log_info(tt::LogAlways, "  GET  /api/stream      - Real-time stream (SSE)");
+        log_info(tt::LogAlways, "  GET  /api/metrics     - Prometheus metrics");
 
         server_.listen("0.0.0.0", port);
     }

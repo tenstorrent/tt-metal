@@ -13,7 +13,7 @@
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
@@ -243,7 +243,7 @@ void LightMetalReplayImpl::setup_devices() {
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
-    const chip_id_t mmio_device_id = 0;
+    const ChipId mmio_device_id = 0;
     auto devices_map = tt::tt_metal::detail::CreateDevices(
         {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     this->device_ = devices_map.at(mmio_device_id);

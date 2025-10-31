@@ -53,7 +53,7 @@ def main():
         "--process-logs-only",
         dest="processLogsOnly",
         action="store_true",
-        help="Only process the logs avaialble in the default logs folder",
+        help="Only process the logs available in the default logs folder",
         default=False,
     )
     parser.add_option(
@@ -61,6 +61,13 @@ def main():
         dest="profile_dispatch_cores",
         action="store_true",
         help="Collect dispatch cores profiling data",
+        default=False,
+    )
+    parser.add_option(
+        "--cpp-post-process",
+        dest="cpp_post_process",
+        action="store_true",
+        help="Use C++ to post-process profiling data",
         default=False,
     )
     parser.add_option(
@@ -177,6 +184,9 @@ def main():
             generate_logs_folder(os.path.abspath(outputFolder))
         )
 
+    if options.cpp_post_process:
+        os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+
     if len(args) > 0:
         doReport = False
         if options.report:
@@ -184,6 +194,8 @@ def main():
                 logger.error("No available port found")
                 sys.exit(1)
             logger.info(f"Using port {port}")
+            os.environ["TTNN_OP_PROFILER"] = "1"
+            os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
             doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
 
         if not doReport:
@@ -276,7 +288,7 @@ def main():
                 captureProcess.terminate()
                 captureProcess.communicate()
                 logger.error(
-                    f"No profiling data could be captured. Please make sure you are on the correct build. Use build_metal.sh --enable-profiler to build if you are not sure."
+                    f"No profiling data could be captured. Please make sure you are on a Tracy-enabled build (default)."
                 )
                 sys.exit(1)
 
