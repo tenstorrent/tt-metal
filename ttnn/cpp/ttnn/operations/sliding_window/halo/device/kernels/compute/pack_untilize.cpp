@@ -62,6 +62,8 @@ void MAIN {
 
     if constexpr (use_pack_untilize) {
         pack_untilize_uninit(out_cb_id0);
+    } else {
+        untilize_uninit(src_cb_id);
     }
 }
 }  // namespace NAMESPACE
