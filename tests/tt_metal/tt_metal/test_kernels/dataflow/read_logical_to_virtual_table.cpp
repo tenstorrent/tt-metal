@@ -14,11 +14,13 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* table_address_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_address);
 
     for (uint16_t i = 0; i < num_logical_cols; i++) {
-        *table_address_ptr = logical_col_to_virtual_col[i];
-        table_address_ptr += 1;
+        coord_t virtual_coord = get_virtual_coord_from_worker_logical_coord(i, 0);
+        *table_address_ptr = virtual_coord.x;
+        table_address_ptr++;
     }
     for (uint16_t i = 0; i < num_logical_rows; i++) {
-        *table_address_ptr = logical_row_to_virtual_row[i];
-        table_address_ptr += 1;
+        coord_t virtual_coord = get_virtual_coord_from_worker_logical_coord(0, i);
+        *table_address_ptr = virtual_coord.y;
+        table_address_ptr++;
     }
 }
