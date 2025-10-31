@@ -58,6 +58,8 @@ def test_pipeline_performance(
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
+    benchmark_profiler = BenchmarkProfiler()
+
     # Skip 4U.
     if galaxy_type == "4U":
         # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
@@ -72,8 +74,6 @@ def test_pipeline_performance(
                 ml_model_name="empty_run",
             )
         pytest.skip("4U is not supported for this test")
-
-    benchmark_profiler = BenchmarkProfiler()
 
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -174,8 +174,8 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
-                result = pipeline(
-                    prompt=prompts[0],
+                pipeline(
+                    prompt=prompts[prompt_idx],
                     negative_prompt=negative_prompt,
                     height=height,
                     width=width,
