@@ -184,7 +184,6 @@ CPMAddPackage(
 # pybind11 : https://github.com/pybind/pybind11
 ############################################################################################################################
 
-# TODO(athompson): use later version of pybind11 (which better supports virtual inheritance)
 CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
