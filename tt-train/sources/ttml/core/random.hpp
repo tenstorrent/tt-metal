@@ -73,7 +73,8 @@ void parallel_generate(
     DistGenFunc dist_factory,
     uint32_t seed,
     uint32_t max_threads = std::thread::hardware_concurrency()) {
-    if (static const auto new_rng = std::getenv("TT_RNG"); new_rng != nullptr) {
+    static const bool new_rng = (std::getenv("TT_RNG") != nullptr);
+    if (new_rng) {
         return sse::parallel_generate(seq, dist_factory, seed, max_threads);
     }
     return legacy::parallel_generate(seq, dist_factory, seed, max_threads);
