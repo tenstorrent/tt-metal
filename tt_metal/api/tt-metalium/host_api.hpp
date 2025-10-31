@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/runtime_args_data.hpp>

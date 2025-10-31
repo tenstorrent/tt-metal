@@ -8,6 +8,8 @@
 #include <circular_buffer_config.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 
+#include <tt-metalium/buffer.hpp>
+
 namespace tt::tt_metal {
 
 BufferType from_flatbuffer(flatbuffer::BufferType type);
