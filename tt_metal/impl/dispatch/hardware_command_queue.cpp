@@ -88,7 +88,6 @@ HWCommandQueue::HWCommandQueue(
     num_entries_in_completion_q_(0),
     num_completed_completion_q_reads_(0),
     device_(device),
-    noc_index_(noc_index),
     prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(
         MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
