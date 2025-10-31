@@ -27,16 +27,16 @@ public:
 
     CircularBufferConfig& config() { return config_; }
 
-    const std::unordered_set<uint8_t>& buffer_indices() const { return config_.buffer_indices(); }
-    const std::unordered_set<uint8_t>& local_buffer_indices() const { return config_.local_buffer_indices(); }
-    const std::unordered_set<uint8_t>& remote_buffer_indices() const { return config_.remote_buffer_indices(); }
+    const std::unordered_set<uint8_t>& buffer_indices() const { return config_.impl()->buffer_indices(); }
+    const std::unordered_set<uint8_t>& local_buffer_indices() const { return config_.impl()->local_buffer_indices(); }
+    const std::unordered_set<uint8_t>& remote_buffer_indices() const { return config_.impl()->remote_buffer_indices(); }
 
     uint32_t page_size(uint32_t buffer_index) const;
 
-    bool globally_allocated() const { return this->config_.globally_allocated_address().has_value(); }
+    bool globally_allocated() const { return this->config_.impl()->globally_allocated_address().has_value(); }
     bool is_global_circular_buffer() const { return this->shadow_global_circular_buffer_ != nullptr; }
 
-    uint32_t size() const { return this->config_.total_size(); }
+    uint32_t size() const { return this->config_.impl()->total_size(); }
 
     uint32_t num_pages(uint32_t buffer_index) const;
 

@@ -29,10 +29,10 @@ CircularBufferImpl::CircularBufferImpl(const CoreRangeSet& core_ranges, const Ci
     locally_allocated_address_(std::nullopt) {
     this->validate_set_config_attributes();
     TT_FATAL(
-        this->config_.remote_buffer_indices().empty(),
+        this->config_.impl()->remote_buffer_indices().empty(),
         "Remote buffer indices are not supported without a GlobalCircularBuffer");
     if (globally_allocated()) {
-        globally_allocated_address_ = config.globally_allocated_address().value();
+        globally_allocated_address_ = config.impl()->globally_allocated_address().value();
     }
 }
 
@@ -46,10 +46,10 @@ CircularBufferImpl::CircularBufferImpl(
     locally_allocated_address_(std::nullopt) {
     this->validate_set_config_attributes();
     TT_FATAL(
-        !config.globally_allocated_address().has_value(),
+        !config.impl()->globally_allocated_address().has_value(),
         "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
     TT_FATAL(
-        !this->config_.remote_buffer_indices().empty(),
+        !this->config_.impl()->remote_buffer_indices().empty(),
         "Remote buffer indices should be specified when using a GlobalCircularBuffer");
     this->set_global_circular_buffer(global_circular_buffer);
 }
@@ -62,23 +62,23 @@ CircularBufferImpl::CircularBufferImpl(const CBDescriptor& descriptor) :
     this->validate_set_config_attributes();
     if (descriptor.global_circular_buffer) {
         TT_FATAL(
-            !config_.globally_allocated_address().has_value(),
+            !config_.impl()->globally_allocated_address().has_value(),
             "Connot create CircularBuffer with specified GlobalCircularBuffer when config already linked to a buffer");
         TT_FATAL(
-            !this->config_.remote_buffer_indices().empty(),
+            !this->config_.impl()->remote_buffer_indices().empty(),
             "Remote buffer indices should be specified when using a GlobalCircularBuffer");
         this->set_global_circular_buffer(*descriptor.global_circular_buffer);
     } else {
         if (globally_allocated()) {
-            globally_allocated_address_ = config_.globally_allocated_address().value();
+            globally_allocated_address_ = config_.impl()->globally_allocated_address().value();
         }
     }
 }
 
 void CircularBufferImpl::validate_set_config_attributes() {
     for (uint8_t buffer_index = 0; buffer_index < NUM_CIRCULAR_BUFFERS; buffer_index++) {
-        std::optional<DataFormat> data_format_spec = this->config_.data_formats().at(buffer_index);
-        std::optional<uint32_t> page_size_spec = this->config_.page_sizes().at(buffer_index);
+        std::optional<DataFormat> data_format_spec = this->config_.impl()->data_formats().at(buffer_index);
+        std::optional<uint32_t> page_size_spec = this->config_.impl()->page_sizes().at(buffer_index);
 
         bool df_set = data_format_spec.has_value();
         bool ps_set = page_size_spec.has_value();
@@ -116,7 +116,7 @@ uint32_t CircularBufferImpl::page_size(uint32_t buffer_index) const {
             "Cannot access page size for buffer index {} because circular buffer is not configured on that index",
             buffer_index);
     }
-    uint32_t page_size = this->config_.page_sizes().at(buffer_index).value();
+    uint32_t page_size = this->config_.impl()->page_sizes().at(buffer_index).value();
     if (this->size() % page_size != 0) {
         TT_THROW("Total circular buffer size {} B must be divisible by page size {} B", this->size(), page_size);
     }
@@ -143,7 +143,7 @@ DataFormat CircularBufferImpl::data_format(uint32_t buffer_index) const {
             "Cannot access data format for buffer index {} because circular buffer is not configured on that index",
             buffer_index);
     }
-    return this->config_.data_formats().at(buffer_index).value();
+    return this->config_.impl()->data_formats().at(buffer_index).value();
 }
 
 const std::optional<Tile>& CircularBufferImpl::tile(uint32_t buffer_index) const {
@@ -152,7 +152,7 @@ const std::optional<Tile>& CircularBufferImpl::tile(uint32_t buffer_index) const
             "Cannot access tile dims for buffer index {} because circular buffer is not configured on that index",
             buffer_index);
     }
-    return this->config_.tiles().at(buffer_index);
+    return this->config_.impl()->tiles().at(buffer_index);
 }
 
 uint32_t CircularBufferImpl::address() const {
@@ -164,7 +164,7 @@ uint32_t CircularBufferImpl::address() const {
 }
 
 void CircularBufferImpl::assign_global_address() {
-    globally_allocated_address_ = config_.shadow_global_buffer->address();
+    globally_allocated_address_ = config_.impl()->shadow_global_buffer->address();
 }
 
 void CircularBufferImpl::set_global_circular_buffer(const experimental::GlobalCircularBuffer& global_circular_buffer) {

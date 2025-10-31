@@ -81,7 +81,7 @@ CircularBufferConfig from_flatbuffer(
         config_fb->max_size(),
         config_fb->buffer_size());
 
-    config.shadow_global_buffer = shadow_global_buffer;
+    config.impl()->shadow_global_buffer = shadow_global_buffer;
 
     return config;
 }
