@@ -6,9 +6,7 @@
 
 #include <cstdint>
 
-// TODO: Both of these "constants" are used on the device side.
-// TODO: These should be in the tt::tt_metal namespace
-
-// We need to provide a replacement getter ASAP
+// TODO: This will no longer be a constant, swap this out with a getter ASAP.
+// TODO: This should be in the tt::tt_metal namespace.
+// TODO: This is used by both host and device.
 constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
-constexpr static std::uint32_t CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT = 4;
