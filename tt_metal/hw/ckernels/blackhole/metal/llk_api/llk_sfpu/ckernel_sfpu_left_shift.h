@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -20,7 +18,7 @@ inline void calculate_left_shift(const uint shift_amt) {
         TTI_SFPLOAD(0,12,ADDR_MOD_7,0);
         TT_SFPSHFT(shift_amt,0,0,1);
         TTI_SFPSTORE(0,12,ADDR_MOD_7,0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

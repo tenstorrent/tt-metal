@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -63,7 +61,7 @@ inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in
         calculate_sfpu_gcd_body<31>();
 
         TT_SFPSTORE(p_sfpu::LREG1, 4, 3, dst_index_out * dst_tile_size);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

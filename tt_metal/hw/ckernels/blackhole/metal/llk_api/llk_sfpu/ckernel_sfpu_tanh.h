@@ -7,30 +7,28 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_tanh() {
     // SFPU microcode
-    vUInt l0 = l_reg[LRegs::LReg0];
-    vUInt l1 = l_reg[LRegs::LReg1];
-    vUInt l2 = l_reg[LRegs::LReg2];
+    sfpi::vUInt l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vUInt l1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt l2 = sfpi::l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
         val = lut(val, l0, l1, l2);
-        dst_reg[0] = val;
+        sfpi::dst_reg[0] = val;
 
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 
-    l_reg[LRegs::LReg0] = l0;
-    l_reg[LRegs::LReg1] = l1;
-    l_reg[LRegs::LReg2] = l2;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = l1;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = l2;
 }
 
 template <bool APPROXIMATION_MODE>

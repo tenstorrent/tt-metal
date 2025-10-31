@@ -9,41 +9,40 @@
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_recip.h"
 
-using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
 inline void init_remainder(const uint value, const uint recip) {
-    // load vConstFloatPrgm0 = value
+    // load sfpi::vConstFloatPrgm0 = value
     _sfpu_load_config32_(0xC, (value >> 16) & 0xFFFF, value & 0xFFFF);
-    // load vConstFloatPrgm1 = recip
+    // load sfpi::vConstFloatPrgm1 = recip
     _sfpu_load_config32_(0xD, (recip >> 16) & 0xFFFF, recip & 0xFFFF);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_remainder(const uint value, const uint recip) {
     // SFPU microcode
-    vFloat s = vConstFloatPrgm0;
-    vFloat recip_val = vConstFloatPrgm1;
-    vFloat value_tmp = s;
+    sfpi::vFloat s = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat recip_val = sfpi::vConstFloatPrgm1;
+    sfpi::vFloat value_tmp = s;
     s = sfpi::abs(s);
     recip_val = sfpi::abs(recip_val);
 
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat val = dst_reg[0];
-        vFloat v = sfpi::abs(val);
+        sfpi::vFloat val = sfpi::dst_reg[0];
+        sfpi::vFloat v = sfpi::abs(val);
 
-        vFloat quotient;
-        vInt exp = exexp(v * recip_val);
-        v_if(exp < 0) { quotient = vConst0; }
+        sfpi::vFloat quotient;
+        sfpi::vInt exp = sfpi::exexp(v * recip_val);
+        v_if(exp < 0) { quotient = sfpi::vConst0; }
         // Since fp32 has 23 mantissa bits, the LSB represents the fractional part when exp < 23.
         // We effectively round off the fractional bits to zero by right shifting using (exp - 23) and then left
         // shifting it back using (0 - (exp - 23)).
         v_elseif(exp < 23) {
-            quotient =
-                reinterpret<vFloat>(shft((shft(reinterpret<vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
+            quotient = sfpi::reinterpret<sfpi::vFloat>(
+                sfpi::shft((sfpi::shft(sfpi::reinterpret<sfpi::vUInt>(v * recip_val), (exp - 23))), (0 - (exp - 23))));
         }
         v_else { quotient = v * recip_val; }
         v_endif
@@ -59,7 +58,7 @@ inline void calculate_remainder(const uint value, const uint recip) {
 
         v_if(value_tmp < 0 && v != 0) { v = v + value_tmp; }
         v_endif;
-        v = setsgn(v, value_tmp);
+        v = sfpi::setsgn(v, value_tmp);
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
@@ -70,8 +69,8 @@ inline void calculate_remainder(const uint value, const uint recip) {
         }
         v_if(sfpi::abs(v) - s == 0.0f) { v = 0.0f; }
         v_endif;
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 

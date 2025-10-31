@@ -8,12 +8,10 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
-inline vFloat softplus(vFloat x) {
+inline sfpi::vFloat softplus(sfpi::vFloat x) {
     /*
      This function implements softplus using piecewise polynomial
        approximation. The approximation is done using 4 intervals (each branch
@@ -25,8 +23,8 @@ inline vFloat softplus(vFloat x) {
        The intervals and degrees of freedom for each interval was selected
        based on what gave the best compromise of speed vs. accuracy.
     */
-    vFloat result;
-    v_if(x < -20.0f) { result = vConst0; }
+    sfpi::vFloat result;
+    v_if(x < -20.0f) { result = sfpi::vConst0; }
     v_elseif(x < -5.0f) {
         // Coefficients for [-20, -5]
         result =
@@ -69,20 +67,20 @@ inline vFloat softplus(vFloat x) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void calculate_softplus_body(vFloat beta, vFloat beta_reciprocal, vFloat threshold) {
-    vFloat x = beta * dst_reg[0];
-    v_if(x < threshold) { dst_reg[0] = beta_reciprocal * softplus(x); }
+inline void calculate_softplus_body(sfpi::vFloat beta, sfpi::vFloat beta_reciprocal, sfpi::vFloat threshold) {
+    sfpi::vFloat x = beta * sfpi::dst_reg[0];
+    v_if(x < threshold) { sfpi::dst_reg[0] = beta_reciprocal * softplus(x); }
     v_endif;
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_softplus(uint param0, uint param1, uint param2) {
-    vFloat beta = Converter::as_float(param0);
-    vFloat beta_reciprocal = Converter::as_float(param1);
-    vFloat threshold = Converter::as_float(param2);
+    sfpi::vFloat beta = Converter::as_float(param0);
+    sfpi::vFloat beta_reciprocal = Converter::as_float(param1);
+    sfpi::vFloat threshold = Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_softplus_body<APPROXIMATION_MODE>(beta, beta_reciprocal, threshold);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 

@@ -9,8 +9,6 @@
 #include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -49,7 +47,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
 
     // Step 1: Compute log2(base)
     // Normalize base to calculation range
-    sfpi::vFloat absbase = setsgn(base, 0);       // set base as positive
+    sfpi::vFloat absbase = sfpi::setsgn(base, 0);  // set base as positive
     sfpi::vFloat x = sfpi::setexp(absbase, 127);  // set exp to exp bias (put base in range of 1-2)
 
     // 3rd order polynomial approx - determined using rminimax over [1,2]
@@ -91,11 +89,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     //   instruction with immediate operand (i.e. no extra register used).
     //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
 
-    z_f32 = addexp(z_f32, 23);  // equal to multiplying by 2**23
+    z_f32 = sfpi::addexp(z_f32, 23);  // equal to multiplying by 2**23
     const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
     sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
-    sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
+    sfpi::vInt zii = sfpi::exexp(sfpi::reinterpret<sfpi::vFloat>(z));   // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
 
     // Compute formula in Horner form
@@ -127,7 +125,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
         // If pow is odd integer then result is negative
         // If power is even, then result is positive
         // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
-        y = setsgn(y, pow_int << 31);
+        y = sfpi::setsgn(y, pow_int << 31);
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
@@ -142,7 +140,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
         // rather than 81 (which would have been correct).
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
-        y = reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+        y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
     }
 
     return y;

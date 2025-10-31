@@ -10,8 +10,6 @@
 #include "ckernel_sfpu_exp.h"
 #include "sfpi.h"
 
-using namespace sfpi;
-
 namespace ckernel::sfpu {
 
 static const float PI = 3.1415927f;
@@ -19,9 +17,9 @@ static const float PI_2 = 1.5707964f;
 static const float PI_4 = 0.7853982f;
 static const float FRAC_1_PI = 0.31830987f;
 
-static sfpi_inline vFloat sfpu_tan_large(vFloat x) {
-    const vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
-    const vFloat y =
+static sfpi_inline sfpi::vFloat sfpu_tan_large(sfpi::vFloat x) {
+    const sfpi::vFloat r = 4.0f * sfpi::abs(x) - 5.0f;
+    const sfpi::vFloat y =
         ((((((((((((2.1457846f * r + 2.815174f) * r - 3.9035487f) * r - 5.2096696f) * r + 3.658698f) * r + 4.9457364f) *
                    r -
                0.7137798f) *
@@ -39,15 +37,15 @@ static sfpi_inline vFloat sfpu_tan_large(vFloat x) {
          2.514385f) *
             r +
         3.0097759f;
-    return setsgn(y, x);
+    return sfpi::setsgn(y, x);
 }
 
 template <bool APPROXIMATION_MODE>
-static vFloat sfpu_tan(vFloat x);
+static sfpi::vFloat sfpu_tan(sfpi::vFloat x);
 
 template <>
-sfpi_inline vFloat sfpu_tan<true>(vFloat x) {
-    const vFloat xx = x * x;
+sfpi_inline sfpi::vFloat sfpu_tan<true>(sfpi::vFloat x) {
+    const sfpi::vFloat xx = x * x;
 
     v_if(sfpi::abs(x) <= 1.0f) {
         x *= (((0.07407404f * xx - 0.0031158808f) * xx + 0.1559396f) * xx + 0.33035427) * xx + 1.0000609f;
@@ -59,8 +57,8 @@ sfpi_inline vFloat sfpu_tan<true>(vFloat x) {
 }
 
 template <>
-sfpi_inline vFloat sfpu_tan<false>(vFloat x) {
-    const vFloat xx = x * x;
+sfpi_inline sfpi::vFloat sfpu_tan<false>(sfpi::vFloat x) {
+    const sfpi::vFloat xx = x * x;
 
     v_if(sfpi::abs(x) <= 1.0f) {
         x *= ((((((0.010222361f * xx - 0.015764693f) * xx + 0.02789032f) * xx + 0.012122508f) * xx + 0.05659461f) * xx +
@@ -80,26 +78,26 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_tangent() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI;
-        v -= int32_to_float(float_to_int16(v, 0), 0);
-        dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
-        dst_reg++;
+        sfpi::vFloat v = sfpi::dst_reg[0] * FRAC_1_PI;
+        v -= sfpi::int32_to_float(sfpi::float_to_int16(v, 0), 0);
+        sfpi::dst_reg[0] = sfpu_tan<APPROXIMATION_MODE>(PI * v);
+        sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
-static vFloat sfpu_sinpi(vFloat x);
+static sfpi::vFloat sfpu_sinpi(sfpi::vFloat x);
 
 template <>
-sfpi_inline vFloat sfpu_sinpi<true>(vFloat x) {
-    vFloat xx = x * x;
+sfpi_inline sfpi::vFloat sfpu_sinpi<true>(sfpi::vFloat x) {
+    sfpi::vFloat xx = x * x;
 
     return x * ((0x1.29cf02p+1f * xx - 0x1.4954d4p+2f) * xx + 0x1.92149p+1f);
 }
 
 template <>
-sfpi_inline vFloat sfpu_sinpi<false>(vFloat x) {
-    vFloat xx = x * x;
+sfpi_inline sfpi::vFloat sfpu_sinpi<false>(sfpi::vFloat x) {
+    sfpi::vFloat xx = x * x;
 
     return x *
            ((((0x1.406628p-4f * xx - 0x9.93f86p-4f) * xx + 0x2.8cd64p+0f) * xx - 0x5.2aef6p+0f) * xx + 0x3.243f6cp+0f);
@@ -109,15 +107,15 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_sine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI;
-        vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
+        sfpi::vFloat v = sfpi::dst_reg[0] * FRAC_1_PI;
+        sfpi::vInt whole_v = sfpi::float_to_int16(v, 0);
+        v -= sfpi::int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
         v_if(whole_v & 1) { v = -v; }
         v_endif;
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 
@@ -125,15 +123,15 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_cosine() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0] * FRAC_1_PI + 0.5f;
-        vInt whole_v = float_to_int16(v, 0);
-        v -= int32_to_float(whole_v, 0);
+        sfpi::vFloat v = sfpi::dst_reg[0] * FRAC_1_PI + 0.5f;
+        sfpi::vInt whole_v = sfpi::float_to_int16(v, 0);
+        v -= sfpi::int32_to_float(whole_v, 0);
         v = sfpu_sinpi<APPROXIMATION_MODE>(v);
 
         v_if(whole_v & 1) { v = -v; }
         v_endif;
-        dst_reg[0] = v;
-        dst_reg++;
+        sfpi::dst_reg[0] = v;
+        sfpi::dst_reg++;
     }
 }
 
@@ -152,12 +150,12 @@ inline void calculate_sfpu_trig() {
     (t4 * (t4 * (t4 * (t4 * (coef5 * t4 + coef4) + coef3) + coef2) + coef1) + coef0)
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val) {
-    vFloat t0 = sfpi::abs(val);
+sfpi_inline sfpi::vFloat sfpu_atan_maclaurin_series(sfpi::vFloat val) {
+    sfpi::vFloat t0 = sfpi::abs(val);
     v_if(t0 > 1) { t0 = sfpu_reciprocal<false>(t0); }
     v_endif;
 
-    vFloat t1 = t0 * t0;
+    sfpi::vFloat t1 = t0 * t0;
 
     t1 = POLYVAL6(-0.013480470f, 0.057477314f, -0.121239071f, 0.195635925f, -0.332994597f, 0.999995630f, t1);
 
@@ -172,22 +170,22 @@ sfpi_inline vFloat sfpu_atan_maclaurin_series(vFloat val) {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_atan() {
     for (int d = 0; d < ITERATIONS; d++) {
-        dst_reg[0] = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(dst_reg[0]);
-        dst_reg++;
+        sfpi::dst_reg[0] = sfpu_atan_maclaurin_series<APPROXIMATION_MODE>(sfpi::dst_reg[0]);
+        sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat sfpu_asine_maclaurin_series(vFloat val) {
+sfpi_inline sfpi::vFloat sfpu_asine_maclaurin_series(sfpi::vFloat val) {
     // input for [-1:1]
     // Mclauren series
     // arcsin(x) = x + [(1/2) *x^3/3] + [(1 * 3) / (2 * 4) * x^5 / 5] + [(1 * 3 * 5) / (2 * 4 * 6) * x^7 / 7 ] + ...
     // arcsin(x) ≈ x + (1/6) * x^3 + (3/40) * x^5 + (5/112) * x^7 + (35/1152) * x^9 + (63/2816) * x^11a
 
-    vFloat tmp = val;
-    vFloat val_square = val * val;
+    sfpi::vFloat tmp = val;
+    sfpi::vFloat val_square = val * val;
     // x
-    vFloat output = tmp;
+    sfpi::vFloat output = tmp;
     // (1/6) * x^3
     tmp = tmp * val_square;
     output += 0.166666666 * tmp;
@@ -215,11 +213,11 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_asin() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v < vConstNeg1 || v > vConst1) { dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else { dst_reg[0] = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if(v < vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_else { sfpi::dst_reg[0] = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
         v_endif;
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -228,11 +226,11 @@ inline void calculate_acos() {
     // SFPU microcode
     // acos = (pi/2 - asin)
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v < vConstNeg1 || v > vConst1) { dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else { dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        v_if(v < vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
+        v_else { sfpi::dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
         v_endif;
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
@@ -241,10 +239,10 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) + _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
-        dst_reg[0] = result;
-        dst_reg++;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) + _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 
@@ -253,10 +251,10 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sinh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) - _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
-        dst_reg[0] = result;
-        dst_reg++;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::vFloat result = (_sfpu_exp_21f_<is_fp32_dest_acc_en>(v) - _sfpu_exp_21f_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
     }
 }
 

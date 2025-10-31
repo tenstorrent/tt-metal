@@ -7,13 +7,12 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATE = false, bool save_reg = true /* Unused. Enough registers available. */>
-sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
+sfpi_inline sfpi::vFloat sfpu_reciprocal(const sfpi::vFloat in) {
     return _sfpu_reciprocal_<APPROXIMATE ? 0 : 2>(in);
 }
 

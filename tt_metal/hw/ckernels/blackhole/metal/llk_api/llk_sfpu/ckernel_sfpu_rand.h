@@ -6,8 +6,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
-using namespace sfpi;
-
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE>
@@ -45,7 +43,7 @@ inline void rand(uint32_t from, uint32_t scale) {
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
 
         TTI_SFPSTORE(p_sfpu::LREG0, FP32, ADDR_MOD_7, 0);
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 }  // namespace ckernel::sfpu
