@@ -981,7 +981,7 @@ jobs:
           # PHASE 2: Check combined approval for groups with same files
           echo "DEBUG: Phase 2 - Checking combined approval for groups with same files"
 
-          declare -A GROUP_APPROVED_BY  # Will store approved member names
+          declare -A GROUP_APPROVED_BY  # Will store approved member names (with shared label if applicable)
           declare -A GROUP_IS_APPROVED  # Will store true/false
 
           for key in "${GROUP_KEYS[@]}"; do
@@ -990,6 +990,7 @@ jobs:
 
             # Find all groups with the same file list (from same CODEOWNERS line)
             combined_members="$members"
+            has_other_groups=false
             for other_key in "${GROUP_KEYS[@]}"; do
               if [ "$other_key" != "$key" ]; then
                 other_files="${GROUP_FILES[$other_key]}"
@@ -998,13 +999,16 @@ jobs:
                   other_members="${GROUP_MEMBERS_LIST[$other_key]}"
                   if [ -n "$other_members" ]; then
                     combined_members="$combined_members,$other_members"
+                    has_other_groups=true
                   fi
                 fi
               fi
             done
 
             # Check if ANY member from combined set has approved
-            approved_names=""
+            # Build separate lists for direct members and shared members
+            direct_approved=""
+            shared_approved=""
             if [ -n "$combined_members" ]; then
               IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
               for member in "${COMBINED_ARRAY[@]}"; do
@@ -1016,17 +1020,37 @@ jobs:
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                    approved_names="$approved_names$USER_NAME, "
+                  if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
+                    USER_NAME="$member"
+                  fi
+
+                  # Check if this member is in the current group or only in other groups
+                  if [ "$has_other_groups" = true ] && ! echo "$members" | grep -q "$member"; then
+                    # This approver is from another group (shared codeowner)
+                    shared_approved="$shared_approved$USER_NAME, "
                   else
-                    approved_names="$approved_names$member, "
+                    # This approver is from this group
+                    direct_approved="$direct_approved$USER_NAME, "
                   fi
                 fi
               done
             fi
 
+            # Clean up trailing commas
+            direct_approved=$(echo "$direct_approved" | sed 's/, $//')
+            shared_approved=$(echo "$shared_approved" | sed 's/, $//')
+
+            # Build combined approved string
+            approved_names=""
+            if [ -n "$direct_approved" ] && [ -n "$shared_approved" ]; then
+              approved_names="$direct_approved, $shared_approved (shared)"
+            elif [ -n "$direct_approved" ]; then
+              approved_names="$direct_approved"
+            elif [ -n "$shared_approved" ]; then
+              approved_names="$shared_approved (shared)"
+            fi
+
             if [ -n "$approved_names" ]; then
-              approved_names=$(echo "$approved_names" | sed 's/, $//')
               GROUP_IS_APPROVED["$key"]="true"
               GROUP_APPROVED_BY["$key"]="$approved_names"
               echo "DEBUG: Group $key (${GROUP_NAME[$key]}) with files=$files is APPROVED by: $approved_names"
@@ -1114,7 +1138,17 @@ jobs:
                 ALL_GROUPS="$APPROVED_GROUPS"
               fi
               echo "DEBUG: ALL_GROUPS first 200 chars: ${ALL_GROUPS:0:200}"
-              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
+
+              # Create status message based on pending count
+              if [ "$PENDING_COUNT" -eq 0 ]; then
+                STATUS_MESSAGE="🎉 ✅ **All CodeOwners approvals complete!** This PR is ready to be merged."
+                SUMMARY_LINE="**Summary:** $APPROVED_COUNT/$APPROVED_COUNT groups approved"
+              else
+                STATUS_MESSAGE="This PR requires approval from **one member of each** of the following groups:"
+                SUMMARY_LINE="**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups"
+              fi
+
+              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\n$STATUS_MESSAGE\n\n$SUMMARY_LINE\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
             fi
 
           # Note: "Requested by" and "Changes" info removed from GitHub comment as they're
