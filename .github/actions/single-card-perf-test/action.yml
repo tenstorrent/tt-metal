@@ -13,20 +13,35 @@ inputs:
     description: "Where to append combined test output"
   summary_pattern:
     required: false
-    # PyTest outcomes + perf lines people care about
+    # Improved regex: PyTest outcomes, perf, warnings, info, and section headers
     default: >-
       (?ix)
-      ( ^=+\s+short\ test\ summary\ info\s+=+$ ) |
-      ( ^\[gw\d+\]\s+(PASSED|FAILED)\b ) |
+      ( ^\[gw\d+\]\s+(PASSED|FAILED|SKIPPED|ERROR)\b ) |
       ( ^(PASSED|FAILED|ERROR|SKIPPED)\b ) |
-      ( ^All\ performance\ checks\ passed!$ ) |
-      ( Run\ and\ measurement\ data\ saved ) |
-      ( Mean\ inference\ time ) |
-      ( Model\ compil(ed|ation)\ took|Model\ compiled\ with\ warmup ) |
-      ( ^=+\s+slowest\ durations\s+=+\s*$ ) |
-      ( ^=+\s+warnings\ summary\s+=+\s*$ ) |
-      ( ^==\s*.*\sfailed,.*\spassed,.*==\s*$ ) |
-      ( ^E\s+[A-Z] | Traceback | AssertionError )
+      ( ^={3,}.*={3,}$ ) |
+      ( ^- generated xml file: ) |
+      ( ^Average model time= ) |
+      ( ^Average model performance= ) |
+      ( ^Run and measurement data saved ) |
+      ( ^\d+\.\d+s (call|setup|teardown)\s+ ) |
+      ( ^WARNING\b|UserWarning|PydanticDeprecatedSince20|DeprecationWarning ) |
+      ( ^INFO\b ) |
+      ( ^\s*You may be able to resolve this warning ) |
+      ( ^\s*-- Docs: ) |
+      ( ^\s*platform\s+linux ) |
+      ( ^\s*rootdir: ) |
+      ( ^\s*configfile: ) |
+      ( ^\s*plugins: ) |
+      ( ^\s*timeout: ) |
+      ( ^\s*created: ) |
+      ( ^\s*\d+\s+worker ) |
+      ( ^scheduling tests via ) |
+      ( ^\s*test session starts ) |
+      ( ^\s*short test summary info ) |
+      ( ^\s*slowest durations ) |
+      ( ^\s*warnings summary ) |
+      ( ^\s*PCC check was successful ) |
+      ( ^\s*All\ performance\ checks\ passed!$ )
     description: "EGREP regex for lines to keep in the compact summary"
   summary_context:
     required: false
@@ -114,7 +129,7 @@ runs:
 
         # Fail-first extract (short, only on failure):
         if [[ "${{ job.status }}" != "success" ]]; then
-          grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$nolog" \
+          grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,|WARNING|UserWarning)' "$nolog" \
             | head -n 150 > fail-first.txt || true
         fi
 
