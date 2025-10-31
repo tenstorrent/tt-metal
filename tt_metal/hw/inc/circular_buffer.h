@@ -105,7 +105,7 @@ FORCE_INLINE RemoteReceiverCBInterface& get_remote_receiver_cb_interface(uint32_
 }
 
 #if defined(COMPILE_FOR_TRISC)
-constexpr uint32_t cb_addr_shift = CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT;
+constexpr uint32_t cb_addr_shift = 4;
 #else
 constexpr uint32_t cb_addr_shift = 0;
 #endif
