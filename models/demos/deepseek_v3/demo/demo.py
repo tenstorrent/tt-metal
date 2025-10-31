@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
+from models.demos.deepseek_v3.tt.generator_bp import DeepseekGenerator as DeepseekGeneratorBP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
@@ -65,6 +66,12 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Print generated tokens for the first user token as they are produced, instead of waiting until the end.",
+    )
+    p.add_argument(
+        "--generator",
+        choices=["pp", "bp"],
+        default="pp",
+        help="Select generator implementation: default (pipeline parallel), bp (batch parallel).",
     )
     return p
 
@@ -120,6 +127,7 @@ def run_demo(
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
+    generator: str = "pp",
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -139,8 +147,12 @@ def run_demo(
 
     # Open mesh device (reusing test fixture defaults) and set fabric to 1D
     mesh_shape = _default_mesh_shape()
-    logger.info("Setting fabric config to FABRIC_1D for demo run")
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    if generator == "bp":
+        fabric = ttnn.FabricConfig.FABRIC_2D
+    else:
+        fabric = ttnn.FabricConfig.FABRIC_1D
+    logger.info(f"Setting fabric config to {fabric.name} for demo run")
+    ttnn.set_fabric_config(fabric)
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
@@ -175,17 +187,28 @@ def run_demo(
             from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
-
-        gen = DeepseekGenerator(
-            mesh_device=mesh_device,
-            model_path=Path(model_path),
-            cache_dir=Path(cache_dir),
-            tokenizer=tokenizer,
-            random_weights=bool(random_weights),
-            dense_layers=(1 if random_weights and single_layer else None),
-            override_num_layers=(1 if random_weights else None),
-            single_layer=(single_layer if random_weights else None),
-        )
+        if generator == "pp":
+            gen = DeepseekGenerator(
+                mesh_device=mesh_device,
+                model_path=Path(model_path),
+                cache_dir=Path(cache_dir),
+                tokenizer=tokenizer,
+                random_weights=bool(random_weights),
+                dense_layers=(1 if random_weights and single_layer else None),
+                override_num_layers=(1 if random_weights else None),
+                single_layer=(single_layer if random_weights else None),
+            )
+        else:  # generator == "bp"
+            gen = DeepseekGeneratorBP(
+                mesh_device=mesh_device,
+                model_path=Path(model_path),
+                cache_dir=Path(cache_dir),
+                tokenizer=tokenizer,
+                random_weights=bool(random_weights),
+                dense_layers=(1 if random_weights and single_layer else None),
+                override_num_layers=(1 if random_weights else None),
+                single_layer=(single_layer if random_weights else None),
+            )
         # Build the prompt list
         if random_weights:
             prompt_list = [""]
@@ -251,6 +274,7 @@ def main() -> None:
         reference_file=args.reference_file,
         tf_prompt_len=args.tf_prompt_len,
         early_print_first_user=args.early_print_first_user,
+        generator=args.generator,
     )
 
     print("\n===== Generated =====\n")
