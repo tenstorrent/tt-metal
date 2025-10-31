@@ -6,7 +6,6 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
 #include "sfpu/ckernel_sfpu_reduce.h"
 #include "ckernel_instr_params.h"
 

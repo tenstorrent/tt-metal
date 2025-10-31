@@ -595,8 +595,9 @@ ALWI void max_reduce_with_indices_init() {
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
- * Only column-wise reduction is supported at this time.
  * Only 32x32 tile dimensions are supported.
+ *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
+ * Only column-wise reduction is supported at this time.
  *
  * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
@@ -604,31 +605,18 @@ ALWI void max_reduce_with_indices_init() {
  * | pool_type       | The type of reduction operation, SUM or AVG (MAX not supported)          | PoolType  | SUM, AVG                                              | True     |
  * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt32                                | True     |
  * | reduce_dim      | The reduction dimension, set to column for column reduce                 | ReduceDim | REDUCE_COL                                            | False    |
- * | is_32x32_tile   | The tile dimensions to perform the reduction on                          | bool      | true                                                  | False    |
  */
 // clang-format on
-template <
-    PoolType pool_type,
-    DataFormat format,
-    ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
-    bool is_32x32_tile = true>
+template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
 ALWI void sfpu_reduce(uint32_t idst) {
-    static_assert(is_32x32_tile, "Only 32x32 tile dimensions are supported for reduce operations");
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
     static_assert(
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
         "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
-    VectorMode vector_mode;
-    if constexpr (is_32x32_tile) {
-        vector_mode = VectorMode::RC_custom;  // default to custom vector mode for specific 32x32 tile dimensions
-    } else {
-        vector_mode =
-            VectorMode::C;  // default to column vector mode for non-32x32 tile dimensions (currently not supported)
-    }
-
-    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, vector_mode)));
+    // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
+    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, VectorMode::RC_custom)));
 }
 
 /**
