@@ -292,6 +292,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
     logger.info(f"Appending device data")
     deviceTimesLog = os.path.join(logFolder, PROFILER_DEVICE_SIDE_LOG)
     traceOps = {}
+    processedDevices = []  # Track successfully processed devices
     if os.path.isfile(deviceTimesLog):
         setup = device_post_proc_config.default_setup()
         if device_analysis_types:
@@ -306,7 +307,13 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
         deviceData = import_log_run_stats(setup)
         freq = deviceData["deviceInfo"]["freq"]
         for device in devicesOps:
-            assert device in deviceData["devices"]
+            if device not in deviceData["devices"]:
+                logger.warning(f"Device {device} not found in device profiling log, skipping...")
+                continue
+
+            # Track successfully processed device
+            processedDevices.append(device)
+
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
             deviceDispatchOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["dispatch_ops"]
             deviceOpsTime.sort(key=device_op_compare_time)
@@ -370,37 +377,56 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
 
             assert len(dispatchOPAnalysis) == 0, "Unrecognized dispatch OPs are presentent by dispatch cores"
 
+            # Match host ops with device ops by run_host_id instead of assuming order/count match
             if len(devicesOps[device]) != len(deviceOpsTime):
-                deviceOPId = None
-                hostOPId = None
-                for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
-                    if len(deviceOpTime["timeseries"]) > 0:
-                        timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
-                        if "zone_name" in timeID and "FW" in timeID["zone_name"]:
-                            if "run_host_id" in timeID:
-                                if timeID["run_host_id"] != deviceOp["global_call_count"]:
-                                    deviceOPId = timeID["run_host_id"]
-                                    hostOPId = deviceOp["global_call_count"]
-                                    break
+                logger.warning(
+                    f"Device {device}: Host has {len(devicesOps[device])} ops, "
+                    f"but device profiling log has {len(deviceOpsTime)} ops. "
+                    f"Will attempt to match ops by run_host_id."
+                )
 
-                if deviceOPId and hostOPId:
-                    assert False, (
-                        f"Device data mismatch: Expected {len(devicesOps[device])} "
-                        f"but received {len(deviceOpsTime)} ops on device {device}. "
-                        f"Device is showing op ID {deviceOPId} when host is showing op ID {hostOPId}"
-                    )
+            # Build a mapping of run_host_id -> deviceOpTime
+            deviceOpTimeMap = {}
+            for deviceOpTime in deviceOpsTime:
+                if len(deviceOpTime["timeseries"]) > 0:
+                    timeID, ts, statData, risc, core = deviceOpTime["timeseries"][0]
+                    if "run_host_id" in timeID:
+                        run_host_id = timeID["run_host_id"]
+                        deviceOpTimeMap[run_host_id] = deviceOpTime
+
+            # Match host ops with device ops
+            matched_ops = 0
+            unmatched_host_ops = []
+            for deviceOp in devicesOps[device]:
+                host_op_id = deviceOp["global_call_count"]
+                if host_op_id in deviceOpTimeMap:
+                    deviceOpTime = deviceOpTimeMap[host_op_id]
+                    matched_ops += 1
                 else:
-                    assert (
-                        False
-                    ), f"Device data mismatch: Expected {len(devicesOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
-            for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
+                    unmatched_host_ops.append(host_op_id)
+                    logger.warning(f"Host op ID {host_op_id} not found in device profiling log for device {device}")
+
+            unmatched_device_ops = set(deviceOpTimeMap.keys()) - set([op["global_call_count"] for op in devicesOps[device]])
+            if unmatched_device_ops:
+                logger.warning(f"Device {device} has {len(unmatched_device_ops)} ops not in host log: {sorted(list(unmatched_device_ops))[:10]}...")
+
+            logger.info(f"Device {device}: Matched {matched_ops}/{len(devicesOps[device])} host ops with device profiling data")
+
+            # Process matched ops only
+            for deviceOp in devicesOps[device]:
+                host_op_id = deviceOp["global_call_count"]
+                if host_op_id not in deviceOpTimeMap:
+                    continue
+                deviceOpTime = deviceOpTimeMap[host_op_id]
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
                     if "zone_name" in timeID and "FW" in timeID["zone_name"]:
-                        if "run_host_id" in timeID:
-                            assert (
-                                timeID["run_host_id"] == deviceOp["global_call_count"]
-                            ), f"op id {timeID['run_host_id']} reported by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
+                        # Sanity check: run_host_id should match since we looked it up by host_op_id
+                        if "run_host_id" in timeID and timeID["run_host_id"] != deviceOp["global_call_count"]:
+                            logger.error(
+                                f"Internal error: op id {timeID['run_host_id']} does not match "
+                                f"expected op id {deviceOp['global_call_count']} on device {device}"
+                            )
                         if core not in cores:
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
@@ -411,20 +437,20 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                 for analysis, data in deviceOp["device_time"].items():
                     for sample in data["series"]:
                         sample["duration_ns"] = sample["duration_cycles"] * 1000 / freq
-            traceOps = {}
+        traceOps = {}
 
-            # Tag trace ops with a UID
-            for device in devicesOps:
-                for deviceOp in devicesOps[device]:
-                    if "metal_trace_replay_session_id" in deviceOp:
-                        deviceOp["global_call_count"] = (
-                            deviceOp["global_call_count"]
-                            | deviceOp["metal_trace_replay_session_id"] << TRACE_OP_ID_BITSHIFT
-                        )
-                        traceOps[deviceOp["global_call_count"]] = deviceOp
-                    else:
-                        # Update host reported device op with device populated version
-                        ops[deviceOp["global_call_count"]] = deviceOp
+        # Tag trace ops with a UID (only for successfully processed devices)
+        for device in processedDevices:
+            for deviceOp in devicesOps[device]:
+                if "metal_trace_replay_session_id" in deviceOp:
+                    deviceOp["global_call_count"] = (
+                        deviceOp["global_call_count"]
+                        | deviceOp["metal_trace_replay_session_id"] << TRACE_OP_ID_BITSHIFT
+                    )
+                    traceOps[deviceOp["global_call_count"]] = deviceOp
+                else:
+                    # Update host reported device op with device populated version
+                    ops[deviceOp["global_call_count"]] = deviceOp
 
     # if enabled, analyze noc trace files present in log folder and add
     # relevant statistics to 'ops' dict
@@ -440,6 +466,14 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                     ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
                     ops[op_id]["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
+
+    # Log device processing summary
+    if processedDevices:
+        logger.info(f"Successfully processed {len(processedDevices)} device(s): {processedDevices}")
+        total_devices = len(devicesOps)
+        if len(processedDevices) < total_devices:
+            skipped = total_devices - len(processedDevices)
+            logger.warning(f"Skipped {skipped} device(s) (not found in device profiling log)")
 
     return devicesOps, traceOps
 

@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <limits>
@@ -983,12 +984,26 @@ void ReadMeshDeviceProfilerResults(
             }
         }
 
+        // Check if we should filter by device ID
+        int target_device_id = -1;
+        if (const char* env_device_id = std::getenv("MODNN_NPU_PROFILING_DEVICE_ID")) {
+            target_device_id = std::atoi(env_device_id);
+        }
+
         for (IDevice* device : mesh_device.get_devices()) {
+            // Skip devices that don't match the target device ID (if specified)
+            if (target_device_id >= 0 && static_cast<int>(device->id()) != target_device_id) {
+                continue;
+            }
             const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(device, state);
             detail::ReadDeviceProfilerResults(device, virtual_cores, state, metadata);
         }
 
         for (IDevice* device : mesh_device.get_devices()) {
+            // Skip devices that don't match the target device ID (if specified)
+            if (target_device_id >= 0 && static_cast<int>(device->id()) != target_device_id) {
+                continue;
+            }
             mesh_device.enqueue_to_thread_pool([device, state, &metadata]() {
                 const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(device, state);
                 detail::ProcessDeviceProfilerResults(device, virtual_cores, state, metadata);
