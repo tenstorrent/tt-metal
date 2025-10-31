@@ -602,29 +602,43 @@ ALWI void max_reduce_with_indices_init() {
  * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t  | Must be less than the size of the DST register buffer | True     |
  * | pool_type       | The type of reduction operation, SUM or AVG (MAX not supported)          | PoolType  | SUM, AVG                                              | True     |
- * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt16, UInt32                        | True     |
+ * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt32                                | True     |
  * | reduce_dim      | The reduction dimension, set to column for column reduce                 | ReduceDim | REDUCE_COL                                            | False    |
  * | is_32x32_tile   | The tile dimensions to perform the reduction on                          | bool      | true                                                  | False    |
  */
 // clang-format on
 template <
     PoolType pool_type,
-    DataFormat format = DataFormat::Int32,
+    DataFormat format,
     ReduceDim reduce_dim = ReduceDim::REDUCE_COL,
     bool is_32x32_tile = true>
 ALWI void sfpu_reduce(uint32_t idst) {
     static_assert(is_32x32_tile, "Only 32x32 tile dimensions are supported for reduce operations");
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
 
-    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst)));
+    VectorMode vector_mode;
+    if constexpr (is_32x32_tile) {
+        vector_mode = VectorMode::RC_custom;  // default to custom vector mode for specific 32x32 tile dimensions
+    } else {
+        vector_mode =
+            VectorMode::C;  // default to column vector mode for non-32x32 tile dimensions (currently not supported)
+    }
+
+    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, vector_mode)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <DataFormat format = DataFormat::Int32>
+template <DataFormat format>
 ALWI void sfpu_reduce_init() {
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
     MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
 }
 
