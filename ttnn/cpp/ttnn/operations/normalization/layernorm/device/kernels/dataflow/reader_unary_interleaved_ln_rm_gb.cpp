@@ -26,7 +26,8 @@ void kernel_main() {
     const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
     constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
@@ -48,7 +49,7 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    {
+    if constexpr (!use_welford) {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);

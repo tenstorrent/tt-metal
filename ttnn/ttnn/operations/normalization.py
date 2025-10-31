@@ -108,10 +108,10 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
     variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
     input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
 
-    if weight.dtype in [torch.float16, torch.bfloat16]:
+    if weight is not None and weight.dtype in [torch.float16, torch.bfloat16]:
         input_tensor = input_tensor.to(weight.dtype)
 
-    return weight * input_tensor
+    return weight * input_tensor if weight is not None else input_tensor
 
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
