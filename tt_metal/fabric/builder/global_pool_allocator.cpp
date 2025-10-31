@@ -108,6 +108,13 @@ GlobalPoolAllocator create_global_pool_allocators(
             size_t{0},
             [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); }),
         available_buffer_memory_regions);
+    TT_FATAL(static_allocator != nullptr, "static_allocator is null");
+    TT_FATAL(
+        static_allocator->get_sender_local_to_global_index_map().size() == num_used_sender_channels,
+        "static_allocator->get_sender_local_to_global_index_map().size() != num_used_sender_channels");
+    TT_FATAL(
+        static_allocator->get_receiver_local_to_global_index_map().size() == num_used_receiver_channels,
+        "static_allocator->get_receiver_local_to_global_index_map().size() != num_used_receiver_channels");
 
     pool_allocators.push_back(static_allocator);
     pool_types.push_back(tt::tt_fabric::FabricChannelPoolType::STATIC);
@@ -118,6 +125,7 @@ GlobalPoolAllocator create_global_pool_allocators(
             return pool_definition.type == FabricChannelPoolType::ELASTIC;
         });
 
+    TT_FATAL(!elastic_channels_found, "Elastic channels are not supported in this configuration");
     if (elastic_channels_found) {
         // Create elastic channel allocator by compressing out forwarded channels
         auto elastic_allocator = create_elastic_channel_allocator(

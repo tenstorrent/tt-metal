@@ -1601,18 +1601,6 @@ FORCE_INLINE void run_sender_channel_step_impl(
             }
         }
     }
-    // if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-    //     // send new credits if the chunk is completed
-    //     // CHECKLIST:
-    //     // 1) Where do we advance through the chunk
-    //     //    A: in send_next_data
-    //     // 2) Where do we release the chunk
-    //     //    A: we release the chunk when we get an ack from the receiver and it's the last slot
-    //     // 3) Where do we acquire a new chunk after send (but before ack)
-    //     //    A:
-    //     // 4) Verify that in the path between 2) and 3), we don't possibly lose the last
-    //     //    chunk to another channel (which would cause starvation)
-    // }
     if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
         auto check_connection_status =
             !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
@@ -2620,6 +2608,7 @@ void kernel_main() {
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     // TODO: change to TMP.
+    static constexpr bool DOWNSTREAM_IS_ELASTIC = false;
     static constexpr bool DOWNSTREAM_VC0_IS_ELASTIC = DOWNSTREAM_IS_ELASTIC;
     static constexpr bool DOWNSTREAM_VC1_IS_ELASTIC = DOWNSTREAM_IS_ELASTIC;
     std::array<

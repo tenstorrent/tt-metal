@@ -57,6 +57,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     // Initialize the local to global channel index maps
     this->sender_channel_local_to_global_index_map.resize(num_used_sender_channels);
     this->receiver_channel_local_to_global_index_map.resize(num_used_receiver_channels);
+    TT_FATAL(num_used_receiver_channels > 0, "Number of used receiver channels must be greater than 0");
     std::iota(
         this->sender_channel_local_to_global_index_map.begin(),
         this->sender_channel_local_to_global_index_map.end(),
@@ -654,6 +655,7 @@ void FabricStaticSizedChannelsAllocator::remove_sender_channel(size_t channel_id
     std::vector<size_t> sender_channels_to_shift_down = {};
     std::vector<size_t> receiver_channels_to_shift_down = {};
     bool did_something = false;
+    size_t count = 0;
     do {
         did_something = false;
         for (size_t i = 0; i < num_used_sender_channels; ++i) {
@@ -670,6 +672,8 @@ void FabricStaticSizedChannelsAllocator::remove_sender_channel(size_t channel_id
                 did_something = true;
             }
         }
+        count++;
+        TT_FATAL(count < 100, "Count is too high");
     } while (did_something);
     for (auto ch : sender_channels_to_shift_down) {
         sender_channels_base_address[ch] -= channel_size_bytes;

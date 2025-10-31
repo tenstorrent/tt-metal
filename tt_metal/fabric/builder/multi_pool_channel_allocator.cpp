@@ -98,18 +98,27 @@ void MultiPoolChannelAllocator::emit_ct_args(
         -> std::vector<size_t> {
         std::vector<size_t> channel_to_pool_index = {};
         bool did_something = false;
+        size_t count = 0;
         do {
             did_something = false;
-            for (size_t pool_idx = 0; pool_idx < pool_allocators_.size(); ++pool_idx) {
+            auto n_pools = pool_allocators_.size();
+            for (size_t pool_idx = 0; pool_idx < n_pools; ++pool_idx) {
                 auto pool_allocator = pool_allocators_[pool_idx];
+                TT_FATAL(pool_allocator != nullptr, "Pool allocator at index {} is null", pool_idx);
                 const auto& local_to_global_index_map = get_local_to_global_index_map(pool_allocator.get());
-                for (size_t local = 0; local < local_to_global_index_map.size(); ++local) {
+                auto index_map_size = local_to_global_index_map.size();
+                TT_FATAL(
+                    index_map_size > 0,
+                    "Index map size is 0");  // DELETE AFTER DEBUGGING REGRESSION FOR ONLY STATIC CHANNELS
+                for (size_t local = 0; local < index_map_size; ++local) {
                     if (channel_to_pool_index.size() == local) {
                         channel_to_pool_index.push_back(pool_idx);
                         did_something = true;
                     }
                 }
             }
+            TT_FATAL(count < 100, "Count is too high");
+            count++;
         } while (did_something);
         return channel_to_pool_index;
     };

@@ -438,7 +438,7 @@ static FabricRouterRecipes choose_router_recipe(
     }
 }
 
-GlobalPoolAllocator initialize_channel_configs(
+std::pair<FabricRouterRecipes, GlobalPoolAllocator> initialize_channel_configs(
     tt::tt_fabric::Topology topology,
     const tt::tt_fabric::FabricEriscDatamoverOptions& options,
     size_t num_used_sender_channels,
@@ -450,14 +450,16 @@ GlobalPoolAllocator initialize_channel_configs(
     const auto& pool_definitions = recipes.local.get_pool_definitions();
 
     // Use the new global pool allocator function
-    return create_global_pool_allocators(
-        topology,
-        options,
-        pool_definitions,
-        num_used_sender_channels,
-        num_used_receiver_channels,
-        channel_buffer_size_bytes,
-        available_buffer_memory_regions);
+    return {
+        std::move(recipes),
+        create_global_pool_allocators(
+            topology,
+            options,
+            pool_definitions,
+            num_used_sender_channels,
+            num_used_receiver_channels,
+            channel_buffer_size_bytes,
+            available_buffer_memory_regions)};
 }
 
 void FabricEriscDatamoverConfig::add_receiver_channel_to_downstream_adapters(
@@ -634,8 +636,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     configure_skip_connection_flags(topology, options);
 
-    auto global_pool_allocator = initialize_channel_configs(
-        topology,
+    auto [recipes, global_pool_allocator] = initialize_channel_configs(
+        TODO... update to emit MultiPoolChannelAllocator directly topology,
         options,
         this->num_used_sender_channels,
         this->num_used_receiver_channels,
@@ -655,6 +657,9 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     }
     this->multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
         global_pool_allocator.local_pool_allocators, global_pool_allocator.local_pool_types);
+    // Create the channel-to-pool mapping
+    this->channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipes.local);
+    this->remote_channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipes.remote);
 
     // Create remote channels allocator from the first local allocator
     if (!global_pool_allocator.local_pool_allocators.empty()) {
@@ -705,11 +710,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // this->multi_pool_allocator =
     //     std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(std::move(pool_allocators),
     //     std::move(pool_types));
-
-    // // Create the channel-to-pool mapping
-    // this->channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipe);
-    // this->remote_channel_to_pool_mapping =
-    //     std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(remote_channels_recipe);
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
@@ -1211,6 +1211,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Emit channel-to-pool mappings (steps 5-8 of schema)
     ct_args.push_back(0xabaddad8);
+    TT_FATAL(config.channel_to_pool_mapping != nullptr, "Channel to pool mapping must be non-null");
     config.channel_to_pool_mapping->emit_ct_args(ct_args);
 
     // Emit remote channel pool data (for remote_receiver_channels initialization)
@@ -1228,7 +1229,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
 
     ct_args.push_back(0xabaddad7);
-    for (auto& adapter : receiver_channel_to_downstream_adapters) {
+    for (auto& adapter : config.receiver_channel_to_downstream_adapters) {
         adapter->emit_ct_args(ct_args, config.num_fwd_paths);
     }
     ct_args.push_back(0xabaddad9);
