@@ -62,9 +62,13 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     v_endif;
 
     if constexpr (!FAST_APPROX) {
-        v_if(in < 0.0F) {
+        sfpi::vInt exp = sfpi::exexp(in);
+        sfpi::vInt man = sfpi::exman9(in);
+        sfpi::vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000;  // returns 0 for +ve value
+        v_if((exp == 128 && man != 0) || in < 0.0F) {
             result = std::numeric_limits<float>::quiet_NaN();  // returns nan for fp32 and inf for bf16
         }
+        v_elseif(signbit == 0 && exp == 128 && man == 0) { result = std::numeric_limits<float>::infinity(); }
         v_endif;
     }
 
