@@ -291,11 +291,6 @@ const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_data_for
     return *this;
 }
 
-const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_total_size(uint32_t total_size) const {
-    parent_.impl_->set_total_size(total_size);
-    return *this;
-}
-
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_page_size(uint32_t page_size) const {
     parent_.impl_->set_page_size(buffer_index_, page_size);
     return *this;
