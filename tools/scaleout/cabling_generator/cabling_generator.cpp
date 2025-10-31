@@ -475,7 +475,8 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         const auto& host1 = deployment_hosts_[host_id1];
         const auto& host2 = deployment_hosts_[host_id2];
 
-        // Create node_type strings with "_DEFAULT" suffix removed if present
+        // Create node_type strings with "_DEFAULT" suffix removed if present;
+        //  all the default connections are enumerated
         const std::string suffix = "_DEFAULT";
         std::string host1_node_type = host1.node_type;
         if (host1_node_type.size() >= suffix.size() &&
@@ -491,9 +492,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         // Get arch from node
         // Assume arch for start and end are the same
         // This is validated in create_port_connection
-        auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
 
-        CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
+        // TODO: Determine better heuristic/specification for cable length and type
+        // auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
+        // CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
+
         if (loc_info) {
             output_file << host1.hostname << ",";
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
@@ -508,9 +511,8 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
             output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
                         << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2_node_type << ",";
 
-            output_file << cable_length_str.at(cable_l) << ",";
-            output_file << speed_str.at(arch) << "_" << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC")
-                        << std::endl;
+            output_file << ",";        // Length blank, leaving up to technician
+            output_file << std::endl;  // Type blank, leaving up to technician
         } else {
             output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1_node_type << ",";
             output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << std::endl;
