@@ -139,10 +139,8 @@ void MAIN {
             }
 
             // Process block of Welford's
-            // Shouldn't need a full init, but there's a bug
-            // in short init that causes accuracy to drop
             reconfig_data_format_srca(cb_result_or_input);
-            transpose_wh_init(cb_result_or_input, cb_result_or_input);
+            transpose_wh_init_short(cb_result_or_input);
             welford_init();
             for (uint32_t j = 0; j < blk; j++) {
                 cb_wait_front(cb_result_or_input, j + 1);
