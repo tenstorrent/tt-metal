@@ -36,7 +36,6 @@ private:
     std::atomic<bool> running_{false};
     std::chrono::time_point<std::chrono::steady_clock> started_at_;
     std::string metal_home_;
-    std::string hostname_;
 
     // Accumulated telemetry data
     TelemetrySnapshot telemetry_state_;
@@ -151,18 +150,8 @@ private:
         return buffer.str();
     }
 
-    static std::string get_hostname() {
-        char hostname[HOST_NAME_MAX + 1];
-        if (gethostname(hostname, sizeof(hostname)) != 0) {
-            return "unknown";
-        }
-        hostname[HOST_NAME_MAX] = '\0';  // Ensure null termination
-        return std::string(hostname);
-    }
-
 public:
-    WebServer(const std::string& metal_home = "") :
-        started_at_(std::chrono::steady_clock::now()), hostname_(get_hostname()) {
+    WebServer(const std::string& metal_home = "") : started_at_(std::chrono::steady_clock::now()) {
         if (!metal_home.empty()) {
             metal_home_ = metal_home;
         } else {
