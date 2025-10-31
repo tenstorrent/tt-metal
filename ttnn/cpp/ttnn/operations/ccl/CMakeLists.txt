@@ -26,6 +26,9 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            all_gather/all_gather.hpp
+            all_reduce/all_reduce.cpp
+            reduce_scatter/reduce_scatter.hpp
             ccl_common.hpp
             ccl_host_datastructures.hpp
             ccl_host_types.hpp
