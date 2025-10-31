@@ -161,7 +161,7 @@ void MetalContext::initialize(
         // Combine build_key and fw_compile_hash using XOR to create unique firmware build key
         // Uses full 64-bit fw_compile_hash for proper change detection
         uint64_t fw_build_key =
-            BuildEnvManager::get_instance().get_device_build_env(device_id).build_key ^ fw_compile_hash;
+            BuildEnvManager::get_instance().get_device_build_env(device_id).build_key() ^ fw_compile_hash;
 
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);
