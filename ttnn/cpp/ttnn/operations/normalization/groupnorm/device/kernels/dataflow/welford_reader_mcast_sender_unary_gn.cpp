@@ -381,7 +381,8 @@ void kernel_main() {
                     }
 
                     // Read mean and variance arrays from cb_ex_global, then combine using Welford
-                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(p_global_means, p_global_vars);
+                    constexpr uint32_t stride = NOC_DRAM_READ_ALIGNMENT_BYTES / 2;
+                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, stride>(p_global_means, p_global_vars);
 
                     // Write this to cb_ex_global
                     p_global_means[0] = global_result.mean;
