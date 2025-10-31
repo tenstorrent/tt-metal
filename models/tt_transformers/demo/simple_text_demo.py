@@ -963,7 +963,7 @@ def test_demo_text(
             # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
             logger.debug(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
@@ -1054,7 +1054,7 @@ def test_demo_text(
         if token_accuracy:
             acc = token_acc.compute_accuracy()
             logger.info(f"=== Top1 and Top5 Token Accuracy ===")
-            logger.info(f" Top1 Accuracy: {acc[0]*100:.2f}%, Top5 Accuracy: {acc[1]*100:.2f}%")
+            logger.info(f" Top1 Accuracy: {acc[0] * 100:.2f}%, Top5 Accuracy: {acc[1] * 100:.2f}%")
 
         profiler.end(f"inference_decode", iteration=batch_idx)
 
@@ -1112,19 +1112,19 @@ def test_demo_text(
     logger.info("")
     logger.info(f"=== Performance metrics ===")
     logger.info(
-        f"1st token decode time: {tok_1_perf*1000:.2f}ms [{round(1/tok_1_perf, 2)} t/s/u, {round((1/tok_1_perf)*global_batch_size, 2)} t/s]"
+        f"1st token decode time: {tok_1_perf * 1000:.2f}ms [{round(1 / tok_1_perf, 2)} t/s/u, {round((1 / tok_1_perf) * global_batch_size, 2)} t/s]"
     )
     if tok_128_perf > 0:
         logger.info(
-            f"128th token decode time: {tok_128_perf*1000:.2f}ms [{round(1/tok_128_perf, 2)} t/s/u, {round((1/tok_128_perf)*global_batch_size, 2)} t/s]"
+            f"128th token decode time: {tok_128_perf * 1000:.2f}ms [{round(1 / tok_128_perf, 2)} t/s/u, {round((1 / tok_128_perf) * global_batch_size, 2)} t/s]"
         )
     if tok_1024_perf > 0:
         logger.info(
-            f"1024th token decode time: {tok_1024_perf*1000:.2f}ms [{round(1/tok_1024_perf, 2)} t/s/u, {round((1/tok_1024_perf)*global_batch_size, 2)} t/s]"
+            f"1024th token decode time: {tok_1024_perf * 1000:.2f}ms [{round(1 / tok_1024_perf, 2)} t/s/u, {round((1 / tok_1024_perf) * global_batch_size, 2)} t/s]"
         )
     if tok_4096_perf > 0:
         logger.info(
-            f"4096th token decode time: {tok_4096_perf*1000:.2f}ms [{round(1/tok_4096_perf, 2)} t/s/u, {round((1/tok_4096_perf)*global_batch_size, 2)} t/s]"
+            f"4096th token decode time: {tok_4096_perf * 1000:.2f}ms [{round(1 / tok_4096_perf, 2)} t/s/u, {round((1 / tok_4096_perf) * global_batch_size, 2)} t/s]"
         )
 
     # Print some of the perf metrics
@@ -1263,10 +1263,7 @@ def test_demo_text(
             ml_model_type="llm",
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
-            config_params={
-                "data_parallel": data_parallel,
-                "tensor_parallel": num_devices // data_parallel,
-            },
+            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
@@ -1357,7 +1354,7 @@ def test_demo_text(
 
         # Compare paired batches (A<->A, B<->B, C<->C)
         comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
-        comparison_names = [f"Batch{i//2+1}<->Batch{i//2+1}" for i in range(0, repeat_batches, 2)]
+        comparison_names = [f"Batch{i // 2 + 1}<->Batch{i // 2 + 1}" for i in range(0, repeat_batches, 2)]
 
         all_matches = True
         for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
@@ -1366,14 +1363,14 @@ def test_demo_text(
 
             if output1 == output2:
                 logger.info(
-                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx+1} and {batch2_idx+1} outputs match"
+                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs match"
                 )
             else:
                 logger.warning(
-                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx+1} and {batch2_idx+1} outputs differ"
+                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs differ"
                 )
-                logger.info(f"  Batch {batch1_idx+1} output: {output1[:100]}...")
-                logger.info(f"  Batch {batch2_idx+1} output: {output2[:100]}...")
+                logger.info(f"  Batch {batch1_idx + 1} output: {output1[:100]}...")
+                logger.info(f"  Batch {batch2_idx + 1} output: {output2[:100]}...")
                 all_matches = False
 
         assert all_matches, "Repeat batch outputs should be identical"
