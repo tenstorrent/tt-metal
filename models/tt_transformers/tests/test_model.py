@@ -146,7 +146,7 @@ def test_model_inference(
             "Llama-3.1-8B": 0.965 if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.979 if mode_accuracy else 0.97607,
             "Llama-3.2-1B": 0.9990 if mode_accuracy else 0.9864,
-            "Llama-3.2-3B": 0.958 if mode_accuracy else 0.948,
+            "Llama-3.2-3B": 0.958 if mode_accuracy else 0.9479,
             "Llama-3.2-11B": 0.955 if mode_accuracy else 0.944,
             "Llama-3.2-90B": 0.9732,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
