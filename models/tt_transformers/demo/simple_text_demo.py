@@ -1263,6 +1263,10 @@ def test_demo_text(
             ml_model_type="llm",
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
+            config_params={
+                "data_parallel": data_parallel,
+                "tensor_parallel": num_devices // data_parallel,
+            },
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
