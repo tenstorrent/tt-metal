@@ -232,7 +232,7 @@ void device_module(py::module& m_device) {
     )doc");
     m_device.def(
         "CloseDevices",
-        [](const std::map<chip_id_t, MeshDevice*>& devices) {
+        [](const std::map<tt::ChipId, MeshDevice*>& devices) {
             for (const auto& device_entry : devices) {
                 device_entry.second->close();
             }

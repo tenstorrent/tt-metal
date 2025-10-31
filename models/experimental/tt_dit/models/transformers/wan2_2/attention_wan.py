@@ -206,22 +206,19 @@ class WanAttention:
         kv_input = prompt_1BLP if prompt_1BLP is not None else spatial_1BND
 
         # Project spatial
-        q_1BNF = self.to_q(spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        k_1BNF = self.to_k(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
-        v_1BNF = self.to_v(kv_input, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config)
+        q_1BNF = self.to_q(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
+        k_1BNF = self.to_k(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+        v_1BNF = self.to_v(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Norm spatial before splitting heads
         q_1BNF = self.norm_q(q_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
         k_1BNF = self.norm_k(k_1BNF, compute_kernel_config=self.rmsnorm_compute_kernel_config)
 
         def create_heads(inp):
-            # Unfortunate hack - we don't have a split_heads operation that takes unfused qkv
-            # Can pass None kv input and 0 KV heads to create_qkv_heads to create just Q heads, but it's suspicious
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
                 inp,
-                ttnn.concat([inp, inp], dim=-1),
                 num_heads=self.n_local_heads,
-                num_kv_heads=self.n_local_heads,
+                num_kv_heads=0,
                 transpose_k_heads=False,
             )
             return out
@@ -271,7 +268,7 @@ class WanAttention:
                     num_links=self.ccl_manager.num_links,
                     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
                     mesh_device=self.mesh_device,
-                    topology=self.ccl_manager.topology,
+                    topology=ttnn.Topology.Linear,  # RJA always uses Linear topology
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
                 )
@@ -304,8 +301,6 @@ class WanAttention:
                 spatial_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
 
-        spatial_1BND = self.to_out(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
+        spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
         return spatial_1BND

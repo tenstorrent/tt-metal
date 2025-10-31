@@ -15,13 +15,16 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
     auto processor_index = MetalContext::instance().hal().get_processor_index(
         params.core_type, params.processor_class, params.processor_id);
     defines.push_back(fmt::format("PROCESSOR_INDEX={}", processor_index));
-    if (l1_cache_enable_processors.contains(params.core_type, processor_index)) {
+    if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureEnableL1DataCache) and
+        l1_cache_enable_processors.contains(params.core_type, processor_index)) {
         defines.push_back("ENABLE_L1_DATA_CACHE");
     }
     switch (params.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
-                case HalProcessorClassType::DM: break;
+                case HalProcessorClassType::DM:
+                    defines.push_back(fmt::format("COMPILE_FOR_DM={}", params.processor_id));
+                    break;
                 case HalProcessorClassType::COMPUTE: {
                     switch (params.processor_id) {
                         case 0:

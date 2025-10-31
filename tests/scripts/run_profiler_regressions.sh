@@ -10,33 +10,11 @@ run_mid_run_data_dump() {
     echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
-    runDate=$(ls $PROFILER_OUTPUT_DIR/)
-    cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
-}
-
-run_async_test() {
-    #Some tests here do not skip grayskull
-    if [ "$ARCH_NAME" == "wormhole_b0" ]; then
-        remove_default_log_locations
-        mkdir -p $PROFILER_ARTIFACTS_DIR
-        ./tools/tracy/profile_this.py -c "pytest -svv models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_causallm.py::test_falcon_causal_lm[wormhole_b0-20-2-BFLOAT16-L1-falcon_7b-layers_2-decode_batch32]" | tee $PROFILER_ARTIFACTS_DIR/test_out.log
-
-        if cat $PROFILER_ARTIFACTS_DIR/test_out.log | grep "SKIPPED"
-        then
-            echo "No verification as test was skipped"
-        else
-            echo "Verifying test results"
-            runDate=$(ls $PROFILER_OUTPUT_DIR/)
-            LINE_COUNT=1000 # Smoke test to see at least 1000 ops are reported
-            res=$(verify_perf_line_count_floor "$PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv" "$LINE_COUNT")
-            echo $res
-        fi
-    fi
+    python -m tracy -v -r -p --sync-host-device --cpp-post-process --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
+    python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py
 }
 
 run_profiling_test() {
-    run_async_test
 
     run_mid_run_data_dump
 

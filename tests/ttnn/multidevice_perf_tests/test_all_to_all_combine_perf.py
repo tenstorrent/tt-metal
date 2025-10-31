@@ -35,7 +35,7 @@ def test_all_to_all_combine_perf(
     if arch_type == "6U":
         file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py"
     elif arch_type == "T3K":
-        file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py"
+        file = f"pytest tests/nightly/t3000/ccl/test_all_to_all_combine.py"
     else:
         raise ValueError(f"Invalid arch_type: {arch_type}")
 

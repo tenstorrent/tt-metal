@@ -364,6 +364,7 @@ def test_mochi_transformer_model(
             model_name="mochi-1-preview",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
         assert os.path.exists(
@@ -409,11 +410,15 @@ def test_mochi_transformer_model(
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
+        [(1, 8), 1, 0, 1],
         [(2, 4), 1, 0, 1],
+        [(2, 4), 0, 1, 1],
         [(4, 8), 1, 0, 4],
     ],
     ids=[
+        "1x8sp1tp0",
         "2x4sp1tp0",
+        "2x4sp0tp1",
         "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
@@ -486,8 +491,11 @@ def test_mochi_transformer_model_caching(
         model_name="mochi-1-preview",
         subfolder="transformer",
         parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     )
+
+    logger.info(f"Cache path {cache_path}")
 
     # Create TT model
     tt_model = MochiTransformer3DModel(

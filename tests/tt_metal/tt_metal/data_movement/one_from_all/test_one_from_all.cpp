@@ -21,9 +21,9 @@ namespace unit_tests::dm::core_from_all {
 struct OneFromAllConfig {
     uint32_t test_id = 0;
 
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord sub_start_core_coord = CoreCoord();
-    CoreCoord sub_grid_size = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord sub_start_core_coord;
+    CoreCoord sub_grid_size;
 
     uint32_t num_of_transactions = 0;
     uint32_t transaction_size_pages = 0;

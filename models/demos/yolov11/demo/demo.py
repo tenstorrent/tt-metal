@@ -169,6 +169,7 @@ def run_yolov11n_demo_dataset(
 def test_demo(
     device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device, model_location_generator
 ):
+    pytest.skip("Skipping yolov11 demo test: https://github.com/tenstorrent/tt-metal/issues/30568")
     run_yolov11n_demo(
         device,
         model_type,

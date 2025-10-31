@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "nlp_concat_heads_decode_device_operation.hpp"
+#include <algorithm>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::transformer {
@@ -19,18 +20,32 @@ void NLPConcatHeadsDecodeDeviceOperation::validate(const std::vector<Tensor>& in
         input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor.layout() == tt::tt_metal::Layout::TILE,
+        "Input tensor layout must be TILE but got {}",
+        input_tensor.layout());
     TT_FATAL(input_shape[0] == 1, "seqlen=1 for decode");
     TT_FATAL(input_shape[1] <= 32, "currently only support less than 32 users");
     TT_FATAL(input_shape[2] == 32, "currently only support 32 padded heads");
     TT_FATAL(input_shape[2] >= this->num_heads, "head_dim must be multiple of TILE_WIDTH");
 
     // input tensor shard spec
-    TT_FATAL(input_tensor.is_sharded(), "Error");
-    TT_FATAL(input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+    TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded");
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        "Input tensor memory layout must be HEIGHT_SHARDED but got {}",
+        input_tensor.memory_config().memory_layout());
     auto shard_spec = input_tensor.shard_spec().value();
-    TT_FATAL(shard_spec.shape[1] == input_tensor.padded_shape()[-1], "Error");
-    TT_FATAL(shard_spec.shape[0] == input_tensor.padded_shape()[-2], "Error");
+    TT_FATAL(
+        shard_spec.shape[1] == input_tensor.padded_shape()[-1],
+        "Shard spec shape[1] ({}) must match input tensor padded shape[-1] ({})",
+        shard_spec.shape[1],
+        input_tensor.padded_shape()[-1]);
+    TT_FATAL(
+        shard_spec.shape[0] == input_tensor.padded_shape()[-2],
+        "Shard spec shape[0] ({}) must match input tensor padded shape[-2] ({})",
+        shard_spec.shape[0],
+        input_tensor.padded_shape()[-2]);
     auto num_cores = shard_spec.grid.num_cores();
     TT_FATAL(num_cores == input_shape[1], "num_cores must be equal to num users");
     if (this->on_subcoregrids) {
@@ -48,9 +63,7 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
     auto batch = input_shape[1];
     auto head_dim = input_shape[3];
     // pad batch to 32 if necessary
-    if (batch < 32) {
-        batch = 32;
-    }
+    batch = std::max<uint32_t>(batch, 32);
 
     auto hidden_dim = num_heads * head_dim;
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import is_6u, is_galaxy
+from conftest import is_galaxy
 
 
 def pytest_addoption(parser):
@@ -37,6 +37,12 @@ def pytest_addoption(parser):
         action="store",
         default=10,
         help="Number of iterations of denoising loop (default: 10)",
+    )
+    parser.addoption(
+        "--debug-mode",
+        action="store_true",
+        default=False,
+        help="Run SDXL in debug mode (default: False)",
     )
 
 
@@ -74,25 +80,26 @@ def get_device_name():
     import ttnn
 
     num_devices = ttnn.GetNumAvailableDevices()
-    if is_6u():
-        return "6U"
-    elif is_galaxy():
-        return "4U"
+    if is_galaxy():
+        return "galaxy"
     elif num_devices == 0:
-        return "CPU"
+        return "cpu"
     elif num_devices == 1:
-        return "N150"
+        return "n150"
     elif num_devices == 2:
-        return "N300"
-    elif num_devices == 4:
-        return "N150x4"
+        return "n300"
     elif num_devices == 8:
-        return "T3K"
+        return "t3k"
 
 
 @pytest.fixture
 def loop_iter_num(request):
     return int(request.config.getoption("--loop-iter-num"))
+
+
+@pytest.fixture
+def debug_mode(request):
+    return request.config.getoption("--debug-mode")
 
 
 @pytest.fixture(scope="function")

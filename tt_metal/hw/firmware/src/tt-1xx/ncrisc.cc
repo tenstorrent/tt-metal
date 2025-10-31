@@ -64,7 +64,7 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 extern "C" uint32_t wh_iram_trampoline(uint32_t status, uint32_t first_argument);
 #endif
 
-inline __attribute__((always_inline)) void notify_brisc_and_wait() {
+inline __attribute__((always_inline)) void wait_for_brisc_notification() {
     while (true) {
         uint8_t run_value = *ncrisc_run;
         if (run_value == RUN_SYNC_MSG_GO || run_value == RUN_SYNC_MSG_LOAD) {
@@ -114,7 +114,7 @@ int main(int argc, char* argv[]) {
     DeviceProfilerInit();
     while (1) {
         WAYPOINT("W");
-        notify_brisc_and_wait();
+        wait_for_brisc_notification();
         DeviceZoneScopedMainN("NCRISC-FW");
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;

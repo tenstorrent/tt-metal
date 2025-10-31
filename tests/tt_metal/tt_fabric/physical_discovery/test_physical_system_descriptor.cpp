@@ -26,14 +26,14 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    constexpr bool using_mock_cluster_descriptor = false;
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     constexpr bool run_discovery = true;
 
     auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
         cluster.get_driver(),
         distributed_context,
         &tt::tt_metal::MetalContext::instance().hal(),
-        using_mock_cluster_descriptor,
+        rtoptions,
         run_discovery);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
@@ -73,7 +73,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto my_host_neighbors = physical_system_desc.get_host_neighbors(my_host);
 
     auto unique_chip_ids = cluster.get_unique_chip_ids();
-    std::unordered_map<AsicID, chip_id_t> asic_id_to_chip_id;
+    std::unordered_map<AsicID, ChipId> asic_id_to_chip_id;
 
     for (const auto& [chip_id, asic_id] : unique_chip_ids) {
         asic_id_to_chip_id[AsicID{asic_id}] = chip_id;

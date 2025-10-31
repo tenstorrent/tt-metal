@@ -78,7 +78,7 @@ def test_feedforward(
     tt_model = FeedForward(
         dim, dim_out, inner_dim=inner_dim, bias=bias, activation_fn=activation_fn, mesh_device=mesh_device
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, seq, dim), dtype=torch_dtype)
 
@@ -87,10 +87,7 @@ def test_feedforward(
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
-    device_grid = mesh_device.compute_with_storage_grid_size()
-    core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
-
-    tt_output = tt_model(tt_input_tensor, core_grid=core_grid)
+    tt_output = tt_model(tt_input_tensor)
 
     for t in ttnn.get_device_tensors(tt_output):
         t = ttnn.to_torch(t)
@@ -162,7 +159,7 @@ def test_parallel_feedforward(
         fsdp_mesh_axis=fsdp_mesh_axis,
         ccl_manager=ccl_manager,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch_input_tensor = torch.randn((1, B, seq, dim), dtype=torch_dtype)
 
@@ -171,10 +168,7 @@ def test_parallel_feedforward(
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
 
-    device_grid = mesh_device.compute_with_storage_grid_size()
-    core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
-
-    tt_output = tt_model(tt_input_tensor, core_grid=core_grid)
+    tt_output = tt_model(tt_input_tensor)
 
     shard_dims = [None, None]
     shard_dims[tp_mesh_axis] = -1

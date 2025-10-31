@@ -32,40 +32,136 @@ set(IRAM_OPTIONS
     ENABLE_IRAM # With IRAM
 )
 
-# Get the appropriate SFPI tarball
-file(STRINGS "../sfpi-version.sh" SFPI)
-set(SFPI_arch "${CMAKE_HOST_SYSTEM_PROCESSOR}")
-foreach(tuple ${SFPI})
-    string(STRIP ${tuple} pair)
-    string(REPLACE "=" ";" pair ${pair})
-    list(LENGTH pair count)
-    if(count EQUAL 2)
-        list(GET pair 0 key)
-        list(GET pair 1 value)
-        if(key STREQUAL "sfpi_version")
-            set(SFPI_VERSION "${value}")
-        elseif(key STREQUAL "sfpi_url")
-            set(SFPI_URL "${value}")
-        elseif(key STREQUAL "sfpi_${SFPI_arch}_txz_md5")
-            set(SFPI_TXZ_MD5 "${value}")
-        endif()
-    endif()
-endforeach()
+# determine sfpi version information
+set(SFPI_BASE "${PROJECT_SOURCE_DIR}/runtime")
+file(MAKE_DIRECTORY ${SFPI_BASE})
 
-if(NOT DEFINED SFPI_TXZ_MD5)
-    message(FATAL_ERROR "SFPI tarball for ${SFPI_arch} is not available")
+# sfpi-info.sh generates a cmake script, which we include just below.
+execute_process(
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-info.sh CMAKE txz
+    OUTPUT_FILE ${SFPI_BASE}/sfpi-version.cmake
+    COMMAND_ERROR_IS_FATAL ANY
+)
+# sfpi-info.sh sources sfpi-version, if either changes we should reconfigure
+set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY
+        CMAKE_CONFIGURE_DEPENDS
+            "../sfpi-info.sh;../sfpi-version"
+)
+# this script sets a bunch of variables of the form SFPI_snake_case_name
+include(${SFPI_BASE}/sfpi-version.cmake)
+
+if(TT_USE_SYSTEM_SFPI)
+    # we'll use the system's version
+    set(SFPI_BASE "/opt/tenstorrent")
+elseif(NOT "${SFPI_md5}" STREQUAL "")
+    # download a toolchain
+    include(FetchContent)
+    FetchContent_Declare(
+        sfpi
+        URL
+            "${SFPI_url}/${SFPI_filename}"
+        URL_HASH "MD5=${SFPI_md5}"
+        SOURCE_DIR
+        "${SFPI_BASE}/sfpi"
+    )
+    FetchContent_MakeAvailable(sfpi)
+else()
+    message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
+    if(IS_READABLE "${SFPI_BASE}/${SFPI_filename}")
+        message(STATUS "Locally-built ${SFPI_filename} present")
+    else()
+        file(REMOVE_RECURSE "${SFPI_BASE}/sfpi")
+        message(
+            STATUS
+            "Building SFPI, this could take some time (~10 CPU-hours)\n"
+            "Logging to ${SFPI_BASE}/sfpi-build.log ..."
+        )
+        execute_process(
+            COMMAND
+                ${CMAKE_CURRENT_SOURCE_DIR}/../sfpi-info.sh BUILD ${SFPI_BASE}/sfpi-src
+            OUTPUT_FILE ${SFPI_BASE}/sfpi-build.log
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+    endif()
+    if(EXISTS "${SFPI_BASE}/sfpi")
+        message(STATUS "Locally-built toolchain present")
+    else()
+        message(STATUS "Unpacking locally-built ${SFPI_filename}")
+        execute_process(
+            COMMAND
+                tar xJf ${SFPI_BASE}/${SFPI_filename}
+            WORKING_DIRECTORY ${SFPI_BASE}
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+    endif()
 endif()
 
-include(FetchContent)
-FetchContent_Declare(
-    sfpi
-    URL
-        "${SFPI_URL}/v${SFPI_VERSION}/sfpi_${SFPI_VERSION}_${SFPI_arch}.txz"
-    URL_HASH "MD5=${SFPI_TXZ_MD5}"
-    SOURCE_DIR
-    "${PROJECT_SOURCE_DIR}/runtime/sfpi"
+set(GPP_CMD "${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++")
+if(NOT EXISTS "${GPP_CMD}")
+    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
+endif()
+
+execute_process(
+    COMMAND
+        ${GPP_CMD} --version
+    COMMAND
+        sed -e "1{s/^[^ ]* //;p}" -e d
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE GPP_VERSION
 )
-FetchContent_MakeAvailable(sfpi)
+message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
+# check this is the version we want (the system version might be wrong)
+string(REGEX REPLACE "^\\([^:]*:([^)]*)\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
+if(NOT ${GPP_VERSION} STREQUAL ${SFPI_version})
+    if(TT_USE_SYSTEM_SFPI)
+        message(
+            FATAL_ERROR
+            "Installed SFPI version ${GPP_VERSION} does not match required version ${SFPI_version}\nYou need to run `${PROJECT_SOURCE_DIR}/install_dependencies.sh --sfpi`."
+        )
+    else()
+        message(FATAL_ERROR "SFPI packaging malfunction, ${SFPI_version} delivers ${GPP_VERSION}")
+    endif()
+endif()
+
+if(NOT TT_USE_SYSTEM_SFPI)
+    # Check each executable is loadable, as the user might not have installed the dependencies
+    # \tlibcsfml-window.so.2.2 => not found
+    # undefined symbol: blob\t(./a.out)
+    file(
+        GLOB SFPI_BINARIES
+        "${SFPI_BASE}/sfpi/compiler/bin/*"
+        "${SFPI_BASE}/sfpi/compiler/libexec/gcc/riscv-tt-elf/*/*"
+    )
+    execute_process(
+        COMMAND
+            echo ${SFPI_BINARIES}
+        COMMAND
+            sed "s/;/ /g"
+        COMMAND
+            xargs file
+        COMMAND
+            sed -e "/ELF ..-bit .SB executable,/{s/:.*//;p}" -e d
+        COMMAND
+            xargs ldd -d
+        COMMAND
+            sed -e "/=> not found/p" -e "/undefined symbol/{s/\t(.*)$//;p}" -e d
+        COMMAND
+            sort -u
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        OUTPUT_VARIABLE SFPI_UNMET
+    )
+    if(NOT "${SFPI_UNMET}" STREQUAL "")
+        message(NOTICE "Unsatisfied dependencies:\n${SFPI_UNMET}")
+        message(
+            FATAL_ERROR
+            "SFPI has unsatisfied dependencies. Either\n* set TT_USE_SYSTEM_SFPI and run install_dependencies.sh --install-sfpi, or\n* install the missing packages, or\n* (expert level) build your own sfpi and point sfpi-version at it"
+        )
+    endif()
+endif()
 
 foreach(ARCH IN LISTS ARCHS)
     if(ARCH STREQUAL "quasar")
@@ -141,26 +237,6 @@ foreach(ARCH IN LISTS ARCHS)
         endforeach()
     endforeach()
 endforeach()
-
-if(TT_USE_SYSTEM_SFPI)
-    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++")
-else()
-    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv-tt-elf-g++")
-endif()
-
-if(NOT EXISTS "${GPP_CMD}")
-    message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
-endif()
-
-execute_process(
-    COMMAND
-        ${GPP_CMD} --version
-    COMMAND
-        head -1
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    OUTPUT_VARIABLE GPP_VERSION
-)
-message(STATUS "Using SFPI compiler: ${GPP_CMD}, ${GPP_VERSION}")
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -276,7 +352,7 @@ foreach(ARCH IN LISTS ARCHS)
             DEPENDS
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
                 # If the compiler changes, rebuild
-                ../sfpi-version.sh
+                ../sfpi-version
             COMMENT "Building ${ARCH} hw lib ${HWOBJ}"
             VERBATIM
         )
@@ -358,6 +434,7 @@ target_sources(
             inc/debug/dprint.h
             inc/debug/dprint_buffer.h
             inc/debug/dprint_pages.h
+            inc/debug/dprint_tensix.h
             inc/debug/dprint_tile.h
             inc/debug/eth_link_status.h
             inc/debug/fw_debug.h

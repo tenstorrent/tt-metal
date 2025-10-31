@@ -59,11 +59,12 @@ void kernel_main() {
     }
 
     // Test stateful read one packet API
-    noc_async_read_one_packet_set_state(addr_self_noc, page_size, noc_index);
-    noc_async_read_one_packet_set_state(addr_other_noc, page_size, 1 - noc_index);
+    constexpr uint32_t vc = 0;
+    noc_async_read_one_packet_set_state(addr_self_noc, page_size, vc, noc_index);
+    noc_async_read_one_packet_set_state(addr_other_noc, page_size, vc, 1 - noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
-        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, noc_index);
-        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, 1 - noc_index);
+        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, vc, noc_index);
+        noc_async_read_one_packet_with_state(l1_read_addr, l1_read_addr, vc, 1 - noc_index);
     }
 
     // Test stateful write one packet API
@@ -159,9 +160,10 @@ void kernel_main() {
     }
 
     // DRAM sharded read API
-    uint32_t src_addr_0 = noc_async_read_tile_dram_sharded_set_state<true>(DRAM_ALIGNMENT, page_size, 0, 0, noc_index);
-    uint32_t src_addr_1 =
-        noc_async_read_tile_dram_sharded_set_state<true>(DRAM_ALIGNMENT, page_size, 0, 0, 1 - noc_index);
+    uint64_t src_addr_0 = get_noc_addr_from_bank_id<true>(0, DRAM_ALIGNMENT);
+    uint64_t src_addr_1 = get_noc_addr_from_bank_id<true>(0, DRAM_ALIGNMENT);
+    noc_async_read_one_packet_set_state<true>(src_addr_0, page_size, vc, noc_index);
+    noc_async_read_one_packet_set_state<true>(src_addr_1, page_size, vc, 1 - noc_index);
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
         noc_async_read_tile_dram_sharded_with_state_with_trid(

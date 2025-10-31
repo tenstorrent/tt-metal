@@ -137,8 +137,13 @@ def import_device_profile_log(logPath):
     devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq)))
 
     df = pd.read_csv(logPath, skiprows=1, header=0, na_filter=False)
+
+    # Convert trace_id and trace_id_count columns to integers
+    df.iloc[:, 8] = pd.to_numeric(df.iloc[:, 8], errors="coerce").fillna(-1).astype(int)  # trace_id
+    df.iloc[:, 9] = pd.to_numeric(df.iloc[:, 9], errors="coerce").fillna(-1).astype(int)  # trace_id_count
+
     for row in df.itertuples():
-        assert len(row) == 14
+        assert len(row) == 16
 
         chipID = row[1]
         core = (row[2], row[3])
@@ -148,11 +153,13 @@ def import_device_profile_log(logPath):
         attachedData = 0
         attachedData = row[7]
         timerID["run_host_id"] = row[8]
-        timerID["zone_name"] = row[9]
-        timerID["type"] = row[10]
-        timerID["src_line"] = row[11]
-        timerID["src_file"] = row[12]
-        timerID["meta_data"] = row[13]
+        timerID["trace_id"] = row[9]
+        timerID["trace_id_count"] = row[10]
+        timerID["zone_name"] = row[11]
+        timerID["type"] = row[12]
+        timerID["src_line"] = row[13]
+        timerID["src_file"] = row[14]
+        timerID["meta_data"] = row[15]
 
         if chipID in devicesData["devices"]:
             if core in devicesData["devices"][chipID]["cores"]:
@@ -233,7 +240,7 @@ def get_ops(timeseries):
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
                         or (
-                            risc == "CORE_AGG"
+                            risc == "TENSIX_RISC_AGG"
                             and timerID["zone_name"] == "TRACE-FW"
                             and timerID["type"] == "ZONE_START"
                         )
@@ -257,7 +264,11 @@ def get_ops(timeseries):
                     elif (
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                        or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
+                        or (
+                            risc == "TENSIX_RISC_AGG"
+                            and timerID["zone_name"] == "TRACE-FW"
+                            and timerID["type"] == "ZONE_END"
+                        )
                     ):
                         assert (
                             len(opCores[core]) == 1
@@ -273,7 +284,7 @@ def get_ops(timeseries):
                         (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
                         or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
                         or (
-                            risc == "CORE_AGG"
+                            risc == "TENSIX_RISC_AGG"
                             and timerID["zone_name"] == "TRACE-FW"
                             and timerID["type"] == "ZONE_START"
                         )
@@ -284,7 +295,11 @@ def get_ops(timeseries):
                 if (
                     (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
                     or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
-                    or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
+                    or (
+                        risc == "TENSIX_RISC_AGG"
+                        and timerID["zone_name"] == "TRACE-FW"
+                        and timerID["type"] == "ZONE_END"
+                    )
                 ):
                     opIsDone = True
             ops[-1]["timeseries"].append(ts)

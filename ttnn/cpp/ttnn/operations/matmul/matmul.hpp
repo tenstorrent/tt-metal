@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -115,6 +114,7 @@ struct SparseMatmulOperation {
         const Tensor& sparsity,
         std::optional<uint32_t> nnz,
         bool is_input_a_sparse = false,
+        bool is_input_b_sparse = true,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const DataType> dtype = std::nullopt,
         const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,

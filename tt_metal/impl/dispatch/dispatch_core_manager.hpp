@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -75,9 +75,9 @@ public:
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the issue queue interface
-    const tt_cxy_pair& prefetcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    const tt_cxy_pair& prefetcher_core(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    bool is_prefetcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    bool is_prefetcher_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
     /// @brief Gets the location of the kernel desginated to interface with prefetcher kernel running on mmio device.
     ///         Prefetcher kernel on mmio device relays commands to prefetcher_d running on remote device.
@@ -85,9 +85,9 @@ public:
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the issue queue interface
-    const tt_cxy_pair& prefetcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    const tt_cxy_pair& prefetcher_d_core(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    bool is_prefetcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    bool is_prefetcher_d_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
     /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular
     /// command queue
@@ -100,9 +100,9 @@ public:
     /// @param channel assigned to the command queue
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the completion queue interface
-    const tt_cxy_pair& completion_queue_writer_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    const tt_cxy_pair& completion_queue_writer_core(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    bool is_completion_queue_writer_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    bool is_completion_queue_writer_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
     /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a
     /// particular command queue
@@ -110,13 +110,13 @@ public:
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the dispatcher core
-    const tt_cxy_pair& dispatcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    const tt_cxy_pair& dispatcher_core(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    bool is_dispatcher_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    bool is_dispatcher_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    bool is_dispatcher_s_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    bool is_dispatcher_s_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    bool is_dispatcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    bool is_dispatcher_d_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
     /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a
     /// particular command queue
@@ -124,9 +124,9 @@ public:
     /// @param channel assigned to the command queue where commands are enqueued
     /// @param cq_id ID of the command queue within the channel
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the dispatcher_d core
-    const tt_cxy_pair& dispatcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    const tt_cxy_pair& dispatcher_d_core(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
-    const tt_cxy_pair& dispatcher_s_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    const tt_cxy_pair& dispatcher_s_core(ChipId device_id, uint16_t channel, uint8_t cq_id);
 
     /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a
     /// particular command queue
@@ -135,9 +135,9 @@ public:
     /// @param cq_id ID of the command queue within the channel
     /// @param tunnel ID of the tunnel which this fabric mux will send data through
     /// @return tt_cxy_pair logical location (chip + core coordinate) of the fabric mux core
-    const tt_cxy_pair& fabric_mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id, int tunnel);
+    const tt_cxy_pair& fabric_mux_core(ChipId device_id, uint16_t channel, uint8_t cq_id, int tunnel);
 
-    bool is_fabric_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id, int tunnel);
+    bool is_fabric_mux_core_allocated(ChipId device_id, uint16_t channel, uint8_t cq_id, int tunnel);
 
     CoreType get_dispatch_core_type();
 
@@ -146,9 +146,9 @@ public:
     uint8_t get_num_hw_cqs() { return this->num_hw_cqs; }
 
     // TODO: remove this API, we should read the core descriptor once, should not have backdoors like this to add cores
-    void add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core);
+    void add_dispatch_core_to_device(ChipId device_id, const CoreCoord& core);
 
-    std::vector<CoreCoord> get_all_logical_dispatch_cores(chip_id_t device_id);
+    std::vector<CoreCoord> get_all_logical_dispatch_cores(ChipId device_id);
 
 private:
     /// @brief reset_dispatch_core_manager initializes vector of cores per device for dispatch kernels
@@ -158,12 +158,12 @@ private:
     /// @brief getting any available dispatch core for a device
     /// @param device_id
     /// @return
-    CoreCoord get_next_available_dispatch_core(chip_id_t device_id);
+    CoreCoord get_next_available_dispatch_core(ChipId device_id);
 
     void log_dispatch_assignment(
         std::string name,
         tt_cxy_pair& cxy,
-        chip_id_t device_id,
+        ChipId device_id,
         uint16_t channel,
         uint8_t cq_id,
         bool force_ethernet = false);
@@ -171,9 +171,9 @@ private:
     // {device ID : {channel (hugepage) : {cq_id : dispatch assignment}}}
     // Each device has an assigned hugepage at a specific channel that holds (up to 2) hardware command queues
     // (represented by cq_id)
-    std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
+    std::unordered_map<ChipId, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>>
         dispatch_core_assignments;
-    std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
+    std::unordered_map<ChipId, std::list<CoreCoord>> available_dispatch_cores_by_device;
     DispatchCoreConfig dispatch_core_config_;
     uint8_t num_hw_cqs{};
     static dispatch_core_manager* _inst;

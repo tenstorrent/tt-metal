@@ -92,7 +92,7 @@ jobs:
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
   build:
     if: ${{ github.ref_name == 'main' ||
@@ -162,7 +162,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "N300-llmbox-viommu",
+          # "N300-llmbox-viommu", # re-enable when we have more capacity
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -185,7 +185,7 @@ jobs:
       matrix:
         platform: [
           "N300-viommu",
-          "N300-llmbox-viommu",
+          # "N300-llmbox-viommu", # re-enable when we have more capacity
         ]
     uses: ./.github/workflows/smoke.yaml
     with:

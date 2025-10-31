@@ -194,7 +194,12 @@ std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor
             auto mem_config = this->output_mem_config;
             return {TensorSpec(
                 input_tensor.logical_shape(),
-                TensorLayout(program_config.out_data_format, PageConfig(program_config.output_layout), mem_config))};
+                TensorLayout::fromPaddedShape(
+                    program_config.out_data_format,
+                    PageConfig(program_config.output_layout),
+                    mem_config,
+                    input_tensor.logical_shape(),
+                    input_tensor.padded_shape()))};
         },
         this->program_config);
 }
@@ -260,23 +265,52 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                 uint32_t num_out_blocks = program_config.num_out_blocks;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
                 uint32_t batch = a.padded_shape()[0];
-
-                return groupnorm_multi_core(
-                    a,
-                    gamma,
-                    beta,
-                    input_mask,
-                    reciprocals,
-                    output_tensor,
-                    this->eps,
-                    this->num_groups,
-                    batch,
-                    program_config.im_data_format,
-                    program_config.compute_with_storage_grid_size,
-                    inplace,
-                    num_out_blocks,
-                    this->compute_kernel_config,
-                    this->use_welford);
+                uint32_t W = a.padded_shape()[3];
+                uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, this->num_groups);
+                while (num_virtual_cols > 0 &&
+                       ((W / num_virtual_cols) % TILE_WIDTH != 0 || (this->num_groups % num_virtual_cols) != 0)) {
+                    num_virtual_cols -= 1;
+                }
+                if (num_virtual_cols == 0) {
+                    TT_THROW("Core Grid resulted in virtual cores x = 0, Please try another core grid");
+                }
+                uint32_t num_actual_rows = grid_size.y;
+                uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
+                if (batch >= num_virtual_rows) {
+                    return groupnorm_multi_core_no_mcast(
+                        a,
+                        gamma,
+                        beta,
+                        input_mask,
+                        reciprocals,
+                        output_tensor,
+                        this->eps,
+                        this->num_groups,
+                        batch,
+                        program_config.im_data_format,
+                        program_config.compute_with_storage_grid_size,
+                        inplace,
+                        num_out_blocks,
+                        this->compute_kernel_config,
+                        this->use_welford);
+                } else {
+                    return groupnorm_multi_core_mcast(
+                        a,
+                        gamma,
+                        beta,
+                        input_mask,
+                        reciprocals,
+                        output_tensor,
+                        this->eps,
+                        this->num_groups,
+                        batch,
+                        program_config.im_data_format,
+                        program_config.compute_with_storage_grid_size,
+                        inplace,
+                        num_out_blocks,
+                        this->compute_kernel_config,
+                        this->use_welford);
+                }
             }
         },
         this->program_config);

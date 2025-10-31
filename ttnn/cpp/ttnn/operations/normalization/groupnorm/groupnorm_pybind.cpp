@@ -18,8 +18,6 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
         module,
         ttnn::group_norm,
         R"doc(
-                ``ttnn.group_norm(input_tensor: ttnn.Tensor, num_groups: int, epsilon: float = 1e-12, input_mask: Optional[ttnn.Tensor] = None, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, reciprocals: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, inplace: bool = True, output_layout: Optional[ttnn.Layout] = None, num_out_blocks: Optional[int] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, negative_mask: Optional[ttnn.Tensor] = None, use_welford: bool = False) -> ttnn.Tensor``
-
                 Computes group_norm over :attr:`input_tensor`.
                 See `Group Normalization <https://arxiv.org/abs/1803.08494>`_ for more details.
 

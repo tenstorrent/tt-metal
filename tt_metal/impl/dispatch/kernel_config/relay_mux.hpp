@@ -66,8 +66,8 @@ private:
 public:
     RelayMux(
         int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool d2h,
@@ -117,7 +117,7 @@ void assemble_fabric_mux_client_config_args(
 
 // Helper function to calculate number of hops from a mmio device to downstream device
 // The two devices must be along the same tunnel.
-int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id);
+int get_num_hops(ChipId mmio_dev_id, ChipId downstream_dev_id);
 
 // Helper function to assemble args specific to the 2D fabric header
 template <typename Configuration>

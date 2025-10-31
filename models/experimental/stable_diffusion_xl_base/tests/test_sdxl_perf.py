@@ -41,9 +41,10 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
-        is_ci_env,
-        is_ci_v2_env,
-        model_location_generator,
+        debug_mode=False,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
+        model_location_generator=model_location_generator,
         iterations=iterations,
     )
 

@@ -11,6 +11,24 @@ set_target_properties(
             api
 )
 
+file(
+    GLOB_RECURSE kernels
+    all_gather_async/device/kernels/*
+    all_gather_concat_heads_fused/device/kernels/*
+    all_reduce_async/device/kernels/*
+    all_to_all_async/device/kernels/*
+    llama_all_gather_matmul_async/device/kernels/*
+    llama_reduce_scatter/device/kernels/*
+    llama_reduce_scatter_create_heads/device/kernels/*
+    neighbor_pad_async/device/kernels/*
+    reduce_scatter_minimal_async/device/kernels/*
+    ring_attention_all_gather_async/device/kernels/*
+    rms_allgather/device/kernels/*
+    send_recv_async/send_async/device/kernels/*
+    send_recv_async/recv_async/device/kernels/*
+    slice_reshard_async/device/kernels/*
+)
+
 target_sources(
     ttnn_op_experimental_ccl
     PUBLIC
@@ -18,7 +36,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
-            all_broadcast_async/device/all_broadcast_async_op.hpp
             all_reduce_async/all_reduce_async.hpp
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
@@ -28,12 +45,7 @@ target_sources(
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            send_recv_async/send_async/device/kernels/sender_reader.cpp
-            send_recv_async/send_async/device/kernels/sender_writer.cpp
-            send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
-            send_recv_async/recv_async/device/kernels/receiver_writer.cpp
-            send_recv_async/recv_async/device/kernels/receiver_reader.cpp
+        FILES ${kernels}
     PRIVATE
         llama_common.cpp
         composite_common.cpp
@@ -42,9 +54,6 @@ target_sources(
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
         all_reduce_async/device/all_reduce_async_op.cpp
         all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
-        reduce_scatter_async/device/reduce_scatter_async_op.cpp
-        reduce_scatter_async/device/reduce_scatter_async_program.cpp
-        reduce_scatter_async/reduce_scatter.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
@@ -57,9 +66,6 @@ target_sources(
         all_gather_async/all_gather_async.cpp
         all_gather_async/device/all_gather_async_op.cpp
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
-        all_gather_command_processor_async/all_gather_command_processor_async.cpp
-        all_gather_command_processor_async/device/all_gather_command_processor_async_op.cpp
-        all_gather_command_processor_async/device/all_gather_command_processor_async_program.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_mm_async_program_factory.cpp
@@ -80,9 +86,6 @@ target_sources(
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
-        all_broadcast_async/all_broadcast_async.cpp
-        all_broadcast_async/device/all_broadcast_async_op.cpp
-        all_broadcast_async/device/all_broadcast_async_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op.cpp
         send_recv_async/send_async/device/send_async_program.cpp

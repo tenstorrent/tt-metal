@@ -23,7 +23,7 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_broadcast_async(
+    tt_out_tensor = ttnn.all_broadcast(
         input_tensor_mesh,
         num_links=num_links,
         memory_config=output_mem_config,
@@ -36,7 +36,7 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_broadcast_async(
+        tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
             memory_config=output_mem_config,
@@ -193,7 +193,7 @@ def run_all_broadcast_impl(
         tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
-            tt_out_tensors = ttnn.experimental.all_broadcast_async(
+            tt_out_tensors = ttnn.all_broadcast(
                 input_tensor_mesh_list[i],
                 num_links=num_links,
                 memory_config=output_mem_config,

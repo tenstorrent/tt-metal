@@ -37,6 +37,11 @@ void AllGatherMatmulAsync::validate_with_output_tensors(
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
 
+    TT_FATAL(
+        std::all_of(
+            input_tensors.begin(), input_tensors.end(), [](const auto& t) { return t.logical_shape().rank() == 4; }),
+        "AllGatherMatmulAsync requires input tensors to be of rank 4");
+
     if (output_tensors[0].has_value()) {
         auto& all_gather_output_tensor = output_tensors.at(0).value();
         // All Gather validate
@@ -236,10 +241,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "AllGatherMatmulAsync is only supported for Fast Dispatch");
-
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);

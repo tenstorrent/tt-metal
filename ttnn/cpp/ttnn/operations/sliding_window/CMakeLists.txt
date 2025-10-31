@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_sliding_window)
 set_target_properties(
     ttnn_op_sliding_window
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            false
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -15,6 +15,10 @@ file(GLOB_RECURSE kernels halo/device/kernels/*)
 target_sources(
     ttnn_op_sliding_window
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -24,6 +28,7 @@ target_sources(
         halo/device/untilize_with_halo_program_factory.cpp
         halo/halo.cpp
         sliding_window.cpp
+        op_slicing/op_slicing.cpp
 )
 
 target_include_directories(ttnn_op_sliding_window PRIVATE ${FixmeOpIncDirs})

@@ -16,7 +16,7 @@ The following model is evaluated (mAPval 50-95) for `500 samples` :-
 -   YOLOv8s (640x640 resolution) - **0.6099**
 -   YOLOv11n (640x640 resolution) - **0.7329**
 -   YOLOv7 (640x640 resolution) - **0.3726**
--   YOLOv12x (640x640 resolution) - **0.6192**
+-   YOLOv12x (640x640 resolution) - **0.5635**
 -   YOLOv6l (640x640 resolution) - **0.8150**
 -   YOLOv5x (640x640 resolution) - **0.8170**
 

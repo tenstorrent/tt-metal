@@ -32,9 +32,7 @@ def test_large_softmax(device, batch_size, h, w, dim):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
     input_tensor = ttnn.to_device(input_tensor, device)
-    # TODO: need to fix a hang, which occurs when numeric_stable is True
-    # See: issue #28509
-    output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=False)
+    output_tensor = ttnn.softmax(input_tensor, dim=dim, numeric_stable=True)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)

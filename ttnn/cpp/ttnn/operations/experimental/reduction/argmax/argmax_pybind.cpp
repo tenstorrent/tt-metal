@@ -15,8 +15,7 @@ namespace ttnn::operations::experimental::reduction::detail {
 namespace py = pybind11;
 void bind_argmax_operation(py::module& module) {
     auto doc =
-        R"doc(argmax(input_tensor: ttnn.Tensor, *, dim: Optional[int] = None, memory_config: MemoryConfig = std::nullopt) -> ttnn.Tensor
-
+        R"doc(
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
 
@@ -60,8 +59,7 @@ void bind_argmax_operation(py::module& module) {
 
 void bind_argmin_operation(py::module& module) {
     auto doc =
-        R"doc({0}(input_tensor: ttnn.Tensor, dim: int, *, all: bool, memory_config: ttnn.MemoryConfig) -> std::vector<Tensor>
-
+        R"doc(
         Performs Argmin function on :attr:`input_tensor`, :attr:`dim`, :attr:`all`.
 
         Args:

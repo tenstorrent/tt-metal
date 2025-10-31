@@ -112,9 +112,7 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
                 captureCommand, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
     else:
-        logger.error(
-            f"Tracy tools were not found. Please make sure you are on the correct build. Use build_metal.sh --enable-profiler to build if you are not sure."
-        )
+        logger.error(f"Tracy tools were not found. Please make sure you are on a Tracy-enabled build (default).")
         sys.exit(1)
 
     return toolsReady, captureProcess

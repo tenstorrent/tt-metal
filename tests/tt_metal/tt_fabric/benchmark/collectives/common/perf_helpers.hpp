@@ -17,8 +17,8 @@ using HelpersFixture = ::tt::tt_metal::MeshDeviceFixtureBase;
 
 // ---- Reusable defaults -------
 inline constexpr uint32_t kDefaultMeshId = 0;
-inline constexpr chip_id_t kDefaultSrcChip = 0;
-inline constexpr chip_id_t kDefaultDstChip = 1;
+inline constexpr ChipId kDefaultSrcChip = 0;
+inline constexpr ChipId kDefaultDstChip = 1;
 inline constexpr bool kDefaultUseDramDst = false;
 inline constexpr uint32_t kDefaultTensorBytes = 1u << 20;  // 1 MiB
 inline constexpr uint32_t kDefaultPageSize = 4096;         // 4 KiB
@@ -35,8 +35,8 @@ struct PerfPoint {
 
 struct PerfParams {
     uint32_t mesh_id = kDefaultMeshId;
-    chip_id_t src_chip = kDefaultSrcChip;
-    chip_id_t dst_chip = kDefaultDstChip;
+    ChipId src_chip = kDefaultSrcChip;
+    ChipId dst_chip = kDefaultDstChip;
     bool use_dram_dst = kDefaultUseDramDst;
     uint32_t tensor_bytes = kDefaultTensorBytes;
     uint32_t page_size = kDefaultPageSize;
@@ -68,6 +68,6 @@ void warmup_once(HelpersFixture* fixture, PerfParams base, int iters = 1);
 PerfStats run_repeated(HelpersFixture* fixture, const PerfParams& p, int warmup_iters, int iters);
 
 // Utility used by multiple tests
-tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id);
+tt::tt_metal::IDevice* find_device_by_id(ChipId phys_id);
 
 }  // namespace tt::tt_fabric::bench

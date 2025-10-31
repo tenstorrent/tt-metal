@@ -33,16 +33,25 @@ struct ExecuteAllReduceAsync {
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        uint32_t cluster_axis,
+        std::optional<std::uint32_t> cluster_axis,
         const MeshDevice& mesh_device,
-        const std::vector<GlobalSemaphore>& barrier_semaphores,
-        const std::vector<GlobalSemaphore>& rs_global_semaphores,
-        const std::vector<GlobalSemaphore>& ag_global_semaphores,
+        const std::optional<std::vector<GlobalSemaphore>>& barrier_semaphores,
+        const std::optional<std::vector<GlobalSemaphore>>& rs_global_semaphores,
+        const std::optional<std::vector<GlobalSemaphore>>& ag_global_semaphores,
         ttnn::operations::reduction::ReduceType math_op,
         const std::optional<ttnn::MemoryConfig>& memory_config,
-        ttnn::ccl::Topology topology,
+        std::optional<ttnn::ccl::Topology> topology,
         std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor,
+        uint32_t cluster_axis,
+        ttnn::operations::reduction::ReduceType math_op,
+        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+        std::optional<size_t> num_preferred_links = std::nullopt,
+        std::optional<ttnn::ccl::Topology> topology = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -57,6 +66,7 @@ struct ExecuteAllReduceAsync {
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
         bool use_noc1_only,
         bool use_optimal_ccl_for_llama);
+
     static std::vector<ttnn::Tensor> invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
         ttnn::Tensor& buffer_tensor,

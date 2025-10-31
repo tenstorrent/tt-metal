@@ -16,7 +16,7 @@ from loguru import logger
 
 
 class TtEncoder(LightweightModule):
-    def __init__(self, device, state_dict, model_config):
+    def __init__(self, device, state_dict, model_config, debug_mode=False):
         super().__init__()
 
         self.device = device
@@ -28,6 +28,7 @@ class TtEncoder(LightweightModule):
         self.padding = (1, 1)
         self.dilation = (1, 1)
         self.groups = 1
+        self.debug_mode = debug_mode
 
         num_up_blocks = 4
 
@@ -42,6 +43,7 @@ class TtEncoder(LightweightModule):
                     model_config,
                     has_downsample=block_id < 3,
                     has_shortcut=block_id > 0 and block_id < 3,
+                    debug_mode=debug_mode,
                 )
             )
 
@@ -106,7 +108,7 @@ class TtEncoder(LightweightModule):
         B, C, H, W = input_shape
         hidden_states = sample
 
-        [hidden_states, [H, W], [self.tt_conv_in_weights, self.tt_conv_in_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_conv_in_weights, tt_conv_in_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_in_weights,
             in_channels=self.conv_in_params["input_channels"],
@@ -130,6 +132,9 @@ class TtEncoder(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv_in_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv_in_weights = tt_conv_in_weights
+            self.tt_conv_in_bias = tt_conv_in_bias
 
         for idx, down_block in enumerate(self.down_blocks):
             logger.info(f"Starting {idx}. down-block")
@@ -182,7 +187,7 @@ class TtEncoder(LightweightModule):
 
         hidden_states = ttnn.silu(hidden_states)
 
-        [hidden_states, [H, W], [self.tt_conv_out_weights, self.tt_conv_out_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_conv_out_weights, tt_conv_out_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_out_weights,
             in_channels=self.conv_out_params["input_channels"],
@@ -206,5 +211,8 @@ class TtEncoder(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv_out_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv_out_weights = tt_conv_out_weights
+            self.tt_conv_out_bias = tt_conv_out_bias
 
         return hidden_states, [C, H, W]

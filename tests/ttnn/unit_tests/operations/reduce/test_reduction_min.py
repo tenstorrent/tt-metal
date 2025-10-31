@@ -16,13 +16,14 @@ from models.common.utility_functions import torch_random
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
 @pytest.mark.parametrize("dim", [-1, -2])
 @pytest.mark.parametrize("keepdim", [True, False])
-def test_min(device, batch_size, h, w, dim, keepdim):
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_min(device, batch_size, h, w, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
     torch_output_tensor, _ = torch.min(torch_input_tensor, dim=dim, keepdim=keepdim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
     output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
