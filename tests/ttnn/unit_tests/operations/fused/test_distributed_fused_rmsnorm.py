@@ -127,8 +127,8 @@ def run_distributed_fused_rmsnorm(
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
-    [128, 256, 2048, 8192, 9472, 18944],
-    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen8192", "seqlen9472", "seqlen18944"],
+    [128, 256, 2048, 8192, 9472, 18944, 75776],
+    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen8192", "seqlen9472", "seqlen18944", "seqlen75776"],
 )
 @pytest.mark.parametrize(
     "hidden_dim", [256, 2048, 5120, 8192], ids=["hidden_dim256", "hidden_dim2048", "hidden_dim5120", "hidden_dim8192"]
@@ -172,3 +172,59 @@ def test_distributed_fused_rmsnorm(
     run_distributed_fused_rmsnorm(
         mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight
     )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
+@pytest.mark.parametrize("seqlen", [2048])
+@pytest.mark.parametrize("hidden_dim", [5120, 8192], ids=["hidden_dim5120", "hidden_dim8192"])
+@pytest.mark.parametrize("num_heads_per_device", [1, 2, 10], ids=["num_heads1_", "num_heads2", "num_heads10"])
+@pytest.mark.parametrize("use_weight", [True, False], ids=["has_weight", "no_weight"])
+@pytest.mark.parametrize(
+    "mesh_device, tp_mesh_axis",
+    [
+        [(1, 8), 1],
+        [(2, 4), 1],
+        [(2, 4), 0],
+    ],
+    ids=["1x8_tp1", "2x4_tp1", "2x4_tp0"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
+    ],
+    ids=["fabric_linear"],
+    indirect=["device_params"],
+)
+def test_distributed_fused_rmsnorm_program_cache(
+    mesh_device,
+    tp_mesh_axis,
+    seqlen,
+    hidden_dim,
+    dtype,
+    stats_dtype,
+    topology,
+    num_heads_per_device,
+    use_weight,
+    reset_seeds,
+):
+    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    if hidden_dim // 32 % num_heads != 0:
+        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
+    inp_shape = (1, 1, seqlen, hidden_dim)
+    dummy_tensors = []
+    for i in range(2):
+        run_distributed_fused_rmsnorm(
+            mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight
+        )
+        dummy_tensors.append(
+            ttnn.from_torch(
+                torch.zeros(32, 32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        )
