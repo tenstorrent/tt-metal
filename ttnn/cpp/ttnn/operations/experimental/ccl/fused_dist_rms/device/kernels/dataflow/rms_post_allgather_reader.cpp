@@ -47,22 +47,6 @@ void kernel_main() {
     generate_reduce_scaler(reduce_scalar_cb, scalar_value);
     generate_bcast_col_scalar(epsilon_cb, epsilon_value);
 
-    if constexpr (has_weight) {
-        cb_reserve_back(weight_cb, num_tile_cols);
-        uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
-        for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile++) {
-            uint64_t weight_noc_addr = get_noc_addr(col_tile, weight_accessor);
-            // noc_async_read_tile(col_tile, weight_accessor, weight_wr_ptr);
-            // weight_wr_ptr += weight_tile_bytes;
-
-            noc_async_read(weight_noc_addr, weight_wr_ptr, 16 * 2 /*one face row*/);
-            noc_async_read(weight_noc_addr + 512, weight_wr_ptr + 512, 16 * 2 /*one face row*/);
-            weight_wr_ptr += weight_tile_bytes;
-        }
-        noc_async_read_barrier();
-        cb_push_back(weight_cb, num_tile_cols);
-    }
-
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t stats_tile_idx = tile_row * stats_tiles_cols;
         // Read stats tiles
@@ -89,6 +73,24 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(input_cb, block_size);
+
+            if constexpr (has_weight) {
+                if (tile_row == tile_row_start) {
+                    cb_reserve_back(weight_cb, block_size);
+                    uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
+                    for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                        uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
+                        // noc_async_read_tile(col_tile, weight_accessor, weight_wr_ptr);
+                        // weight_wr_ptr += weight_tile_bytes;
+
+                        noc_async_read(weight_noc_addr, weight_wr_ptr, 16 * 2 /*one face row*/);
+                        noc_async_read(weight_noc_addr + 512, weight_wr_ptr + 512, 16 * 2 /*one face row*/);
+                        weight_wr_ptr += weight_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(weight_cb, block_size);
+                }
+            }
         }
     }
 }
