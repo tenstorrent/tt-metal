@@ -153,6 +153,63 @@ def run_device_perf_detailed(
     return post_processed_results
 
 
+def run_device_perf_detailed2(
+    command, subdir, cols, op_name1="", op_name2="", has_signposts=False, warmup_iters=0, device_analysis_types=None
+):
+    duration_cols = [col + " DURATION [ns]" for col in cols]
+
+    clear_profiler_runtime_artifacts()
+
+    results = {}
+    for d_col in duration_cols:
+        results[f"AVG {d_col}"] = 0
+        results[f"MIN {d_col}"] = float("inf")
+        results[f"MAX {d_col}"] = -float("inf")
+        results[f"STD {d_col}"] = 0
+
+    if device_analysis_types is None:
+        device_analysis_types = ["device_kernel_duration"]
+
+    run_device_profiler(command, subdir, device_analysis_types=device_analysis_types)
+    r = post_process_ops_log_detailed(
+        subdir, duration_cols, op_name=op_name1, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
+    )
+
+    logger.info(f"run_device_perf_detailed2 -> {r}")
+    for d_col in duration_cols:
+        results[f"AVG {d_col}"] = r[f"AVG {d_col}"]
+        results[f"MIN {d_col}"] = r[f"MIN {d_col}"]
+        results[f"MAX {d_col}"] = r[f"MAX {d_col}"]
+        results[f"STD {d_col}"] = r[f"STD {d_col}"]
+
+    post_processed_results1 = defaultdict(dict)
+    for col, d_col in zip(cols, duration_cols):
+        post_processed_results1[col]["AVG"] = results[f"AVG {d_col}"]
+        post_processed_results1[col]["MIN"] = results[f"MIN {d_col}"]
+        post_processed_results1[col]["MAX"] = results[f"MAX {d_col}"]
+        post_processed_results1[col]["STD"] = results[f"STD {d_col}"]
+
+    r2 = post_process_ops_log_detailed(
+        subdir, duration_cols, op_name=op_name2, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
+    )
+    for d_col in duration_cols:
+        results[f"AVG {d_col}"] = r2[f"AVG {d_col}"]
+        results[f"MIN {d_col}"] = r2[f"MIN {d_col}"]
+        results[f"MAX {d_col}"] = r2[f"MAX {d_col}"]
+        results[f"STD {d_col}"] = r2[f"STD {d_col}"]
+    post_processed_results2 = defaultdict(dict)
+    for col, d_col in zip(cols, duration_cols):
+        post_processed_results2[col]["AVG"] = r2[f"AVG {d_col}"]
+        post_processed_results2[col]["MIN"] = r2[f"MIN {d_col}"]
+        post_processed_results2[col]["MAX"] = r2[f"MAX {d_col}"]
+        post_processed_results2[col]["STD"] = r2[f"STD {d_col}"]
+
+    logger.info(
+        f"\nTest: {command}\nPerformance statistics for op: {op_name}\n{json.dumps(post_processed_results1, indent=4)}\n{json.dumps(post_processed_results2, indent=4)} "
+    )
+    return post_processed_results1, post_processed_results2
+
+
 def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=False):
     expected_results = {}
     failed = False

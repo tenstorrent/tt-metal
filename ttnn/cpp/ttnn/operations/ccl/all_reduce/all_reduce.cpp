@@ -41,6 +41,7 @@ ttnn::Tensor ExecuteAllReduce::invoke(
     tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
+    log_info(tt::LogOp, "Executing AllReduce operation using topology: {}", topology_);
     // Call the experimental all_reduce_async with Sum operation
     return ::ttnn::experimental::all_reduce_async(
         input_tensor,

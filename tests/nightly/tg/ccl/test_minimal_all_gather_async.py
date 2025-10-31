@@ -92,9 +92,9 @@ def test_all_gather_async(
         cluster_axis = 0
     submesh_shape = (1, num_devices)
     cluster_axis = 1
-    if (num_devices == 4):
+    if num_devices == 4:
         submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape), ttnn.MeshCoordinate(0, 2))
-    elif (num_devices == 8):
+    elif num_devices == 8:
         submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
     ttnn.visualize_mesh_device(submesh_device)
 
@@ -453,11 +453,14 @@ def test_all_gather_async_quad_host_mesh(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-# [1, 1, 8192, 8192]
-# [1, 1, 8192, 8192]
-# [1, 1, 8192, 1024]
-# [1, 8, 8192, 64]
-# [1, 64, 8192, 64]
+# AllGather	1	Linear	bfloat16	2	[1, 1, 1024, 8192]	[1, 1, 8192, 8192]	DRAM / DRAM	8
+# AllGather	1	Linear	bfloat16	3	[1, 1, 8192, 1024]	[1, 1, 8192, 8192]	DRAM / DRAM	8
+# AllGather	1	Linear	bfloat16	3	[1, 1, 8192, 128]	[1, 1, 8192, 1024]	DRAM / DRAM	8
+# AllGather	1	Linear	bfloat16	1	[1, 1, 8192, 64]	[1, 8, 8192, 64]	DRAM / DRAM	8
+# AllGather	1	Linear	bfloat16	1	[1, 8, 8192, 64]	[1, 64, 8192, 64]	DRAM / DRAM	8
+# AllGather	1	Linear	bfloat16	3	[1, 1, 8191, 4000]	[1, 1, 8191, 32000]	DRAM / DRAM	8
+
+
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
 @pytest.mark.parametrize(
@@ -471,12 +474,12 @@ def test_all_gather_async_quad_host_mesh(
         (8, [1, 1, 8191, 32000], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
-        "mux_1",
-        "mux_2",
-        "mux_3",
-        "mux_4",
-        "mux_5",
-        "mux_6",
+        "llama_1",
+        "llama_2",
+        "llama_3",
+        "llama_4",
+        "llama_5",
+        "llama_6",
     ],
 )
 @pytest.mark.parametrize(
@@ -510,8 +513,8 @@ def test_all_gather_async_quad_host_mesh(
     ],
 )
 @pytest.mark.parametrize("num_workers_per_link", [1, 2, 4], ids=["1worker", "2worker", "4worker"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
-def test_all_gather_async_mux(
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_all_gather_llama(
     mesh_device,
     num_devices,
     ag_output_shape,
@@ -526,10 +529,13 @@ def test_all_gather_async_mux(
     num_iters,
     num_workers_per_link,
 ):
+    submesh_shape = (1, 8)
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
     ttnn.visualize_mesh_device(mesh_device)
+    ttnn.visualize_mesh_device(submesh_device)
 
     run_all_gather_impl(
-        mesh_device,
+        submesh_device,
         num_devices,
         ag_output_shape,
         dim,
@@ -541,7 +547,7 @@ def test_all_gather_async_mux(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=1,
+        cluster_axis=None,
         use_barrier=True,
         use_persistent_buffers=True,
         chunks_per_sync=None,
@@ -549,4 +555,4 @@ def test_all_gather_async_mux(
         num_buffers_per_channel=None,
         skip_check=False,
     )
-    ttnn.ReadDeviceProfiler(mesh_device)
+    ttnn.ReadDeviceProfiler(submesh_device)

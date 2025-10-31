@@ -118,3 +118,79 @@ def test_send_recv(
         dtype,
         layout,
     )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "per_chip_shape",
+    [
+        ([1, 1, 32, 4096]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize(
+    "socket_storage_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize(
+    "socket_fifo_size",
+    [
+        10 * 1024,
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC, "trace_region_size": 90112},
+    ],
+    indirect=["device_params"],
+    ids=[
+        "2D_Linear",
+    ],
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_send_recv_llama(
+    mesh_device,
+    per_chip_shape,
+    layout,
+    mem_config,
+    dtype,
+    socket_storage_type,
+    socket_fifo_size,
+):
+    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 4), ttnn.MeshCoordinate(0, 0))
+    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(2, 4), ttnn.MeshCoordinate(2, 4))
+
+    # sender_mesh_device.reshape(ttnn.MeshShape(1, 8))
+    # receiver_mesh_device.reshape(ttnn.MeshShape(1, 8))
+    ttnn.visualize_mesh_device(sender_mesh_device)
+    ttnn.visualize_mesh_device(receiver_mesh_device)
+    run_send_recv_test(
+        sender_mesh_device,
+        receiver_mesh_device,
+        socket_storage_type,
+        socket_fifo_size,
+        per_chip_shape,
+        mem_config,
+        dtype,
+        layout,
+    )
