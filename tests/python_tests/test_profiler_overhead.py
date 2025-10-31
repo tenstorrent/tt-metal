@@ -28,22 +28,21 @@ def test_profiler_overhead():
     runtime = Profiler.get_data(test_config["testname"])
 
     # filter out all zones that don't have marker "OVERHEAD"
-    overhead_zones = [x for x in runtime.unpack if x.full_marker.marker == "OVERHEAD"]
+
+    overhead_zones = runtime.zones().marker("OVERHEAD").frame()
     assert (
         len(overhead_zones) == 32
     ), f"Expected 32 overhead zones, got {len(overhead_zones)}"
 
     # the first iteration is inconsistent, because code is not in icache
-    overhead_zones.pop(0)
+    overhead_zones = overhead_zones.iloc[1:].reset_index(drop=True)
 
-    for i, zone in enumerate(
-        overhead_zones, 9
-    ):  # enumerate from 9 because the first iteration is ignored
-        calculated_duration = 10 * i
-        overhead = zone.duration - calculated_duration
+    expected_overhead = get_expected_overhead()
+    for i, zone in overhead_zones.iterrows():
+        calculated_duration = 10 * (i + 9)
+        overhead = zone["duration"] - calculated_duration
 
-        expected_overhead = get_expected_overhead()
         assert overhead == pytest.approx(expected_overhead, abs=5), (
-            f"iterations: {i}, runtime: {zone.duration}/{i * 10} "
+            f"iterations: {i}, runtime: {zone['duration']}/{calculated_duration} "
             f"(actual/calculated), overhead {overhead}/{expected_overhead} (actual/expected)"
         )

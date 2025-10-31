@@ -1,15 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
-import csv
 import os
 import shutil
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from statistics import mean, stdev
-from typing import List
+from typing import Any
 
+import pandas as pd
 import plotly.graph_objects as go
 import pytest
 from helpers.device import (
@@ -18,94 +17,8 @@ from helpers.device import (
     run_elf_files,
     wait_for_tensix_operations_finished,
 )
-from helpers.profiler import Profiler
+from helpers.profiler import Profiler, ProfilerData
 from helpers.test_config import ProfilerBuild, build_test
-
-
-@dataclass
-class PerfZone:
-    start: int
-    end: int
-    duration: int
-
-
-@dataclass
-class PerfThreadData:
-    init: PerfZone
-    tile_loop: PerfZone
-    kernel: PerfZone
-
-
-@dataclass
-class PerfData:
-    unpack: PerfThreadData
-    math: PerfThreadData
-    pack: PerfThreadData
-
-
-def _parse_thread(thread_data) -> PerfThreadData:
-    zones = {}
-    markers = {"kernel", "init", "tile_loop"}
-
-    for entry in thread_data:
-        marker = entry.full_marker.marker.lower()
-        if marker in markers:
-            zones[marker] = PerfZone(
-                start=entry.start, end=entry.end, duration=entry.duration
-            )
-
-    if len(zones) < len(markers):
-        missing = markers - zones.keys()
-        raise AssertionError(
-            f"Missing zones after perf run: {', '.join(sorted(missing))}"
-        )
-
-    return PerfThreadData(**zones)
-
-
-def process_profiler_data(profiler_data) -> PerfData:
-    return PerfData(
-        unpack=_parse_thread(profiler_data.unpack),
-        math=_parse_thread(profiler_data.math),
-        pack=_parse_thread(profiler_data.pack),
-    )
-
-
-def timing_l1_to_l1(perf_data: PerfData) -> int:
-    """Time to perform the whole operation (compute)"""
-    return (perf_data.pack.tile_loop.end - perf_data.unpack.tile_loop.start,)
-
-
-def timing_unpack(perf_data: PerfData) -> int:
-    return (perf_data.unpack.tile_loop.duration,)
-
-
-def timing_math(perf_data: PerfData) -> int:
-    return (perf_data.math.tile_loop.duration,)
-
-
-def timing_pack(perf_data: PerfData) -> int:
-    return (perf_data.pack.tile_loop.duration,)
-
-
-def timing_l1_congestion(perf_data: PerfData) -> int:
-    return (
-        perf_data.unpack.tile_loop.duration,
-        perf_data.pack.tile_loop.duration,
-    )
-
-
-def process_runs(runs, test_config):
-    loop_factor = test_config.get("loop_factor", 1)
-    tile_cnt = test_config.get("tile_cnt", 1)
-
-    return tuple(
-        {
-            "mean": mean(column) / loop_factor / tile_cnt,
-            "stddev": stdev(column) / loop_factor / tile_cnt,
-        }
-        for column in zip(*runs)
-    )
 
 
 class PerfRunType(Enum):
@@ -119,26 +32,122 @@ class PerfRunType(Enum):
 ALL_RUN_TYPES = [type for type in PerfRunType]
 
 
+def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
+
+    # dont aggregate marker column
+    timings = perf_data.columns.drop("marker")
+    result = perf_data.groupby("marker", as_index=False)[timings].agg(["mean", "std"])
+
+    columns = ["marker"]
+    columns += [f"{stat}({col})" for col in timings for stat in ["mean", "std"]]
+
+    result.columns = columns
+    return result
+
+
+def _stats_l1_to_l1(data: ProfilerData) -> pd.Series:
+    groups = data.zones().raw().groupby(["marker"])
+
+    timings = []
+    for (marker,), group in groups:
+
+        unpack_start = group[
+            (group["thread"] == "UNPACK") & (group["type"] == "ZONE_START")
+        ].reset_index(drop=True)
+
+        pack_end = group[
+            (group["thread"] == "PACK") & (group["type"] == "ZONE_END")
+        ].reset_index(drop=True)
+
+        if len(unpack_start) == 0 or len(pack_end) == 0:
+            raise ValueError(
+                "Zone must be captured on both unpack and pack for L1_TO_L1 to work properly"
+            )
+
+        if len(unpack_start) != len(pack_end):
+            raise ValueError(
+                f"Unpack and pack must be paired properly for L1_TO_L1 to work properly"
+            )
+
+        durations = pack_end["timestamp"] - unpack_start["timestamp"]
+
+        marker_timings = pd.DataFrame(
+            {
+                "marker": marker,
+                PerfRunType.L1_TO_L1.name: durations,
+            }
+        )
+        timings.append(marker_timings)
+
+    return _stats_timings(pd.concat(timings, ignore_index=True))
+
+
+def _stats_thread(stat: str, raw_thread: pd.DataFrame) -> pd.DataFrame:
+    start_entries = raw_thread[(raw_thread["type"] == "ZONE_START")].reset_index(
+        drop=True
+    )
+
+    end_entries = raw_thread[(raw_thread["type"] == "ZONE_END")].reset_index(drop=True)
+
+    if len(start_entries) != len(end_entries):
+        raise ValueError(
+            f"Mismatched start/end zones: {len(start_entries)} != {len(end_entries)}"
+        )
+
+    timings = pd.DataFrame(
+        {
+            "marker": start_entries["marker"],
+            stat: end_entries["timestamp"] - start_entries["timestamp"],
+        }
+    )
+
+    return _stats_timings(timings)
+
+
+def _stats_unpack_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.UNPACK_ISOLATE.name, data.unpack().raw())
+
+
+def _stats_math_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.MATH_ISOLATE.name, data.math().raw())
+
+
+def _stats_pack_isolate(data: ProfilerData) -> pd.DataFrame:
+    return _stats_thread(PerfRunType.PACK_ISOLATE.name, data.pack().raw())
+
+
+def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
+    stats = [
+        _stats_thread(
+            f"{PerfRunType.UNPACK_ISOLATE.name}[UNPACK]", data.unpack().raw()
+        ),
+        _stats_thread(f"{PerfRunType.PACK_ISOLATE.name}[PACK]", data.pack().raw()),
+    ]
+
+    return pd.concat(stats, ignore_index=True)
+
+
 def perf_benchmark(
     test_config, run_types: list[PerfRunType], run_count=2, boot_mode=BootMode.DEFAULT
 ):  # global override boot mode for perf tests here
 
-    RUN_CONFIGURATIONS = {
-        PerfRunType.L1_TO_L1: timing_l1_to_l1,
-        PerfRunType.UNPACK_ISOLATE: timing_unpack,
-        PerfRunType.MATH_ISOLATE: timing_math,
-        PerfRunType.PACK_ISOLATE: timing_pack,
-        PerfRunType.L1_CONGESTION: timing_l1_congestion,
+    STATS_FUNCTION = {
+        PerfRunType.L1_TO_L1: _stats_l1_to_l1,
+        PerfRunType.UNPACK_ISOLATE: _stats_unpack_isolate,
+        PerfRunType.MATH_ISOLATE: _stats_math_isolate,
+        PerfRunType.PACK_ISOLATE: _stats_pack_isolate,
+        PerfRunType.L1_CONGESTION: _stats_l1_congestion,
     }
-    SUPPORTED_RUNS = RUN_CONFIGURATIONS.keys()
+    SUPPORTED_RUNS = STATS_FUNCTION.keys()
 
-    results = {}
+    results = []
 
-    for type in run_types:
-        assert type in SUPPORTED_RUNS, f"ERROR: run_type={type} not implemented"
-        get_timing = RUN_CONFIGURATIONS[type]
+    for run_type in run_types:
+        assert run_type in SUPPORTED_RUNS, f"ERROR: run_type={run_type} not implemented"
 
-        test_config["perf_run_type"] = type
+        get_stats = STATS_FUNCTION[run_type]
+
+        test_config["perf_run_type"] = run_type
         build_test(test_config, boot_mode, ProfilerBuild.Yes)
 
         runs = []
@@ -148,21 +157,64 @@ def perf_benchmark(
             wait_for_tensix_operations_finished()
 
             profiler_data = Profiler.get_data(test_config["testname"])
-            perf_data = process_profiler_data(profiler_data)
 
-            runs.append(get_timing(perf_data))
+            runs.append(profiler_data)
 
-        results[type] = process_runs(runs, test_config)
+        results.append(get_stats(ProfilerData.concat(runs)))
 
-    return results
+    results = pd.concat(results, ignore_index=True)
+
+    # combine all run types into a single row in the dataframe
+    report = results.groupby("marker").first().reset_index()
+
+    return report
 
 
-@dataclass
 class PerfReport:
-    sweep_names: List[str] = field(default_factory=list)
-    stat_names: List[str] = field(default_factory=list)
-    sweep_values: List[List] = field(default_factory=list)
-    stat_values: List[List] = field(default_factory=list)
+    """
+    Lazy evaluation container for performance benchmark data.
+
+    Allows for lazy evaluated query and append operation to the report.
+
+    """
+
+    def __init__(
+        self,
+        frames: list[pd.DataFrame] | None = None,
+        masks: list[pd.Series] | None = None,
+    ):
+        self._frames = frames or [pd.DataFrame()]
+        self._masks = masks or [pd.Series()]
+
+    def append(self, frame: pd.DataFrame) -> None:
+        self._frames.append(frame)
+        self._masks.append(pd.Series(True, index=frame.index))
+
+    def frame(self) -> pd.DataFrame:
+        # merge
+        frame = pd.concat(self._frames, ignore_index=True)
+        mask = pd.concat(self._masks, ignore_index=True)
+
+        # apply masks
+        frame = frame[mask]
+
+        # save
+        self._frames = [frame]
+        self._masks = [pd.Series(True, index=frame.index)]
+
+        return frame
+
+    def filter(self, column: str, value: Any) -> "PerfReport":
+        """Filter: Generic column filter"""
+        mask_chain = [
+            mask & (frame[column] == value)
+            for frame, mask in zip(self._frames, self._masks)
+        ]
+        return PerfReport(frames=self._frames, masks=mask_chain)
+
+    def marker(self, marker: str) -> "PerfReport":
+        """Filter: Marker"""
+        return self.filter("marker", marker)
 
 
 @pytest.fixture(scope="module")
@@ -178,7 +230,6 @@ def perf_report(request):
         print("Perf: Unexpected error, Saving report anyway", e)
 
     dump_report(test_module, report)
-    dump_scatter(test_module, report)
 
 
 def _dataclass_names(parent, obj):
@@ -202,57 +253,40 @@ def _get_sweep_names(params):
     return names
 
 
-def _get_stat_names(result):
-    """Version with pre-allocation."""
+def _get_sweep_values(params):
+    return [
+        value
+        for param in params.values()
+        for value in (_dataclass_values(param) if is_dataclass(param) else [param])
+    ]
 
-    # Pre-calculate total size needed
-    total_stats = sum(len(stats) for stats in result.values())
-    names = [None] * (total_stats * 2)  # Pre-allocate exact size
 
-    column = 0
-    for run_type, stats in result.items():
-        stats_count = len(stats)
-        for idx in range(stats_count):
-            idx_str = f"[{idx}]" if len(stats) > 1 else ""
-            names[column] = f"mean({run_type.name}{idx_str})"
-            names[column + 1] = f"stddev({run_type.name}{idx_str})"
-            column += 2
+def _get_sweep(params):
+    """Returns a DataFrame containing the sweep values for the given parameters"""
 
-    return names
+    names = _get_sweep_names(params)
+    values = _get_sweep_values(params)
+
+    return pd.DataFrame([values], columns=names)
 
 
 def update_report(report: PerfReport, test_config, results):
+    # TODO: make this more robust, handle nested dataclasses, etc.
 
     exclude = {
         "testname",
         "perf_run_type",
-        "loop_factor",  # used to minimize the effect of profiler overhead for short loops
     }
 
     params = {
         param: value for param, value in test_config.items() if param not in exclude
     }
 
-    if not report.sweep_names:
-        report.sweep_names = _get_sweep_names(params)
+    sweep = _get_sweep(params)
 
-    if not report.stat_names:
-        report.stat_names = _get_stat_names(results)
+    combined = sweep.merge(results, how="cross")
 
-    sweep = []
-    for param in params.values():
-        if is_dataclass(param):
-            sweep.extend(_dataclass_values(param))
-        else:
-            sweep.append(param)
-    report.sweep_values.append(sweep)
-
-    stat_values = []
-    for stats in results.values():
-        for stat in stats:
-            stat_values.append(stat["mean"])
-            stat_values.append(stat["stddev"])
-    report.stat_values.append(stat_values)
+    report.append(combined)
 
 
 def delete_benchmark_dir(testname: str):
@@ -278,9 +312,6 @@ def create_benchmark_dir(testname: str):
 
 
 def dump_report(testname: str, report: PerfReport):
-    if len(report.sweep_values) != len(report.stat_values):
-        raise ValueError("Mismatch between sweep_values and stat_values lengths")
-
     root = os.environ.get("LLK_HOME")
     if not root:
         raise AssertionError("Environment variable LLK_HOME is not set")
@@ -288,17 +319,7 @@ def dump_report(testname: str, report: PerfReport):
     benchmark_dir = create_benchmark_dir(testname)
     output_path = benchmark_dir / f"{testname}.csv"
 
-    header_row = report.sweep_names + report.stat_names
-    data_rows = [
-        sweep_vals + stat_vals
-        for sweep_vals, stat_vals in zip(report.sweep_values, report.stat_values)
-    ]
-
-    # Write to CSV
-    with open(output_path, "a", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(header_row)
-        writer.writerows(data_rows)
+    report.frame().to_csv(output_path, index=False)
 
 
 def dump_scatter(testname: str, report: PerfReport):

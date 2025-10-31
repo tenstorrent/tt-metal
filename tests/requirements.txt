@@ -14,6 +14,7 @@ narwhals==1.46.0
 networkx==3.4.2
 numpy==2.2.6
 packaging==25.0
+pandas==2.3.2
 plotly==6.3.0
 pluggy==1.6.0
 pre-commit==4.3.0
