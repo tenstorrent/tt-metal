@@ -27,32 +27,6 @@ const std::unique_ptr<tt::umd::Cluster> PhysicalSystemDescriptor::null_cluster =
 
 namespace {
 
-// This reimplements tt::Cluster::get_bus_id() and should be moved to tt::umd::Cluster
-inline uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip) {
-    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto cluster_desc = cluster->get_cluster_description();
-    uint16_t bus_id = cluster_desc->get_bus_id(chip);
-
-    return bus_id;
-}
-
-// This reimplements tt::Cluster::get_arch() and should be moved to tt::umd::Cluster
-tt::ARCH get_arch(const std::unique_ptr<tt::umd::ClusterDescriptor>& cluster_descriptor) {
-    // Pick a chip and query its architecture
-    const std::unordered_set<ChipId>& chips = cluster_descriptor->get_all_chips();
-    TT_FATAL(!chips.empty(), "Unable to determine architecture because UMD driver detected no chips.");
-    tt::ARCH arch = cluster_descriptor->get_arch(*chips.begin());
-    TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
-
-    // We don't yet support mixed architecture clusters. Check that all chips are the same architecture.
-    bool all_same_arch = std::all_of(
-        chips.begin(), chips.end(), [&](ChipId chip_id) { return cluster_descriptor->get_arch(chip_id) == arch; });
-
-    TT_FATAL(all_same_arch, "Chips with differing architectures detected. This is unsupported.");
-
-    return arch;
-}
-
 std::string get_host_name() {
     char hostname[HOST_NAME_MAX + 1];
     gethostname(hostname, sizeof(hostname));
@@ -85,7 +59,7 @@ TrayID get_tray_id_for_chip(
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = get_bus_id(cluster, chip_id);
+    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
@@ -101,7 +75,7 @@ std::pair<TrayID, ASICLocation> get_asic_position(
 
         TT_FATAL(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
-        auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
+        auto ubb_id = tt::tt_fabric::get_ubb_id(cluster, chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
@@ -279,7 +253,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] =
-            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, target_device_type_ != TargetDevice::Silicon);
+            get_asic_position(cluster_, cluster_desc_->get_arch(), src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
