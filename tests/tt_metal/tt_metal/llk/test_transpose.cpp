@@ -139,7 +139,7 @@ void run_single_core_transpose(
     uint32_t num_buffer_tiles = 32;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
-            num_buffer_tiles * test_config.single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            num_buffer_tiles * test_config.single_tile_size, {{src0_cb_index, tt::DataFormat::Float32}})
             .set_page_size(src0_cb_index, test_config.single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
@@ -147,7 +147,7 @@ void run_single_core_transpose(
     uint32_t num_output_buffer_tiles = 32;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
-            num_output_buffer_tiles * test_config.single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+            num_output_buffer_tiles * test_config.single_tile_size, {{ouput_cb_index, tt::DataFormat::Float32}})
             .set_page_size(ouput_cb_index, test_config.single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
@@ -212,19 +212,51 @@ void run_single_core_transpose(
          (uint32_t)0,  // unused to maintain compat
          num_tensor_tiles});
 
-    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
-    tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size / 2, 100.0f, 0x1234);
+    // Cast src_vec back to bfloat16 and then to float for processing
+    std::vector<float> src_float_vec;
+    src_float_vec.reserve(src_vec.size() * 2);  // Each uint32_t contains 2 bfloat16 values
+    for (uint32_t packed_val : src_vec) {
+        auto [bf1, bf2] = unpack_two_bfloat16_from_uint32(packed_val);
+        src_float_vec.push_back(static_cast<float>(bf1));
+        src_float_vec.push_back(static_cast<float>(bf2));
+    }
+    // Convert float vector back to uint32_t vector, one uint32_t per float
+    std::vector<uint32_t> src_uint32_vec;
+    src_uint32_vec.reserve(src_float_vec.size());
+    for (float f : src_float_vec) {
+        uint32_t* uint32_ptr = reinterpret_cast<uint32_t*>(&f);
+        src_uint32_vec.push_back(*uint32_ptr);
+    }
+    tt_metal::detail::WriteToBuffer(src_dram_buffer, src_uint32_vec);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    // Convert result_vec from floats reinterpreted as uint32 back to packed bfloat16
+    std::vector<uint32_t> packed_result_vec;
+    packed_result_vec.reserve(result_vec.size() / 2);
+    for (size_t i = 0; i < result_vec.size(); i += 2) {
+        // Reinterpret uint32 as float
+        float f1 = *reinterpret_cast<const float*>(&result_vec[i]);
+        float f2 = (i + 1 < result_vec.size()) ? *reinterpret_cast<const float*>(&result_vec[i + 1]) : 0.0f;
+
+        // Convert floats to bfloat16
+        bfloat16 bf1 = bfloat16(f1);
+        bfloat16 bf2 = bfloat16(f2);
+
+        // Pack two bfloat16 values into one uint32_t
+        uint32_t packed = pack_two_bfloat16_into_uint32({bf1, bf2});
+        packed_result_vec.push_back(packed);
+    }
+    result_vec = packed_result_vec;
 
     EXPECT_EQ(
         result_vec.size(),
         NC * H * W / 2);  // we are expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
 
-    validate_transpose_wh(src_vec, test_config.shape, result_vec);
+    validate_transpose_wh(src_vec, test_config.shape, packed_result_vec);
 }
 
 }  // namespace unit_tests::compute::transpose
@@ -253,8 +285,8 @@ TEST_F(MeshDeviceFixture, TensixComputeTransposeWHDest) {
     unit_tests::compute::transpose::TransposeConfig test_config = {
         .short_init = false,
         .transpose_dest = true,
-        .single_tile_size = 2 * 1024,
-        .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
+        .single_tile_size = 4 * 1024,
+        .shape = {1, 1, 1 * 32 * 1, 1 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }

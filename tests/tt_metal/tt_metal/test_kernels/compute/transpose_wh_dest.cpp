@@ -13,7 +13,8 @@ void MAIN {
     uint32_t NHtWt = get_compile_time_arg_val(0);
 
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-
+    UNPACK((_llk_unpack_dbg_feature_disable_()));
+    UNPACK((cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1)));
     // transpose a row-major block:
     // - assumes the tiles come in in column major order from reader
     // - uses reader_unary_transpose_wh
@@ -26,8 +27,8 @@ void MAIN {
         copy_tile_init(tt::CBIndex::c_0);
         copy_tile(tt::CBIndex::c_0, 0, 0);
 
-        transpose_wh_dest_init_short();
-        transpose_wh_dest(0);
+        transpose_wh_dest_init_short<true>();
+        transpose_wh_dest<true>(0);
         tile_regs_commit();
 
         tile_regs_wait();
