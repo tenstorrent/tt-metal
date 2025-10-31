@@ -114,32 +114,34 @@ def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decode
 
 
 def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer):
-    """Test experts component - extracted from decoder layer"""
+    """Test experts component - extracted from decoder layer, matching HF signature."""
 
     # Create input
     hidden_states = torch.randn(hidden_shape)
-    seq_len = hidden_shape[1]
-    batch_size = hidden_shape[0]
-    # Choose routing based on seq_len (sparse for seq_len=1, dense for seq_len>1)
-    if seq_len == 1:
-        # Sparse routing
-        import itertools
+    batch_size, seq_len, hidden_dim = hidden_states.shape
+    num_tokens = batch_size * seq_len
+    num_experts = getattr(config, "num_local_experts")
+    top_k = min(getattr(config, "num_experts_per_tok", 2), num_experts)
 
-        routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+    # Build per-token top-k routing: indices and weights
+    top_k_index = torch.empty(num_tokens, top_k, dtype=torch.long)
+    top_k_weights = torch.empty(num_tokens, top_k)
+    routing_weights = torch.zeros(num_tokens, num_experts)
+    for t in range(num_tokens):
+        idx = torch.randperm(num_experts)[:top_k]
+        w = torch.rand(top_k)
+        w = w / w.sum()
+        top_k_index[t] = idx
+        top_k_weights[t] = w
+        routing_weights[t, idx] = w
 
-        for b, s in itertools.product(range(batch_size), range(seq_len)):
-            active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
-            weights = torch.rand(config.num_experts_per_tok)
-            weights = weights / weights.sum()  # Normalize
-            routing_weights[b * seq_len + s, active_experts] = weights
-    else:
-        # Dense routing
-        routing_weights = torch.ones(hidden_states.shape[-2], config.num_local_experts) / config.num_local_experts
-    # Extract reference experts from reference layer
-    reference_experts = reference_layer.mlp.experts.eval()  # Set to eval mode for inference
-    reference_output = reference_experts(hidden_states, routing_weights=routing_weights)
+    # Reference experts call expects flattened tokens
+    reference_experts = reference_layer.mlp.experts.eval()
+    hidden_states_flat = hidden_states.view(num_tokens, hidden_dim)
+    reference_output_flat = reference_experts(hidden_states_flat, top_k_index, top_k_weights)
+    reference_output = reference_output_flat.view(batch_size, seq_len, hidden_dim)
 
-    # Convert to TTNN tensors
+    # TT Experts expect full distribution over experts per token
     tt_hidden_states = ttnn.from_torch(
         hidden_states,
         device=mesh_device,
@@ -155,10 +157,9 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
 
-    # Extract TT experts from decoder layer
     tt_experts = decoder_layer.mlp.experts
     tt_output = tt_experts(tt_hidden_states, tt_routing_weights)
-    # Compare outputs
+
     passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.93)
     assert passing, f"Experts test failed. Output: {output}"
 
@@ -195,7 +196,8 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     ]
 )
 @pytest.mark.parametrize("mesh_shape", [(1, 4)])
-def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
+@pytest.mark.parametrize("layer_idx", [1], ids=["moe_layer_1"])  # ensure we hit an MoE layer for experts
+def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, layer_idx, reset_seeds):
     """Test complete decoder layer - combines attention + MLP + norms"""
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
@@ -208,7 +210,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     # Create reference model
     from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeDecoderLayer
 
-    reference_layer = Glm4MoeDecoderLayer(config, layer_idx=0)
+    reference_layer = Glm4MoeDecoderLayer(config, layer_idx=layer_idx)
 
     with torch.no_grad():
         for name, param in reference_layer.named_parameters():
@@ -228,7 +230,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         setup["mesh_device"],
         config,
         reference_state,
-        layer_idx=0,
+        layer_idx=layer_idx,
         ccl_manager=setup["ccl_manager"],
         dtype=setup["dtype"],
         tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
@@ -311,7 +313,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     if seq_len == 1 and hasattr(reference_layer.mlp, "router"):
         run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
-    # run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
+    # Test experts path when available (MoE layers)
+    if hasattr(reference_layer.mlp, "experts"):
+        run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
     run_attention_component(
         setup["mesh_device"],
         hidden_states.shape,
