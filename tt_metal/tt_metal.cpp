@@ -47,7 +47,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
-#include "semaphore.hpp"
+#include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
@@ -358,8 +358,8 @@ std::string get_platform_architecture_name() {
     return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
 }
 
-std::map<chip_id_t, IDevice*> CreateDevices(
-    const std::vector<chip_id_t>& device_ids,
+std::map<ChipId, IDevice*> CreateDevices(
+    const std::vector<ChipId>& device_ids,
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
@@ -386,7 +386,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
         initialize_fabric_and_dispatch_fw);
 
     const auto devices = tt::DevicePool::instance().get_all_active_devices();
-    std::map<chip_id_t, IDevice*> ret_devices;
+    std::map<ChipId, IDevice*> ret_devices;
     // Only include the mmio device in the active devices set returned to the caller if we are not running
     // on a Galaxy cluster.
     // On Galaxy, gateway (mmio devices) cannot run compute workloads.
@@ -401,7 +401,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     return ret_devices;
 }
 
-void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
+void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
     for (auto& [id, device] : devices) {
@@ -923,7 +923,7 @@ bool IsGalaxyCluster() { return tt::tt_metal::MetalContext::instance().get_clust
 
 size_t GetNumPCIeDevices() { return tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices(); }
 
-chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
+ChipId GetPCIeDeviceID(ChipId device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
@@ -938,7 +938,7 @@ std::string SerializeClusterDescriptor() {
 void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
 
 IDevice* CreateDevice(
-    chip_id_t device_id,
+    ChipId device_id,
     const uint8_t num_hw_cqs,
     const size_t l1_small_size,
     const size_t trace_region_size,
@@ -973,7 +973,7 @@ IDevice* CreateDevice(
 }
 
 IDevice* CreateDeviceMinimal(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
+    ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
     tt::tt_metal::MetalContext::instance().initialize(
         dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
@@ -1199,6 +1199,9 @@ uint32_t CreateSemaphore(
         core_spec);
     std::optional<uint32_t> semaphore_id;
     TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().is_coord_in_range((crs.ranges().back()).end_coord, core_type),
+        "Coordinates out of range");
     for (const auto& core_range : crs.ranges()) {
         std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
         if (!semaphore_id.has_value()) {
@@ -1276,7 +1279,6 @@ void SetRuntimeArgs(
     stl::Span<const uint32_t> runtime_args) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
-    ZoneScoped;
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 

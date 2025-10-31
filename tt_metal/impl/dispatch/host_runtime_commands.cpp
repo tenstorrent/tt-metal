@@ -97,13 +97,12 @@ EnqueueProgramCommand::EnqueueProgramCommand(
     program_dispatch::ProgramDispatchMetadata& dispatch_md) :
     command_queue_id(command_queue_id),
     device(device),
-    noc_index(noc_index),
+    program(program),
     manager(manager),
     config_buffer_mgr(config_buffer_mgr),
+    dispatch_core(dispatch_core),
     dispatch_core_type(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
     expected_num_workers_completed(expected_num_workers_completed),
-    program(program),
-    dispatch_core(dispatch_core),
     packed_write_max_unicast_sub_cmds(get_packed_write_max_unicast_sub_cmds(this->device)),
     multicast_cores_launch_message_wptr(multicast_cores_launch_message_wptr),
     unicast_cores_launch_message_wptr(unicast_cores_launch_message_wptr),
@@ -159,7 +158,7 @@ void EnqueueProgramCommand::process() {
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
     uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
-    command_queue_id(command_queue_id), device(device), manager(manager) {}
+    command_queue_id(command_queue_id), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {
     // CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_TERMINATE

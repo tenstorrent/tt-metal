@@ -133,6 +133,9 @@ void AllGatherAsync::validate_with_output_tensors(
                 input_tensor.memory_config().buffer_type() == BufferType::L1,
                 "We don't support input DRAM block sharding");
         }
+        TT_FATAL(input_tensor.logical_shape().rank() >= 2, "AllGatherAsync requires tensor of rank 2 or greater");
+    } else {
+        TT_FATAL(input_tensor.logical_shape().rank() == 4, "Llama specific all_gather requires tensor of rank 4");
     }
 }
 
@@ -334,10 +337,6 @@ Tensor all_gather_async_impl(
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel,
     bool reverse_order) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "all_gather_async op is only supported for Fast Dispatch");
-
     TT_FATAL(input_tensor.device() != nullptr, "Mesh device is required");
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);

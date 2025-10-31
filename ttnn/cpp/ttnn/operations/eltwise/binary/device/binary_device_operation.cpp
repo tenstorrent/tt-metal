@@ -38,7 +38,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
-        case BinaryOpType::BIAS_GELU: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::HYPOT: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
         case BinaryOpType::RSUB:
         case BinaryOpType::GT:
         case BinaryOpType::LT:
@@ -55,7 +56,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND:
-            return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16) || (a == DataType::UINT32 && b == DataType::UINT32));
+            return (
+                (a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16) ||
+                (a == DataType::UINT32 && b == DataType::UINT32));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
         case BinaryOpType::XLOGY:
@@ -101,8 +104,8 @@ BinaryDeviceOperation::program_factory_t BinaryDeviceOperation::select_program_f
         if (height_b == 1) {
             if (tensor_args.input_tensor_a.is_sharded()) {
                 if (tensor_args.input_tensor_a.padded_shape()[0] == tensor_args.input_tensor_b->padded_shape()[0] ||
-                    tensor_args.input_tensor_a.padded_shape()[0] > 1 and
-                        tensor_args.input_tensor_b->padded_shape()[0] == 1) {
+                    (tensor_args.input_tensor_a.padded_shape()[0] > 1 &&
+                        tensor_args.input_tensor_b->padded_shape()[0] == 1)) {
                     return BroadcastHeightMultiCoreShardedOptimized{};
                 }
                 return BroadcastHeightMultiCoreSharded{};
@@ -157,30 +160,46 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
         if (tensor_b_sharded) {
             TT_FATAL(
                 input_tensor_a.memory_config().memory_layout() == input_tensor_b->memory_config().memory_layout(),
-                "Error");
-            TT_FATAL(input_tensor_a.shard_spec().value() == input_tensor_b->shard_spec().value(), "Error");
+                "Input tensor A and input tensor B must have the same memory layout");
+            TT_FATAL(
+                input_tensor_a.shard_spec().value() == input_tensor_b->shard_spec().value(),
+                "Input tensor A and input tensor B must have the same shard spec");
         }
         if (attributes.memory_config.is_sharded()) {
             TT_FATAL(
-                input_tensor_a.memory_config().memory_layout() == attributes.memory_config.memory_layout(), "Error");
+                input_tensor_a.memory_config().memory_layout() == attributes.memory_config.memory_layout(),
+                "Input tensor A and output tensor must have the same memory layout");
         } else {
-            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(
+                attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Output tensor must be interleaved");
         }
     } else if (tensor_b_sharded) {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input tensor A must be interleaved");
         if (attributes.memory_config.is_sharded()) {
             TT_FATAL(
-                input_tensor_b->memory_config().memory_layout() == attributes.memory_config.memory_layout(), "Error");
+                input_tensor_b->memory_config().memory_layout() == attributes.memory_config.memory_layout(),
+                "Input tensor B and output tensor must have the same memory layout");
         } else {
-            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(
+                attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Output tensor must be interleaved");
         }
     } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input tensor A must be interleaved");
         if (input_tensor_b.has_value()) {
-            TT_FATAL((input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED), "Error");
+            TT_FATAL(
+                input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Input tensor B must be interleaved");
         }
         if (!attributes.memory_config.is_sharded()) {
-            TT_FATAL(attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+            TT_FATAL(
+                attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+                "Output tensor must be interleaved");
         }
     }
 
@@ -188,7 +207,7 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
     std::visit(
         [&attributes](auto&& program_factory) {
             if constexpr (std::is_same_v<decltype(program_factory), ElementWiseMultiCore>) {
-                TT_FATAL(not attributes.activations.has_value(), "Error");
+                TT_FATAL(not attributes.activations.has_value(), "Activations are not supported for binary operations");
             }
         },
         program_factory);

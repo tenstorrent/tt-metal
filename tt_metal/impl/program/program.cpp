@@ -10,7 +10,7 @@
 #include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
 #include <persistent_kernel_cache.hpp>
-#include <semaphore.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
 #include <array>
@@ -66,7 +66,7 @@
 #include "tile.hpp"
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
@@ -76,6 +76,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
+#include "tt_stl/reflection.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -116,7 +117,7 @@ void validate_kernel_placement(IDevice* device, bool force_slow_dispatch, std::s
     bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    tt::CoreType dispatch_core_type = dispatch_core_config.get_core_type();
     const std::vector<CoreCoord>& storage_cores =
         MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
     bool on_storage_only_core =
@@ -176,7 +177,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint32_t build_key) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
@@ -213,12 +214,12 @@ void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
 detail::ProgramImpl::ProgramImpl() :
+    finalized_(false),
+    cached_device_hash_(std::nullopt),
     programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
     id(program_counter++),
     runtime_id(0),
-    local_circular_buffer_allocation_needed_(false),
-    finalized_(false),
-    cached_device_hash_(std::nullopt) {
+    local_circular_buffer_allocation_needed_(false) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
         grid_extent_.push_back({});
@@ -423,7 +424,7 @@ KernelGroup::KernelGroup(
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
     programmable_core_type_index(programmable_core_type_index),
-    core_ranges(CoreRangeSet()),
+
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
     go_msg(dev_msgs_factory.create<dev_msgs::go_msg_t>()) {
@@ -520,18 +521,12 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         const auto& handle_to_kernel = kernels_[programmable_core_type_index];
         for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
-                if (core.x > grid_extent_[programmable_core_type_index].x) {
-                    grid_extent_[programmable_core_type_index].x = core.x;
-                }
-                if (core.y > grid_extent_[programmable_core_type_index].y) {
-                    grid_extent_[programmable_core_type_index].y = core.y;
-                }
-                if (core.x < base.x) {
-                    base.x = core.x;
-                }
-                if (core.y < base.y) {
-                    base.y = core.y;
-                }
+                grid_extent_[programmable_core_type_index].x =
+                    std::max(core.x, grid_extent_[programmable_core_type_index].x);
+                grid_extent_[programmable_core_type_index].y =
+                    std::max(core.y, grid_extent_[programmable_core_type_index].y);
+                base.x = std::min(core.x, base.x);
+                base.y = std::min(core.y, base.y);
             }
         }
         grid_extent_[programmable_core_type_index].x++;
@@ -970,7 +965,7 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
         TT_FATAL(
             kernel_defines.find(str) == kernel_defines.end(), "{} is a reserved define and can't be manually set", str);
     }
-    std::string align_code = "";
+    std::string align_code;
     std::unordered_set<CBHandle> initialized_cbs;
     std::unordered_set<uint8_t> remote_cb_indices;
     for (auto logical_cr : kernel->logical_coreranges()) {
@@ -1301,7 +1296,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        ttsl::hash::hash_combine(device_hash, device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -1574,7 +1569,7 @@ std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaph
 bool detail::ProgramImpl::is_finalized() const { return this->finalized_; }
 void detail::ProgramImpl::set_finalized() { this->finalized_ = true; }
 
-void detail::ProgramImpl::set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status) {
+void detail::ProgramImpl::set_program_binary_status(ChipId device_id, ProgramBinaryStatus status) {
     Inspector::program_set_binary_status(this, device_id, status);
     this->binaries_on_device_[device_id] = status;
 }
