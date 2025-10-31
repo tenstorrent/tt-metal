@@ -85,6 +85,17 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_mean_idx, 1);
 
+        if (r == start_row) {
+            DPRINT << "READER: rstd tile all cols:" << ENDL();
+            DPRINT << "READER: rstd tile " << 0 << ":" << ENDL();
+            print_tile(cb_rstd_idx, 0, false);
+        }
+        if (r == start_row) {
+            DPRINT << "READER: mean tile all cols:" << ENDL();
+            DPRINT << "READER: mean tile " << 0 << ":" << ENDL();
+            print_tile(cb_mean_idx, 0, false);
+        }
+
 #ifdef EVERYTHING_FITS_IN_L1
         // If everything fits in L1, read all data for the row at once
         read_tiles(cb_input_idx, input_address_generator, r * Wt, Wt, tile_bytes);
@@ -98,6 +109,21 @@ void kernel_main() {
             read_tiles(cb_gamma_idx, gamma_address_generator, 0, Wt, tile_bytes);
             noc_async_read_barrier();
             cb_push_back(cb_gamma_idx, Wt);
+        }
+
+        if (r == start_row) {
+            DPRINT << "READER: input tile all cols:" << ENDL();
+            for (uint32_t c = 0; c < Wt; c += 1) {
+                DPRINT << "READER: input tile " << c << ":" << ENDL();
+                print_tile(cb_input_idx, c, false);
+            }
+        }
+        if (r == start_row) {
+            DPRINT << "READER: dL_out tile all cols:" << ENDL();
+            for (uint32_t c = 0; c < Wt; c += 1) {
+                DPRINT << "READER: dL_out tile " << c << ":" << ENDL();
+                print_tile(cb_dL_out_idx, c, false);
+            }
         }
 #else
         // If not everything fits in L1, we need to read data multiple times per row

@@ -74,7 +74,7 @@ inline void compute_x_hat_preprocessing(uint32_t num_tiles) {
 
             // Load input tile
             copy_tile_init(cb_input_idx);
-            copy_tile(cb_input_idx, tile_idx, x_hat_reg);
+            copy_tile(cb_input_idx, tile_idx + block_idx, x_hat_reg);
 
             // Load broadcasted mean
             copy_tile_init(cb_mean_bcast_idx);
@@ -495,21 +495,6 @@ inline void compute_dgamma_components(
     reconfig_data_format(cb_dL_out_idx, cb_x_hat_idx);
     mul_tiles_init(cb_dL_out_idx, cb_x_hat_idx);
     mul_tiles(cb_dL_out_idx, cb_x_hat_idx, input_tile_idx, input_tile_idx, dgamma_register);
-
-    // Mask dgamma_register if needed
-    if constexpr (do_mask_w) {
-        if (global_col + 1 == Wt) {
-            // Limitation: mask_tile only works when the mask register is immediately next to the data register.
-            const uint32_t mask_register = dgamma_register + 1U;
-
-            reconfig_data_format(cb_mask_w_idx, cb_mask_w_idx);
-            copy_tile_init(cb_mask_w_idx);
-            copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
-
-            mask_tile_init();
-            mask_tile(dgamma_register, mask_register);
-        }
-    }
 }
 
 // Computes dbeta_components = dy (simple copy)
@@ -520,21 +505,6 @@ inline void compute_dbeta_components(
     reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, dy_tile_idx, dbeta_register);
-
-    // Mask dbeta_register if needed
-    if constexpr (do_mask_w) {
-        if (global_col + 1 == Wt) {
-            // Limitation: mask_tile only works when the mask register is immediately next to the data register.
-            const uint32_t mask_register = dbeta_register + 1U;
-
-            reconfig_data_format(cb_mask_w_idx, cb_mask_w_idx);
-            copy_tile_init(cb_mask_w_idx);
-            copy_tile(cb_mask_w_idx, /* tile_idx */ 0, /* register idx */ mask_register);
-
-            mask_tile_init();
-            mask_tile(dbeta_register, mask_register);
-        }
-    }
 }
 
 inline void MAIN {

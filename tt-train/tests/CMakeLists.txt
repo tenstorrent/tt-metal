@@ -3,14 +3,20 @@ enable_testing()
 
 set(SOURCES
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 2db5011f3c (precision issue fixed, ready for review)
     core/tensor_utils_test.cpp
     core/n300_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
 <<<<<<< HEAD
+<<<<<<< HEAD
     core/random_tests.cpp
 =======
 >>>>>>> 4bcee3238c (cleaning)
+=======
+>>>>>>> 2db5011f3c (precision issue fixed, ready for review)
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
@@ -59,6 +65,7 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
     ops/layer_norm_op_fused_test.cpp
@@ -119,6 +126,11 @@ set(SOURCES
     ops/layer_norm_op_fused_test.cpp
     # padding_test_minimal.cpp
 >>>>>>> f0893d1f65 (layernorm fw + attempt to improve precision)
+=======
+    ops/layer_norm_op_fused_test.cpp
+    ops/layernorm_fw_op_test.cpp
+    padding_test_minimal.cpp
+>>>>>>> 2db5011f3c (precision issue fixed, ready for review)
 )
 
 add_executable(ttml_tests ${SOURCES})

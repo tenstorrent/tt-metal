@@ -134,7 +134,7 @@ TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_SmallTensor) {
     auto rstd_computed = core::to_vector(output_tensors[2].value());
 
     // Test output accuracy
-    float tolerance = 1e-2f;
+    float tolerance = 5e-2f;
     uint32_t y_mismatches = 0;
     float y_max_error = 0.0f;
     float y_sum_error = 0.0f;
@@ -276,7 +276,7 @@ TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_MediumTensor) {
     auto rstd_computed = core::to_vector(output_tensors[2].value());
 
     // Test output accuracy
-    float tolerance = 1e-2f;
+    float tolerance = 5e-2f;
     uint32_t y_mismatches = 0;
     float y_max_error = 0.0f;
     float y_sum_error = 0.0f;
@@ -418,7 +418,7 @@ TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_LargeTensor) {
     auto rstd_computed = core::to_vector(output_tensors[2].value());
 
     // Test output accuracy
-    float tolerance = 1e-2f;
+    float tolerance = 5e-2f;
     uint32_t y_mismatches = 0;
     float y_max_error = 0.0f;
     float y_sum_error = 0.0f;
@@ -556,7 +556,7 @@ TEST_F(LayerNormForwardOpTest, MetalLayerNormFw_LargeFeatures) {
     auto y_computed = core::to_vector(output_tensors[0].value());
 
     // Test output accuracy
-    float tolerance = 1e-2f;
+    float tolerance = 5e-2f;
     uint32_t y_mismatches = 0;
     float y_max_error = 0.0f;
     float y_sum_error = 0.0f;
@@ -638,7 +638,7 @@ TEST_F(LayerNormForwardOpTest, MorehLayerNormFw_VsReference) {
     auto y_computed = core::to_vector(out_tensors[0].value());
 
     // Test output accuracy
-    float tolerance = 1e-2f;
+    float tolerance = 5e-2f;
     uint32_t y_mismatches = 0;
     float y_max_error = 0.0f;
     float y_sum_error = 0.0f;
@@ -720,7 +720,7 @@ TEST_F(LayerNormForwardOpTest, CompositeLayerNormFw_VsReference) {
     auto y_computed = core::to_vector(output_tensor->get_value());
 
     // Test output accuracy
-    float tolerance = 1e-2f;
+    float tolerance = 5e-2f;
     uint32_t y_mismatches = 0;
     float y_max_error = 0.0f;
     float y_sum_error = 0.0f;

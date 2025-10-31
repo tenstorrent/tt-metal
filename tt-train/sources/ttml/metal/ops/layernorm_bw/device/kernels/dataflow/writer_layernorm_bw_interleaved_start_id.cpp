@@ -3,16 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
+#include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 // CBs with output data
 constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gradient)
 constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_11;     // dgamma components
 constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta components
 
+constexpr uint32_t cb_x_debug_idx = tt::CBIndex::c_19;  // debug x_hat (to avoid conflict with reader)
+
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
-constexpr uint32_t onetile = 1;
+// constexpr uint32_t onetile = 1;
 
 template <typename AddrGen>
 inline void write_cb_block_to_dram(
@@ -34,6 +38,7 @@ void kernel_main() {
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_bytes = get_tile_size(cb_dx_idx);
+    const uint32_t tile_bytes_dgamma = get_tile_size(cb_dgamma_components);
     constexpr auto dx_args = TensorAccessorArgs<2>();
     constexpr auto dgamma_args = TensorAccessorArgs<dx_args.next_compile_time_args_offset()>();
     constexpr auto dbeta_args = TensorAccessorArgs<dgamma_args.next_compile_time_args_offset()>();
@@ -50,6 +55,7 @@ void kernel_main() {
         // NOTE: The final dL_dgamma and dL_dbeta (gradients w.r.t. gamma and beta) require
         // reduction across batches, which is performed on the host. Here, we output the
         // per-tile components for host-side reduction.
+
         for (uint32_t c = 0; c < Wt; c += block_size) {
             // Calculate actual number of tiles in this block (handles last block when Wt % block_size != 0)
             const uint32_t current_block_size = (c + block_size > Wt) ? (Wt - c) : block_size;
@@ -60,12 +66,20 @@ void kernel_main() {
 
             // Write dgamma_components block
             write_cb_block_to_dram(
-                cb_dgamma_components, dgamma_output_addr_generator, start_idx, current_block_size, tile_bytes);
-
+                cb_dgamma_components, dgamma_output_addr_generator, start_idx, current_block_size, tile_bytes_dgamma);
             // Write dbeta_components block
+            DPRINT << "WRITER: dgamma_components block " << start_idx << ":" << ENDL();
+            cb_wait_front(cb_dgamma_components, block_size);
+            if (c == 0) {
+                DPRINT << "WRITER: dgamma_components block " << 1 << ":" << ENDL();
+                print_tile(cb_dgamma_components, 0, false);
+            }
             write_cb_block_to_dram(
-                cb_dbeta_components, dbeta_output_addr_generator, start_idx, current_block_size, tile_bytes);
+                cb_dbeta_components, dbeta_output_addr_generator, start_idx, current_block_size, tile_bytes_dgamma);
 
+            // DPRINT << "WRITER: Processing row printing cb_debug_idx " << r << ENDL();
+            // cb_wait_front(cb_x_debug_idx, 1);
+            // print_tile(cb_x_debug_idx, 0, false);
             noc_async_write_barrier();
 
             cb_pop_front(cb_dx_idx, current_block_size);

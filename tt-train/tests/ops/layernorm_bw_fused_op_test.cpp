@@ -69,7 +69,6 @@ std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> layernorm_ba
     // Reshape to (batch_size, features)
     auto dy_reshaped = xt::reshape_view(dy, {cache.batch_size, cache.features});
     auto x_hat_reshaped = xt::reshape_view(cache.x_hat, {cache.batch_size, cache.features});
-
     // Compute dgamma and dbeta - sum over batch dimension
     xt::xarray<float> dgamma = xt::sum(dy_reshaped * x_hat_reshaped, {0});
     xt::xarray<float> dbeta = xt::sum(dy_reshaped, {0});
@@ -345,6 +344,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_Two_Incomplete_Tiles) {
             core::from_vector(gamma_data, ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device());
 
         std::vector<float> mu_data(cache.mu.data(), cache.mu.data() + cache.mu.size());
+
         auto mean_tensor =
             core::from_vector(mu_data, ttnn::Shape({batch_size, heads, seq_len, 1}), &autograd::ctx().get_device());
 
@@ -352,6 +352,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_Two_Incomplete_Tiles) {
         for (uint32_t b = 0; b < combined_batch; ++b) {
             rstd_data.push_back(1.0f / cache.s.data()[b]);
         }
+
         auto rstd_tensor =
             core::from_vector(rstd_data, ttnn::Shape({batch_size, heads, seq_len, 1}), &autograd::ctx().get_device());
         auto dy_tensor = core::from_vector(
@@ -1744,4 +1745,55 @@ TEST_F(LayerNormFusedOpTest, MorehLayerNormBackward_AgainstXTensor_NotThatLargeF
     std::cout << "\n=== Test Summary ===" << std::endl;
     std::cout << "All gradients (dx, dgamma, dbeta) for moreh_layer_norm tested successfully against xarray reference!"
               << std::endl;
+}
+
+TEST_F(LayerNormFusedOpTest, LayerNormFwFitsL1) {
+    using namespace ttml;
+
+    uint32_t batch_size = 6;
+    uint32_t seq_len = 13;
+    uint32_t heads = 16;
+    uint32_t features = 333;
+
+    uint32_t size = batch_size * seq_len * heads;
+
+    std::vector<float> test_data;
+    test_data.reserve((size_t)batch_size * seq_len * heads * features);
+    for (uint32_t i = 0; i < batch_size * seq_len * heads; i++) {
+        float mean = (float)i / (float)size;
+        float stddev = 1.F + (float)i / (float)(size * 2);
+        std::mt19937 gen(i);
+        std::normal_distribution<float> dist(mean, stddev);
+        for (uint32_t j = 0; j < features; j++) {
+            test_data.push_back(dist(gen));
+        }
+    }
+
+    auto tensor = autograd::create_tensor(core::from_vector(
+        test_data, ttnn::Shape({batch_size, seq_len, heads, features}), &autograd::ctx().get_device()));
+
+    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
+    auto beta = autograd::create_tensor(core::zeros(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
+
+    auto result = ops::layernorm(tensor, gamma, beta);
+
+    auto result_tensor = result->get_value();
+    auto result_data = core::to_vector(result_tensor);
+    for (uint32_t i = 0; i < batch_size * seq_len * heads; i++) {
+        uint32_t idx = i * features;
+
+        float exp_mean = 0.F;
+        float exp_var = 0.F;
+        for (uint32_t j = 0; j < features; ++j) {
+            exp_mean += result_data[idx + j];
+            exp_var += result_data[idx + j] * result_data[idx + j];
+        }
+
+        exp_mean /= (float)features;
+        exp_var /= (float)features;
+        exp_var = exp_var - exp_mean * exp_mean;
+
+        EXPECT_NEAR(exp_mean, 0.F, 5e-2);
+        EXPECT_NEAR(exp_var, 1.F, 5e-2);
+    }
 }

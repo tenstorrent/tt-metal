@@ -244,8 +244,8 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
-    // uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm backward
-    uint32_t block_size = 1;
+    uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm backward
+    // uint32_t block_size = 1;
 
     std::cout << "Block total_rows_to_process: " << total_rows_to_process << std::endl;
 
@@ -279,7 +279,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     [[maybe_unused]] auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_x_hat = create_circular_buffer(
-        program, all_cores, kXHatCbIndex, precise_data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
+        program, all_cores, kXHatCbIndex, data_format, bfloat16_single_tile_size_bytes, num_x_hat_tiles);
     [[maybe_unused]] auto cb_rstd = create_circular_buffer(
         program, all_cores, kRstdCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdTiles);
     [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
@@ -317,6 +317,7 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         precise_data_format,
         float32_single_tile_size_bytes,
         kNumDyGammaXnormSumTiles);
+
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
