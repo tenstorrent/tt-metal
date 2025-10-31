@@ -68,6 +68,19 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    if (this->root_dir.empty()) {
+        log_critical(
+            tt::LogMetal,
+            "Failed to determine TT-Metal root directory. "
+            "Root directory must be set via one of the following methods:\n"
+            "1. Automatically determined when using a package install\n"
+            "2. Set TT_METAL_RUNTIME_ROOT environment variable to the path containing tt_metal/\n"
+            "3. Call RunTimeOptions::set_root_dir() API before creating RunTimeOptions\n"
+            "4. Run from the root of the repository\n"
+            "Current working directory: {}",
+            std::filesystem::current_path().string());
+    }
+
     TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
 
     {
@@ -115,8 +128,11 @@ RunTimeOptions::RunTimeOptions() {
     profiler_mid_run_dump = false;
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
-#if defined(TRACY_ENABLE)
+    profiler_trace_tracking = false;
+    profiler_cpp_post_process = false;
+
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+#if defined(TRACY_ENABLE)
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
         profiler_enabled = true;
         const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
@@ -131,9 +147,17 @@ RunTimeOptions::RunTimeOptions() {
         if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
             profiler_trace_profiler = true;
         }
+        const char* profiler_trace_tracking_str = std::getenv("TT_METAL_PROFILER_TRACE_TRACKING");
+        if (profiler_trace_tracking_str != nullptr && profiler_trace_tracking_str[0] == '1') {
+            profiler_trace_tracking = true;
+        }
         const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
         if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
             profiler_mid_run_dump = true;
+        }
+        const char* profiler_cpp_post_process_str = std::getenv("TT_METAL_PROFILER_CPP_POST_PROCESS");
+        if (profiler_cpp_post_process_str != nullptr && profiler_cpp_post_process_str[0] == '1') {
+            profiler_cpp_post_process = true;
         }
     }
 
@@ -152,6 +176,10 @@ RunTimeOptions::RunTimeOptions() {
     if (profile_buffer_usage_str != nullptr && profile_buffer_usage_str[0] == '1') {
         profiler_buffer_usage_enabled = true;
     }
+#else
+    TT_FATAL(
+        !(profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1'),
+        "TT_METAL_DEVICE_PROFILER env var is set to 1. This requires a Tracy-enabled build of tt-metal.");
 #endif
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
@@ -610,7 +638,7 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
 uint32_t RunTimeOptions::get_watcher_hash() const {
     // These values will cause kernels / firmware to be recompiled if they change
     // Only the ones which have #define on the device side need to be listed here
-    std::string hash_str = "";
+    std::string hash_str;
     hash_str += std::to_string(watcher_feature_disabled(watcher_waypoint_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_noc_sanitize_str));
     hash_str += std::to_string(watcher_feature_disabled(watcher_assert_str));

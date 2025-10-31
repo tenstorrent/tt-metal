@@ -44,8 +44,7 @@ run_tg_tests() {
     ## The jit build also has different behaviour for IRAM enabled/disabled so we enable it globally.
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
+    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
     #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py --timeout=500 ; fail+=$? #See issue #30017
     #TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py --timeout=500 ; fail+=$? #See issue #30017
     pytest -n auto tests/nightly/tg/ccl/test_all_broadcast.py --timeout=200 ; fail+=$?
@@ -54,9 +53,21 @@ run_tg_tests() {
 
   elif [[ "$1" == "sd35" ]]; then
     echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
-    pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "tg" --timeout=300; fail+=$?
-    pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
-    pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_vae_sd35.py -k "tg" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
+
+  elif [[ "$1" == "flux1" ]]; then
+    echo "LOG_METAL: running Flux.1 run_tg_frequent_tests"
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_attention.py::test_attention_flux -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_single_transformer_block -k "4x" --timeout=300; fail+=$?
+    HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest -n auto models/experimental/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k "4x" --timeout=300; fail+=$?
+
+  elif [[ "$1" == "mochi" ]]; then
+    echo "LOG_METAL: running mochi run_tg_frequent_tests"
+    FAKE_DEVICE=TG pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder and 4links-load_dit-large_latent or conv3d_1x1x1 or -4links-l768" --timeout=1500; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq and 4x8"; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "4x8 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
 
   else
     echo "LOG_METAL: Unknown model type: $1"

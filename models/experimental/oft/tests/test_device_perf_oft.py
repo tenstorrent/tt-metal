@@ -33,7 +33,7 @@ def run_device_perf_tests(
     [
         (
             "pytest models/experimental/oft/tests/pcc/test_oftnet.py::test_oftnet -k bfp16_use_device_oft",
-            253_123_435,
+            204_613_230,
             "oft_oftnet",
             "oft_oftnet",
             1,
@@ -42,7 +42,7 @@ def run_device_perf_tests(
         ),
         (
             "pytest models/experimental/oft/tests/pcc/test_encoder.py::test_decode",
-            4_764_102,
+            4_539_775,
             "oft_decoder",
             "oft_decoder",
             1,
@@ -51,7 +51,7 @@ def run_device_perf_tests(
         ),
         (
             "pytest models/experimental/oft/demo/demo.py::test_demo_inference",
-            256_114_255,
+            207_612_082,
             "oft_full_demo",
             "oft_full_demo",
             1,

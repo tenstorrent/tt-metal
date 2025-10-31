@@ -12,6 +12,10 @@ on:
       docker-image:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -30,6 +34,7 @@ jobs:
           {
             name: "Galaxy CNN model perf tests",
             model-type: "CNN",
+            model-name: "cnn",
             arch: wormhole_b0,
             save-perf-data: false,
             timeout: 60,
@@ -38,6 +43,7 @@ jobs:
           {
             name: "Galaxy Llama 70B model perf tests", #see GH issue #26295
             model-type: "Llama-70B",
+            model-name: "llama70b",
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
@@ -46,6 +52,7 @@ jobs:
           },
           {
             name: "Llama Galaxy Perf Unit Tests",
+            model-name: "llama_unit_tests",
             arch: wormhole_b0,
             cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests',
             timeout: 100,
@@ -56,6 +63,7 @@ jobs:
           {
             name: "Galaxy Llama 70B prefill perf tests",
             model-type: "Llama-70B",
+            model-name: "llama70b_prefill",
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
@@ -65,20 +73,40 @@ jobs:
           {
             name: "Galaxy DiT SD3.5 model perf tests",
             model-type: "SD3.5",
+            model-name: "sd35",
             arch: wormhole_b0,
             save-perf-data: true,
             timeout: 60,
-            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -k "4x8cfg1sp0tp1"',
+            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/sd35/test_performance_sd35.py -k "4x8cfg1sp0tp1"',
             owner_id: U03FJB5TM5Y # Colman Glagovich
+          },
+          {
+            name: "Galaxy DiT Flux.1 model perf tests",
+            model-type: "Flux.1-Dev",
+            arch: wormhole_b0,
+            save-perf-data: true,
+            timeout: 60,
+            cmd: 'HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py -k "4x8sp0tp1"',
+            owner_id: U08TED0JM9D # Samuel Adesoye
           },
           {
             name: "Galaxy Sentence Bert tests",
             arch: wormhole_b0,
             model-type: "sentence_bert",
+            model-name: "sentence_bert",
             save-perf-data: false,
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_sentence_bert_model_perf_tg_device --dispatch-mode ""',
             timeout: 30,
             owner_id: U088413NP0Q, # Ashai Reddy
+          },
+          {
+            name: "Galaxy Mochi model perf tests",
+            model-type: "mochi",
+            arch: wormhole_b0,
+            save-perf-data: true,
+            timeout: 60,
+            cmd: 'export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" && pytest models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0" && TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 and yes_use_cache"',
+            owner_id: U09ELB03XRU # Stephen Osborne
           }
         ]
     name: ${{ matrix.test-group.name }}
@@ -115,6 +143,7 @@ jobs:
           name: ${{ inputs.wheel-artifact-name || 'wheel artifact not specified' }}
       - name: Run model perf regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        if: ${{ inputs.model == 'all' || inputs.model == matrix.test-group.model-name }}
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO

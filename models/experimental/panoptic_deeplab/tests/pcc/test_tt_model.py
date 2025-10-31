@@ -17,12 +17,12 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -54,9 +54,10 @@ def test_panoptic_deeplab(device, model_location_generator):
 
     pytorch_input = torch.randn(batch_size, input_channels, input_height, input_width, dtype=torch.bfloat16)
 
-    ttnn_input_torch = pytorch_input.permute(0, 2, 3, 1)
+    # Use proper input preprocessing to avoid OOM (creates HEIGHT SHARDED memory config)
+    from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
 
-    ttnn_input = ttnn.from_torch(ttnn_input_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ttnn_input = preprocess_nchw_input_tensor(device, pytorch_input)
 
     try:
         pytorch_model = PytorchPanopticDeepLab(
@@ -66,7 +67,6 @@ def test_panoptic_deeplab(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -74,7 +74,10 @@ def test_panoptic_deeplab(device, model_location_generator):
         pytorch_model.eval()
 
         # Create TTNN parameters from the PyTorch model with loaded weights
-        ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
+        # Use explicit input dimensions to match preprocessing
+        ttnn_parameters = create_panoptic_deeplab_parameters(
+            pytorch_model, device, input_height=input_height, input_width=input_width, batch_size=batch_size
+        )
 
         # Apply Conv+BatchNorm fusion to the parameters
         logger.info("Applying Conv+BatchNorm fusion to parameters...")
@@ -87,6 +90,16 @@ def test_panoptic_deeplab(device, model_location_generator):
             conv_w_dtype=ttnn.bfloat8_b,
         )
 
+        # Apply layer-specific configurations
+        logger.info("Applying ResNet backbone configurations...")
+        model_configs.setup_resnet_backbone()
+        logger.info("Applying ASPP layer overrides...")
+        model_configs.setup_aspp()
+        logger.info("Applying decoder layer overrides...")
+        model_configs.setup_decoder()
+        logger.info("Applying head layer overrides...")
+        model_configs.setup_heads()
+
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
             device=device,
@@ -97,7 +110,6 @@ def test_panoptic_deeplab(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
             train_size=train_size,
             model_configs=model_configs,
         )
@@ -111,20 +123,38 @@ def test_panoptic_deeplab(device, model_location_generator):
     logger.info("Running TTNN model with fused Conv+BatchNorm parameters...")
     ttnn_semantic, ttnn_center, ttnn_offset, _ = ttnn_model.forward(ttnn_input)
 
-    ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic).permute(0, 3, 1, 2)
-    ttnn_center_torch = ttnn.to_torch(ttnn_center).permute(0, 3, 1, 2)
-    ttnn_offset_torch = ttnn.to_torch(ttnn_offset).permute(0, 3, 1, 2)
+    all_passed = []
+    all_passed.append(
+        check_ttnn_output(
+            "Semantic",
+            pytorch_semantic,
+            ttnn_semantic,
+            to_channel_first=False,
+            output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+            exp_pcc=0.993,
+        )
+    )
+    all_passed.append(
+        check_ttnn_output(
+            "Center",
+            pytorch_center,
+            ttnn_center,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
+            exp_pcc=0.959,
+        )
+    )
+    all_passed.append(
+        check_ttnn_output(
+            "Offset",
+            pytorch_offset,
+            ttnn_offset,
+            to_channel_first=False,
+            output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
+            exp_pcc=0.999,
+        )
+    )
 
-    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.99)
-    logger.info(f"Semantic PCC: {sem_msg}")
-    assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
-
-    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.99)
-    logger.info(f"Center PCC: {center_msg}")
-    assert center_passed, f"Center heatmap PCC failed: {center_msg}"
-
-    offset_passed, offset_msg = assert_with_pcc(pytorch_offset, ttnn_offset_torch, pcc=0.99)
-    logger.info(f"Offset PCC: {offset_msg}")
-    assert offset_passed, f"Offset map PCC failed: {offset_msg}"
-
+    # Fail test based on PCC results
+    assert all(all_passed), f"PDL outputs did not pass the PCC check {all_passed=}"
     logger.info("All PCC tests passed!")

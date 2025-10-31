@@ -101,23 +101,21 @@ struct NocUnicastInlineWriteCommandHeader {
     uint32_t value;
 };
 struct NocUnicastAtomicIncCommandHeader {
-    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), wrap(wrap), val(val), flush(flush) {}
+    NocUnicastAtomicIncCommandHeader(uint64_t noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
-    uint16_t wrap;
-    uint16_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocUnicastAtomicIncFusedCommandHeader {
     NocUnicastAtomicIncFusedCommandHeader(
-        uint64_t noc_address, uint64_t semaphore_noc_address, uint16_t val, uint16_t wrap, bool flush = true) :
-        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), wrap(wrap), val(val), flush(flush) {}
+        uint64_t noc_address, uint64_t semaphore_noc_address, uint32_t val, bool flush = true) :
+        noc_address(noc_address), semaphore_noc_address(semaphore_noc_address), val(val), flush(flush) {}
 
     uint64_t noc_address;
     uint64_t semaphore_noc_address;
-    uint16_t wrap;
-    uint16_t val;
+    uint32_t val;
     bool flush;
 };
 struct NocMulticastCommandHeader {
@@ -129,8 +127,7 @@ struct NocMulticastCommandHeader {
 };
 struct NocMulticastAtomicIncCommandHeader {
     uint32_t address;
-    uint16_t val;
-    uint16_t wrap;
+    uint32_t val;
     uint8_t noc_x_start;
     uint8_t noc_y_start;
     uint8_t size_x;
@@ -381,7 +378,6 @@ struct PacketHeaderBase {
         this->command_fields.unicast_seminc_fused.noc_address = noc_addr;
         this->command_fields.unicast_seminc_fused.semaphore_noc_address = semaphore_noc_addr;
         this->command_fields.unicast_seminc_fused.val = noc_fused_unicast_write_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc_fused.wrap = noc_fused_unicast_write_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc_fused.flush = noc_fused_unicast_write_atomic_inc_command_header.flush;
 
         this->payload_size_bytes = payload_size_bytes;
@@ -404,7 +400,6 @@ struct PacketHeaderBase {
 
         this->command_fields.unicast_seminc.noc_address = noc_addr;
         this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
-        this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
         this->command_fields.unicast_seminc.flush = noc_unicast_atomic_inc_command_header.flush;
         this->payload_size_bytes = 0;
 #else
@@ -423,7 +418,6 @@ struct PacketHeaderBase {
         this->command_fields.mcast_seminc.size_x = noc_multicast_atomic_inc_command_header.size_x;
         this->command_fields.mcast_seminc.size_y = noc_multicast_atomic_inc_command_header.size_y;
         this->command_fields.mcast_seminc.val = noc_multicast_atomic_inc_command_header.val;
-        this->command_fields.mcast_seminc.wrap = noc_multicast_atomic_inc_command_header.wrap;
         this->payload_size_bytes = payload_size_bytes;
         return static_cast<volatile Derived*>(this);
     }

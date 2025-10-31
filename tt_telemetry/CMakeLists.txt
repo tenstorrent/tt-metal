@@ -73,8 +73,10 @@ target_sources(
     PRIVATE
         server/main.cpp
         telemetry/telemetry_collector.cpp
+        telemetry/watchdog.cpp
         telemetry/metric.cpp
         server/web_server.cpp
+        server/prom_formatter.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
         topology/topology.cpp

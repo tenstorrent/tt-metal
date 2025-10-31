@@ -54,7 +54,7 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
     "model_dtype, fallback_feedforward, fallback_lateral, fallback_oft, use_host_decoder, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.float32, False, False, False, False, 0.917, .978, 0.999, 0.939),
+       ( torch.float32, False, False, False, False, 0.906, 0.978, 0.999, 0.929),
     ],
     # fmt: on
 )

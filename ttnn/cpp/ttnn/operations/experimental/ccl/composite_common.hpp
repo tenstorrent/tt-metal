@@ -19,10 +19,12 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/experimental/ccl/all_broadcast_async/device/all_broadcast_async_op.hpp"
+#include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_op.hpp"
 #include "ttnn/distributed/types.hpp"
 
 namespace composite_common {
+
+std::tuple<uint32_t, int32_t> normalize_dim_4d(uint32_t dim, uint32_t rank);
 
 bool use_composite_reduce_scatter(const ttnn::Tensor& input_tensor, int32_t dim, std::optional<uint32_t> cluster_axis);
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config);

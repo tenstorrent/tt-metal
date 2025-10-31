@@ -344,6 +344,7 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormDistributedDefaultProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
@@ -391,6 +392,7 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
@@ -430,6 +432,6 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir.parent.parent
     else:
         # For installed packages, reference bundled data directory
-        root_dir = this_dir / "tt-metalium"
+        root_dir = this_dir
 
     SetRootDir(str(root_dir))
