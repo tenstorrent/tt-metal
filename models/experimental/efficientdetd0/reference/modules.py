@@ -419,7 +419,9 @@ class Classifier(nn.Module):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
+                print(f"TORCH PreConv {feat.shape}")
                 feat = conv(feat)
+                print(f"TORCH PostConv {feat.shape}")
                 feat = bn(feat)
                 feat = self.swish(feat)
             feat = self.header(feat)

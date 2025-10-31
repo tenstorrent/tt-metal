@@ -58,3 +58,107 @@ def load_torch_model_state(torch_model: torch.nn.Module = None, layer_name: str 
 #     logger.info(f"Successfully loaded weights: 3Detr {layer_name}")
 
 #     return torch_model.eval()
+
+
+import ttnn
+from ttnn.torch_tracer import trace, visualize
+from ttnn.dot_access import make_dot_access_dict
+from ttnn.model_preprocessing import ModuleArgs, Conv2dArgs, ConvTranspose2dArgs, MaxPool2dArgs, GroupNormArgs
+
+
+def infer_ttnn_module_args(*, model, run_model, device):
+    if run_model is None:
+        return None
+
+    with trace():
+        output = run_model(model)
+
+    visualize(output, file_name=ttnn.CONFIG.tmp_dir / "model_graph.svg")
+
+    def _infer_ttnn_module_args(graph):
+        ttnn_module_args = {}
+        for node in graph:
+            attributes = graph.nodes[node]
+            operation = attributes["operation"]
+            if isinstance(operation, ttnn.tracer.TorchModule):
+                *_, module_name = operation.module.__ttnn_tracer_name__.split(".")
+                (input_node, _, edge_data), *_ = graph.in_edges(node, data=True)
+                input_shape = graph.nodes[input_node]["shapes"][edge_data["source_output_index"]]
+                if isinstance(operation.module, torch.nn.Conv2d):
+                    ttnn_module_args[module_name] = Conv2dArgs(
+                        in_channels=operation.module.in_channels,
+                        out_channels=operation.module.out_channels,
+                        kernel_size=operation.module.kernel_size,
+                        stride=operation.module.stride,
+                        padding=operation.module.padding,
+                        dilation=operation.module.dilation,
+                        groups=operation.module.groups,
+                        padding_mode=operation.module.padding_mode,
+                        batch_size=input_shape[0],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        dtype=ttnn.bfloat16,
+                        weights_dtype=ttnn.bfloat16,
+                        use_1d_systolic_array=True,
+                        enable_auto_formatting=False,
+                        conv_blocking_and_parallelization_config_override={},
+                        device=device,
+                    )
+                elif isinstance(operation.module, torch.nn.ConvTranspose2d):
+                    ttnn_module_args[module_name] = ConvTranspose2dArgs(
+                        in_channels=operation.module.in_channels,
+                        out_channels=operation.module.out_channels,
+                        kernel_size=operation.module.kernel_size,
+                        stride=operation.module.stride,
+                        padding=operation.module.padding,
+                        output_padding=operation.module.output_padding,
+                        dilation=operation.module.dilation,
+                        groups=operation.module.groups,
+                        padding_mode=operation.module.padding_mode,
+                        batch_size=input_shape[0],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        dtype=ttnn.bfloat16,
+                        weights_dtype=ttnn.bfloat16,
+                        use_1d_systolic_array=True,
+                        enable_auto_formatting=False,
+                        conv_blocking_and_parallelization_config_override={},
+                        device=device,
+                    )
+                elif isinstance(operation.module, torch.nn.MaxPool2d):
+                    ttnn_module_args[module_name] = MaxPool2dArgs(
+                        kernel_size=operation.module.kernel_size,
+                        stride=operation.module.stride,
+                        padding=operation.module.padding,
+                        dilation=operation.module.dilation,
+                        batch_size=input_shape[0],
+                        input_channels=input_shape[1],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        dtype=ttnn.bfloat16,
+                    )
+                elif isinstance(operation.module, torch.nn.GroupNorm):
+                    ttnn_module_args[module_name] = GroupNormArgs(
+                        num_groups=operation.module.num_groups,
+                        num_channels=operation.module.num_channels,
+                        eps=operation.module.eps,
+                        affine=operation.module.affine,
+                        batch_size=input_shape[0],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        dtype=ttnn.bfloat16,
+                    )
+                elif isinstance(operation.module, torch.nn.BatchNorm2d):
+                    continue
+                else:
+                    ttnn_module_args[module_name] = _infer_ttnn_module_args(operation.graph)
+
+                if module_name.isdigit():
+                    ttnn_module_args[int(module_name)] = ttnn_module_args[module_name]
+
+        return make_dot_access_dict(ttnn_module_args, ignore_types=(ModuleArgs,))
+
+    ttnn_module_args = _infer_ttnn_module_args(ttnn.tracer.get_graph(output))
+    return ttnn_module_args[""]

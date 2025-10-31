@@ -10,10 +10,12 @@ from ttnn.model_preprocessing import (
     ModuleArgs,
     MaxPool2dArgs,
     convert_torch_model_to_ttnn_model,
+    fold_batch_norm2d_into_conv2d,
 )
 
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.reference.modules import BiFPN, Classifier
+from models.experimental.efficientdetd0.reference.modules import Classifier
+from models.experimental.efficientdetd0.reference.modules import SeparableConvBlock
 
 
 def preprocess_conv_parameter(parameter, *, dtype):
@@ -53,10 +55,44 @@ def custom_preprocessor(
     parameters = {}
     weight_dtype = ttnn.bfloat16
 
-    if isinstance(model, BiFPN):
-        pass
-    if isinstance(model, Classifier):
-        pass
+    if isinstance(model, torch.nn.BatchNorm2d):
+        weight = model.weight
+        bias = model.bias
+        running_mean = model.running_mean
+        running_var = model.running_var
+        weight = weight.reshape((1, 1, 1, -1))
+        bias = bias.reshape((1, 1, 1, -1))
+        running_mean = running_mean.reshape((1, 1, 1, -1))
+        running_var = running_var.reshape((1, 1, 1, -1))
+        parameters["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        parameters["running_mean"] = ttnn.from_torch(running_mean, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        parameters["running_var"] = ttnn.from_torch(running_var, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        parameters["eps"] = model.eps
+    if isinstance(model, SeparableConvBlock):
+        parameters["depthwise_conv"] = {}
+        parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.weight, dtype=ttnn.float32)
+        parameters["depthwise_conv"]["bias"] = None
+        if model.depthwise_conv.bias is not None:
+            bias = model.depthwise_conv.bias
+            bias = bias.reshape((1, 1, 1, -1))
+            parameters["depthwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+
+        if hasattr(model, "bn"):
+            weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv, model.bn)
+            parameters["pointwise_conv"] = {}
+            parameters["pointwise_conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+            bias = bias.reshape((1, 1, 1, -1))
+            parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        else:
+            parameters["pointwise_conv"] = {}
+            parameters["pointwise_conv"]["weight"] = ttnn.from_torch(model.pointwise_conv.weight, dtype=ttnn.float32)
+            parameters["pointwise_conv"]["bias"] = None
+            if model.pointwise_conv.bias is not None:
+                bias = model.pointwise_conv.bias
+                bias = bias.reshape((1, 1, 1, -1))
+                parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+
         # import pdb; pdb.set_trace()
         # for child_name, child in model.named_children():
         #     parameters[child_name] = convert_torch_model_to_ttnn_model(
@@ -159,7 +195,13 @@ def custom_preprocessor(
     #     if hasattr(model, "bias") and model.bias is not None:
     #         parameters["bias"] = ttnn.from_torch(model.bias, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
 
-    elif isinstance(model, EfficientDetBackbone):
+    elif isinstance(
+        model,
+        (
+            Classifier,
+            EfficientDetBackbone,
+        ),
+    ):
         # Let the sub-modules handle their own preprocessing
         for child_name, child in model.named_children():
             parameters[child_name] = convert_torch_model_to_ttnn_model(

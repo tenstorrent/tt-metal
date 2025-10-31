@@ -140,14 +140,14 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
         return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
-class Conv2dStaticSamePadding(nn.Module):
+class Conv2dStaticSamePadding(nn.Conv2d):
     """
     created by Zylo117
     The real keras/tensorflow conv2d with same padding
     """
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, bias=True, groups=1, dilation=1, **kwargs):
-        super().__init__()
+        super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, bias=bias, groups=groups)
         self.stride = self.conv.stride
         self.kernel_size = self.conv.kernel_size
@@ -180,14 +180,14 @@ class Conv2dStaticSamePadding(nn.Module):
         return x
 
 
-class MaxPool2dStaticSamePadding(nn.Module):
+class MaxPool2dStaticSamePadding(nn.MaxPool2d):
     """
     created by Zylo117
     The real keras/tensorflow MaxPool2d with same padding
     """
 
     def __init__(self, *args, **kwargs):
-        super().__init__()
+        super().__init__(*args, **kwargs)
         self.pool = nn.MaxPool2d(*args, **kwargs)
         self.stride = self.pool.stride
         self.kernel_size = self.pool.kernel_size
