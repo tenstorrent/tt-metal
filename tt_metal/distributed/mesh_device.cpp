@@ -57,6 +57,7 @@
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -1023,6 +1024,37 @@ uint32_t MeshDevice::num_sub_devices() const {
 bool MeshDevice::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();
+}
+
+void MeshDevice::quiesce_internal() {
+    TT_FATAL(
+        get_active_sub_device_manager_id() == get_default_sub_device_manager_id(),
+        "Cannot quiesce when non-default sub-device manager is active");
+    for (const auto& submesh : submeshes_) {
+        if (auto submesh_ptr = submesh.lock()) {
+            submesh_ptr->quiesce_submeshes();
+        }
+    }
+    bool have_reset_launch_msg_state = false;
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->wait_for_completion(!have_reset_launch_msg_state);
+        have_reset_launch_msg_state = true;
+    }
+    for (auto& command_queue : mesh_command_queues_) {
+        command_queue->finish_and_reset_in_use();
+    }
+}
+
+void MeshDevice::quiesce_submeshes() {
+    quiesce_internal();
+    for (auto& command_queue : mesh_command_queues_) {
+        for (auto& device : get_devices()) {
+            TT_ASSERT(
+                device->sysmem_manager().get_last_completed_event(command_queue->id()) == 0,
+                "Last completed event is not 0");
+            TT_ASSERT(device->sysmem_manager().get_current_event(command_queue->id()) == 0, "Current event is not 0");
+        }
+    }
 }
 
 // Allocator methods
