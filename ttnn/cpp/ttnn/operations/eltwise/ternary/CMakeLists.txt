@@ -11,24 +11,24 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels where/device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_ternary
     PUBLIC
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES where/where.hpp
+        FILES common/ternary_op_types.hpp ternary.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
         ternary_composite_op.cpp
-        where/where.cpp
-        where/device/where_device_operation.cpp
-        where/device/where_program_factory.cpp
-        where/device/where_utils.cpp
+        ternary.cpp
+        device/ternary_device_operation.cpp
+        device/ternary_program_factory.cpp
+        device/ternary_op_utils.cpp
 )
 
 target_include_directories(ttnn_op_eltwise_ternary PRIVATE ${FixmeOpIncDirs})
