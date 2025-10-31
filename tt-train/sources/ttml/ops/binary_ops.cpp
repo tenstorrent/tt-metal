@@ -106,9 +106,31 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
     out->set_value(ttnn::subtract(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         tt::tt_metal::MemoryConfig mem_config;
-        // TODO: support broadcasting
-        a->add_grad(out->get_grad());
-        b->add_grad(ttnn::neg(out->get_grad()));
+        // Support broadcasting similar to addition
+        if (was_broadcasted(a, out->get_grad())) {
+            a->add_grad(ttnn::moreh_sum(
+                out->get_grad(),
+                get_broadcast_dimensions(a, out->get_grad()),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            a->add_grad(out->get_grad());
+        }
+
+        auto neg_grad = ttnn::neg(out->get_grad());
+        if (was_broadcasted(b, out->get_grad())) {
+            b->add_grad(ttnn::moreh_sum(
+                neg_grad,
+                get_broadcast_dimensions(b, out->get_grad()),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise()));
+        } else {
+            b->add_grad(neg_grad);
+        }
     };
     auto links = autograd::get_links(a, b);
 
@@ -123,9 +145,29 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
     out->set_value(ttnn::multiply(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         tt::tt_metal::MemoryConfig mem_config;
-        // TODO: support broadcasting (or not)
+        // Support broadcasting
         auto a_grad = ttnn::multiply(out->get_grad(), b->get_value());
         auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
+
+        if (was_broadcasted(a, out->get_grad())) {
+            a_grad = ttnn::moreh_sum(
+                a_grad,
+                get_broadcast_dimensions(a, out->get_grad()),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise());
+        }
+
+        if (was_broadcasted(b, out->get_grad())) {
+            b_grad = ttnn::moreh_sum(
+                b_grad,
+                get_broadcast_dimensions(b, out->get_grad()),
+                /* keep_dim */ true,
+                /* output_tensor */ std::nullopt,
+                /* memory_config_arg */ std::nullopt,
+                core::ComputeKernelConfig::precise());
+        }
 
         a->add_grad(a_grad);
         b->add_grad(b_grad);

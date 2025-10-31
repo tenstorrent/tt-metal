@@ -1,0 +1,49 @@
+# BERT Model Configuration - BFLOAT16 Optimized
+# Hardware-tuned configuration for Tenstorrent devices using BFLOAT16 precision
+# Based on BERT-base architecture with adjustments for bfloat16 numerical stability
+
+# Model architecture
+vocab_size: 30522
+max_sequence_length: 512
+embedding_dim: 768
+intermediate_size: 3072
+num_heads: 12
+num_blocks: 12
+
+# Training parameters
+dropout_prob: 0.1
+
+# LayerNorm epsilon for BFLOAT16 hardware
+# - 1e-5F: Recommended for BFLOAT16 to ensure numerical stability on Tenstorrent hardware
+# - TTML automatically clamps to max(eps, 1e-4F) for BFLOAT16 dtype to prevent underflow
+# - This value balances safety (avoiding NaN in rsqrt operations) with precision
+# - For pure FLOAT32 workflows, use bert_config.yaml with 1e-12F instead
+#
+# Hardware Considerations:
+# - BFLOAT16: 7-bit mantissa, machine epsilon ~0.0078125
+# - Values below 1e-4F may truncate to zero in variance calculations
+# - Clamping prevents silent errors in low-variance scenarios (e.g., uniform embeddings)
+# - Tenstorrent Wormhole/Grayskull optimized for bfloat16 operations
+layer_norm_eps: 1e-5
+
+# BERT-specific features
+use_token_type_embeddings: true
+type_vocab_size: 2  # For sentence A/B (NSP task)
+use_pooler: true    # For classification tasks
+
+# Framework settings
+runner_type: "default"  # or "memory_efficient"
+
+# Usage Notes:
+# - Use this config when training BERT with BFLOAT16 precision
+# - For FLOAT32 training, use configs/bert_config.yaml (eps=1e-12)
+# - Enable hardware clamping (default) for safety: enable_hardware_clamp=true
+# - Disable clamping only for expert numerical experiments: enable_hardware_clamp=false
+#
+# Example Python usage:
+#   config = BertConfig.from_yaml("configs/bert_config_bfloat16.yaml")
+#   model = Bert(config)  # LayerNorm will use eps=1e-5F, clamped to 1e-4F for bfloat16
+#
+# Example C++ usage:
+#   auto config = models::bert::BertConfig::from_yaml("configs/bert_config_bfloat16.yaml");
+#   auto model = std::make_shared<models::bert::Bert>(config);
