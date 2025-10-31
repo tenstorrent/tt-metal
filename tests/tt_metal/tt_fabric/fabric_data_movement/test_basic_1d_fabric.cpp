@@ -2349,6 +2349,10 @@ void UDMFabric1DUnicastCommon(
         worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
     }
 
+    // Define req_notification_size_bytes for read operations
+    // Must include full packet header (80B max) + sync data (48B)
+    constexpr uint32_t req_notification_size_bytes = 128;
+
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -2364,6 +2368,9 @@ void UDMFabric1DUnicastCommon(
         dest_fabric_node_id.chip_id,
         dest_fabric_node_id.mesh_id.get()};
 
+    // Add req_notification_size_bytes for both read and write operations
+    compile_time_args.push_back(req_notification_size_bytes);
+
     // Set up fabric connection runtime args
     auto sender_available_links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dest_fabric_node_id);
     uint32_t sender_link_idx = sender_available_links.empty() ? 0 : sender_available_links[0];
@@ -2377,9 +2384,15 @@ void UDMFabric1DUnicastCommon(
         sender_logical_core,
         sender_runtime_args);
 
+    // Select sender kernel based on operation type
+    const char* sender_kernel_path =
+        (noc_send_type == NOC_UNICAST_READ)
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_sender.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender.cpp";
+
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_sender.cpp",
+        sender_kernel_path,
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2402,9 +2415,18 @@ void UDMFabric1DUnicastCommon(
         num_packets,
         time_seed};
 
+    // Add req_notification_size_bytes for both read and write operations
+    receiver_compile_time_args.push_back(req_notification_size_bytes);
+
+    // Select receiver kernel based on operation type
+    const char* receiver_kernel_path =
+        (noc_send_type == NOC_UNICAST_READ)
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_read_receiver.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_receiver.cpp";
+
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_udm_receiver.cpp",
+        receiver_kernel_path,
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -3133,6 +3155,15 @@ TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricUnicastEast) {
 
 TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricUnicastWest) {
     UDMFabric1DUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 1));
+}
+
+// UDM Mode Read Tests - test udm read api for 1D
+TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricReadEast) {
+    UDMFabric1DUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
+}
+
+TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricReadWest) {
+    UDMFabric1DUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
 }
 
 }  // namespace fabric_router_tests

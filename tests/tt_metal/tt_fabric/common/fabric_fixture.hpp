@@ -306,6 +306,7 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_SCATTER_WRITE = 4,
     NOC_MULTICAST_WRITE = 5,       // mcast has bug
     NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_UNICAST_READ = 7,          // read wont be supported without UDM mode
     NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
 };
 

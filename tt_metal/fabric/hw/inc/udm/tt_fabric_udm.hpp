@@ -288,7 +288,7 @@ inline __attribute__((always_inline)) void fabric_fast_write_any_len(
     uint32_t num_dests = 1,
     uint16_t trid = 0,
     uint8_t posted = 0) {
-    auto& connection = get_or_open_fabric_connection();
+    auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
     // For optimization purpose, the non-last fabric writes will be posted, and only the last fabric write is determined
@@ -328,7 +328,7 @@ inline __attribute__((always_inline)) void fabric_fast_write_ack(
     if (received_header->udm_control.write.posted) {
         return;
     }
-    auto& connection = get_or_open_fabric_connection();
+    auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* ack_header = get_or_allocate_header();
 
     uint8_t src_chip_id = received_header->udm_control.write.src_chip_id;
@@ -345,6 +345,114 @@ inline __attribute__((always_inline)) void fabric_fast_write_ack(
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+/**
+ * @brief Initiate a read request through the fabric for any length
+ *
+ * This function sends a single read request packet through the fabric network,
+ * regardless of the data size. The receiver is responsible for breaking up the
+ * data into appropriate chunks if it exceeds the maximum fabric payload size.
+ *
+ * @param dst_dev_id Destination device ID for fabric routing
+ * @param dst_mesh_id Destination mesh ID for fabric routing
+ * @param dest_addr Remote NOC address to read from (encoded with x,y coordinates and local address)
+ * @param src_l1_addr Local L1 memory address where the data should be written when received
+ * @param size_bytes Total number of bytes to read (can be any size)
+ * @param trid Transaction ID for tracking the read operation
+ */
+inline __attribute__((always_inline)) void fabric_fast_read_any_len(
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint64_t dest_addr,
+    uint32_t src_l1_addr,
+    uint32_t size_bytes,
+    uint16_t trid = 0) {
+    auto [connection, is_init] = get_or_open_fabric_connection();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
+
+    fabric_read_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, src_l1_addr, size_bytes, trid);
+    // TODO: remove the 16B once we properly support reads in fabric router
+    packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, 16);
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_blocking_from_address(
+        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+
+    fabric_reads_num_acked++;
+}
+
+/**
+ * @brief Internal helper for sending a single read response packet
+ *
+ * @tparam use_fused_atomic Whether to use fused atomic increment (for last packet)
+ * @param connection Fabric connection to use
+ * @param packet_header Packet header with routing already configured
+ * @param src_addr Source address in local L1 memory
+ * @param dest_addr Destination NOC address
+ * @param len_bytes Number of bytes to write
+ * @param counter_noc_addr NOC address of the counter to increment (only used if use_fused_atomic is true)
+ */
+template <bool use_fused_atomic = false>
+inline __attribute__((always_inline)) void fabric_fast_read_ack(
+    WorkerToFabricEdmSender& connection,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint64_t dest_addr,
+    uint32_t len_bytes,
+    uint64_t counter_noc_addr = 0) {
+    if constexpr (use_fused_atomic) {
+        packet_header->to_noc_fused_unicast_write_atomic_inc(
+            NocUnicastAtomicIncFusedCommandHeader(dest_addr, counter_noc_addr, 1, true /* flush */), len_bytes);
+    } else {
+        packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, len_bytes);
+    }
+
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_without_header_non_blocking_from_address(src_addr, len_bytes);
+    connection.send_payload_blocking_from_address(
+        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+/**
+ * @brief Process a read request and send the requested data back to the requester
+ *
+ * This function processes a received read request packet by extracting the request
+ * parameters from the UDM control fields and sending the requested data back to
+ * the source. It handles breaking up large data into multiple packets if needed,
+ * and uses a fused atomic increment on the last packet to signal completion.
+ *
+ * @param received_header Pointer to the received read request packet header
+ * @param src_addr Local source address where the requested data is stored
+ */
+inline __attribute__((always_inline)) void fabric_fast_read_any_len_ack(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t src_addr) {
+    auto [connection, is_init] = get_or_open_fabric_connection();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* response_header = get_or_allocate_header();
+
+    // Extract read request parameters from the received header
+    uint8_t src_chip_id = received_header->udm_control.read.src_chip_id;
+    uint16_t src_mesh_id = received_header->udm_control.read.src_mesh_id;
+    uint8_t src_noc_x = received_header->udm_control.read.src_noc_x;
+    uint8_t src_noc_y = received_header->udm_control.read.src_noc_y;
+    uint32_t src_l1_address = received_header->udm_control.read.src_l1_address;
+    uint32_t size_bytes = received_header->udm_control.read.size_bytes;
+    uint8_t src_risc_id = received_header->udm_control.read.risc_id;
+    uint16_t transaction_id = received_header->udm_control.read.transaction_id;
+    uint64_t dest_addr = get_noc_addr(src_noc_x, src_noc_y, src_l1_address);
+
+    // Calculate the counter address for the final atomic increment
+    uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::READS_NUM_ACKED>(src_risc_id);
+    uint64_t counter_noc_addr = get_noc_addr(src_noc_x, src_noc_y, counter_addr);
+
+    fabric_write_set_unicast_route(response_header, src_chip_id, src_mesh_id, transaction_id, 1 /* posted */);
+    while (size_bytes > max_fabric_payload_size) {
+        fabric_fast_read_ack<false>(connection, response_header, src_addr, dest_addr, max_fabric_payload_size);
+
+        src_addr += max_fabric_payload_size;
+        dest_addr += max_fabric_payload_size;
+        size_bytes -= max_fabric_payload_size;
+    }
+    fabric_fast_read_ack<true>(connection, response_header, src_addr, dest_addr, size_bytes, counter_noc_addr);
 }
 
 }  // namespace tt::tt_fabric::udm
