@@ -34,11 +34,11 @@ jobs:
       - name: Generate Matrix
         id: set-matrix
         run: |
-          # Full matrix definition
-          FULL_MATRIX='[
+          # Create full matrix with jq for readability
+          FULL_MATRIX=$(jq -n '[
             {
               "name": "Galaxy CNN model perf tests",
-              "model-type": "CNN",
+              "model-type": "CNN", 
               "model-name": "cnn",
               "arch": "wormhole_b0",
               "save-perf-data": false,
@@ -48,7 +48,7 @@ jobs:
             {
               "name": "Galaxy Llama 70B model perf tests",
               "model-type": "Llama-70B",
-              "model-name": "llama70b",
+              "model-name": "llama70b", 
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
@@ -58,7 +58,7 @@ jobs:
             {
               "name": "Llama Galaxy Perf Unit Tests",
               "model-name": "llama_unit_tests",
-              "arch": "wormhole_b0",
+              "arch": "wormhole_b0", 
               "cmd": "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/tests/tg_perf_unit_tests",
               "timeout": 100,
               "tracy": true,
@@ -72,7 +72,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
-              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode \"\"",
+              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode \"\"", 
               "owner_id": "U03PUAKE719"
             },
             {
@@ -86,7 +86,7 @@ jobs:
               "owner_id": "U03FJB5TM5Y"
             },
             {
-              "name": "Galaxy DiT Flux.1 model perf tests",
+              "name": "Galaxy DiT Flux.1 model perf tests", 
               "model-type": "Flux.1-Dev",
               "model-name": "flux1-dev",
               "arch": "wormhole_b0",
@@ -97,7 +97,7 @@ jobs:
             },
             {
               "name": "Galaxy Sentence Bert tests",
-              "arch": "wormhole_b0",
+              "arch": "wormhole_b0", 
               "model-type": "sentence_bert",
               "model-name": "sentence_bert",
               "save-perf-data": false,
@@ -117,20 +117,20 @@ jobs:
             {
               "name": "Galaxy Mochi model perf tests",
               "model-type": "mochi",
-              "model-name": "mochi",
+              "model-name": "mochi", 
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
               "cmd": "export TT_DIT_CACHE_DIR=\"/tmp/TT_DIT_CACHE\" && pytest models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k \"4x8sp1tp0\" && TT_MM_THROTTLE_PERF=5 pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k \"4x8sp1tp0 and yes_use_cache\"",
               "owner_id": "U09ELB03XRU"
             }
-          ]'
+          ]' --compact-output)
           
-          # Filter matrix based on input
+          # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
             echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
           else
-            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model)]')
+            FILTERED_MATRIX=$(echo "$FULL_MATRIX" | jq --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model)]' --compact-output)
             echo "matrix=$FILTERED_MATRIX" >> $GITHUB_OUTPUT
           fi
 
