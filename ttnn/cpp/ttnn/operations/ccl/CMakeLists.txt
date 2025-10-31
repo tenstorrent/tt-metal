@@ -27,7 +27,7 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
             all_gather/all_gather.hpp
-            all_reduce/all_reduce.cpp
+            all_reduce/all_reduce.hpp
             reduce_scatter/reduce_scatter.hpp
             all_broadcast/device/all_broadcast_op.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
             ccl_common.hpp
