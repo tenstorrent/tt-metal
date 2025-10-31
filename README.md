@@ -154,10 +154,6 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 
 #### [TT-NN Visualizer](https://github.com/tenstorrent/ttnn-visualizer)
 A comprehensive tool for visualizing and analyzing model execution, offering interactive graphs, memory plots, tensor details, buffer overviews, operation flow graphs, and multi-instance support with file or SSH-based report loading.
-Install via pip or build from source:
-```bash
-pip install ttnn-visualizer
-```
 
 #### [TT-Exalens](https://github.com/tenstorrent/tt-exalens)
 The TT-Exalens repository describes TT-Lensium, a low-level debugging tool for Tenstorrent hardware. It allows developers to access and communicate with Wormhole and Blackhole devices.
@@ -192,7 +188,8 @@ Inspector provides insights into host runtime. It logs necessary data for invest
 
 | Release | Release Date |
 |---------|--------------|
-| 0.64.0  | ETA Oct 15, 2025 |
+| 0.65.0  | ETA Nov 19, 2025 |
+| [0.64.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.0) | Oct 29, 2025 |
 | [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 |
 | [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
 | 0.61.0  | Skipped |

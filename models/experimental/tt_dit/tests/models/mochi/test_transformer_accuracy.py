@@ -126,6 +126,7 @@ def test_transformer_accuracy(
         model_name="mochi-1-preview",
         subfolder="transformer",
         parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     )
     assert os.path.exists(

@@ -127,6 +127,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
+    {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
@@ -202,7 +203,6 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.size = specific.size.has_value() ? specific.size : base.size;
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
-    merged.atomic_inc_wrap = specific.atomic_inc_wrap.has_value() ? specific.atomic_inc_wrap : base.atomic_inc_wrap;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
 
     // Special handling for nested destination
@@ -286,7 +286,6 @@ public:
     std::optional<std::string> get_yaml_config_path();
     bool check_filter(ParsedTestConfig& test_config, bool fine_grained);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
-    std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
     bool dump_built_tests();
     std::string get_built_tests_dump_file_name(const std::string& default_file_name);
@@ -304,7 +303,7 @@ private:
     std::optional<std::string> filter_value;
 };
 
-const std::string no_default_test_yaml_config = "";
+const std::string no_default_test_yaml_config;
 
 template <typename T>
 inline T YamlConfigParser::parse_scalar(const YAML::Node& yaml_node) {
@@ -497,7 +496,6 @@ private:
         resolved_pattern.size = parsed_pattern.size;
         resolved_pattern.num_packets = parsed_pattern.num_packets;
         resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
-        resolved_pattern.atomic_inc_wrap = parsed_pattern.atomic_inc_wrap;
         resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
 
         if (parsed_pattern.destination.has_value()) {
@@ -550,6 +548,16 @@ private:
                         LogTest,
                         "Auto-detected {} iterations for all_to_one pattern in test '{}'",
                         num_devices,
+                        p_config.name);
+                } else if (p.type == "sequential_all_to_all") {
+                    // Dynamically calculate iterations for sequential_all_to_all patterns based on all device pairs
+                    auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+                    uint32_t num_pairs = static_cast<uint32_t>(all_pairs.size());
+                    max_iterations = std::max(max_iterations, num_pairs);
+                    log_info(
+                        LogTest,
+                        "Auto-detected {} iterations for sequential_all_to_all pattern in test '{}'",
+                        num_pairs,
                         p_config.name);
                 }
             }
@@ -732,10 +740,6 @@ private:
                 !pattern.atomic_inc_val.has_value(),
                 "Test '{}': 'atomic_inc_val' should not be specified for 'unicast_write' ntype.",
                 test.name);
-            TT_FATAL(
-                !pattern.atomic_inc_wrap.has_value(),
-                "Test '{}': 'atomic_inc_wrap' should not be specified for 'unicast_write' ntype.",
-                test.name);
         }
 
         // 3. Validate payload size
@@ -888,6 +892,8 @@ private:
                 expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
             } else if (pattern.type == "all_devices_uniform_pattern") {
                 expand_all_devices_uniform_pattern(test, defaults);
+            } else if (pattern.type == "sequential_all_to_all") {
+                expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -944,6 +950,33 @@ private:
         log_debug(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
         auto random_pairs = this->route_manager_.get_full_device_random_pairs(this->gen_);
         add_senders_from_pairs(test, random_pairs, base_pattern);
+    }
+
+    void expand_sequential_all_to_all_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+        log_debug(
+            LogTest,
+            "Expanding sequential_all_to_all_unicast pattern for test: {} (iteration {})",
+            test.name,
+            iteration_idx);
+
+        auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+
+        if (all_pairs.empty()) {
+            log_warning(LogTest, "No valid pairs found for sequential_all_to_all pattern");
+            return;
+        }
+
+        // Select only the pair for this iteration
+        if (iteration_idx < all_pairs.size()) {
+            std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {all_pairs[iteration_idx]};
+            add_senders_from_pairs(test, single_pair, base_pattern);
+        } else {
+            TT_THROW(
+                "Iteration index {} exceeds number of available device pairs {} for sequential_all_to_all pattern",
+                iteration_idx,
+                all_pairs.size());
+        }
     }
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
@@ -1131,7 +1164,6 @@ private:
         base_sync_pattern.size = 0;                                     // No payload, just sync signal
         base_sync_pattern.num_packets = 1;                              // Single sync signal
         base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
-        base_sync_pattern.atomic_inc_wrap = 0xFFFF;                     // Large wrap value
 
         // Topology-specific routing - get multi-directional hops first
         auto [multi_directional_hops, global_sync_val] =
@@ -1485,10 +1517,6 @@ private:
         if (config.atomic_inc_val) {
             out << YAML::Key << "atomic_inc_val";
             out << YAML::Value << config.atomic_inc_val.value();
-        }
-        if (config.atomic_inc_wrap) {
-            out << YAML::Key << "atomic_inc_wrap";
-            out << YAML::Value << config.atomic_inc_wrap.value();
         }
         if (config.mcast_start_hops) {
             out << YAML::Key << "mcast_start_hops";

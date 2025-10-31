@@ -95,22 +95,52 @@ run_t3000_sentence_bert_tests() {
   fi
 }
 
-run_t3000_stable_diffusion_35_large_tests() {
+run_t3000_dit_tests() {
   # Record the start time
   fail=0
   start_time=$(date +%s)
+  test_name=${FUNCNAME[1]}
+  test_cmd=$1
 
-  echo "LOG_METAL: Running run_t3000_stable_diffusion_35_large_tests"
+  echo "LOG_METAL: Running ${test_name}"
 
-  pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -k "2x4cfg1sp0tp1" ; fail+=$?
+  pytest ${test_cmd} ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_stable_diffusion_35_large_tests $duration seconds to complete"
+  echo "LOG_METAL: ${test_name} $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+run_t3000_mochi_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_mochi_tests"
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "2x4sp0tp1"
+  pytest models/experimental/tt_dit/tests/models/mochi/test_performance_mochi.py -k "2x4sp0tp1 and yes_use_cache" --timeout 1800; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_stable_diffusion_35_large_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/sd35/test_performance_sd35.py -k 2x4cfg1sp0tp1"
+}
+
+run_t3000_flux1_tests() {
+  run_t3000_dit_tests "models/experimental/tt_dit/tests/models/flux1/test_performance_flux1.py"
 }
 
 run_t3000_model_perf_tests() {
