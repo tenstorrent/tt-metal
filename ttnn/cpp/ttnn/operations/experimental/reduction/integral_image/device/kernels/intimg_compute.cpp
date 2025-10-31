@@ -23,7 +23,7 @@
 #include "debug/dprint.h"
 #include "debug/dprint_tensix.h"
 
-#include <cmath>
+// #include <cmath>
 
 namespace {
 
