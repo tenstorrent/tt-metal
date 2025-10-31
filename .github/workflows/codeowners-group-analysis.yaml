@@ -742,164 +742,84 @@ jobs:
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
-          # Get team members for teams that need approval
           TEAM_MEMBERS=""
           if [ -n "$TEAMS" ]; then
-            echo "DEBUG get-team-members: TEAMS='$TEAMS'"
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
-            echo "DEBUG get-team-members: Split into ${#TEAM_ARRAY[@]} entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
-              echo "DEBUG get-team-members: Processing team_entry='$team_entry'"
-              # Extract team name from team:files format
               team=$(echo "$team_entry" | cut -d':' -f1)
-              echo "DEBUG get-team-members: Extracted team='$team'"
-              # Remove @org/ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
-              echo "DEBUG get-team-members: clean_team='$clean_team' (for API call)"
-
-              # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                               -H "Accept: application/vnd.github.v3+json" \
-                               "$MEMBERS_API" 2>/dev/null)
-
-              # Check if API call was successful (HTTP 200)
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                               -H "Accept: application/vnd.github.v3+json" \
-                               "$MEMBERS_API")
-
-              if [ "$MEMBERS_HTTP_CODE" = "200" ] && [ -n "$MEMBERS_DATA" ] && [ "$MEMBERS_DATA" != "null" ]; then
-                # Extract member logins successfully
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API")
+              if [ "$MEMBERS_HTTP_CODE" = "200" ]; then
+                MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "$MEMBERS_API" 2>/dev/null)
                 TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-                if [ -n "$TEAM_MEMBER_LOGINS" ]; then
-                  echo "DEBUG get-team-members: Successfully got members for $team: $TEAM_MEMBER_LOGINS"
-                  TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
-                else
-                  echo "DEBUG get-team-members: Team $team has no members"
-                  TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
-                fi
+                [ -n "$TEAM_MEMBER_LOGINS" ] && TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|" || TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
               elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
-                # Team not found
-                echo "Warning: Team $clean_team not found (HTTP $MEMBERS_HTTP_CODE)"
                 TEAM_MEMBERS="$TEAM_MEMBERS$team:team-not-found|"
               elif [ "$MEMBERS_HTTP_CODE" = "403" ]; then
-                # Insufficient permissions
-                echo "Warning: Insufficient permissions to access team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
                 TEAM_MEMBERS="$TEAM_MEMBERS$team:insufficient-permissions|"
               elif [ "$MEMBERS_HTTP_CODE" = "401" ]; then
-                # Unauthorized
-                echo "Warning: Unauthorized access to team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
                 TEAM_MEMBERS="$TEAM_MEMBERS$team:unauthorized|"
               else
-                # Other error
-                echo "Warning: Failed to fetch members for team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
                 TEAM_MEMBERS="$TEAM_MEMBERS$team:api-error|"
               fi
             done
           fi
-
-          echo "DEBUG generate-comment: Final TEAM_MEMBERS='$TEAM_MEMBERS'"
-
-          # Save TEAM_MEMBERS to file to avoid ARG_MAX limits (file persists between steps in same job)
           echo "$TEAM_MEMBERS" > "${RUNNER_TEMP}/team_members.txt"
-          echo "Saved team members data to ${RUNNER_TEMP}/team_members.txt ($(echo "$TEAM_MEMBERS" | wc -c) bytes)"
 
-          # PHASE 1: Collect all teams and individuals with their metadata (don't determine approval yet)
-          # This allows us to check combined approval for groups with the same files
-
-          echo "DEBUG: Phase 1 - Collecting all groups with metadata"
-
-          # Arrays to store group metadata
-          declare -A GROUP_TYPE          # team or pattern
-          declare -A GROUP_NAME          # display name (team name or pattern)
-          declare -A GROUP_MEMBERS_INFO  # formatted member info string
-          declare -A GROUP_MEMBERS_LIST  # comma-separated usernames for approval checking
-          declare -A GROUP_FILES         # comma-separated sorted file list
-          declare -A GROUP_FILES_HTML    # formatted HTML file list
-          GROUP_KEYS=()  # Array to track all group keys in order
-
+          declare -A GROUP_TYPE GROUP_NAME GROUP_MEMBERS_INFO GROUP_MEMBERS_LIST GROUP_FILES GROUP_FILES_HTML
+          declare -A GROUP_APPROVED_BY GROUP_IS_APPROVED
+          GROUP_KEYS=()
           GROUP_INDEX=0
-
-          # Collect teams
           if [ -n "$TEAMS" ]; then
-            echo "DEBUG generate-comment: TEAMS='$TEAMS'"
             IFS='§' read -ra TEAM_ARRAY <<< "$TEAMS"
-            echo "DEBUG generate-comment: Split into ${#TEAM_ARRAY[@]} team entries"
             for team_entry in "${TEAM_ARRAY[@]}"; do
               [ -z "$team_entry" ] && continue
-
               team=$(echo "$team_entry" | cut -d':' -f1)
-              [ -z "$team" ] && continue
-
-              # Skip the large-changes team
-              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
-                continue
-              fi
-
+              [ -z "$team" ] || [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ] && continue
               team_files=$(echo "$team_entry" | cut -d':' -f2-)
               clean_team=$(echo "$team" | sed 's/^@//')
-
-              # Sort files for comparison (normalize file list)
               sorted_files=$(echo "$team_files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
-
               KEY="team_$GROUP_INDEX"
               GROUP_KEYS+=("$KEY")
               GROUP_TYPE["$KEY"]="team"
               GROUP_NAME["$KEY"]="$clean_team"
               GROUP_FILES["$KEY"]="$sorted_files"
-
-              # Get team members
-              team_members_info=""
-              team_members_list=""
-
+              team_members_info="" team_members_list=""
               if [ -n "$TEAM_MEMBERS" ]; then
                 team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
                 if [ -n "$team_members_entry" ]; then
                   team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
-
-                  if [ "$team_owners" = "insufficient-permissions" ]; then
-                    team_members_info="Members: (insufficient token permissions)"
-                  elif [ "$team_owners" = "team-not-found" ]; then
-                    team_members_info="Members: (team not found)"
-                  elif [ "$team_owners" = "unauthorized" ]; then
-                    team_members_info="Members: (unauthorized access)"
-                  elif [ "$team_owners" = "api-error" ]; then
-                    team_members_info="Members: (API error)"
-                  elif [ "$team_owners" = "no-members" ]; then
-                    team_members_info="Members: (no members)"
-                  else
-                    # Get full names for team members
-                    all_members=""
-                    IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
-                    for member in "${MEMBERS_ARRAY[@]}"; do
-                      member_name="$member"
-                      if [ -n "$member" ] && [ "$member" != " " ]; then
-                        USER_API="https://api.github.com/users/$member"
-                        USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                       -H "Accept: application/vnd.github.v3+json" \
-                                       "$USER_API" 2>/dev/null)
-                        USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                        if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                          member_name="$USER_NAME"
+                  case "$team_owners" in
+                    insufficient-permissions) team_members_info="Members: (insufficient token permissions)";;
+                    team-not-found) team_members_info="Members: (team not found)";;
+                    unauthorized) team_members_info="Members: (unauthorized access)";;
+                    api-error) team_members_info="Members: (API error)";;
+                    no-members) team_members_info="Members: (no members)";;
+                    *)
+                      all_members=""
+                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                      for member in "${MEMBERS_ARRAY[@]}"; do
+                        member_name="$member"
+                        if [ -n "$member" ] && [ "$member" != " " ]; then
+                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                          [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ] && member_name="$USER_NAME"
                         fi
-                      fi
-                      all_members="$all_members$member_name, "
-                    done
-                    all_members=$(echo "$all_members" | sed 's/, $//')
-                    team_members_info="Members: $all_members"
-                    team_members_list="$team_owners"  # Store usernames for approval checking
-                  fi
+                        all_members="$all_members$member_name, "
+                      done
+                      team_members_info="Members: $(echo "$all_members" | sed 's/, $//')"
+                      team_members_list="$team_owners"
+                      ;;
+                  esac
                 else
                   team_members_info="Members: (team not found)"
                 fi
               else
                 team_members_info="Members: (no team data)"
               fi
-
               GROUP_MEMBERS_INFO["$KEY"]="$team_members_info"
               GROUP_MEMBERS_LIST["$KEY"]="$team_members_list"
-
-              # Create file list HTML
               file_list_html=""
               if [ -n "$team_files" ] && [ "$team_files" != "null" ]; then
                 file_list_html="\n  <details><summary>&#128193; Files owned by this team</summary>\n\n"
@@ -908,42 +828,31 @@ jobs:
                   if [ -n "$file" ]; then
                     escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
                     file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
-                    file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
-                    file_list_html="$file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
+                    file_list_html="$file_list_html  - [<code>$escaped_file</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash)\n"
                   fi
                 done
                 file_list_html="$file_list_html\n  </details>"
               fi
               GROUP_FILES_HTML["$KEY"]="$file_list_html"
-
               GROUP_INDEX=$((GROUP_INDEX + 1))
             done
           fi
 
-          # Collect individual patterns
           if [ -n "$INDIVIDUALS" ]; then
             IFS='§' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
             for pattern_group in "${PATTERN_GROUPS[@]}"; do
               [ -z "$pattern_group" ] && continue
-
               files=$(echo "$pattern_group" | rev | cut -d':' -f1 | rev)
               pattern_and_owners=$(echo "$pattern_group" | rev | cut -d':' -f2- | rev)
               pattern=$(echo "$pattern_and_owners" | cut -d':' -f1)
               owners=$(echo "$pattern_and_owners" | cut -d':' -f2-)
-
-              # Sort files for comparison
               sorted_files=$(echo "$files" | tr ',' '\n' | sort | tr '\n' ',' | sed 's/,$//')
-
               KEY="pattern_$GROUP_INDEX"
               GROUP_KEYS+=("$KEY")
               GROUP_TYPE["$KEY"]="pattern"
               GROUP_NAME["$KEY"]="$pattern"
               GROUP_FILES["$KEY"]="$sorted_files"
-
-              # Parse owners
-              all_owners=""
-              usernames_list=""
-
+              all_owners="" usernames_list=""
               IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
               for owner_pair in "${OWNERS_ARRAY[@]}"; do
                 username=$(echo "$owner_pair" | cut -d'|' -f1)
@@ -951,123 +860,60 @@ jobs:
                 all_owners="$all_owners$full_name, "
                 usernames_list="$usernames_list$username,"
               done
-              all_owners=$(echo "$all_owners" | sed 's/, $//')
-              usernames_list=$(echo "$usernames_list" | sed 's/,$//')
-
-              GROUP_MEMBERS_INFO["$KEY"]="Members: $all_owners"
-              GROUP_MEMBERS_LIST["$KEY"]="$usernames_list"
-
-              # Create file list HTML
+              GROUP_MEMBERS_INFO["$KEY"]="Members: $(echo "$all_owners" | sed 's/, $//')"
+              GROUP_MEMBERS_LIST["$KEY"]="$(echo "$usernames_list" | sed 's/,$//')"
               file_list_html=""
               if [ -n "$files" ] && [ "$files" != "null" ]; then
                 file_list_html="\n  <details><summary>&#128193; Files owned by this group</summary>\n\n"
                 IFS=',' read -ra FILES_ARRAY <<< "$files"
                 for file in "${FILES_ARRAY[@]}"; do
-                  if [ -n "$file" ]; then
-                    escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                    file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
-                    file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
-                    file_list_html="$file_list_html  - [<code>$escaped_file</code>]($file_url)\n"
-                  fi
+                  [ -n "$file" ] && file_list_html="$file_list_html  - [<code>$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$(echo -n "$file" | sha256sum | cut -d' ' -f1))\n"
                 done
                 file_list_html="$file_list_html\n  </details>"
               fi
               GROUP_FILES_HTML["$KEY"]="$file_list_html"
-
               GROUP_INDEX=$((GROUP_INDEX + 1))
             done
           fi
 
-          # PHASE 2: Check combined approval for groups with same files
-          echo "DEBUG: Phase 2 - Checking combined approval for groups with same files"
-
-          declare -A GROUP_APPROVED_BY  # Will store approved member names (with shared label if applicable)
-          declare -A GROUP_IS_APPROVED  # Will store true/false
-
           for key in "${GROUP_KEYS[@]}"; do
             files="${GROUP_FILES[$key]}"
             members="${GROUP_MEMBERS_LIST[$key]}"
-
-            # Find all groups with the same file list (from same CODEOWNERS line)
             combined_members="$members"
             has_other_groups=false
             for other_key in "${GROUP_KEYS[@]}"; do
-              if [ "$other_key" != "$key" ]; then
-                other_files="${GROUP_FILES[$other_key]}"
-                if [ "$files" = "$other_files" ]; then
-                  # Same files - combine members
-                  other_members="${GROUP_MEMBERS_LIST[$other_key]}"
-                  if [ -n "$other_members" ]; then
-                    combined_members="$combined_members,$other_members"
-                    has_other_groups=true
-                  fi
-                fi
+              if [ "$other_key" != "$key" ] && [ "$files" = "${GROUP_FILES[$other_key]}" ]; then
+                other_members="${GROUP_MEMBERS_LIST[$other_key]}"
+                [ -n "$other_members" ] && combined_members="$combined_members,$other_members" && has_other_groups=true
               fi
             done
-
-            # Check if ANY member from combined set has approved
-            # Build separate lists for direct members and shared members
-            direct_approved=""
-            shared_approved=""
+            direct_approved="" shared_approved=""
             if [ -n "$combined_members" ]; then
               IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
               for member in "${COMBINED_ARRAY[@]}"; do
                 [ -z "$member" ] && continue
                 if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                  # Get full name
-                  USER_API="https://api.github.com/users/$member"
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                 -H "Accept: application/vnd.github.v3+json" \
-                                 "$USER_API" 2>/dev/null)
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                  if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
-                    USER_NAME="$member"
-                  fi
-
-                  # Check if this member is in the current group or only in other groups
+                  [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
                   if [ "$has_other_groups" = true ] && ! echo "$members" | grep -q "$member"; then
-                    # This approver is from another group (shared codeowner)
                     shared_approved="$shared_approved$USER_NAME, "
                   else
-                    # This approver is from this group
                     direct_approved="$direct_approved$USER_NAME, "
                   fi
                 fi
               done
             fi
-
-            # Clean up trailing commas
             direct_approved=$(echo "$direct_approved" | sed 's/, $//')
             shared_approved=$(echo "$shared_approved" | sed 's/, $//')
-
-            # Build combined approved string
             approved_names=""
-            if [ -n "$direct_approved" ] && [ -n "$shared_approved" ]; then
-              approved_names="$direct_approved, $shared_approved (shared)"
-            elif [ -n "$direct_approved" ]; then
-              approved_names="$direct_approved"
-            elif [ -n "$shared_approved" ]; then
-              approved_names="$shared_approved (shared)"
-            fi
-
-            if [ -n "$approved_names" ]; then
-              GROUP_IS_APPROVED["$key"]="true"
-              GROUP_APPROVED_BY["$key"]="$approved_names"
-              echo "DEBUG: Group $key (${GROUP_NAME[$key]}) with files=$files is APPROVED by: $approved_names"
-            else
-              GROUP_IS_APPROVED["$key"]="false"
-              echo "DEBUG: Group $key (${GROUP_NAME[$key]}) with files=$files is PENDING"
-            fi
+            [ -n "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$direct_approved, $shared_approved (shared)"
+            [ -n "$direct_approved" ] && [ -z "$shared_approved" ] && approved_names="$direct_approved"
+            [ -z "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$shared_approved (shared)"
+            [ -n "$approved_names" ] && GROUP_IS_APPROVED["$key"]="true" && GROUP_APPROVED_BY["$key"]="$approved_names" || GROUP_IS_APPROVED["$key"]="false"
           done
 
-          # PHASE 3: Build display strings
-          echo "DEBUG: Phase 3 - Building display strings"
-
-          PENDING_GROUPS=""
-          APPROVED_GROUPS=""
-          PENDING_COUNT=0
-          APPROVED_COUNT=0
-
+          PENDING_GROUPS="" APPROVED_GROUPS="" PENDING_COUNT=0 APPROVED_COUNT=0
           for key in "${GROUP_KEYS[@]}"; do
             group_type="${GROUP_TYPE[$key]}"
             group_name="${GROUP_NAME[$key]}"
@@ -1075,116 +921,43 @@ jobs:
             file_list_html="${GROUP_FILES_HTML[$key]}"
             is_approved="${GROUP_IS_APPROVED[$key]}"
             approved_by="${GROUP_APPROVED_BY[$key]}"
-
-            if [ "$group_type" = "team" ]; then
-              type_label="Team"
-            else
-              type_label="Group"
-            fi
-
+            [ "$group_type" = "team" ] && type_label="Team" || type_label="Group"
             if [ "$is_approved" = "true" ]; then
-              if [ -n "$APPROVED_GROUPS" ]; then
-                APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n- ✅ **$group_name** ($type_label) - $members_info | **Approved by:** $approved_by$file_list_html"
-              else
-                APPROVED_GROUPS="- ✅ **$group_name** ($type_label) - $members_info | **Approved by:** $approved_by$file_list_html"
-              fi
+              [ -n "$APPROVED_GROUPS" ] && APPROVED_GROUPS="$APPROVED_GROUPS\n---\n\n"
+              APPROVED_GROUPS="$APPROVED_GROUPS- ✅ **$group_name** ($type_label) - $members_info | **Approved by:** $approved_by$file_list_html"
               APPROVED_COUNT=$((APPROVED_COUNT + 1))
             else
-              if [ -n "$PENDING_GROUPS" ]; then
-                PENDING_GROUPS="$PENDING_GROUPS\n---\n\n- ⏳ **$group_name** ($type_label) - $members_info | **Pending approval**$file_list_html"
-              else
-                PENDING_GROUPS="- ⏳ **$group_name** ($type_label) - $members_info | **Pending approval**$file_list_html"
-              fi
+              [ -n "$PENDING_GROUPS" ] && PENDING_GROUPS="$PENDING_GROUPS\n---\n\n"
+              PENDING_GROUPS="$PENDING_GROUPS- ⏳ **$group_name** ($type_label) - $members_info | **Pending approval**$file_list_html"
               PENDING_COUNT=$((PENDING_COUNT + 1))
             fi
           done
 
-            # Get requester information
-          REQUESTER_NAME=""
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # For manual workflow dispatch, the requester is the person who triggered it
-            REQUESTER_LOGIN="${{ github.event.sender.login }}"
-            REQUESTER_NAME="${{ github.event.sender.login }}"
+          if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
+            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
           else
-            # For comment triggers, the requester is the comment author
-            REQUESTER_LOGIN="${{ needs.parse-comment.outputs.comment-author || '' }}"
-            REQUESTER_NAME="$REQUESTER_LOGIN"
-          fi
-
-          # Get full name for requester if available
-          if [ -n "$REQUESTER_LOGIN" ] && [ "$REQUESTER_LOGIN" != "$PR_AUTHOR_LOGIN" ]; then
-            REQUESTER_USER_API="https://api.github.com/users/$REQUESTER_LOGIN"
-            REQUESTER_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                   -H "Accept: application/vnd.github.v3+json" \
-                                   "$REQUESTER_USER_API" 2>/dev/null)
-            REQUESTER_FULL_NAME=$(echo "$REQUESTER_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-            if [ -n "$REQUESTER_FULL_NAME" ] && [ "$REQUESTER_FULL_NAME" != "null" ]; then
-              REQUESTER_NAME="$REQUESTER_FULL_NAME"
-            fi
-          fi
-
-          # Combine pending groups first, then approved groups
-            echo "DEBUG: PENDING_GROUPS first 200 chars: ${PENDING_GROUPS:0:200}"
-            echo "DEBUG: APPROVED_GROUPS first 200 chars: ${APPROVED_GROUPS:0:200}"
-
-            if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
-              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
+            ALL_GROUPS="$PENDING_GROUPS"
+            [ -n "$PENDING_GROUPS" ] && [ -n "$APPROVED_GROUPS" ] && ALL_GROUPS="$ALL_GROUPS\n---\n\n$APPROVED_GROUPS"
+            [ -z "$PENDING_GROUPS" ] && [ -n "$APPROVED_GROUPS" ] && ALL_GROUPS="$APPROVED_GROUPS"
+            if [ "$PENDING_COUNT" -eq 0 ]; then
+              STATUS_MESSAGE="🎉 ✅ **All CodeOwners approvals complete!** This PR is ready to be merged."
+              SUMMARY_LINE="**Summary:** $APPROVED_COUNT/$APPROVED_COUNT groups approved"
             else
-              # Add separator between pending and approved groups if both exist
-              ALL_GROUPS="$PENDING_GROUPS"
-              if [ -n "$PENDING_GROUPS" ] && [ -n "$APPROVED_GROUPS" ]; then
-                ALL_GROUPS="$ALL_GROUPS\n---\n\n$APPROVED_GROUPS"
-              elif [ -n "$APPROVED_GROUPS" ]; then
-                ALL_GROUPS="$APPROVED_GROUPS"
-              fi
-              echo "DEBUG: ALL_GROUPS first 200 chars: ${ALL_GROUPS:0:200}"
-
-              # Create status message based on pending count
-              if [ "$PENDING_COUNT" -eq 0 ]; then
-                STATUS_MESSAGE="🎉 ✅ **All CodeOwners approvals complete!** This PR is ready to be merged."
-                SUMMARY_LINE="**Summary:** $APPROVED_COUNT/$APPROVED_COUNT groups approved"
-              else
-                STATUS_MESSAGE="This PR requires approval from **one member of each** of the following groups:"
-                SUMMARY_LINE="**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups"
-              fi
-
-              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\n$STATUS_MESSAGE\n\n$SUMMARY_LINE\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
+              STATUS_MESSAGE="This PR requires approval from **one member of each** of the following groups:"
+              SUMMARY_LINE="**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups"
             fi
-
-          # Note: "Requested by" and "Changes" info removed from GitHub comment as they're
-          # already visible in the PR UI. These details are included in Slack notifications
-          # where they provide important context.
-
-          # Add note if only PR author is available as codeowner
-          if [ "$NO_OWNERS_AVAILABLE" = "true" ]; then
-            COMMENT="$COMMENT\n\n**Note:** Only the PR author is available as a codeowner for this PR. No external review notifications will be sent."
+            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\n$STATUS_MESSAGE\n\n$SUMMARY_LINE\n\n### Group Information:\n\n$ALL_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
           fi
-
-          # Add helpful tip if triggered via comment and ping was not used
-          if [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ]; then
-            COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username1 @username2 @team/subteam\\\` to ping specific users and teams."
-          fi
-
-          # Add section for files without codeowners if any exist
+          [ "$NO_OWNERS_AVAILABLE" = "true" ] && COMMENT="$COMMENT\n\n**Note:** Only the PR author is available as a codeowner for this PR. No external review notifications will be sent."
+          [ "${{ github.event_name }}" = "issue_comment" ] && [ "$PING_OWNERS" = "false" ] && [ "$SEND_SLACK" = "false" ] && COMMENT="$COMMENT\n\n---\n💡 **Tip:** Use \\\`/codeowners ping\\\` to notify pending owners via Slack, or \\\`/ping @username1 @username2 @team/subteam\\\` to ping specific users and teams."
           if [ -n "$FILES_WITHOUT_OWNERS" ]; then
             COMMENT="$COMMENT\n\n---\n\n### ⚠️ Files Without CodeOwners\n\nThe following files have no designated code owners:"
-
-            # Build file list with clickable links
             FILES_WITHOUT_OWNERS_LIST=""
             IFS=$'\n' read -ra FILES_ARRAY <<< "$FILES_WITHOUT_OWNERS"
             for file in "${FILES_ARRAY[@]}"; do
-              if [ -n "$file" ]; then
-                # Escape special characters for markdown
-                escaped_file=$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')
-                # Create clickable link to file in PR
-                file_hash=$(echo -n "$file" | sha256sum | cut -d' ' -f1)
-                file_url="${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$file_hash"
-                FILES_WITHOUT_OWNERS_LIST="$FILES_WITHOUT_OWNERS_LIST\n- [<code>$escaped_file</code>]($file_url)"
-              fi
+              [ -n "$file" ] && FILES_WITHOUT_OWNERS_LIST="$FILES_WITHOUT_OWNERS_LIST\n- [<code>$(echo "$file" | sed 's/\*/\\*/g' | sed 's/_/\\_/g')</code>](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER/files#diff-$(echo -n "$file" | sha256sum | cut -d' ' -f1))"
             done
-
-            COMMENT="$COMMENT$FILES_WITHOUT_OWNERS_LIST"
-            COMMENT="$COMMENT\n\n💡 **Suggestion:** Consider adding these files to the CODEOWNERS file for better review coverage."
+            COMMENT="$COMMENT$FILES_WITHOUT_OWNERS_LIST\n\n💡 **Suggestion:** Consider adding these files to the CODEOWNERS file for better review coverage."
           fi
 
             # Output comment for next step
