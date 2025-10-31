@@ -97,14 +97,18 @@ class SpeechT5Encoder(nn.Module):
         pe_slice = self.positional_encoding[:, :seq_len, :]
         hidden_states = hidden_states + self.encode_positions_alpha * pe_slice
 
-        # Op 3: Pre-encoder layer norm (from wrapped_encoder line 42)
-        hidden_states = self.layer_norm(hidden_states)
-
-        # Op 4: Pre-encoder dropout (from wrapped_encoder line 43)
+        # Op 3: Prenet dropout (from encode_positions)
         if self.training:
             hidden_states = F.dropout(hidden_states, p=self.dropout_p, training=True)
 
-        # Op 5: Compute relative position bias (from wrapped_encoder line 45)
+        # Op 4: Pre-encoder layer norm (from wrapped_encoder)
+        hidden_states = self.layer_norm(hidden_states)
+
+        # Op 5: Pre-encoder dropout (from wrapped_encoder)
+        if self.training:
+            hidden_states = F.dropout(hidden_states, p=self.dropout_p, training=True)
+
+        # Op 6: Compute relative position bias (from wrapped_encoder)
         position_bias = self._compute_position_bias(seq_len, hidden_states.device)
 
         # Ops 6-N: Pass through encoder blocks
@@ -160,6 +164,8 @@ class SpeechT5EncoderBlock(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, position_bias: torch.Tensor) -> torch.Tensor:
         """
+        POST-NORM architecture (matching HuggingFace SpeechT5).
+
         Args:
             hidden_states: [batch, seq_len, hidden_size]
             position_bias: [seq_len, seq_len, 64]
@@ -167,26 +173,27 @@ class SpeechT5EncoderBlock(nn.Module):
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
         """
-        # HF line: residual = hidden_states
+        # Attention sub-layer with POST-NORM (HF style)
         residual = hidden_states
 
-        # HF line: hidden_states, attn_weights, _ = self.attention(...)
+        # HF: hidden_states, attn_weights, _ = self.attention(...)
         hidden_states = self.attention(hidden_states, position_bias=position_bias)
 
-        # HF line: hidden_states = self.dropout(hidden_states)
+        # HF: hidden_states = self.dropout(hidden_states)
         if self.training:
             hidden_states = F.dropout(hidden_states, p=self.dropout_p, training=True)
 
-        # HF line: hidden_states = residual + hidden_states
+        # HF: hidden_states = residual + hidden_states
         hidden_states = residual + hidden_states
 
-        # HF line: hidden_states = self.layer_norm(hidden_states)
+        # HF: hidden_states = self.layer_norm(hidden_states)  ← POST-NORM
         hidden_states = self.layer_norm(hidden_states)
 
-        # HF line: hidden_states = hidden_states + self.feed_forward(hidden_states)
+        # FFN sub-layer with POST-NORM
+        # HF: hidden_states = hidden_states + self.feed_forward(hidden_states)
         hidden_states = hidden_states + self.feed_forward(hidden_states)
 
-        # HF line: hidden_states = self.final_layer_norm(hidden_states)
+        # HF: hidden_states = self.final_layer_norm(hidden_states)  ← POST-NORM
         hidden_states = self.final_layer_norm(hidden_states)
 
         return hidden_states

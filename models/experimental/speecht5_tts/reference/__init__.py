@@ -24,6 +24,10 @@ from .speecht5_postnet import (
     SpeechT5PostNetConfig,
     load_from_huggingface as load_postnet_from_huggingface,
 )
+from .speecht5_full_model import (
+    SpeechT5FullReference,
+    load_full_reference_from_huggingface,
+)
 
 __all__ = [
     "SpeechT5Config",
@@ -33,7 +37,9 @@ __all__ = [
     "SpeechDecoderPrenet",
     "SpeechT5SpeechDecoderPostnet",
     "SpeechT5PostNetConfig",
+    "SpeechT5FullReference",
     "load_encoder_from_huggingface",
     "load_decoder_from_huggingface",
     "load_postnet_from_huggingface",
+    "load_full_reference_from_huggingface",
 ]

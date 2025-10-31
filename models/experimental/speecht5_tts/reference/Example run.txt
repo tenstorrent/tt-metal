@@ -1,0 +1,39 @@
+You can run SpeechT5 TTS locally with the 🤗 Transformers library.
+
+First install the 🤗 Transformers library, sentencepiece, soundfile and datasets(optional):
+pip install --upgrade pip
+pip install --upgrade transformers sentencepiece datasets[audio]
+Run inference via the Text-to-Speech (TTS) pipeline. You can access the SpeechT5 model via the TTS pipeline in just a few lines of code!
+from transformers import pipeline
+from datasets import load_dataset
+import soundfile as sf
+
+synthesiser = pipeline("text-to-speech", "microsoft/speecht5_tts")
+
+embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+speaker_embedding = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
+# You can replace this embedding with your own as well.
+
+speech = synthesiser("Hello, my dog is cooler than you!", forward_params={"speaker_embeddings": speaker_embedding})
+
+sf.write("speech.wav", speech["audio"], samplerate=speech["sampling_rate"])
+Run inference via the Transformers modelling code - You can use the processor + generate code to convert text into a mono 16 kHz speech waveform for more fine-grained control.
+from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
+from datasets import load_dataset
+import torch
+import soundfile as sf
+from datasets import load_dataset
+
+processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
+model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
+vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
+
+inputs = processor(text="Hello, my dog is cute.", return_tensors="pt")
+
+# load xvector containing speaker's voice characteristics from a dataset
+embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
+speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
+
+speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
+
+sf.write("speech.wav", speech.numpy(), samplerate=16000)
