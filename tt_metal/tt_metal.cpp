@@ -56,7 +56,7 @@
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
 #include "impl/buffers/circular_buffer.hpp"
-#include "impl/buffers/circular_buffer_constants.h"
+#include "impl/buffers/circular_buffer_constants.hpp"
 
 namespace tt {
 
