@@ -97,7 +97,7 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
     const auto& device_coords = tensor.device_storage().coords;
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (cluster_axis.has_value()) {
-        log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
+        log_info(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
         TT_FATAL(!device_coords.empty(), "device_coords is empty");
         TT_FATAL(
             device_coords.at(0).dims() > cluster_axis.value(),
@@ -109,10 +109,10 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
             ring_size = std::max(ring_size, device_coord[cluster_axis.value()] + 1);
         }
         TT_FATAL(ring_size > 0, "ring_size is 0");
-        log_debug(tt::LogOp, "Topological dimension {}", ring_size);
+        log_info(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
     } else {
-        log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
+        log_info(tt::LogOp, "Topological dimension {}", device_coords.size());
         return device_coords.size();
     }
 }

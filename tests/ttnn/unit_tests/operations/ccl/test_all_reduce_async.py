@@ -336,7 +336,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
     num_all_reduce_instances: int = 1,
     num_iters: int = 1,
     cluster_axis=None,
-    use_semaphore_free_all_reduce_impl: bool = False,
+    use_semaphore_free_all_reduce_impl: bool = True,
 ):
     mem_config = memory_config or ttnn.MemoryConfig(buffer_type=buffer_type)
 
@@ -395,6 +395,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
         )
         input_tensor_mesh = ttnn.to_device(ttnn_tensor, mesh_device)
+        logger.info("input_tensor_mesh shape: ", input_tensor_mesh.shape)
 
         # Run the op
         for i in range(num_iters):
@@ -787,3 +788,96 @@ def test_all_reduce_fabric_2d(
             assert (
                 mesh_device.num_program_cache_entries() == 2
             ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 2 as we are using fabric 2D dynamic, which uses reduce scatter + all gather"
+
+
+# AllReduce	1	Linear	bfloat16		[1, 1, 8192, 8192]	[1, 1, 8192, 8192]	DRAM / DRAM	8		#REF!	#REF!
+# AllReduce	1	Linear	bfloat16		[1, 1, 8192, 1024]	[1, 1, 8192, 1024]	DRAM / DRAM	8		#REF!	#REF!
+# AllReduce	1	Linear	bfloat16		[1, 1, 8192, 16]	[1, 1, 8192, 16]	DRAM / DRAM	8		#REF!	#REF!
+# AllReduce	1	Linear	bfloat16		[1, 1, 1, 1]	[1, 1, 1, 1]	DRAM / DRAM	8		#REF!	#REF!
+# Enumerate the post-commit cases explicitly
+@pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
+@pytest.mark.parametrize(
+    "num_devices, per_chip_output_shape, layout",
+    [
+        (8, [1, 1, 8192, 8192], ttnn.TILE_LAYOUT),
+        (8, [1, 1, 8192, 1024], ttnn.TILE_LAYOUT),
+        (8, [1, 1, 8192, 16], ttnn.TILE_LAYOUT),
+        (8, [1, 1, 1, 1], ttnn.TILE_LAYOUT),
+    ],
+    ids=[
+        "llama_1",
+        "llama_2",
+        "llama_3",
+        "llama_4",
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 6),
+    ],
+    ids=["perf"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_reduce_topology",
+    [
+        # 1D_Ring
+        (
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+            ttnn.Topology.Ring,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=[
+        "1D_Ring",
+    ],
+)
+@pytest.mark.parametrize("num_workers_per_link", [1, 2, 4], ids=["1worker", "2worker", "4worker"])
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+def test_all_reduce_llama(
+    mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    function_level_defaults,
+    enable_trace,
+    all_reduce_topology,
+    num_workers_per_link,
+    num_iters,
+):
+    submesh_shape = (2, 4)
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
+    submesh_device.reshape(ttnn.MeshShape((1, num_devices)))
+    ttnn.visualize_mesh_device(mesh_device)
+    ttnn.visualize_mesh_device(submesh_device)
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        submesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        function_level_defaults,
+        num_iters=num_iters,
+        cluster_axis=1,
+    )

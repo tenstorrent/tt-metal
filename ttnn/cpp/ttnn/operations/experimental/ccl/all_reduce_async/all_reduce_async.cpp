@@ -204,7 +204,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     // Reduce scatter + all gather
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
-    log_debug(tt::LogOp, "Using reduce scatter + all gather");
+    log_info(tt::LogOp, "Using reduce scatter + all gather1");
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
         interleaved_tensor,
         std::nullopt,
@@ -270,7 +270,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         composite_common::use_composite_reduce_scatter(padded_tensor, composite_dim, cluster_axis);
     if (composite_all_gather || composite_reduce_scatter || (dim != composite_dim) ||
         tt::tt_fabric::GetFabricConfig() == tt::tt_fabric::FabricConfig::FABRIC_2D) {
-        log_debug(tt::LogOp, "Using composite all gather + local reduce");
+        log_info(tt::LogOp, "Using composite all gather + local reduce2");
         // All reduce = all gather + local reduce
         composite_dim = 0;
 
@@ -303,7 +303,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     // Reduce scatter + all gather
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
     padded_tensor.deallocate();
-    log_debug(tt::LogOp, "Using reduce scatter + all gather");
+    log_info(tt::LogOp, "Using reduce scatter + all gather2");
     ttnn::Tensor scattered_tensor;
     if (rs_global_semaphores.has_value() && barrier_semaphores.has_value()) {
         TT_FATAL(topology.has_value(), "Topology is required for experimental reduce scatter");
@@ -320,6 +320,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             worker_subdevice_id_opt,
             cluster_axis);
     } else {
+        log_info(tt::LogOp, "scattered_tensor = ttnn::reduce_scatter");
         scattered_tensor = ttnn::reduce_scatter(
             interleaved_tensor,
             dim,
@@ -351,6 +352,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             use_llama_sharded,
             barrier_semaphores.value()[1]);
     } else {
+        log_info(tt::LogOp, "gathered = ttnn::all_gather");
         gathered = ttnn::all_gather(
             scattered_tensor,
             dim,

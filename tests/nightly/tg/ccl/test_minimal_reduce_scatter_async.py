@@ -254,3 +254,89 @@ def test_reduce_scatter_async_quad_host_mesh(
         cluster_axis=cluster_axis,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_blackhole("This test is for wormhole")
+@pytest.mark.parametrize("num_links", [1, 2, 4], ids=["1link", "2link", "4link"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        (8, [1, 1, 8192, 8192], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8192, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8192, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1, 1], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "llama_1",
+        "llama_2",
+        "llama_3",
+        "llama_4",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+    ],
+    ids=["perf"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("num_workers_per_link", [1, 2, 4], ids=["1worker", "2worker", "4worker"])
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_reduce_scatter_async_llama(
+    mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    rs_topology,
+    num_workers_per_link,
+):
+    submesh_shape = (1, 8)
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
+    submesh_device.reshape(ttnn.MeshShape((1, num_devices)))
+    ttnn.visualize_mesh_device(mesh_device)
+    ttnn.visualize_mesh_device(submesh_device)
+    run_reduce_scatter_impl(
+        submesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=None,
+        use_barrier=True,
+        use_persistent_buffers=True,
+        chunks_per_sync=None,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=None,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
