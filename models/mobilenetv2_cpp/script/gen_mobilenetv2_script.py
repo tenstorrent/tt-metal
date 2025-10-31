@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import os
+
+import torch
+
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 
 weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
