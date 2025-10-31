@@ -9,9 +9,9 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import click
 import yaml
@@ -95,7 +95,18 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     return config
 
 
-def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
+@dataclass
+class TracyConfig:
+    output_root: Path
+    base_port: int
+    extra_args: List[str]
+
+
+def get_rank_environment(
+    binding: RankBinding,
+    config: TTRunConfig,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     """Get all environment variables for a specific rank.
 
     Args:
@@ -145,10 +156,17 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Rank-specific overrides last (higher precedence)
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
 
+    if extra_env:
+        env.update(extra_env)
+
     return env
 
 
-def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> List[str]:
+def build_rank_environment_args(
+    binding: RankBinding,
+    config: TTRunConfig,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> List[str]:
     """Build environment variable arguments for mpirun.
 
     Args:
@@ -159,7 +177,7 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
         List of ["-x", "KEY=value"] arguments for mpirun
     """
     env_args = []
-    env = get_rank_environment(binding, config)
+    env = get_rank_environment(binding, config, extra_env)
 
     for key, value in env.items():
         env_args.extend(["-x", f"{key}={value}"])
@@ -167,7 +185,12 @@ def build_rank_environment_args(binding: RankBinding, config: TTRunConfig) -> Li
     return env_args
 
 
-def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optional[List[str]] = None) -> List[str]:
+def build_mpi_command(
+    config: TTRunConfig,
+    program: List[str],
+    mpi_args: Optional[List[str]] = None,
+    tracy_config: Optional[TracyConfig] = None,
+) -> List[str]:
     """Build OpenMPI command with per-rank environment variables."""
     # Find mpirun-ulfm executable, fall back to mpirun if not found
     mpi_launcher = shutil.which("mpirun-ulfm")
@@ -198,10 +221,47 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
             cmd.append(":")
 
         cmd.extend(["-np", "1"])
-        cmd.extend(build_rank_environment_args(binding, config))
-        cmd.extend(program)
+        tracy_env: Dict[str, str] = {}
+        rank_program = program
+        if tracy_config:
+            rank_program, tracy_env = wrap_program_with_tracy(program, binding, tracy_config)
+        cmd.extend(build_rank_environment_args(binding, config, tracy_env))
+        cmd.extend(rank_program)
 
     return cmd
+
+
+def wrap_program_with_tracy(
+    program: List[str], binding: RankBinding, tracy_config: TracyConfig
+) -> Tuple[List[str], Dict[str, str]]:
+    """Return the tracy-wrapped command and any extra env for a rank."""
+
+    rank_output_dir = (tracy_config.output_root / f"rank{binding.rank}").resolve()
+    rank_output_dir.mkdir(parents=True, exist_ok=True)
+    port = tracy_config.base_port + binding.rank
+
+    tracy_cmd = [
+        sys.executable,
+        "-m",
+        "tracy",
+        "-r",
+        "--port",
+        str(port),
+        "-o",
+        str(rank_output_dir),
+    ]
+
+    if tracy_config.extra_args:
+        tracy_cmd.extend(tracy_config.extra_args)
+
+    tracy_cmd.extend(program)
+
+    extra_env = {
+        "TT_METAL_PROFILER_DIR": str(rank_output_dir),
+        "TRACY_PORT": str(port),
+    }
+
+    return tracy_cmd, extra_env
 
 
 def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
@@ -252,6 +312,30 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     type=click.Path(exists=True, path_type=Path),
     help="Mock cluster rank binding configuration file (YAML)",
 )
+@click.option(
+    "--profile-with-tracy",
+    is_flag=True,
+    default=False,
+    help="Wrap each rank command with `python -m tracy` (unique port/output per rank).",
+)
+@click.option(
+    "--tracy-output-root",
+    required=False,
+    type=click.Path(path_type=Path),
+    help="Base directory for Tracy artifacts (defaults to $TT_METAL_HOME/generated/profiler/ttrun).",
+)
+@click.option(
+    "--tracy-base-port",
+    type=int,
+    default=8086,
+    show_default=True,
+    help="Base port for Tracy capture; each rank increments this by its MPI rank.",
+)
+@click.option(
+    "--tracy-extra-args",
+    callback=lambda ctx, param, value: shlex.split(value) if value else [],
+    help="Additional arguments to pass through to `python -m tracy` (quoted).",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -260,6 +344,10 @@ def main(
     verbose: bool,
     mpi_args: Optional[List[str]],
     mock_cluster_rank_binding: Optional[Path],
+    profile_with_tracy: bool,
+    tracy_output_root: Optional[Path],
+    tracy_base_port: int,
+    tracy_extra_args: List[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -345,7 +433,7 @@ def main(
         tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
         Section 2.4: Distributed Process Launch with tt-run
     """
-    program = ctx.args
+    program = list(ctx.args)
     try:
         config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
     except (ValueError, ValidationError) as e:
@@ -360,7 +448,19 @@ def main(
         raise click.ClickException(f"Program not found: {program[0]}")
 
     # Build MPI command
-    mpi_cmd = build_mpi_command(config, program, mpi_args)
+    tracy_config = None
+    if profile_with_tracy:
+        tracy_root = tracy_output_root
+        if tracy_root is None:
+            default_root = Path(os.environ.get("TT_METAL_HOME", str(Path.home()))) / "generated/profiler/ttrun"
+            tracy_root = default_root
+        tracy_root = tracy_root.expanduser().resolve()
+        tracy_root.mkdir(parents=True, exist_ok=True)
+        if tracy_base_port <= 0:
+            raise click.ClickException("--tracy-base-port must be a positive integer")
+        tracy_config = TracyConfig(output_root=tracy_root, base_port=tracy_base_port, extra_args=tracy_extra_args)
+
+    mpi_cmd = build_mpi_command(config, program, mpi_args, tracy_config)
 
     if verbose or dry_run:
         print_command(mpi_cmd)
