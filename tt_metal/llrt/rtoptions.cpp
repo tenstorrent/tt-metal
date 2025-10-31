@@ -137,6 +137,55 @@ RunTimeOptions::RunTimeOptions() :
     test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
     InitializeFromEnvVars();
+    profiler_enabled = false;
+    profile_dispatch_cores = false;
+    profiler_sync_enabled = false;
+    profiler_mid_run_dump = false;
+    profiler_buffer_usage_enabled = false;
+    profiler_trace_profiler = false;
+    profiler_trace_tracking = false;
+    profiler_cpp_post_process = false;
+
+    const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
+#if defined(TRACY_ENABLE)
+    if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
+        profiler_enabled = true;
+        const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
+        if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
+            profile_dispatch_cores = true;
+        }
+        const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
+        if (profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
+            profiler_sync_enabled = true;
+        }
+        const char* profiler_trace_profiler_str = std::getenv("TT_METAL_TRACE_PROFILER");
+        if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
+            profiler_trace_profiler = true;
+        }
+        const char* profiler_trace_tracking_str = std::getenv("TT_METAL_PROFILER_TRACE_TRACKING");
+        if (profiler_trace_tracking_str != nullptr && profiler_trace_tracking_str[0] == '1') {
+            profiler_trace_tracking = true;
+        }
+        const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
+        if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
+            profiler_mid_run_dump = true;
+        }
+        const char* profiler_cpp_post_process_str = std::getenv("TT_METAL_PROFILER_CPP_POST_PROCESS");
+        if (profiler_cpp_post_process_str != nullptr && profiler_cpp_post_process_str[0] == '1') {
+            profiler_cpp_post_process = true;
+        }
+    }
+
+    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
+    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
+        profiler_enabled = true;
+        profiler_noc_events_enabled = true;
+    }
+
+    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
+    if (profiler_noc_events_report_path_str != nullptr) {
+        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
+    }
 
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),

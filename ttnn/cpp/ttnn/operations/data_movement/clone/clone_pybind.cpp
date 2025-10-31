@@ -9,22 +9,28 @@
 
 namespace ttnn::operations::data_movement::clone {
 void bind_clone_operation(py::module& module) {
-    auto doc = R"doc(clone(input: Tensor, dtype: DataType, memory_config: MemoryConfig) -> Tensor
+    auto doc = R"doc(
+        Clones the input tensor, creating a copy with the specified memory configuration and converting its data type to dtype. This operation does not alter the tensor's layout.
 
-    Clones the input, creating a copy with the specified `memory_config` and converting its data type to `dtype`.
-    This operation does not alter the tensor's layout.
+        Args:
+            input (ttnn.Tensor): the input tensor to be cloned.
 
-    - ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
+        Keyword Args:
+            dtype (ttnn.DataType, optional): the target data type of the cloned tensor. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG. Defaults to `None`.
+            compute_kernel_config (ttnn.ComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
 
-    - TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
+        Returns:
+            ttnn.Tensor: the cloned output tensor.
 
-    If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.
+        Note:
+            * ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
+            * TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
+            * If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.
 
-    Args:
-        input: The tensor to be cloned.
-        dtype: The target data type of the cloned tensor.
-        memory_config: The memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
-        compute_kernel_config: The configuration for the compute kernel.
+        Example:
+            >>> tensor = ttnn.from_torch(torch.rand([1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = ttnn.clone(tensor, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     )doc";
 
     bind_registered_operation(

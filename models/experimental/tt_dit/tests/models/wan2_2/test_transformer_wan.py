@@ -24,17 +24,14 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
     [
-        # [(1, 1), (1, 1), 0, 1, 1],
-        # [(1, 2), (1, 2), 0, 1, 1],
-        # [(1, 2), (1, 2), 1, 0, 1],
-        # [(2, 1), (2, 1), 0, 1, 1],
-        # [(2, 1), (2, 1), 1, 0, 1],
-        # [(2, 2), (2, 2), 0, 1, 1],
-        # [(2, 2), (2, 2), 1, 0, 1],
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
+        # WH (ring) on 4x8
         [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
         [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        # BH (linear) on 4x8
+        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
     ],
     ids=[
         # "1x1sp0tp1",
@@ -46,8 +43,10 @@ from diffusers import WanTransformer3DModel as TorchWanTransformer3DModel
         # "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
-        "4x8sp0tp1",
-        "4x8sp1tp0",
+        "wh_4x8sp0tp1",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp0tp1",
+        "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -220,8 +219,12 @@ def test_wan_transformer_block(
         # [(2, 2), (2, 2), 1, 0, 1],
         [(2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
         [(2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear],
+        # WH (ring) on 4x8
         [(4, 8), (4, 8), 0, 1, 4, ring_params, ttnn.Topology.Ring],
         [(4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        # BH (linear) on 4x8
+        [(4, 8), (4, 8), 0, 1, 2, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
     ],
     ids=[
         # "1x1sp0tp1",
@@ -233,8 +236,10 @@ def test_wan_transformer_block(
         # "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
-        "4x8sp0tp1",
-        "4x8sp1tp0",
+        "wh_4x8sp0tp1",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp0tp1",
+        "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -334,6 +339,7 @@ def test_wan_transformer_model(
             model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
         assert os.path.exists(
@@ -378,11 +384,15 @@ def test_wan_transformer_model(
     "mesh_device, sp_axis, tp_axis, num_links, device_params, topology",
     [
         [(2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear],
+        # WH (ring) on 4x8
         [(4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring],
+        # BH (linear) on 4x8
+        [(4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear],
     ],
     ids=[
         "2x4sp0tp1",
-        "4x8sp1tp0",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -440,6 +450,7 @@ def test_wan_transformer_model_caching(
         model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
         subfolder=subfolder,
         parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     )
 

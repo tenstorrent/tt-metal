@@ -249,7 +249,6 @@
 
     { "job-name-component": "t3000-nightly-tests / t3k_ccl_tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
     { "job-name-component": "t3000-nightly-tests / t3k_ccl_2d_tests", "owner": { "id": "U013121KDH9", "name": "Austin Ho" } },
-    { "job-name-component": "t3000-nightly-tests / t3k_ccl_legacy_tests", "owner": { "id": "U05ACKAJTHS", "name": "Naif Tarafdar" } },
     { "job-name-component": "t3000-nightly-tests / t3k_fabric_unit_tests", "owner": { "id": "U08UBDUKH6Z", "name": "Neel Nyamagoudar" } },
     { "job-name-component": "t3000-nightly-tests / t3k_dispatch_unit_tests", "owner": { "id": "U07R05K4WGJ", "name": "John Bauman" } },
 
