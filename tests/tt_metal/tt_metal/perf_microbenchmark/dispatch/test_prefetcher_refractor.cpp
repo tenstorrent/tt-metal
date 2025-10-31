@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // TODO: need to remove all the includes that are not needed for this test
 #include "gtest/gtest.h"
 #include <tt-metalium/mesh_device.hpp>
