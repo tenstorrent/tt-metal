@@ -4,24 +4,15 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <optional>
-#include <unordered_set>
-
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
-#include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
 namespace tt_metal {
 class Buffer;
+struct Tile;
 }  // namespace tt_metal
 }  // namespace tt
 

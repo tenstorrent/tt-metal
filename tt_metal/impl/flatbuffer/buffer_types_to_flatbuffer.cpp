@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/buffer.hpp>
+
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
