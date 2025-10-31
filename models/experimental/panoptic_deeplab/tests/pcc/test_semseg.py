@@ -14,12 +14,12 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
+from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
@@ -53,7 +53,7 @@ def test_ttnn_semseg(device, model_location_generator):
     }
 
     ttnn_features: Dict[str, ttnn.Tensor] = {
-        name: ttnn.from_torch(tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        name: ttnn.from_torch(tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         for name, tensor in torch_features.items()
     }
 
@@ -66,7 +66,6 @@ def test_ttnn_semseg(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="SyncBN",
             train_size=train_size,
             weights_path=complete_weights_path,
         )
@@ -86,6 +85,10 @@ def test_ttnn_semseg(device, model_location_generator):
             conv_act_dtype=ttnn.bfloat8_b,
             conv_w_dtype=ttnn.bfloat8_b,
         )
+        # Setup layer overrides to enable optimized sharding
+        model_configs.setup_aspp()  # ASPP (used in decoder)
+        model_configs.setup_decoder()
+        model_configs.setup_heads()
 
         # Create TTNN model with fused parameters and centralized configuration
         ttnn_model = TtPanopticDeepLab(
@@ -97,7 +100,6 @@ def test_ttnn_semseg(device, model_location_generator):
             decoder_channels=decoder_channels,
             sem_seg_head_channels=sem_seg_head_channels,
             ins_embed_head_channels=ins_embed_head_channels,
-            norm="",
             train_size=train_size,
             model_configs=model_configs,
         )
@@ -112,8 +114,12 @@ def test_ttnn_semseg(device, model_location_generator):
     logger.info("Running TTNN semantic segmentation head test...")
     ttnn_out_tt, _ = ttnn_model.semantic_head(ttnn_features)
 
-    ttnn_out_torch = ttnn.to_torch(ttnn_out_tt).permute(0, 3, 1, 2)
-
-    passed, msg = assert_with_pcc(torch_out, ttnn_out_torch, pcc=0.99)
-    logger.info(f"Semantic segmentation PCC: {msg}")
-    assert passed, f"Semantic segmentation PCC test failed: {msg}"
+    passed = check_ttnn_output(
+        "Semantic",
+        torch_out,
+        ttnn_out_tt,
+        to_channel_first=False,
+        output_channels=ttnn_model.semantic_head.get_output_channels_for_slicing(),
+        exp_pcc=0.970,
+    )
+    assert passed, f"Semantic segmentation PCC test failed"

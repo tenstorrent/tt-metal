@@ -2,26 +2,39 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import json
+import os
+
+from loguru import logger
 
 CACHE_DICT_FILE = "cache_dict.json"
 
 
-def get_cache_path(model_name, subfolder, parallel_config, dtype="bf16"):
+def config_id(parallel_config):
+    config_id = ""
+    for n, v in parallel_config._asdict().items():
+        config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
+    return config_id
+
+
+def cache_dir_is_set() -> bool:
+    return "TT_DIT_CACHE_DIR" in os.environ
+
+
+def get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
     cache_dir = os.environ.get("TT_DIT_CACHE_DIR")
     assert cache_dir is not None, "TT_DIT_CACHE_DIR environment variable must be set if using caching."
 
     model_path = os.path.join(cache_dir, model_name)
     model_path = os.path.join(model_path, subfolder)
-    parallel_name = f"tp{parallel_config.tensor_parallel.factor}_{parallel_config.tensor_parallel.mesh_axis}_sp{parallel_config.sequence_parallel.factor}_{parallel_config.sequence_parallel.mesh_axis}_{dtype}"
+    parallel_name = f"{config_id(parallel_config)}mesh{mesh_shape[0]}x{mesh_shape[1]}_{dtype}"
     cache_path = os.path.join(model_path, parallel_name) + os.sep
 
     return cache_path
 
 
-def get_and_create_cache_path(model_name, subfolder, parallel_config, dtype="bf16"):
-    cache_path = get_cache_path(model_name, subfolder, parallel_config, dtype)
+def get_and_create_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
+    cache_path = get_cache_path(model_name, subfolder, parallel_config, mesh_shape, dtype)
     os.makedirs(cache_path, exist_ok=True)
     return cache_path
 
@@ -38,3 +51,25 @@ def load_cache_dict(cache_path):
 
 def cache_dict_exists(cache_path):
     return os.path.exists(os.path.join(cache_path, CACHE_DICT_FILE))
+
+
+def initialize_from_cache(tt_model, torch_model, model_name, subfolder, parallel_config, mesh_shape, dtype="bf16"):
+    if cache_dir_is_set():
+        cache_path = get_and_create_cache_path(
+            model_name=model_name,
+            subfolder=subfolder,
+            parallel_config=parallel_config,
+            mesh_shape=mesh_shape,
+            dtype=dtype,
+        )
+        if cache_dict_exists(cache_path):
+            logger.info(f"loading {subfolder} from cache... {cache_path}")
+            tt_model.from_cached_state_dict(load_cache_dict(cache_path))
+        else:
+            logger.info(
+                f"Cache does not exist. Creating cache: {cache_path} and loading {subfolder} from PyTorch state dict"
+            )
+            tt_model.load_torch_state_dict(torch_model.state_dict())
+            save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
+        return True
+    return False

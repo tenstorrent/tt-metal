@@ -16,7 +16,6 @@
 #include <tt-metalium/edm_fabric_counters.hpp>
 #include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
 #include <hostdevcommon/fabric_common.h>
-#include <unordered_map>
 #include <optional>
 #include <cstdint>
 #include <vector>
@@ -33,6 +32,9 @@ namespace tt::tt_fabric {
 struct FabricRiscConfig;
 class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
+class MultiPoolChannelAllocator;
+class ChannelToPoolMapping;
+class FabricRemoteChannelsAllocator;
 
 // Type alias for any fabric datamover builder
 using FabricDatamoverBuilder = std::
@@ -314,7 +316,7 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
-    std::vector<MemoryRegion> available_buffer_memory_regions = {};
+    std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
         std::size_t channel_buffer_size_bytes,
@@ -351,7 +353,20 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_noc_vc = 0;
 
     // Fabric channel allocator for L1 memory management
+    // Points to the primary allocator (typically static allocator for single-pool configs)
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
+
+    // Multi-pool allocator coordinator - manages all pool allocators
+    // Emits pool metadata and delegates to individual pools for CT args
+    std::shared_ptr<MultiPoolChannelAllocator> multi_pool_allocator;
+
+    // Channel-to-pool mapping for multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> channel_to_pool_mapping;
+    // Channel-to-pool mapping for remote (over eth) channels multi-pool support
+    std::shared_ptr<ChannelToPoolMapping> remote_channel_to_pool_mapping;
+
+    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
+    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
     void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
@@ -520,7 +535,7 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter = {};
+    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};

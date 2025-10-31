@@ -32,6 +32,7 @@ class TtUNet2DConditionModel(LightweightModule):
         state_dict,
         module_path,
         model_config,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -42,6 +43,7 @@ class TtUNet2DConditionModel(LightweightModule):
         self.padding = (1, 1)
         self.dilation = (1, 1)
         self.groups = 1
+        self.debug_mode = debug_mode
 
         self.time_proj = TtTimesteps(device, 320, True, 0, 1)
         self.add_time_proj = TtTimesteps(device, 256, True, 0, 1)
@@ -55,7 +57,7 @@ class TtUNet2DConditionModel(LightweightModule):
         )
 
         self.down_blocks = []
-        self.down_blocks.append(TtDownBlock2D(device, state_dict, "down_blocks.0", model_config))
+        self.down_blocks.append(TtDownBlock2D(device, state_dict, "down_blocks.0", model_config, debug_mode=debug_mode))
         self.down_blocks.append(
             TtCrossAttnDownBlock2D(
                 device,
@@ -66,6 +68,7 @@ class TtUNet2DConditionModel(LightweightModule):
                 10,
                 640,
                 True,
+                debug_mode=debug_mode,
             )
         )
         self.down_blocks.append(
@@ -78,6 +81,7 @@ class TtUNet2DConditionModel(LightweightModule):
                 20,
                 1280,
                 False,
+                debug_mode=debug_mode,
             )
         )
 
@@ -89,6 +93,7 @@ class TtUNet2DConditionModel(LightweightModule):
             1280,
             20,
             1280,
+            debug_mode=debug_mode,
         )
 
         self.up_blocks = []
@@ -102,6 +107,7 @@ class TtUNet2DConditionModel(LightweightModule):
                 20,
                 1280,
                 True,
+                debug_mode=debug_mode,
             )
         )
         self.up_blocks.append(
@@ -114,9 +120,10 @@ class TtUNet2DConditionModel(LightweightModule):
                 10,
                 640,
                 True,
+                debug_mode=debug_mode,
             )
         )
-        self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2", model_config))
+        self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2", model_config, debug_mode=debug_mode))
 
         conv_weights_in = state_dict["conv_in.weight"]
         conv_bias_in = state_dict["conv_in.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
@@ -179,7 +186,7 @@ class TtUNet2DConditionModel(LightweightModule):
         temb = ttnn.add(temb, temb_add, use_legacy=False)
         ttnn.deallocate(temb_add)
 
-        [sample, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
+        [sample, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv1_weights,
             in_channels=self.conv1_params["input_channels"],
@@ -203,6 +210,9 @@ class TtUNet2DConditionModel(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv1_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv1_weights = tt_conv1_weights
+            self.tt_conv1_bias = tt_conv1_bias
 
         sample = ttnn.to_memory_config(sample, ttnn.DRAM_MEMORY_CONFIG)
         residuals = (sample,)
@@ -275,7 +285,7 @@ class TtUNet2DConditionModel(LightweightModule):
 
         sample = ttnn.sharded_to_interleaved(sample, ttnn.L1_MEMORY_CONFIG)
 
-        [sample, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
+        [sample, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=sample,
             weight_tensor=self.tt_conv2_weights,
             in_channels=self.conv2_params["input_channels"],
@@ -299,5 +309,8 @@ class TtUNet2DConditionModel(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv2_weights = tt_conv2_weights
+            self.tt_conv2_bias = tt_conv2_bias
 
         return sample, [C, H, W]
