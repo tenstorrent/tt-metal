@@ -70,7 +70,7 @@ jobs:
         run: |
           mkdir -p $TT_METAL_SIMULATOR_HOME
           cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
-          cp /work/tt_metal/tt-metal/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run Idle Eth Tests
         timeout-minutes: 5
