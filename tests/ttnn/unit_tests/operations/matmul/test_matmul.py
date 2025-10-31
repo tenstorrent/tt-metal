@@ -1364,7 +1364,7 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
         core_grid=None if has_program_config else ttnn.CoreGrid(x=4, y=4),
         program_config=program_config,
         compute_kernel_config=ttnn.init_device_compute_kernel_config(
-            device.arch(),
+            mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
