@@ -6,7 +6,7 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 
@@ -89,8 +89,8 @@ def test_ccl_ddr_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if ttnn.get_num_devices() == 8 and all_gather_topology == ttnn.Topology.Ring:
-        pytest.skip("Skipping unsupported case Ring on 2D mesh with no wraparound rings")
+    if ttnn.get_num_devices() != 4 and all_gather_topology == ttnn.Topology.Ring:
+        pytest.skip("This test is only for the quietbox")
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
     # Check all the rows and columns independantly within the device
     if cluster_axis == 0:
@@ -210,7 +210,7 @@ def test_ccl_other_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    if ttnn.get_num_devices() == 8 and all_gather_topology == ttnn.Topology.Ring:
+    if ttnn.get_num_devices() != 4 and all_gather_topology == ttnn.Topology.Ring:
         pytest.skip("Skipping unsupported case Ring on 2D mesh with no wraparound rings")
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
     for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):

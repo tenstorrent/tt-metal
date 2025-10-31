@@ -64,7 +64,7 @@ jobs:
               TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQFixture.ActiveEthTwoRiscsHandshake
             timeout: 60
           - name: ccl nightly tests
-            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
             timeout: 60
           - name: fabric infra unit tests
             cmd: |
