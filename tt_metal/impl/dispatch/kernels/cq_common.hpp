@@ -325,6 +325,8 @@ template <
     uint32_t cb_base>
 class CBReader {
 public:
+    // Acquire pages from upstream. Updates the cb_fence and returns the number of pages acquired. May block waiting for
+    // credits from upstream if we already acquired all the pages previously.
     FORCE_INLINE uint32_t acquire_pages() {
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
@@ -350,6 +352,7 @@ public:
         return usable;
     }
 
+    // Advance the block to the next index, wrapping around if necessary.
     FORCE_INLINE void move_rd_to_next_block() {
         static_assert((cb_blocks & (cb_blocks - 1)) == 0);
         rd_block_idx++;
@@ -439,6 +442,8 @@ public:
         this->move_rd_to_next_block();
     }
 
+    // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until the fence.
+    // Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
     FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr) {
         if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
             if (this->rd_block_idx == cb_blocks - 1) {
@@ -477,6 +482,8 @@ public:
         this->CBReader<my_sem_id, cb_log_page_size, cb_blocks, cb_pages_per_block, cb_base>::init();
     }
 
+    // Get a new CB page. Will update cmd_ptr on wrap-around. Returns the number of pages acquired. Will not release
+    // pages to writer.
     FORCE_INLINE uint32_t get_cb_page(uint32_t& cmd_ptr) {
         // Strided past the data that has arrived, get the next page
         if (this->cb_fence == this->block_next_start_addr[this->rd_block_idx]) {
