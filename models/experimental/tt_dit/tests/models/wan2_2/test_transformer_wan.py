@@ -365,15 +365,22 @@ def test_wan_transformer_model(
         end = time.time()
         logger.info(f"Time taken to load state dict: {end - start} seconds")
 
+    tensor_io = quantization_helper.TensorIO(mesh_device, filter_key="attention")
+
     # Run TT model
     logger.info(
         f"Running TT model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}, timestep shape {timestep_input.shape}"
     )
-    tt_spatial_out = tt_model(
-        spatial=spatial_input,
-        prompt=prompt_input,
-        timestep=timestep_input,
-    )
+    with ttnn.register_pre_operation_hook(tensor_io.pre_hook_write_io), ttnn.register_post_operation_hook(
+        tensor_io.post_hook_write_io
+    ):
+        tt_spatial_out = tt_model(
+            spatial=spatial_input,
+            prompt=prompt_input,
+            timestep=timestep_input,
+        )
+
+    return
 
     # Run torch model
     logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
