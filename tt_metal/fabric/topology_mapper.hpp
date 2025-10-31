@@ -210,7 +210,7 @@ private:
      * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
      * to gather the mappings from all ranks.
      */
-    HostMeshMapping build_host_mesh_mapping();
+    HostMeshMapping build_host_mesh_mapping() const;
 
     /**
      * @brief Build the mapping between host ranks and host names
@@ -220,7 +220,18 @@ private:
      * to the ASIC IDs of the physical descriptor. Uses MPI through distributed context
      * to gather the mappings from all ranks.
      */
-    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, HostName>> build_host_name_to_mesh_rank_mapping();
+    std::unordered_map<MeshId, std::unordered_map<HostName, MeshHostRankId>> build_host_name_to_mesh_rank_mapping()
+        const;
+
+    /**
+     * @brief Build the mapping between fabric node IDs and host ranks
+     *
+     * This method iterates through all fabric node IDs in the mesh graph and creates mappings
+     * based on the fabric node IDs and host ranks from the local mesh binding, mapping them
+     * to the host ranks of the physical descriptor.
+     */
+    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
+    build_fabric_node_id_to_mesh_rank_mapping() const;
 
     /**
      * @brief Build logical adjacency maps from mesh graph connectivity
@@ -273,7 +284,8 @@ private:
         const MeshId mesh_id,
         const PhysicalAdjacencyMap& adjacency_map_physical,
         const LogicalAdjacencyMap& adjacency_map_logical,
-        const std::unordered_map<MeshHostRankId, HostName>& host_name_to_mesh_rank);
+        const std::unordered_map<HostName, MeshHostRankId>& host_name_to_mesh_rank,
+        const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_host_rank);
 
     /**
      * @brief Broadcast the mapping to all hosts

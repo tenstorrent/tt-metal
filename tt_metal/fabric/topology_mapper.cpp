@@ -227,6 +227,7 @@ void TopologyMapper::build_mapping() {
     // Build host-to-mesh mapping via distributed all-gather of local bindings.
     auto mesh_id_host_names = build_host_mesh_mapping();
     auto host_name_to_mesh_rank = build_host_name_to_mesh_rank_mapping();
+    auto fabric_node_id_to_mesh_rank = build_fabric_node_id_to_mesh_rank_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
@@ -243,7 +244,8 @@ void TopologyMapper::build_mapping() {
                 mesh_id,
                 adjacency_map_physical.at(mesh_id),
                 adjacency_map_logical.at(mesh_id),
-                host_name_to_mesh_rank.at(mesh_id));
+                host_name_to_mesh_rank.at(mesh_id),
+                fabric_node_id_to_mesh_rank.at(mesh_id));
         }
 
         // Broadcast the mapping to all hosts
@@ -257,7 +259,7 @@ void TopologyMapper::build_mapping() {
     rebuild_host_rank_structs_from_mapping();
 }
 
-std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_host_mesh_mapping() {
+std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_host_mesh_mapping() const {
     std::unordered_map<MeshId, std::unordered_set<HostName>> mesh_id_to_hosts;
 
     // Gather (mesh_id, host_rank) for ALL meshes owned by each rank, but only if multi-host.
@@ -327,15 +329,15 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_h
     return mesh_id_to_hosts;
 }
 
-std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, HostName>>
-TopologyMapper::build_host_name_to_mesh_rank_mapping() {
-    std::unordered_map<MeshId, std::unordered_map<MeshHostRankId, HostName>> mapping;
+std::unordered_map<MeshId, std::unordered_map<HostName, MeshHostRankId>>
+TopologyMapper::build_host_name_to_mesh_rank_mapping() const {
+    std::unordered_map<MeshId, std::unordered_map<HostName, MeshHostRankId>> mapping;
     auto global_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const std::size_t world_size = *global_context->size();
 
     if (world_size <= 1) {
         for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
-            mapping[mesh_id][local_mesh_binding_.host_rank] = physical_system_descriptor_.my_host_name();
+            mapping[mesh_id][physical_system_descriptor_.my_host_name()] = local_mesh_binding_.host_rank;
         }
         return mapping;
     }
@@ -384,10 +386,23 @@ TopologyMapper::build_host_name_to_mesh_rank_mapping() {
             }
             const auto [mesh_id, host_rank] = decode_mesh_id_and_rank(encoded);
             const auto& host_name = rank_to_host.at(mpi_rank);
-            mapping[mesh_id][host_rank] = host_name;
+            mapping[mesh_id][host_name] = host_rank;
         }
     }
 
+    return mapping;
+}
+
+std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>>
+TopologyMapper::build_fabric_node_id_to_mesh_rank_mapping() const {
+    std::unordered_map<MeshId, std::unordered_map<FabricNodeId, MeshHostRankId>> mapping;
+    for (const auto& mesh_id : mesh_graph_.get_mesh_ids()) {
+        for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
+            auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
+            TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
+            mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
+        }
+    }
     return mapping;
 }
 
@@ -454,7 +469,8 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     const MeshId mesh_id,
     const PhysicalAdjacencyMap& adjacency_map_physical,
     const LogicalAdjacencyMap& adjacency_map_logical,
-    const std::unordered_map<MeshHostRankId, HostName>& host_name_to_mesh_rank) {
+    const std::unordered_map<HostName, MeshHostRankId>& host_name_to_mesh_rank,
+    const std::unordered_map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank) {
     auto& phys_adj = adjacency_map_physical;
     auto& log_adj = adjacency_map_logical;
 
@@ -1009,6 +1025,15 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 }
             }
             if (!ok) {
+                continue;
+            }
+
+            // In the candidate generation loop, after degree check
+            HostName phys_host = physical_system_descriptor_.get_host_name_for_asic(phys_nodes[j]);
+            MeshHostRankId actual_rank = host_name_to_mesh_rank.at(phys_host);
+            FabricNodeId fn = log_nodes[li];
+            MeshHostRankId expected_rank = fabric_node_id_to_mesh_rank.at(fn);
+            if (actual_rank != expected_rank) {
                 continue;
             }
 
