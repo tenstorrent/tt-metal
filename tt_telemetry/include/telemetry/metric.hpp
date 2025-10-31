@@ -46,13 +46,7 @@ public:
 
     Metric(MetricUnit metric_units = MetricUnit::UNITLESS) : units(metric_units) {}
 
-    Metric(std::vector<std::string> path, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        units(metric_units), custom_path_(std::move(path)) {}
-
     virtual const std::vector<std::string> telemetry_path() const {
-        if (!custom_path_.empty()) {
-            return custom_path_;
-        }
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
 
@@ -87,17 +81,11 @@ protected:
 
     bool changed_since_transmission_ = false;
     uint64_t timestamp_ = 0;  // Unix timestamp in milliseconds, 0 = never set
-
-private:
-    std::vector<std::string> custom_path_;
 };
 
 class BoolMetric: public Metric {
 public:
     BoolMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
-
-    BoolMetric(std::vector<std::string> path, MetricUnit metric_units = MetricUnit::UNITLESS) :
-        Metric(std::move(path), metric_units) {}
 
     bool value() const {
         return value_;

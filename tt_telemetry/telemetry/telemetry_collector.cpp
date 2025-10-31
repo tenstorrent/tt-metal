@@ -29,6 +29,7 @@
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
+#include <telemetry/system/system_metrics.hpp>
 #include <topology/topology.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
@@ -54,9 +55,6 @@ static char hostname_[256];
 static std::vector<std::unique_ptr<BoolMetric>> bool_metrics_;
 static std::vector<std::unique_ptr<UIntMetric>> uint_metrics_;
 static std::vector<std::unique_ptr<DoubleMetric>> double_metrics_;
-
-// System-level metrics (host health, not device telemetry) - stored separately for initialization control
-static std::vector<std::unique_ptr<BoolMetric>> system_bool_metrics_;
 
 // Unbounded queue for storing received telemetry snapshots from aggregate endpoints
 static SimpleConcurrentQueue<std::pair<std::string, TelemetrySnapshot>> received_snapshots_;
@@ -199,13 +197,6 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
 static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
 
-    // Include system metrics in initial snapshot
-    for (size_t i = 0; i < system_bool_metrics_.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*system_bool_metrics_[i]);
-        snapshot->bool_metrics[path] = system_bool_metrics_[i]->value();
-        snapshot->bool_metric_timestamps[path] = system_bool_metrics_[i]->timestamp();
-    }
-
     for (size_t i = 0; i < bool_metrics_.size(); i++) {
         std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
         snapshot->bool_metrics[path] = bool_metrics_[i]->value();
@@ -236,17 +227,6 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
 }
 
 static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<TelemetrySnapshot> snapshot) {
-    // Update system metrics
-    for (size_t i = 0; i < system_bool_metrics_.size(); i++) {
-        if (!system_bool_metrics_[i]->changed_since_transmission()) {
-            continue;
-        }
-        std::string path = get_cluster_wide_telemetry_path(*system_bool_metrics_[i]);
-        snapshot->bool_metrics[path] = system_bool_metrics_[i]->value();
-        snapshot->bool_metric_timestamps[path] = system_bool_metrics_[i]->timestamp();
-        system_bool_metrics_[i]->mark_transmitted();
-    }
-
     for (size_t i = 0; i < bool_metrics_.size(); i++) {
         if (!bool_metrics_[i]->changed_since_transmission()) {
             continue;
@@ -305,12 +285,10 @@ static void telemetry_thread(
             MONITOR_INTERVAL_SECONDS.count());
 
         // Create TelemetryRunning system metric BEFORE UMD initialization
-        system_bool_metrics_.push_back(
-            std::make_unique<BoolMetric>(std::vector<std::string>{"system", "TelemetryRunning"}));
-        system_bool_metrics_.back()->set_value(false);  // Initially not running
+        bool_metrics_.push_back(std::make_unique<TelemetryRunningMetric>());
 
-        // Keep reference for updates (safe since vector never removes elements)
-        auto& telemetry_running = *system_bool_metrics_.back();
+        // Keep index for updates (safe even if vector reallocates)
+        size_t telemetry_running_index = bool_metrics_.size() - 1;
 
         std::unique_ptr<tt::umd::Cluster> cluster;
         std::unique_ptr<tt::tt_metal::Hal> hal;
@@ -339,12 +317,12 @@ static void telemetry_thread(
                 log_info(tt::LogAlways, "Initialized metrics");
 
                 // Update TelemetryRunning metric to success state
-                telemetry_running.set_value(true);
+                bool_metrics_[telemetry_running_index]->set_value(true);
             } catch (const std::exception& e) {
                 log_fatal(tt::LogAlways, "UMD initialization failed: {}", e.what());
 
                 // Mark telemetry as failed
-                telemetry_running.set_value(false);
+                bool_metrics_[telemetry_running_index]->set_value(false);
 
                 // Set end time for failure exposure period
                 auto failure_duration = std::chrono::seconds(failure_exposure_duration_seconds);
