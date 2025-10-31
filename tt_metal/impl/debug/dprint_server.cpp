@@ -71,39 +71,9 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
 }
 
 string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
-    if (core_type == CoreType::ETH) {
-        switch (risc_id) {
-            case 0: return abbreviated ? "ER" : "ERISC";
-            case 1:
-                return abbreviated ? "ER1" : "ERISC1";
-            default: return fmt::format("ERROR: UNSUPPORTED RISC_ID({}) for ETH", risc_id);
-        }
-    } else {
-        const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        auto [processor_class, processor_type] =
-            hal.get_processor_class_and_type_from_index(tt::tt_metal::HalProgrammableCoreType::TENSIX, risc_id);
-        switch (processor_class) {
-            case tt::tt_metal::HalProcessorClassType::DM:
-                switch (processor_type) {
-                    case 0: return abbreviated ? "BR" : "BRISC";
-                    case 1:
-                        return abbreviated ? "NC" : "NCRISC";
-                    default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_TYPE({}) for DM", processor_type);
-                }
-                break;
-            case tt::tt_metal::HalProcessorClassType::COMPUTE:
-                switch (processor_type) {
-                    case 0: return abbreviated ? "TR0" : "TRISC0";
-                    case 1: return abbreviated ? "TR1" : "TRISC1";
-                    case 2:
-                        return abbreviated ? "TR2" : "TRISC2";
-                    default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_TYPE({}) for COMPUTE", processor_type);
-                }
-                break;
-            default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_CLASS({})", processor_class);
-        }
-    }
-    return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    return hal.get_processor_class_name(
+        ::tt::tt_metal::hal_programmable_core_type_from_core_type(core_type), risc_id, abbreviated);
 }
 
 void AssertSize(uint8_t sz, uint8_t expected_sz) {
