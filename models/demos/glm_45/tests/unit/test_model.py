@@ -184,11 +184,11 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         reference_model.load_state_dict(reference_weights, strict=False)
         reference_model.eval()
 
-        # Use the same tokenizer setup as simple_text_demo
+        # Use the same tokenizer setup as text_demo
         tokenizer = setup["model_args"].tokenizer
 
-        # Use the same setup as simple_text_demo
-        from models.demos.glm_45.demo.simple_text_demo import prepare_glm_45_generator_args
+        # Use the same setup as text_demo
+        from models.demos.glm_45.demo.text_demo import prepare_glm_45_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()
@@ -287,11 +287,11 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
 
     # If we have cached tokens, we still need to set up the TTNN model
     if reference_tokens is not None:
-        # Use the same tokenizer setup as simple_text_demo
+        # Use the same tokenizer setup as text_demo
         tokenizer = setup["model_args"].tokenizer
 
-        # Use the same setup as simple_text_demo
-        from models.demos.glm_45.demo.simple_text_demo import prepare_glm_45_generator_args
+        # Use the same setup as text_demo
+        from models.demos.glm_45.demo.text_demo import prepare_glm_45_generator_args
 
         # Use the same parameters as the demo
         num_devices = setup["mesh_device"].get_num_devices()
