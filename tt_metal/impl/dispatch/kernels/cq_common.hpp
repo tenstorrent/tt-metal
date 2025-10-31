@@ -428,14 +428,22 @@ public:
         this->block_noc_writes_to_clear_ = noc_nonposted_writes_num_issued[noc_index];
     }
 
-    // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to writer.
+    // Returns how much data is available. Will block until data is available. May release old pages before cmd_ptr to
+    // writer. Updates cmd_ptr on wrap-around.
     // noc_nonposted_writes_num_issued[noc_index] must be updated before calling this function.
     // If this function doesn't return sufficient data, there are two options:
     // 1. Process all the available data and then call this function again.
     // 2. Call get_cb_page_and_release_pages to attempt to get more data.
     FORCE_INLINE uint32_t wait_for_available_data_and_release_old_pages(uint32_t& cmd_ptr) {
         if (this->available_space(cmd_ptr) == 0) {
-            get_cb_page_and_release_pages(cmd_ptr);
+            if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
+                if (this->rd_block_idx_ == cb_blocks - 1) {
+                    cmd_ptr = cb_base;
+                    this->cb_fence_ = cb_base;
+                }
+                move_rd_to_next_block_and_release_pages();
+            }
+            this->acquire_pages();
         }
         return this->available_space(cmd_ptr);
     }
@@ -491,19 +499,6 @@ private:
     FORCE_INLINE void move_rd_to_next_block_and_release_pages() {
         release_block_pages();
         this->move_rd_to_next_block();
-    }
-
-    // Get new CB pages and release old pages to writer. This should only be used when we know there is no data up until
-    // the fence. Returns the number of pages acquired. Updates cmd_ptr on wrap-around.
-    FORCE_INLINE uint32_t get_cb_page_and_release_pages(uint32_t& cmd_ptr) {
-        if (this->cb_fence_ == this->block_next_start_addr_[this->rd_block_idx_]) {
-            if (this->rd_block_idx_ == cb_blocks - 1) {
-                cmd_ptr = cb_base;
-                this->cb_fence_ = cb_base;
-            }
-            move_rd_to_next_block_and_release_pages();
-        }
-        return this->acquire_pages();
     }
 
     bool released_prev_block_{false};
