@@ -75,4 +75,12 @@ void evaluate(const std::shared_ptr<LazyTensor>& lazy_tensor) {
     }
 }
 
+void PassManager::add_pass(std::unique_ptr<Pass>&& pass) { passes_.push_back(std::move(pass)); }
+
+void PassManager::run(const tt::tt_metal::Tensor& lazy_tensor) {
+    for (auto& pass : passes_) {
+        pass->run(lazy_tensor);
+    }
+}
+
 }  // namespace ttnn::experimental::jit

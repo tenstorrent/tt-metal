@@ -16,9 +16,15 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/experimental/jit/lazy_mode.hpp"
+#include "ttnn/experimental/jit/evaluation_manager.hpp"
+#include "ttnn/experimental/jit/passes.hpp"
+#include "ttnn/experimental/jit/graph_utils.hpp"
+#include "ttnn/experimental/jit/lazy_device_operation.hpp"
+#include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/operations/rand/rand.hpp"
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn {
 namespace test {
@@ -459,6 +465,181 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
 
     log_info(tt::LogTest, "✓ Lazy and eager results match!");
     log_info(tt::LogTest, "==== Finished MatmulWithElementwiseLazy test ====");
+}
+
+TEST_F(LazyModeFixture, UnaryOperationsFusion) {
+    log_info(tt::LogTest, "==== Starting UnaryOperationsFusion test ====");
+
+    // First run in eager mode to get baseline
+    log_info(tt::LogTest, "Running operations in EAGER mode for baseline...");
+    ttnn::experimental::jit::disable();
+    ASSERT_FALSE(ttnn::experimental::jit::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 32});
+
+    // Create data for reproducibility
+    auto spec = TensorSpec(
+        shape,
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(ttnn::TILE_LAYOUT),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+    std::vector<bfloat16> data(shape.volume());
+    for (int i = 0; i < shape.volume(); i++) {
+        data[i] = static_cast<float>(i % 100) / 100.0f;  // Values between 0 and 1
+    }
+
+    auto input_eager = Tensor::from_vector(data, spec, device_);
+
+    // Chain of unary operations
+    auto relu_eager = ttnn::relu(input_eager);
+    auto exp_eager = ttnn::exp(relu_eager);
+    auto sqrt_eager = ttnn::sqrt(exp_eager);
+    auto eager_result = sqrt_eager.cpu();
+
+    // Now run in lazy mode with fusion pass
+    log_info(tt::LogTest, "Running same operations in LAZY mode with fusion pass...");
+    ttnn::experimental::jit::enable();
+    ASSERT_TRUE(ttnn::experimental::jit::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    auto input_lazy = Tensor::from_vector(data, spec, device_);
+
+    // Apply unary operations - these should be captured lazily
+    auto relu_lazy = ttnn::relu(input_lazy);
+    auto exp_lazy = ttnn::exp(relu_lazy);
+    auto sqrt_lazy = ttnn::sqrt(exp_lazy);
+
+    // Verify they are not materialized
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(relu_lazy.lazy()->is_materialized()) << "Relu tensor should not be materialized";
+    ASSERT_FALSE(exp_lazy.lazy()->is_materialized()) << "Exp tensor should not be materialized";
+    ASSERT_FALSE(sqrt_lazy.lazy()->is_materialized()) << "Sqrt tensor should not be materialized";
+
+    // Traverse and log graph BEFORE fusion
+    log_info(tt::LogTest, "\n==== Graph structure BEFORE fusion ====");
+    auto graph_before = ttnn::experimental::jit::GraphUtils::topological_sort(sqrt_lazy.lazy());
+    log_info(tt::LogTest, "Graph has {} nodes", graph_before.size());
+
+    size_t unary_ops_before = 0;
+    for (size_t i = 0; i < graph_before.size(); ++i) {
+        auto& node = graph_before[i];
+        auto op = node->op();
+        if (op) {
+            using UnaryLazyOp =
+                ttnn::experimental::jit::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
+            auto* unary_op = dynamic_cast<UnaryLazyOp*>(op.get());
+            if (unary_op) {
+                const auto& attrs = unary_op->attributes();
+                log_info(
+                    tt::LogTest,
+                    "  Node[{}]: Unary op, id={}, op_chain size={}, inputs={}",
+                    i,
+                    node->id(),
+                    attrs.op_chain.size(),
+                    node->op_inputs().size());
+                for (const auto& op_in_chain : attrs.op_chain) {
+                    log_info(tt::LogTest, "    - {}", enchantum::to_string(op_in_chain.type()));
+                }
+                unary_ops_before++;
+            }
+        } else {
+            log_info(tt::LogTest, "  Node[{}]: Materialized input, id={}", i, node->id());
+        }
+    }
+    log_info(tt::LogTest, "Total unary operations: {}", unary_ops_before);
+
+    // Before fusion: should have 3 unary ops (relu, exp, sqrt), each with op_chain size 1 + input node
+    ASSERT_EQ(graph_before.size(), 4) << "Graph should have 4 nodes before fusion";
+    ASSERT_EQ(unary_ops_before, 3) << "Should have 3 unary operations before fusion";
+
+    // Check the chain structure before fusion
+    using UnaryLazyOp = ttnn::experimental::jit::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
+    auto* sqrt_op_before = dynamic_cast<UnaryLazyOp*>(sqrt_lazy.lazy()->op().get());
+    ASSERT_NE(sqrt_op_before, nullptr) << "Sqrt operation should be a unary op";
+    ASSERT_EQ(sqrt_op_before->attributes().op_chain.size(), 1) << "Sqrt op_chain should have 1 element before fusion";
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs().size(), 1) << "Sqrt should have 1 input";
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs()[0]->id(), exp_lazy.lazy()->id()) << "Sqrt input should be exp output";
+
+    // Run the fusion pass
+    log_info(tt::LogTest, "\n==== Running UnaryOperationsFusionPass ====");
+    ttnn::experimental::jit::PassManager pass_manager;
+    pass_manager.add_pass(std::make_unique<ttnn::experimental::jit::UnaryOperationsFusionPass>());
+    pass_manager.run(sqrt_lazy);
+
+    // Traverse and log graph AFTER fusion
+    log_info(tt::LogTest, "\n==== Graph structure AFTER fusion ====");
+    auto graph_after = ttnn::experimental::jit::GraphUtils::topological_sort(sqrt_lazy.lazy());
+    log_info(tt::LogTest, "Graph has {} nodes", graph_after.size());
+
+    size_t unary_ops_after = 0;
+    size_t total_fused_ops = 0;
+    for (size_t i = 0; i < graph_after.size(); ++i) {
+        auto& node = graph_after[i];
+        auto op = node->op();
+        if (op) {
+            using UnaryLazyOp =
+                ttnn::experimental::jit::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
+            auto* unary_op = dynamic_cast<UnaryLazyOp*>(op.get());
+            if (unary_op) {
+                const auto& attrs = unary_op->attributes();
+                log_info(
+                    tt::LogTest,
+                    "  Node[{}]: Unary op, id={}, op_chain size={}, inputs={}",
+                    i,
+                    node->id(),
+                    attrs.op_chain.size(),
+                    node->op_inputs().size());
+                for (const auto& op_in_chain : attrs.op_chain) {
+                    log_info(tt::LogTest, "    - {}", enchantum::to_string(op_in_chain.type()));
+                }
+                unary_ops_after++;
+                total_fused_ops += attrs.op_chain.size();
+            }
+        } else {
+            log_info(tt::LogTest, "  Node[{}]: Materialized input, id={}", i, node->id());
+        }
+    }
+    log_info(tt::LogTest, "Total unary operations: {}", unary_ops_after);
+    log_info(tt::LogTest, "Total fused operations in chains: {}", total_fused_ops);
+
+    // After fusion: graph still has all nodes, but the last op should have merged op_chain
+    ASSERT_EQ(graph_after.size(), 2) << "Graph should have 2 node after fusion";
+    ASSERT_EQ(unary_ops_after, 1) << "Should have 4 unary operations after fusion";
+
+    // Check the fused operation
+    auto* sqrt_op_after = dynamic_cast<UnaryLazyOp*>(sqrt_lazy.lazy()->op().get());
+    ASSERT_NE(sqrt_op_after, nullptr) << "Sqrt operation should be a unary op after fusion";
+    ASSERT_EQ(sqrt_op_after->attributes().op_chain.size(), 3)
+        << "Fused op_chain should have 3 elements (relu+exp+sqrt)";
+
+    // Verify the op_chain contains the right operations in the right order
+    const auto& fused_chain = sqrt_op_after->attributes().op_chain;
+    ASSERT_EQ(fused_chain[0].type(), ttnn::operations::unary::UnaryOpType::RELU) << "First op should be RELU";
+    ASSERT_EQ(fused_chain[1].type(), ttnn::operations::unary::UnaryOpType::EXP) << "Second op should be EXP";
+    ASSERT_EQ(fused_chain[2].type(), ttnn::operations::unary::UnaryOpType::SQRT) << "Third op should be SQRT";
+
+    // Verify the graph structure: sqrt should now take input directly from the original input
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs().size(), 1) << "Sqrt should have 1 input after fusion";
+    ASSERT_EQ(sqrt_lazy.lazy()->op_inputs()[0]->id(), input_lazy.lazy()->id())
+        << "Sqrt should now take input directly from original input (bypassing relu and exp)";
+
+    log_info(tt::LogTest, "\n✓ Fusion verification complete!");
+    log_info(tt::LogTest, "  - op_chain expanded from 1 to 3 operations");
+    log_info(tt::LogTest, "  - Graph dependency updated: sqrt now takes input from original input");
+    log_info(tt::LogTest, "  - Operations in chain: RELU -> EXP -> SQRT");
+
+    // Now materialize
+    log_info(tt::LogTest, "\n==== Materializing result ====");
+    sqrt_lazy.materialize();
+    auto lazy_result = sqrt_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy (with fusion) and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy (with fusion) and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy (with fusion) and eager results match!");
+    log_info(tt::LogTest, "==== Finished UnaryOperationsFusion test ====");
 }
 
 }  // namespace test

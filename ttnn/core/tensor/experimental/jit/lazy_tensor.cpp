@@ -125,5 +125,9 @@ void LazyTensor::set_siblings(const std::vector<std::shared_ptr<LazyTensor>>& si
 void LazyTensor::set_materialized_output_idx(size_t idx) { materialized_output_idx_ = idx; }
 void LazyTensor::set_state(LazyTensorState state) { state_ = state; }
 
+void LazyTensor::set_op_inputs(const std::vector<std::shared_ptr<LazyTensor>>& new_inputs) { op_inputs_ = new_inputs; }
+
+void LazyTensor::set_op(const LazyOperationPtr& new_op) { op_ = new_op; }
+
 //
 }  // namespace ttnn::experimental::jit

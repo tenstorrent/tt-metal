@@ -65,6 +65,10 @@ public:
 
     void materialize();
 
+    // Allow optimization passes to modify the graph structure
+    void set_op_inputs(const std::vector<std::shared_ptr<LazyTensor>>& new_inputs);
+    void set_op(const LazyOperationPtr& new_op);
+
 private:
     void set_siblings(const std::vector<std::shared_ptr<LazyTensor>>& siblings);
     void set_materialized_output_idx(size_t idx);

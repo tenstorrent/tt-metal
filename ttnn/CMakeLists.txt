@@ -82,6 +82,7 @@ target_sources(
         core/tensor/experimental/jit/lazy_tensor.cpp
         core/tensor/experimental/jit/graph_utils.cpp
         core/tensor/experimental/jit/evaluation_manager.cpp
+        core/tensor/experimental/jit/passes.cpp
         core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp
