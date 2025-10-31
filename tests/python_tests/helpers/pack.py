@@ -1,63 +1,45 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# pack.py
-
-import array
 import struct
+
+import ml_dtypes
+import numpy as np
+import torch
 
 
 def pack_bfp16(torch_tensor):
-    return array.array(
-        "B",
-        b"".join(
-            struct.pack("<f", value.item())[2:] for value in torch_tensor.view(-1)
-        ),
-    ).tolist()
+    fp32_array = torch_tensor.cpu().to(torch.float32).numpy()
+    bfp16_array = fp32_array.astype(ml_dtypes.bfloat16)
+    return bfp16_array.tobytes()
 
 
 def pack_fp16(torch_tensor):
-    return array.array(
-        "B",
-        b"".join(struct.pack("<e", value.item()) for value in torch_tensor.view(-1)),
-    ).tolist()
+    return torch_tensor.cpu().numpy().astype(np.float16).tobytes()
 
 
 def pack_fp32(torch_tensor):
-    return array.array(
-        "B",
-        b"".join(struct.pack("<f", value.item()) for value in torch_tensor.view(-1)),
-    ).tolist()
+    return torch_tensor.cpu().numpy().astype(np.float32).tobytes()
 
 
 def pack_int32(torch_tensor):
-    return array.array(
-        "B", b"".join(struct.pack("<i", value) for value in torch_tensor)
-    ).tolist()
+    return torch_tensor.cpu().numpy().astype(np.int32).tobytes()
 
 
 def pack_uint32(torch_tensor):
-    return array.array(
-        "B", b"".join(struct.pack("<I", value) for value in torch_tensor)
-    ).tolist()
+    return torch_tensor.cpu().numpy().astype(np.uint32).tobytes()
 
 
 def pack_uint16(torch_tensor):
-    return array.array(
-        "B", b"".join(struct.pack("<H", value) for value in torch_tensor)
-    ).tolist()
+    return torch_tensor.cpu().numpy().astype(np.uint16).tobytes()
 
 
 def pack_int8(torch_tensor):
-    return array.array(
-        "B", b"".join(struct.pack("<b", value) for value in torch_tensor)
-    ).tolist()
+    return torch_tensor.cpu().numpy().astype(np.int8).tobytes()
 
 
 def pack_uint8(torch_tensor):
-    return array.array(
-        "B", b"".join(struct.pack("<B", value) for value in torch_tensor)
-    ).tolist()
+    return torch_tensor.cpu().numpy().astype(np.uint8).tobytes()
 
 
 def float_to_bfp8_block(block):
