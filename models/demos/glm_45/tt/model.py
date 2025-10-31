@@ -9,7 +9,6 @@ from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_decode_mask
 from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
-from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
@@ -206,39 +205,18 @@ class Model:
             )
             return (self.apply_rope, tt_cos, tt_sin)
 
-        # Decode path (single position): build static height-sharded cos/sin like Qwen
+        # Decode path (single position): return DRAM TILE cos/sin compatible with functional RoPE
         pos_val = self._to_scalar_pos(seq_len_or_pos)
         position_ids = torch.tensor([pos_val]).unsqueeze(0)
         rope_temp_tensor = torch.randn(1)
         cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
-
-        # Convert to ttnn, ensure 4D then replicate to static decode batch
-        cos_tt = ttnn.from_torch(cos, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        sin_tt = ttnn.from_torch(sin, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-
-        # Shapes: [1, head_dim] -> [1, 1, 1, head_dim]
-        cos_4d = ttnn.unsqueeze_to_4D(cos_tt)
-        sin_4d = ttnn.unsqueeze_to_4D(sin_tt)
-        # Repeat across batch dim (3rd index) to [1, 1, decode_batch, head_dim]
-        cos_4d = ttnn.repeat(cos_4d, (1, 1, self.decode_batch, 1))
-        sin_4d = ttnn.repeat(sin_4d, (1, 1, self.decode_batch, 1))
-        # Transpose to [1, decode_batch, 1, head_dim]
-        cos_4d = ttnn.transpose(cos_4d, 1, 2)
-        sin_4d = ttnn.transpose(sin_4d, 1, 2)
-
-        # Height-shard across decode batch cores (static memconfig)
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        decode_core_grid = ttnn.num_cores_to_corerangeset(self.decode_batch, grid, row_wise=True)
-        rot_memcfg = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.hf_config.head_dim),
-            core_grid=decode_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+        tt_cos = ttnn.from_torch(
+            cos.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )
-        cos_sharded = ttnn.interleaved_to_sharded(cos_4d, rot_memcfg)
-        sin_sharded = ttnn.interleaved_to_sharded(sin_4d, rot_memcfg)
-        return (self.apply_rope, cos_sharded, sin_sharded)
+        tt_sin = ttnn.from_torch(
+            sin.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        return (self.apply_rope, tt_cos, tt_sin)
 
     def ttnn_decode_forward(
         self, tokens, current_pos, rot_mat_idxs=None, page_table=None, kv_cache=None, argmax_on_device=False
@@ -430,39 +408,18 @@ class Model:
 
     def update_attention_masks(self, current_pos):
         """Update sliding window attention mask and RoPE position for decode mode (static batch)."""
-        # Lazily initialize rotary setup for decode (static batch)
-        if self.rotary_setup_decode is None:
-            max_seq_len = (
-                getattr(self.hf_config, "max_position_embeddings", None) or getattr(self, "args", None).max_seq_len
-                if hasattr(self, "args") and hasattr(self.args, "max_seq_len")
-                else 131072
-            )
-            rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
-            rope_scaling = None
-            self.rotary_setup_decode = RotarySetup(
-                device=self.mesh_device,
-                batch_size=self.decode_batch,
-                head_dim=self.hf_config.head_dim,
-                max_seq_len=max_seq_len,
-                rope_theta=rope_theta,
-                rope_scaling=rope_scaling,
-                datatype=ttnn.bfloat16,
-            )
-        # Compute sharded cos/sin for current positions (RotarySetup handles device transfer)
-        pos_t = current_pos.reshape(-1) if hasattr(current_pos, "reshape") else torch.as_tensor(current_pos).reshape(-1)
-        # Clamp negative positions to 0 to satisfy RotarySetup expectations
-        try:
-            pos_t = torch.where(pos_t < 0, torch.zeros_like(pos_t), pos_t)
-        except Exception:
-            pos_t = torch.as_tensor(pos_t)
-            pos_t = torch.where(pos_t < 0, torch.zeros_like(pos_t), pos_t)
-        if pos_t.numel() < self.decode_batch:
-            fill_val = pos_t[-1] if pos_t.numel() > 0 else torch.tensor(0, dtype=pos_t.dtype)
-            pad = fill_val.repeat(self.decode_batch - pos_t.numel())
-            pos_t = torch.cat([pos_t, pad], dim=0)
-        rot_mats = self.rotary_setup_decode.get_rot_mats(pos_t)
-        # Store in the same tuple structure as prefill (apply_rope, cos, sin)
-        self._current_rope_mats = (self.apply_rope, rot_mats[0], rot_mats[1])
+        # Create DRAM TILE RoPE matrices for current positions (functional RoPE expects DRAM TILE)
+        pos_scalar = self._to_scalar_pos(current_pos)
+        position_ids = torch.tensor([pos_scalar]).unsqueeze(0)
+        rope_temp_tensor = torch.randn(1)
+        cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
+        tt_cos = ttnn.from_torch(
+            cos.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        tt_sin = ttnn.from_torch(
+            sin.unsqueeze(-2), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        self._current_rope_mats = (self.apply_rope, tt_cos, tt_sin)
 
         pos_idx = self._to_scalar_pos(current_pos)
         sliding_mask = get_decode_mask(pos_idx, self.hf_config.sliding_window)

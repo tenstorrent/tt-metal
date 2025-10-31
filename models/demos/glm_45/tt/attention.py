@@ -338,161 +338,55 @@ class Attention:
         batch_size, seq_len, hidden_size = x.shape
         apply_rope, tt_cos, tt_sin = rope_mats
 
-        # Decode path with static batch: conform to self.decode_batch by padding or slicing
+        # For seq_len == 1, reuse the prefill SDPA path to minimize L1 demand
         if seq_len == 1:
-            # Use external kv_cache if provided (like tt-transformers), otherwise use internal cache
-            if kv_cache:
-                k_cache, v_cache = kv_cache[0], kv_cache[1]
-            else:
-                k_cache, v_cache = self.kv_cache
+            # Project Q/K/V
+            tt_q = ttnn.matmul(x, self.q_proj)
+            if self.q_proj_bias is not None:
+                tt_q = ttnn.add(tt_q, self.q_proj_bias, output_tensor=tt_q)
+            tt_q = ttnn.reshape(tt_q, [1, seq_len * batch_size, -1, self.head_dim])
 
-            # Use pre-created memcfgs and rotary transform for the static decode batch
+            tt_k = ttnn.matmul(x, self.k_proj)
+            if self.k_proj_bias is not None:
+                tt_k = ttnn.add(tt_k, self.k_proj_bias, output_tensor=tt_k)
+            tt_k = ttnn.reshape(tt_k, [1, seq_len * batch_size, -1, self.head_dim])
 
-            # Conform input batch to static decode_batch (pad if smaller, slice if larger)
-            if batch_size < self.decode_batch:
-                pad_bs = self.decode_batch - batch_size
-                pad_tensor = ttnn.from_torch(
-                    torch.zeros((pad_bs, 1, self.hidden_size), dtype=torch.bfloat16),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                )
-                x_padded = ttnn.concat([x, pad_tensor], dim=0)
-            elif batch_size > self.decode_batch:
-                # Keep the first decode_batch entries to match static trace
-                x_padded = ttnn.slice(x, (0, 0, 0), (self.decode_batch, 1, self.hidden_size))
-            else:
-                x_padded = x
+            tt_v = ttnn.matmul(x, self.v_proj)
+            if self.v_proj_bias is not None:
+                tt_v = ttnn.add(tt_v, self.v_proj_bias, output_tensor=tt_v)
+            tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
 
-            # Fused linear for WQKV on padded hidden states; linear expects [S, 1, B, H]
-            x4d = ttnn.reshape(x_padded, (1, 1, self.decode_batch, self.hidden_size))
-            xqkv_fused = ttnn.linear(
-                x4d,
-                self.wqkv,
-                bias=self.wqkv_bias,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            (
-                q_heads_pre_rot_1BQD,
-                k_heads_pre_rot_1BKD,
-                v_heads_1BKD,
-            ) = ttnn.experimental.nlp_create_qkv_heads_decode(
-                xqkv_fused,
-                num_heads=self.num_local_heads,
-                num_kv_heads=self.num_local_kv_heads,
-                memory_config=self.decode_heads_memcfg,
-            )
-            ttnn.deallocate(xqkv_fused)
-
-            # Optional Q/K RMSNorm before RoPE
             if self.use_qk_norm:
-                q_heads_pre_rot_1BQD = ttnn.rms_norm(q_heads_pre_rot_1BQD, epsilon=self.rms_norm_eps)
-                k_heads_pre_rot_1BKD = ttnn.rms_norm(k_heads_pre_rot_1BKD, epsilon=self.rms_norm_eps)
+                tt_q = ttnn.rms_norm(tt_q, epsilon=self.rms_norm_eps)
+                tt_k = ttnn.rms_norm(tt_k, epsilon=self.rms_norm_eps)
 
-            # Apply RoPE using precreated transform (static batch)
-            q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
-                q_heads_pre_rot_1BQD, tt_cos, tt_sin, self.rotary_decode_trans_mat, is_decode_mode=True
-            )
-            k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
-                k_heads_pre_rot_1BKD, tt_cos, tt_sin, self.rotary_decode_trans_mat, is_decode_mode=True
-            )
-            ttnn.deallocate(q_heads_pre_rot_1BQD)
-            ttnn.deallocate(k_heads_pre_rot_1BKD)
+            # Apply RoPE via functional kernel (compatible with TILE layout)
+            tt_q_rope = apply_rope(tt_q, tt_cos, tt_sin)
+            tt_q.deallocate(True)
+            tt_q = tt_q_rope
+            tt_k_rope = apply_rope(tt_k, tt_cos, tt_sin)
+            tt_k.deallocate(True)
+            tt_k = tt_k_rope
 
-            # Pad position idx and page table to static batch if needed
-            if position_idx is not None and position_idx.shape[0] != self.decode_batch:
-                if position_idx.shape[0] > self.decode_batch:
-                    position_idx = ttnn.slice(position_idx, (0,), (self.decode_batch,))
-                else:
-                    pad_bs = self.decode_batch - position_idx.shape[0]
-                    if pad_bs > 0:
-                        last_idx = ttnn.slice(position_idx, (position_idx.shape[0] - 1,), (position_idx.shape[0],))
-                        pad_pos = ttnn.concat([last_idx] * pad_bs, dim=0)
-                        position_idx = ttnn.concat([position_idx, pad_pos], dim=0)
+            # Reshape into SDPA shapes
+            tt_q = ttnn.reshape(tt_q, [batch_size * seq_len, 1, self.num_local_heads, self.head_dim])
+            tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, self.num_local_kv_heads, self.head_dim])
+            tt_v = ttnn.reshape(tt_v, [batch_size * seq_len, self.num_local_kv_heads, self.head_dim])
 
-            if page_table is not None and hasattr(page_table, "shape") and page_table.shape[0] != self.decode_batch:
-                if page_table.shape[0] > self.decode_batch:
-                    _shp = list(page_table.shape)
-                    _dims = len(_shp)
-                    _start = tuple([0] * _dims)
-                    _end = (self.decode_batch,) + tuple(int(x) for x in _shp[1:])
-                    page_table = ttnn.slice(page_table, _start, _end)
-                else:
-                    pad_bs = self.decode_batch - page_table.shape[0]
-                    if pad_bs > 0:
-                        # Duplicate last row 'pad_bs' times along batch dim (dim 0)
-                        _shp = list(page_table.shape)
-                        _dims = len(_shp)
-                        start = (_shp[0] - 1,) + tuple([0] * (_dims - 1))
-                        end = tuple(int(x) for x in _shp)
-                        last_row = ttnn.slice(page_table, start, end)
-                        pads = [last_row] * pad_bs
-                        page_table = ttnn.concat([page_table] + pads, dim=0)
-
-            ttnn.experimental.paged_update_cache(
-                k_cache,
-                k_heads_1BKD,
-                update_idxs_tensor=position_idx,
-                page_table=page_table,
+            # Use provided mask and attention sinks
+            tt_sdpa_out, _ = tt_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                self.sinks,
+                sm_scale=self.scaling,
+                tt_mask=mask,
+                tt_cache=None,
+                position_idx=None,
             )
-            ttnn.experimental.paged_update_cache(
-                v_cache,
-                v_heads_1BKD,
-                update_idxs_tensor=position_idx,
-                page_table=page_table,
-            )
-            ttnn.deallocate(v_heads_1BKD)
-
-            if page_table is not None:
-                tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                    q_heads_1BQD,
-                    k_cache,
-                    v_cache,
-                    cur_pos_tensor=position_idx,
-                    is_causal=True,
-                    attn_mask=None,
-                    attention_sink=self.decode_sinks,
-                    page_table_tensor=page_table,
-                    scale=self.scaling,
-                    program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            else:
-                tt_sdpa_tensor = ttnn.transformer.scaled_dot_product_attention_decode(
-                    q_heads_1BQD,
-                    k_cache,
-                    v_cache,
-                    cur_pos_tensor=position_idx,
-                    is_causal=True,
-                    attn_mask=None,
-                    attention_sink=self.decode_sinks,
-                    scale=self.scaling,
-                    program_config=self.sdpa_program_config,
-                    compute_kernel_config=self.sdpa_compute_kernel_config,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-            ttnn.deallocate(q_heads_1BQD)
-            # SDPA output: use precreated memcfg (static batch)
-            # Move SDPA output to explicit height-sharded memcfg, then concat heads
-            attn_output_11BH = ttnn.to_memory_config(tt_sdpa_tensor, self.sdpa_decode_out_memcfg)
-            attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
-                attn_output_11BH, num_heads=self.num_local_heads
-            )
-            ttnn.deallocate(attn_output_11BH)
-            ttnn.deallocate(tt_sdpa_tensor)
-            # Move to DRAM TILE for output matmul
-            tt_sdpa_out = ttnn.to_memory_config(attn_output_cat, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(attn_output_cat)
-            # Set logical batch dimension to actual batch_size (physical remains 32)
-            try:
-                feat_in = self.num_local_heads * self.head_dim
-                tt_sdpa_out = ttnn.reshape(tt_sdpa_out, (1, 1, batch_size, feat_in), (1, 1, ttnn.TILE_SIZE, feat_in))
-                # logger.info(f"After logical reshape tt_sdpa_out={tt_sdpa_out.shape}")
-            except Exception:
-                pass
+            ttnn.deallocate(tt_q)
+            ttnn.deallocate(tt_k)
+            ttnn.deallocate(tt_v)
         else:
             # Prefill path: apply optional Q/K RMSNorm and RoPE before SDPA
             tt_q = ttnn.matmul(x, self.q_proj)
@@ -520,7 +414,7 @@ class Attention:
             tt_k.deallocate(True)
             tt_k = tt_k_rope
             # Fill cache (prefill mode)
-            assert batch_size == 1, f"Only batch 1 supported, but got {batch_size=}"
+            # Allow any batch size by flattening into tokens dimension
 
             # Use external kv_cache if provided (like tt-transformers), otherwise use internal cache
             if kv_cache:

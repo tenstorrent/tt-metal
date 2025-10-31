@@ -263,50 +263,13 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings)
 
     # Create TTNN RoPE embeddings for decoder layer
-    # In decode path (seq_len == 1), the attention uses a device RoPE op that
-    # requires HEIGHT_SHARDED inputs for cos/sin. Build a height-sharded memcfg.
-    cos_in = cos.unsqueeze(-2)
-    sin_in = sin.unsqueeze(-2)
-    if seq_len == 1:
-        # Permute so logical dim 1 is batch, as expected by device RoPE op
-        cos_in = cos_in.permute(1, 0, 2, 3).contiguous()
-        sin_in = sin_in.permute(1, 0, 2, 3).contiguous()
-
-        # Expand batch to static decode batch size
-        decode_batch = getattr(decoder_layer.self_attn, "decode_batch", 2)
-        if cos_in.shape[1] < decode_batch:
-            pad_bs = decode_batch - cos_in.shape[1]
-            cos_pad = cos_in[:, -1:, ...].expand(cos_in.shape[0], pad_bs, *cos_in.shape[2:])
-            sin_pad = sin_in[:, -1:, ...].expand(sin_in.shape[0], pad_bs, *sin_in.shape[2:])
-            cos_in = torch.cat([cos_in, cos_pad], dim=1)
-            sin_in = torch.cat([sin_in, sin_pad], dim=1)
-
-        grid_size = setup["mesh_device"].compute_with_storage_grid_size()
-        core_grid = ttnn.num_cores_to_corerangeset(decode_batch, grid_size, row_wise=True)
-        hs_memcfg = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, cos_in.shape[-1]),
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-        tt_cos = ttnn.from_torch(
-            cos_in,
-            device=setup["mesh_device"],
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=hs_memcfg,
-        )
-        tt_sin = ttnn.from_torch(
-            sin_in,
-            device=setup["mesh_device"],
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            memory_config=hs_memcfg,
-        )
-    else:
-        tt_cos = ttnn.from_torch(cos_in, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin_in, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    # Attention decode path now uses functional RoPE; DRAM TILE tensors are fine
+    tt_cos = ttnn.from_torch(
+        cos.unsqueeze(-2), device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    tt_sin = ttnn.from_torch(
+        sin.unsqueeze(-2), device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
 
     from models.demos.glm_45.tt.rope import ApplyRotaryPosEmb
 
@@ -339,33 +302,29 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
     # run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
-    # Decode attention (seq_len==1) uses device kernels with higher L1 demand.
-    # Skip attention component for decode path in constrained test env.
-    if seq_len > 1:
-        run_attention_component(
-            setup["mesh_device"],
-            hidden_states.shape,
-            mask,
-            tt_mask,
-            position_embeddings,
-            rope_mats,
-            tt_position_idx,
-            reference_layer,
-            decoder_layer,
-        )
+    run_attention_component(
+        setup["mesh_device"],
+        hidden_states.shape,
+        mask,
+        tt_mask,
+        position_embeddings,
+        rope_mats,
+        tt_position_idx,
+        reference_layer,
+        decoder_layer,
+    )
 
     run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
     run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
-    # Test full decoder layer integration only for prefill path to avoid L1 pressure
-    if seq_len > 1:
-        tt_output = decoder_layer(
-            tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
-        )
+    # Test full decoder layer integration
+    tt_output = decoder_layer(
+        tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
+    )
 
-        pcc_threshold = 0.88
-        passing, output = run_component_comparison(
-            tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
-        )
-        assert passing, f"Decoder layer test failed. Output: {output}"
+    pcc_threshold = 0.93 if seq_len == 1 else 0.88
+    passing, output = run_component_comparison(
+        tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
+    )
+    assert passing, f"Decoder layer test failed. Output: {output}"
