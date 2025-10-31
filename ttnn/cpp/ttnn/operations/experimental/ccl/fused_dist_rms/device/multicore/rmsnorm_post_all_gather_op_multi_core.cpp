@@ -52,12 +52,15 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const Tensor& input_tensor,
     const Tensor& stats_tensor,
     Tensor& output_tensor,
+    const std::optional<const Tensor>& weight_tensor,
     float eps,
     uint32_t num_heads,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     Program program = tt::tt_metal::CreateProgram();
+
+    const bool has_weight = weight_tensor.has_value();
 
     const auto& input_shape = input_tensor.padded_shape();
     const uint32_t W = input_shape[-1];
@@ -78,6 +81,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     log_info(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
     log_info(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
     log_info(tt::LogOp, "num_devices: {}", num_devices);
+    log_info(tt::LogOp, "has_weight: {}", has_weight);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -101,21 +105,28 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     tt::DataFormat intermediate_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat reduce_scalar_data_format = tt::DataFormat::Float16_b;
 
+    tt::DataFormat weight_data_format =
+        has_weight ? tt::tt_metal::datatype_to_dataformat_converter(weight_tensor.value().dtype())
+                   : tt::DataFormat::Float16_b;
+
     uint32_t input_tile_size = tt::tile_size(input_data_format);
     uint32_t output_tile_size = tt::tile_size(output_data_format);
     uint32_t intermediate_tile_size = tt::tile_size(intermediate_data_format);
     uint32_t reduce_scalar_tile_size = tt::tile_size(reduce_scalar_data_format);
     uint32_t stats_tile_size = tt::tile_size(stats_data_format);
+    uint32_t weight_tile_size = tt::tile_size(weight_data_format);
 
     log_info(tt::LogOp, "input_data_format: {}", input_data_format);
     log_info(tt::LogOp, "output_data_format: {}", output_data_format);
     log_info(tt::LogOp, "stats_data_format: {}", stats_data_format);
     log_info(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
     log_info(tt::LogOp, "reduce_scalar_data_format: {}", reduce_scalar_data_format);
+    log_info(tt::LogOp, "weight_data_format: {}", weight_data_format);
 
     auto input_addr = input_tensor.buffer()->address();
     auto output_addr = output_tensor.buffer()->address();
     auto stats_addr = stats_tensor.buffer()->address();
+    auto weight_addr = has_weight ? weight_tensor.value().buffer()->address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -127,6 +138,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     CB 3: epsilon
     CB 4: reduce result
     CB 5: output
+    CB 6: weight
+    CB 7: intermediate hold x * RMS before applying weight
     */
 
     const uint32_t input_cb_id = tt::CBIndex::c_0;
@@ -135,6 +148,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const uint32_t epsilon_cb_id = tt::CBIndex::c_3;
     const uint32_t reduce_result_cb_id = tt::CBIndex::c_4;
     const uint32_t output_cb_id = tt::CBIndex::c_5;
+    const uint32_t weight_cb_id = tt::CBIndex::c_6;
+    const uint32_t intermediate_cb_id = tt::CBIndex::c_7;
 
     constexpr uint32_t double_buffer_constant = 2;
     const uint32_t input_cb_num_tiles = dst_reg_count * double_buffer_constant;
@@ -143,6 +158,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const uint32_t epsilon_cb_num_tiles = 1;
     const uint32_t reduce_result_cb_num_tiles = 1;
     const uint32_t output_cb_num_tiles = dst_reg_count * double_buffer_constant;
+    const uint32_t weight_cb_num_tiles = num_tile_cols;
+    const uint32_t intermediate_cb_num_tiles = dst_reg_count;
 
     create_cb(input_cb_id, program, core_grid, input_tile_size, input_cb_num_tiles, input_data_format);
 
@@ -169,6 +186,17 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
 
     create_cb(output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
 
+    if (has_weight) {
+        create_cb(weight_cb_id, program, core_grid, weight_tile_size, weight_cb_num_tiles, weight_data_format);
+        create_cb(
+            intermediate_cb_id,
+            program,
+            core_grid,
+            intermediate_tile_size,
+            intermediate_cb_num_tiles,
+            intermediate_data_format);
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -185,6 +213,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_id,
         stats_cb_id,
+        weight_cb_id,
         reduce_scalar_cb_id,
         epsilon_cb_id,
         num_tile_cols,
@@ -192,10 +221,13 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         stats_tiles_cols,
         packed_winv_value,
         e.u,
+        has_weight,
     };
 
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(has_weight ? weight_tensor.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_id,
@@ -226,15 +258,19 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     std::vector<uint32_t> compute_args = {
         input_cb_id,
         stats_cb_id,
+        weight_cb_id,
         reduce_scalar_cb_id,
         epsilon_cb_id,
         reduce_result_cb_id,
+        intermediate_cb_id,
         output_cb_id,
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
         use_float32_reduction,
-        use_legacy_rsqrt};
+        use_legacy_rsqrt,
+        has_weight,
+    };
 
     auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/compute/rmsnorm_post_allgather.cpp";
@@ -258,6 +294,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         std::vector<uint32_t> reader_runtime_args = {
             input_addr,
             stats_addr,
+            weight_addr,
             tile_row_start,
             tile_row_end,
         };
@@ -282,10 +319,11 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
             const std::vector<Tensor>& output_tensors) {
             const auto& input_tensor = input_tensors.at(0);
             const auto& stats_tensor = input_tensors.at(1);
+            const auto& weight_tensor = optional_input_tensors.at(0);
 
             const auto input_addr = input_tensor.buffer()->address();
             const auto stats_addr = stats_tensor.buffer()->address();
-
+            const auto weight_addr = weight_tensor.has_value() ? weight_tensor.value().buffer()->address() : 0;
             const auto& output_tensor = output_tensors.at(0);
             const auto output_addr = output_tensor.buffer()->address();
 
@@ -297,6 +335,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
                     auto& reader_args = reader_runtime_args_by_core.at(core.x).at(core.y);
                     reader_args[0] = input_addr;
                     reader_args[1] = stats_addr;
+                    reader_args[2] = weight_addr;
                 }
 
                 {

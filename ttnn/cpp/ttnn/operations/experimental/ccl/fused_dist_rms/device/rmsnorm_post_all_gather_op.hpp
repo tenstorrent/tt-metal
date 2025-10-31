@@ -18,6 +18,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const Tensor& input_tensor,
     const Tensor& stats_tensor,
     Tensor& output_tensor,
+    const std::optional<const Tensor>& weight,
     float eps,
     uint32_t num_heads,
     DeviceComputeKernelConfig compute_kernel_config);
@@ -29,10 +30,14 @@ struct FusedRMSNormPostAllGather {
     const DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 };
 
 }  // namespace ttnn::operations::experimental::ccl

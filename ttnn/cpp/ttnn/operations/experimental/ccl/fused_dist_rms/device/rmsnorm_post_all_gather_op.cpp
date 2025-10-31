@@ -16,7 +16,9 @@ using namespace tt::constants;
 
 namespace ttnn::operations::experimental::ccl {
 
-void FusedRMSNormPostAllGather::validate(const std::vector<Tensor>& input_tensors) const {
+void FusedRMSNormPostAllGather::validate(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors");
     auto& a = input_tensors.at(0);
     auto& stats = input_tensors.at(1);
@@ -62,6 +64,28 @@ void FusedRMSNormPostAllGather::validate(const std::vector<Tensor>& input_tensor
     // Expected input shape: [batch, 1, sequence_length, hidden_dim]
     TT_FATAL(a.logical_shape()[1] == 1, "Input dim 1 must be 1, got: {}", a.logical_shape()[1]);
     TT_FATAL(a.logical_shape()[0] == 1, "Expecting input batch dimension to be 1, got: {}", a.logical_shape()[0]);
+
+    TT_FATAL(optional_input_tensors.size() == 1, "Must have 1 optional input tensor");
+    if (optional_input_tensors.at(0).has_value()) {
+        auto& weight = optional_input_tensors.at(0).value();
+        TT_FATAL(weight.layout() == Layout::TILE, "Weight tensor must have TILE layout, got: {}", weight.layout());
+        TT_FATAL(weight.dtype() == DataType::BFLOAT16, "Weight tensor must be BFLOAT16, got: {}", weight.dtype());
+        TT_FATAL(weight.storage_type() == StorageType::DEVICE, "Weight tensor must be on device!");
+        TT_FATAL(weight.buffer() != nullptr, "Weight tensor must be allocated in buffers on device!");
+        TT_FATAL(
+            weight.padded_shape().size() == 2,
+            "Weight tensor must have 2 dimensions, got: {}",
+            weight.padded_shape().size());
+        TT_FATAL(
+            weight.padded_shape()[-1] == a.padded_shape()[-1],
+            "Weight tensor must have same last dimension as input, got: {} vs {}",
+            weight.padded_shape()[-1],
+            a.padded_shape()[-1]);
+        TT_FATAL(
+            weight.logical_shape()[0] == 1,
+            "Weight tensor must have batch dimension of 1, got: {}",
+            weight.logical_shape()[0]);
+    }
 }
 
 std::vector<TensorSpec> FusedRMSNormPostAllGather::compute_output_specs(
@@ -80,12 +104,15 @@ std::vector<TensorSpec> FusedRMSNormPostAllGather::compute_output_specs(
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks FusedRMSNormPostAllGather::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& a = input_tensors.at(0);
     const auto& stats = input_tensors.at(1);
+    const auto& weight = optional_input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
     return fused_rmsnorm_post_allgather_multi_core(
-        a, stats, output_tensor, this->eps, this->num_heads, this->compute_kernel_config);
+        a, stats, output_tensor, weight, this->eps, this->num_heads, this->compute_kernel_config);
 }
 }  // namespace ttnn::operations::experimental::ccl
