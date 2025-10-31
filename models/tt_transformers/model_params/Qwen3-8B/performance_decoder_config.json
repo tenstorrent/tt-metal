@@ -1,6 +1,6 @@
 {
     "decoders": {
-        "36": {
+        "35": {
             "precision_cfg": {
                 "FF1_FF3": "BFP8"
             },
