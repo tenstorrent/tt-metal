@@ -16,6 +16,9 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_int_sum.h"
 #include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api.h"
+
+#include "debug/assert.h"
+
 // clang-format off
 // 3 Loops in code
 // 1: Optional Max value for numerical stability
@@ -67,14 +70,13 @@ void reduce_cb(
     uint32_t cb_length_t);
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 void MAIN {
-    uint32_t NCHt = get_arg_val<uint32_t>(0);
-    uint32_t Ht = get_arg_val<uint32_t>(1);
-    uint32_t Wt = get_arg_val<uint32_t>(2);
-    uint32_t blk = get_arg_val<uint32_t>(3);
-    uint32_t start_ht = get_arg_val<uint32_t>(4);
-    uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
-    uint32_t cb_length_t = get_arg_val<uint32_t>(6);
-    bool dest_fp_32 = get_arg_val<uint32_t>(6) == 1;
+    const uint32_t NCHt = get_arg_val<uint32_t>(0);
+    const uint32_t Ht = get_arg_val<uint32_t>(1);
+    const uint32_t Wt = get_arg_val<uint32_t>(2);
+    const uint32_t blk = get_arg_val<uint32_t>(3);
+    const uint32_t start_ht = get_arg_val<uint32_t>(4);
+    const uint32_t mask_padded_data = get_arg_val<uint32_t>(5);
+    const uint32_t cb_length_t = get_arg_val<uint32_t>(6);
 
     // reserve one tile for zeros on cb_in2
     // We only do the reserve for the intermediates once and use pack_tile
@@ -105,7 +107,6 @@ void MAIN {
 #endif
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
-    uint32_t max_blk = dest_fp_32 ? 8 : 4;
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
@@ -128,7 +129,6 @@ void MAIN {
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
-            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -143,12 +143,12 @@ void MAIN {
                 cb_processed_input = cb_in0;
             }
 #endif
-            reduce_cb<PoolType::MAX>(cb_processed_input, tt::CBIndex::c_2, cb_prev_max, cb_max, use_prev_reduce, Wt);
+            reduce_cb<PoolType::MAX>(cb_processed_input, tt::CBIndex::c_2, cb_prev_max, cb_max, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
             if (cur_pass != num_cb_passes - 1) {
-                std::swap(cb_max, cb_prev_reduce);
+                std::swap(cb_max, cb_prev_max);
             }
         }
         use_prev_reduce = false;
@@ -165,7 +165,6 @@ void MAIN {
          */
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
-            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -235,7 +234,6 @@ void MAIN {
         cur_cb_length_t = cb_length_t;
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
-            // uint32_t blk = std::gcd(max_blk, cb_length_t);
 #if FUSED_SCALE_MASK
             apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
             apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
@@ -386,6 +384,8 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     //   blk is a divisor of cb_length_t
     //   Calculates e^cb_in for cb_length_t num of tiles
     //      Also if numeric stable calcs e^(cb_in- BCASTCOL(cb_max))
+    ASSERT(cb_length_t % blk == 0);
+
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 #ifdef NUMERIC_STABLE

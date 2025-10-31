@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 from ...layers.normalization import DistributedLayerNorm, LayerNorm
 from ...layers.linear import ColParallelLinear, Linear
@@ -196,7 +197,7 @@ class SD35TransformerBlock:
             self.norm2_context.from_cached_state_dict(substate(cache_dict, "norm2_context"))
             self.ff_context.from_cached_state_dict(substate(cache_dict, "ff_context"))
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         def _shuffle_ada_norm_linear(linear_state):
             # Rearrange QKV projections such column-fracturing shards the heads
             def _shuffle(x, in_dim):
@@ -229,18 +230,18 @@ class SD35TransformerBlock:
             }
             return out_state
 
-        self.norm1_linear.load_state_dict(_shuffle_ada_norm_linear(substate(state_dict, "norm1.linear")))
-        self.norm1_norm.load_state_dict(substate(state_dict, "norm1.norm"))
-        self.norm1_context_linear.load_state_dict(
+        self.norm1_linear.load_torch_state_dict(_shuffle_ada_norm_linear(substate(state_dict, "norm1.linear")))
+        self.norm1_norm.load_torch_state_dict(substate(state_dict, "norm1.norm"))
+        self.norm1_context_linear.load_torch_state_dict(
             _shuffle_ada_norm_linear(substate(state_dict, "norm1_context.linear"))
         )
-        self.norm1_context_norm.load_state_dict(substate(state_dict, "norm1_context.norm"))
+        self.norm1_context_norm.load_torch_state_dict(substate(state_dict, "norm1_context.norm"))
         self.attn.load_state_dict(substate(state_dict, "attn"))
-        self.norm2.load_state_dict(substate(state_dict, "norm2"))
-        self.ff.load_state_dict(rename_ff_state(substate(state_dict, "ff")))
+        self.norm2.load_torch_state_dict(substate(state_dict, "norm2"))
+        self.ff.load_torch_state_dict(rename_ff_state(substate(state_dict, "ff")))
         if not self.context_pre_only:
-            self.norm2_context.load_state_dict(substate(state_dict, "norm2_context"))
-            self.ff_context.load_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
+            self.norm2_context.load_torch_state_dict(substate(state_dict, "norm2_context"))
+            self.ff_context.load_torch_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
 
     def __call__(self, spatial_1BND, prompt_1BLD, time_embed_11BE, N, L):
         """
@@ -250,8 +251,8 @@ class SD35TransformerBlock:
         """
 
         time_embed_11BE = ttnn.silu(time_embed_11BE, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        spatial_time_11BF = self.norm1_linear(time_embed_11BE, core_grid=self.core_grid)
-        prompt_time_11BE = self.norm1_context_linear(time_embed_11BE, core_grid=self.core_grid)
+        spatial_time_11BF = self.norm1_linear(time_embed_11BE)
+        prompt_time_11BE = self.norm1_context_linear(time_embed_11BE)
 
         (
             spatial_shift_attn,
@@ -341,7 +342,7 @@ class SD35TransformerBlock:
                 **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
             )
 
-        spatial_ff_1BND = self.ff(spatial_normed_1BND, core_grid=self.core_grid)
+        spatial_ff_1BND = self.ff(spatial_normed_1BND)
         spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
 
         spatial_1BND += spatial_ff_1BND
@@ -370,7 +371,7 @@ class SD35TransformerBlock:
                 **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
             )
 
-        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD, core_grid=self.core_grid)
+        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD)
         prompt_ff_1BLD = prompt_ff_1BLD * prompt_gate_ff
 
         prompt_1BLD += prompt_ff_1BLD
@@ -531,16 +532,16 @@ class SD35Transformer2DModel:
         self.proj_out.from_cached_state_dict(substate(cache_dict, "proj_out"))
 
     def load_state_dict(self, state_dict):
-        self.pos_embed.load_state_dict(substate(state_dict, "pos_embed"))
-        self.time_text_embed.load_state_dict(substate(state_dict, "time_text_embed"))
-        self.context_embedder.load_state_dict(substate(state_dict, "context_embedder"))
+        self.pos_embed.load_torch_state_dict(substate(state_dict, "pos_embed"))
+        self.time_text_embed.load_torch_state_dict(substate(state_dict, "time_text_embed"))
+        self.context_embedder.load_torch_state_dict(substate(state_dict, "context_embedder"))
 
         for i, block in enumerate(self.transformer_blocks):
-            block.load_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
+            block.load_torch_state_dict(substate(state_dict, f"transformer_blocks.{i}"))
 
-        self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
-        self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))
-        self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+        self.norm_out_linear.load_torch_state_dict(substate(state_dict, "norm_out.linear"))
+        self.norm_out_norm.load_torch_state_dict(substate(state_dict, "norm_out.norm"))
+        self.proj_out.load_torch_state_dict(substate(state_dict, "proj_out"))
 
     def __call__(self, spatial, prompt_embed, pooled_projections, timestep, N, L):
         """
@@ -550,7 +551,7 @@ class SD35Transformer2DModel:
             pooled_projections: Pooled text projections - replicated
             timestep: Timestep tensor - replicated
         """
-        spatial = self.pos_embed(spatial)
+        spatial = self.pos_embed(spatial, already_unfolded=True)
 
         time_embed = self.time_text_embed(timestep, pooled_projections)
         prompt_embed = self.context_embedder(prompt_embed)
@@ -559,9 +560,7 @@ class SD35Transformer2DModel:
         for block in self.transformer_blocks:
             spatial, prompt_embed = block(spatial, prompt_embed, time_embed, N, L)
         # Final normalization and projection
-        spatial_time = self.norm_out_linear(
-            ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG), core_grid=self.core_grid
-        )
+        spatial_time = self.norm_out_linear(ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         scale, shift = chunk_time(spatial_time, 2)
 
         # Gather spatial such that it is fully replicated for final norm and projection
@@ -602,9 +601,7 @@ class SD35Transformer2DModel:
 
         spatial = self.norm_out_norm(spatial) * (1 + scale) + shift
 
-        spatial_out = self.proj_out(
-            spatial, core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config
-        )
+        spatial_out = self.proj_out(spatial, compute_kernel_config=self.hifi_compute_kernel_config)
 
         # NOTE: While we should be able to gather on sequence after norm and proj,
         # it leads to terrible outputs for 2x2sp1tp0. Need to debug.
@@ -625,3 +622,28 @@ class SD35Transformer2DModel:
         #     )
 
         return spatial_out
+
+    def patchify(self, latents: torch.Tensor) -> torch.Tensor:
+        # N, H, W, C -> 1, N, (H / P) * (W / P), P * P * C
+        batch_size, height, width, channels = latents.shape
+        patch = self.patch_size
+
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
+
+        latents = latents.reshape([batch_size, height // patch, patch, width // patch, patch, channels])
+        return latents.transpose(2, 3).flatten(3, 5).flatten(1, 2).unsqueeze(0)
+
+    def unpatchify(self, spatial: torch.Tensor, *, height: int, width: int) -> torch.Tensor:
+        # 1, N, (H / P) * (W / P), P * P * C -> N, H, W, C
+        one, batch_size, _, _ = spatial.shape
+        assert one == 1
+        patch = self.patch_size
+
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
+
+        spatial = spatial.reshape([batch_size, height // patch, width // patch, patch, patch, -1])
+        return spatial.transpose(2, 3).flatten(3, 4).flatten(1, 2)

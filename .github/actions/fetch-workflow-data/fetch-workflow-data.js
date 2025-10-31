@@ -13,7 +13,6 @@ const { execFileSync } = require('child_process');
 const MAX_PAGES = 100; // Maximum number of pages to fetch from GitHub API (tune for rate limits/performance)
 const RUNS_PER_PAGE = 100; // GitHub API max per page
 const DEFAULT_DAYS = 15; // Default rolling window in days
-
 /**
  * Get the cutoff date for filtering runs.
  * @param {number} days - Number of days to look back
@@ -26,21 +25,31 @@ function getCutoffDate(days) {
 }
 
 /**
- * Fetch all workflow runs for the repository, paginated, stopping at sinceDate if provided.
+ * Fetch all workflow runs for the repository, paginated, stopping early when cached runs are encountered.
  * @param {object} github - Octokit client
  * @param {object} context - GitHub Actions context
  * @param {number} days - Number of days to look back
- * @param {Date} sinceDate - Only fetch runs after this date
- * @returns {Promise<Array>} Array of workflow run objects
+ * @param {Set<string>} cachedRunIds - Set of run IDs that are already cached (skip these)
+ * @param {string} eventType - Optional event type filter
+ * @returns {Promise<Array>} Array of workflow run objects (only new, non-cached runs)
  */
-async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType='') {
+async function fetchAllWorkflowRuns(github, context, days, cachedRunIds = null, eventType='') {
   const allRuns = [];
   const cutoffDate = getCutoffDate(days);
   const createdDateFilter = `>=${cutoffDate.toISOString()}`;
+  const cachedIds = cachedRunIds || new Set();
 
-  core.info(`createdDateFilter: ${createdDateFilter}`);
-  core.info(`days ${days}, sinceDate: ${sinceDate}`);
+  core.info(`[FETCH] createdDateFilter: ${createdDateFilter}`);
+  core.info(`[FETCH] days: ${days}, cachedRunIds: ${cachedIds.size}, eventType: ${eventType || 'all'}`);
+
+  let consecutiveCachedRuns = 0;
+  const MAX_CONSECUTIVE_CACHED = 10; // If we see 10 consecutive cached runs, assume we've caught up
+  let skippedOldRuns = 0;
+  let skippedCachedRuns = 0;
+  let addedNewRuns = 0;
+
   for (let page = 1; page <= MAX_PAGES; page++) { // download pages of runs from the GitHub API
+    core.info(`[FETCH] Fetching page ${page}...`);
     const params = {
       owner: context.repo.owner,
       repo: context.repo.repo,
@@ -52,22 +61,61 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
     }
     const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo(params); // listWorkflowRunsForRepo is a GitHub API call to list the workflow runs for the repository
     if (!runs.workflow_runs.length) {
+      core.info(`[FETCH] No runs on page ${page}, stopping`);
       break;
     }
 
+    core.info(`[FETCH] Page ${page}: processing ${runs.workflow_runs.length} runs`);
+
     for (const run of runs.workflow_runs) {
       const runDate = new Date(run.created_at);
-      if (sinceDate && runDate <= sinceDate) {
-        core.info(`Early exit: found run at ${runDate} <= latest cached date ${sinceDate}`);
-        return allRuns;
-      } // if a run is found that's too old, we can early exit cuz all future runs will be even older
-      if (runDate >= cutoffDate) {
-        allRuns.push(run);
+      const runIdStr = String(run.id);
+
+      // Skip runs older than cutoff date
+      if (runDate < cutoffDate) {
+        skippedOldRuns++;
+        if (skippedOldRuns <= MAX_CONSECUTIVE_CACHED) {
+          core.info(`[FETCH] Skipping run ${runIdStr} (older than cutoff: ${runDate.toISOString()} < ${cutoffDate.toISOString()})`);
+        }
+        continue;
+      }
+
+      // If we have cached run IDs, check if this run is already cached
+      if (cachedIds.size > 0 && cachedIds.has(runIdStr)) {
+        consecutiveCachedRuns++;
+        skippedCachedRuns++;
+        if (consecutiveCachedRuns <= MAX_CONSECUTIVE_CACHED) {
+          core.info(`[FETCH] Skipping cached run ${runIdStr} (consecutive cached: ${consecutiveCachedRuns})`);
+        }
+        // If we've seen many consecutive cached runs, we've likely reached the boundary
+        // Stop fetching since all remaining runs will be older and likely cached
+        if (consecutiveCachedRuns >= MAX_CONSECUTIVE_CACHED) {
+          core.info(`[FETCH] Early exit: found ${consecutiveCachedRuns} consecutive cached runs, stopping fetch`);
+          core.info(`[FETCH] Summary: added ${addedNewRuns} new runs, skipped ${skippedCachedRuns} cached, ${skippedOldRuns} old`);
+          return allRuns;
+        }
+        continue;
+      }
+
+      // Reset consecutive cached counter when we find a new run
+      if (consecutiveCachedRuns > 0) {
+        core.info(`[FETCH] Found new run after ${consecutiveCachedRuns} cached runs, resetting counter`);
+      }
+      consecutiveCachedRuns = 0;
+
+      // This is a new run, add it
+      addedNewRuns++;
+      allRuns.push(run);
+      if (addedNewRuns <= 10) {
+        core.info(`[FETCH] Added new run ${runIdStr} (${run.name}, ${runDate.toISOString()})`);
       }
     }
+
     // If the api call returned no runs, assume we've reached the end and break
     if (!runs.workflow_runs.length) break;
   }
+
+  core.info(`[FETCH] Completed all pages. Summary: added ${addedNewRuns} new runs, skipped ${skippedCachedRuns} cached, ${skippedOldRuns} old`);
   return allRuns;
 }
 
@@ -88,6 +136,228 @@ function groupRunsByName(runs) {
 }
 
 /**
+ * Find the most recent successful run of aggregate-workflow-data workflow on main branch.
+ * @param {object} octokit - Octokit client
+ * @param {object} context - GitHub Actions context
+ * @returns {Promise<number|null>} Run ID or null if not found
+ */
+async function findPreviousAggregateRun(octokit, context) {
+  try {
+    core.info('[CACHE] Searching for previous successful aggregate-workflow-data run...');
+    const workflowId = '.github/workflows/aggregate-workflow-data.yaml';
+    const resp = await octokit.rest.actions.listWorkflowRuns({
+      owner: context.repo.owner,
+      repo: context.repo.repo,
+      workflow_id: workflowId,
+      branch: 'main',
+      status: 'completed',
+      per_page: 10
+    });
+    const allRuns = resp.data.workflow_runs || [];
+    core.info(`[CACHE] Found ${allRuns.length} completed runs for aggregate-workflow-data`);
+    const runs = allRuns.filter(r => r.conclusion === 'success');
+    core.info(`[CACHE] Found ${runs.length} successful runs`);
+    if (runs.length > 0) {
+      core.info(`[CACHE] Selected previous run ID: ${runs[0].id} (created: ${runs[0].created_at})`);
+      return runs[0].id;
+    }
+    core.info('[CACHE] No previous successful run found');
+    return null;
+  } catch (e) {
+    core.warning(`[CACHE] Failed to find previous aggregate run: ${e.message}`);
+    return null;
+  }
+}
+
+/**
+ * Prune data older than cutoff date from grouped runs.
+ * @param {Map} grouped - Map of workflow name to array of runs
+ * @param {Date} cutoffDate - Cutoff date
+ * @returns {Map} Pruned grouped runs
+ */
+function pruneOldRuns(grouped, cutoffDate) {
+  const pruned = new Map();
+  let totalRemoved = 0;
+  for (const [name, runs] of grouped.entries()) {
+    const beforeCount = runs.length;
+    const filtered = runs.filter(run => {
+      const runDate = new Date(run.created_at);
+      return runDate >= cutoffDate;
+    });
+    const removed = beforeCount - filtered.length;
+    if (removed > 0) {
+      totalRemoved += removed;
+      const newestRemoved = runs.find(r => new Date(r.created_at) < cutoffDate);
+      if (newestRemoved) {
+        core.info(`[PRUNE] Workflow '${name}': removed ${removed} runs (newest removed: ${newestRemoved.created_at})`);
+      }
+    }
+    if (filtered.length > 0) {
+      pruned.set(name, filtered);
+    } else {
+      core.info(`[PRUNE] Workflow '${name}': removed all ${beforeCount} runs (workflow has no runs >= ${cutoffDate.toISOString()})`);
+    }
+  }
+  if (totalRemoved > 0) {
+    core.info(`[PRUNE] Total runs removed across all workflows: ${totalRemoved}`);
+  } else {
+    core.info(`[PRUNE] No runs removed (all runs are >= ${cutoffDate.toISOString()})`);
+  }
+  return pruned;
+}
+
+/**
+ * Prune annotations index to remove entries for runs older than cutoff date.
+ * @param {object} annotationsIndex - Index mapping runId -> directory
+ * @param {Map} grouped - Map of workflow name to array of runs (for date lookup)
+ * @param {Date} cutoffDate - Cutoff date
+ * @returns {object} Pruned annotations index
+ */
+function pruneAnnotationsIndex(annotationsIndex, grouped, cutoffDate) {
+  const pruned = {};
+  const runDates = new Map();
+  // Build map of run IDs to dates
+  for (const runs of grouped.values()) {
+    for (const run of runs) {
+      runDates.set(String(run.id), new Date(run.created_at));
+    }
+  }
+  for (const [runId, dir] of Object.entries(annotationsIndex || {})) {
+    const runDate = runDates.get(runId);
+    if (runDate && runDate >= cutoffDate) {
+      pruned[runId] = dir;
+    }
+  }
+  return pruned;
+}
+
+/**
+ * Prune logs index to remove entries for runs older than cutoff date.
+ * @param {object} logsIndex - Index mapping runId -> directory
+ * @param {Map} grouped - Map of workflow name to array of runs (for date lookup)
+ * @param {Date} cutoffDate - Cutoff date
+ * @returns {object} Pruned logs index
+ */
+function pruneLogsIndex(logsIndex, grouped, cutoffDate) {
+  const pruned = {};
+  const runDates = new Map();
+  // Build map of run IDs to dates
+  for (const runs of grouped.values()) {
+    for (const run of runs) {
+      runDates.set(String(run.id), new Date(run.created_at));
+    }
+  }
+  for (const [runId, dir] of Object.entries(logsIndex || {})) {
+    const runDate = runDates.get(runId);
+    if (runDate && runDate >= cutoffDate) {
+      pruned[runId] = dir;
+    }
+  }
+  return pruned;
+}
+
+/**
+ * Prune commits older than cutoff date.
+ * @param {Array} commits - Array of commit objects
+ * @param {Date} cutoffDate - Cutoff date
+ * @returns {Array} Pruned commits
+ */
+function pruneCommits(commits, cutoffDate) {
+  return (commits || []).filter(c => {
+    const commitDate = c.date ? new Date(c.date) : null;
+    return commitDate && commitDate >= cutoffDate;
+  });
+}
+
+/**
+ * Check if a workflow name matches any configuration in workflow_configs.
+ * @param {string} workflowName - Name of the workflow to check
+ * @param {Array} workflowConfigs - Array of config objects with wkflw_name or wkflw_prefix
+ * @returns {boolean} True if workflow matches any config
+ */
+function workflowMatchesConfig(workflowName, workflowConfigs) {
+  if (!Array.isArray(workflowConfigs) || workflowConfigs.length === 0) {
+    return true; // If no configs provided, match all workflows (backward compatibility)
+  }
+  for (const config of workflowConfigs) {
+    if (config.wkflw_name && workflowName === config.wkflw_name) {
+      return true;
+    }
+    if (config.wkflw_prefix && workflowName.startsWith(config.wkflw_prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Download and extract an artifact to a temporary directory.
+ * @param {object} octokit - Octokit client
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {object} artifact - Artifact object
+ * @param {string} tmpDir - Temporary directory path
+ * @returns {Promise<string>} Path to extracted directory
+ */
+async function downloadAndExtractArtifact(octokit, owner, repo, artifact, tmpDir) {
+  const resp = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: artifact.id, archive_format: 'zip' });
+  const zipPath = path.join(tmpDir, `${artifact.name}.zip`);
+  fs.writeFileSync(zipPath, Buffer.from(resp.data));
+  const extractDir = path.join(tmpDir, `${artifact.name}-extract`);
+  if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+  execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+  return extractDir;
+}
+
+/**
+ * Recursively find a file by name in a directory.
+ * @param {string} rootDir - Root directory to search
+ * @param {string|Set<string>} targetFileName - File name(s) to find
+ * @returns {string|null} Path to found file or null
+ */
+function findFileInDirectory(rootDir, targetFileName) {
+  const targetNames = typeof targetFileName === 'string' ? new Set([targetFileName]) : targetFileName;
+  const stack = [rootDir];
+  while (stack.length) {
+    const dir = stack.pop();
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      const p = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        stack.push(p);
+      } else if (ent.isFile() && targetNames.has(ent.name)) {
+        return p;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Remove directories in a root directory that are not in the kept set.
+ * @param {string} rootDir - Root directory to clean
+ * @param {Set<string>} keptIds - Set of directory names to keep
+ * @param {string} indexFileName - Name of index file to exclude from removal
+ * @returns {number} Number of directories removed
+ */
+function removeUnkeptDirectories(rootDir, keptIds, indexFileName) {
+  if (!fs.existsSync(rootDir)) {
+    return 0;
+  }
+  let removedDirs = 0;
+  const entries = fs.readdirSync(rootDir, { withFileTypes: true });
+  for (const ent of entries) {
+    if (ent.isDirectory() && ent.name !== indexFileName) {
+      if (!keptIds.has(ent.name)) {
+        fs.rmSync(path.join(rootDir, ent.name), { recursive: true, force: true });
+        removedDirs++;
+      }
+    }
+  }
+  return removedDirs;
+}
+
+/**
  * Main entrypoint for the action.
  * Loads previous cache, fetches new runs, merges/deduplicates, and saves updated cache.
  */
@@ -99,191 +369,145 @@ async function run() {
     const rawCachePath = core.getInput('cache-path', { required: false });
     const defaultOutputPath = path.join(process.env.GITHUB_WORKSPACE || process.cwd(), 'workflow-data.json');
     const outputPath = rawCachePath && rawCachePath.trim() ? rawCachePath : defaultOutputPath;
-    const testRunIdInput = core.getInput('test_run_id') || process.env.TEST_RUN_ID || '';
+    const workflowConfigsInput = core.getInput('workflow_configs', { required: false });
+    let workflowConfigs = [];
+    if (workflowConfigsInput) {
+      try {
+        workflowConfigs = JSON.parse(workflowConfigsInput);
+        if (!Array.isArray(workflowConfigs)) {
+          core.warning('[CONFIG] workflow_configs is not an array, ignoring');
+          workflowConfigs = [];
+        } else {
+          core.info(`[CONFIG] Loaded ${workflowConfigs.length} workflow configurations`);
+        }
+      } catch (e) {
+        core.warning(`[CONFIG] Failed to parse workflow_configs: ${e.message}`);
+        workflowConfigs = [];
+      }
+    }
     // Create authenticated Octokit client
     const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
-    // Load previous cache if it exists
-    let previousRuns = [];
-    let latestCachedDate = null;
+    const owner = github.context.repo.owner;
+    const repo = github.context.repo.repo;
+    const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+    const cutoffDate = getCutoffDate(days);
 
-    core.info(`Restored previousRuns count: ${previousRuns.length}`);
-    core.info(`Latest cached run date: ${latestCachedDate}`);
-    // Test mode: download workflow-data.json artifact from a specific run and exit early
-    if (testRunIdInput) {
-      const runId = parseInt(testRunIdInput, 10);
-      if (Number.isNaN(runId)) {
-        throw new Error(`Invalid test_run_id: ${testRunIdInput}`);
-      }
-      core.info(`[TEST MODE] Using workflow-data.json from run_id=${runId}`);
-      const owner = github.context.repo.owner;
-      const repo = github.context.repo.repo;
-      const { data: artifactsResp } = await octokit.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: runId, per_page: 100 });
-      const artifacts = artifactsResp.artifacts || [];
-      if (artifacts.length === 0) {
-        throw new Error(`No artifacts found for run_id=${runId}`);
-      }
-      // Find an artifact zip that contains workflow-data.json
-      let found = false;
-      const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'wfzip-'));
-      for (const art of artifacts) {
-        try {
-          const resp = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: art.id, archive_format: 'zip' });
-          const zipPath = path.join(tmpDir, `${art.name}.zip`);
-          fs.writeFileSync(zipPath, Buffer.from(resp.data));
-          // Extract artifact to a temp dir and search for workflow JSON file
-          const extractDir = path.join(tmpDir, art.name);
-          if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-          // Avoid buffering large stdout/stderr to prevent ENOBUFS
-          execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-          // Search recursively for workflow JSON
-          const targetNames = new Set(['workflow-data.json', 'workflow.json']);
-          const stack = [extractDir];
-          let foundPath;
-          while (stack.length && !foundPath) {
-            const dir = stack.pop();
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const ent of entries) {
-              const p = path.join(dir, ent.name);
-              if (ent.isDirectory()) {
-                stack.push(p);
-              } else if (ent.isFile() && targetNames.has(ent.name)) {
-                foundPath = p;
-                break;
-              }
-            }
-          }
-          if (foundPath) {
-            const jsonBuf = fs.readFileSync(foundPath);
-            // Ensure output directory exists
-            const outputDir = path.dirname(outputPath);
-            if (!fs.existsSync(outputDir)) {
-              fs.mkdirSync(outputDir, { recursive: true });
-            }
-            fs.writeFileSync(outputPath, jsonBuf);
-            core.info(`[TEST MODE] Wrote ${outputPath} from ${path.basename(foundPath)} in artifact ${art.name}`);
-            // Compute outputs from content
-            let grouped;
-            try {
-              grouped = JSON.parse(fs.readFileSync(outputPath, 'utf8'));
-            } catch (e) {
-              throw new Error(`Parsed JSON invalid at ${outputPath}: ${e.message}`);
-            }
-            const workflowCount = Array.isArray(grouped) ? grouped.length : 0;
-            let totalRuns = 0;
-            if (Array.isArray(grouped)) {
-              for (const entry of grouped) {
-                if (Array.isArray(entry) && Array.isArray(entry[1])) {
-                  totalRuns += entry[1].length;
+    // Log initial GitHub API rate limit
+    const initialRateLimit = await octokit.rest.rateLimit.get();
+    const initialRemaining = initialRateLimit.data.resources.core.remaining;
+    const limit = initialRateLimit.data.resources.core.limit;
+    core.info(`[RATE_LIMIT] Initial GitHub API rate limit: ${initialRemaining} / ${limit} (${((initialRemaining/limit)*100).toFixed(1)}%)`);
+
+    // Load cached data from previous aggregate run
+    let previousRuns = [];
+    let cachedGrouped = new Map();
+    let cachedAnnotationsIndex = {};
+    let cachedGtestLogsIndex = {};
+    let cachedOtherLogsIndex = {};
+    let cachedCommits = [];
+    let cachedLastSuccessTimestamps = {};
+
+    // Find and restore artifacts from previous successful run
+    const previousRunId = await findPreviousAggregateRun(octokit, github.context);
+    if (previousRunId) {
+      core.info(`[CACHE] Starting artifact restoration from run ${previousRunId}`);
+      try {
+        const { data: artifactsResp } = await octokit.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id: previousRunId, per_page: 100 });
+        const artifacts = artifactsResp.artifacts || [];
+        core.info(`[CACHE] Found ${artifacts.length} artifacts in previous run`);
+        for (const art of artifacts) {
+          core.info(`[CACHE]   - ${art.name} (${art.size_in_bytes} bytes, expired: ${art.expired})`);
+        }
+        const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'wfzip-'));
+        core.info(`[CACHE] Created temp directory: ${tmpDir}`);
+
+        // Restore workflow-data.json
+        const workflowDataArtifact = artifacts.find(a => a && a.name === 'workflow-data');
+        if (workflowDataArtifact) {
+          try {
+            const extractDir = await downloadAndExtractArtifact(octokit, owner, repo, workflowDataArtifact, tmpDir);
+            const foundPath = findFileInDirectory(extractDir, new Set(['workflow-data.json', 'workflow.json']));
+            if (foundPath) {
+              core.info(`[CACHE] Found workflow-data.json at ${foundPath}`);
+              const groupedArray = JSON.parse(fs.readFileSync(foundPath, 'utf8'));
+              cachedGrouped = new Map(Array.isArray(groupedArray) ? groupedArray : []);
+              core.info(`[CACHE] Loaded ${cachedGrouped.size} workflows from cache (before pruning)`);
+              core.info(`[CACHE] Cutoff date for pruning: ${cutoffDate.toISOString()} (${days} days ago)`);
+
+              // Count runs before pruning
+              let totalRunsBeforePrune = 0;
+              let oldestRunDate = null;
+              for (const runs of cachedGrouped.values()) {
+                totalRunsBeforePrune += runs.length;
+                for (const run of runs) {
+                  const runDate = new Date(run.created_at);
+                  if (!oldestRunDate || runDate < oldestRunDate) {
+                    oldestRunDate = runDate;
+                  }
                 }
               }
+              if (oldestRunDate) {
+                core.info(`[CACHE] Oldest run in cache: ${oldestRunDate.toISOString()}`);
+              }
+
+              // Prune old runs
+              cachedGrouped = pruneOldRuns(cachedGrouped, cutoffDate);
+
+              // Count runs after pruning
+              let totalRunsAfterPrune = 0;
+              for (const runs of cachedGrouped.values()) {
+                totalRunsAfterPrune += runs.length;
+              }
+
+              core.info(`[CACHE] Summary: ${totalRunsBeforePrune} runs before pruning, ${totalRunsAfterPrune} runs after pruning (removed ${totalRunsBeforePrune - totalRunsAfterPrune})`);
+              core.info(`[CACHE] Retained ${totalRunsAfterPrune} runs across ${cachedGrouped.size} workflows`);
+            } else {
+              core.warning(`[CACHE] workflow-data.json not found in artifacts`);
             }
-            core.setOutput('total-runs', totalRuns);
-            core.setOutput('workflow-count', workflowCount);
-            core.setOutput('cache-path', outputPath);
-            found = true;
-            break;
+          } catch (e) {
+            core.warning(`Failed to restore workflow-data: ${e.message}`);
           }
-        } catch (e) {
-          core.warning(`[TEST MODE] Failed processing artifact ${art.name}: ${e.message}`);
         }
-      }
-      if (!found) {
-        throw new Error(`[TEST MODE] Could not find workflow-data.json in any artifacts for run_id=${runId}`);
-      }
-      // Additionally fetch the annotations artifact from the same run, if present
-      try {
-        const owner = github.context.repo.owner;
-        const repo = github.context.repo.repo;
+
+        // Restore annotations
         const annotationsArtifact = artifacts.find(a => a && a.name === 'workflow-annotations');
-        const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
         const annotationsRoot = path.join(workspace, 'annotations');
         if (!fs.existsSync(annotationsRoot)) fs.mkdirSync(annotationsRoot, { recursive: true });
         let annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
         if (annotationsArtifact) {
-          const annZipPath = path.join(tmpDir, `${annotationsArtifact.name}.zip`);
-          const respAnn = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: annotationsArtifact.id, archive_format: 'zip' });
-          fs.writeFileSync(annZipPath, Buffer.from(respAnn.data));
-          const extractAnnDir = path.join(tmpDir, `${annotationsArtifact.name}-extract`);
-          if (!fs.existsSync(extractAnnDir)) fs.mkdirSync(extractAnnDir, { recursive: true });
-          execFileSync('unzip', ['-o', annZipPath, '-d', extractAnnDir], { stdio: 'ignore' });
-          // Find the annotations-index.json inside the extracted tree
-          const stack = [extractAnnDir];
-          let foundIndex;
-          while (stack.length && !foundIndex) {
-            const dir = stack.pop();
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const ent of entries) {
-              const p = path.join(dir, ent.name);
-              if (ent.isDirectory()) stack.push(p);
-              else if (ent.isFile() && ent.name === 'annotations-index.json') { foundIndex = p; break; }
-            }
-          }
-          if (foundIndex) {
-            const artifactAnnRoot = path.dirname(foundIndex);
-            fs.cpSync(artifactAnnRoot, annotationsRoot, { recursive: true });
-            annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
-            core.info(`[TEST MODE] Restored annotations to ${annotationsRoot}`);
-          } else {
-            core.info('[TEST MODE] No annotations-index.json found; creating empty index');
-            if (!fs.existsSync(annotationsIndexPath)) fs.writeFileSync(annotationsIndexPath, JSON.stringify({}));
-          }
-        } else {
-          core.info('[TEST MODE] No workflow-annotations artifact found in selected run; creating empty index');
-          if (!fs.existsSync(annotationsIndexPath)) fs.writeFileSync(annotationsIndexPath, JSON.stringify({}));
-        }
-        core.setOutput('annotations-root', annotationsRoot);
-        core.setOutput('annotations-index-path', annotationsIndexPath);
-      } catch (e) {
-        core.warning(`[TEST MODE] Failed to restore annotations artifact: ${e.message}`);
-      }
+          try {
+            const extractAnnDir = await downloadAndExtractArtifact(octokit, owner, repo, annotationsArtifact, tmpDir);
+            const foundIndex = findFileInDirectory(extractAnnDir, 'annotations-index.json');
+            if (foundIndex) {
+              core.info(`[CACHE] Found annotations-index.json at ${foundIndex}`);
+              const artifactAnnRoot = path.dirname(foundIndex);
+              fs.cpSync(artifactAnnRoot, annotationsRoot, { recursive: true });
+              annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
+              const beforePrune = JSON.parse(fs.readFileSync(annotationsIndexPath, 'utf8'));
+              const beforePruneCount = Object.keys(beforePrune).length;
+              cachedAnnotationsIndex = beforePrune;
+              core.info(`[CACHE] Loaded ${beforePruneCount} annotation entries (before pruning)`);
 
-      // Additionally fetch the commits artifact from the same run, if present
-      try {
-        const owner = github.context.repo.owner;
-        const repo = github.context.repo.repo;
-        const commitsArtifact = artifacts.find(a => a && a.name === 'commits-main');
-        const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-        let commitsPath = path.join(workspace, 'commits-main.json');
-        if (commitsArtifact) {
-          const commitsZipPath = path.join(tmpDir, `${commitsArtifact.name}.zip`);
-          const respCommits = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: commitsArtifact.id, archive_format: 'zip' });
-          fs.writeFileSync(commitsZipPath, Buffer.from(respCommits.data));
-          const extractCommitsDir = path.join(tmpDir, `${commitsArtifact.name}-extract`);
-          if (!fs.existsSync(extractCommitsDir)) fs.mkdirSync(extractCommitsDir, { recursive: true });
-          execFileSync('unzip', ['-o', commitsZipPath, '-d', extractCommitsDir], { stdio: 'ignore' });
-          // Find commits-main.json
-          const stack2 = [extractCommitsDir];
-          let foundCommitsPath;
-          while (stack2.length && !foundCommitsPath) {
-            const dir = stack2.pop();
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const ent of entries) {
-              const p = path.join(dir, ent.name);
-              if (ent.isDirectory()) stack2.push(p);
-              else if (ent.isFile() && ent.name === 'commits-main.json') { foundCommitsPath = p; break; }
-            }
-          }
-          if (foundCommitsPath) {
-            fs.cpSync(foundCommitsPath, commitsPath, { recursive: false });
-            core.info(`[TEST MODE] Restored commits index to ${commitsPath}`);
-          } else {
-            core.info('[TEST MODE] No commits-main.json found; creating empty list');
-            if (!fs.existsSync(commitsPath)) fs.writeFileSync(commitsPath, JSON.stringify([]));
-          }
-        } else {
-          core.info('[TEST MODE] No commits-main artifact found in selected run; creating empty list');
-          if (!fs.existsSync(commitsPath)) fs.writeFileSync(commitsPath, JSON.stringify([]));
-        }
-        core.setOutput('commits-path', commitsPath);
-      } catch (e) {
-        core.warning(`[TEST MODE] Failed to restore commits artifact: ${e.message}`);
-      }
+              // Prune old annotations (removes entries from index)
+              cachedAnnotationsIndex = pruneAnnotationsIndex(cachedAnnotationsIndex, cachedGrouped, cutoffDate);
+              const afterPruneCount = Object.keys(cachedAnnotationsIndex).length;
+              core.info(`[CACHE] Pruned ${beforePruneCount - afterPruneCount} annotation entries`);
 
-      // Additionally download and index logs for failing workflow runs referenced by this prior aggregate run (test mode)
-      try {
-        const owner = github.context.repo.owner;
-        const repo = github.context.repo.repo;
-        const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+              // Also remove annotation directories for runs not in pruned index
+              const keptRunIds = new Set(Object.keys(cachedAnnotationsIndex));
+              const removedDirs = removeUnkeptDirectories(annotationsRoot, keptRunIds, 'annotations-index.json');
+              if (removedDirs > 0) {
+                core.info(`[CACHE] Removed ${removedDirs} annotation directories for pruned runs`);
+              }
+              fs.writeFileSync(annotationsIndexPath, JSON.stringify(cachedAnnotationsIndex));
+              core.info(`[CACHE] Restored annotations index with ${afterPruneCount} entries`);
+            } else {
+              core.info(`[CACHE] annotations-index.json not found in artifacts, starting fresh`);
+            }
+          } catch (e) {
+            core.warning(`Failed to restore annotations: ${e.message}`);
+          }
+        }
 
         // Restore gtest logs
         const gtestLogsRoot = path.join(workspace, 'logs', 'gtest');
@@ -291,24 +515,33 @@ async function run() {
         let gtestLogsIndexPath = path.join(gtestLogsRoot, 'gtest-logs-index.json');
         const gtestLogsArtifact = artifacts.find(a => a && a.name === 'workflow-gtest-logs');
         if (gtestLogsArtifact) {
-          const logsZipPath = path.join(tmpDir, `${gtestLogsArtifact.name}.zip`);
-          const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: gtestLogsArtifact.id, archive_format: 'zip' });
-          fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
-          const extractLogsDir = path.join(tmpDir, `${gtestLogsArtifact.name}-extract`);
-          if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
-          execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
-          // Copy the extracted logs tree into workspace logs/gtest/
-          fs.cpSync(extractLogsDir, gtestLogsRoot, { recursive: true });
-          const candidateIdx = path.join(gtestLogsRoot, 'gtest-logs-index.json');
-          if (fs.existsSync(candidateIdx)) {
-            gtestLogsIndexPath = candidateIdx;
-          } else if (!fs.existsSync(gtestLogsIndexPath)) {
-            fs.writeFileSync(gtestLogsIndexPath, JSON.stringify({}));
+          try {
+            const extractLogsDir = await downloadAndExtractArtifact(octokit, owner, repo, gtestLogsArtifact, tmpDir);
+            fs.cpSync(extractLogsDir, gtestLogsRoot, { recursive: true });
+            const candidateIdx = path.join(gtestLogsRoot, 'gtest-logs-index.json');
+            if (fs.existsSync(candidateIdx)) {
+              gtestLogsIndexPath = candidateIdx;
+              cachedGtestLogsIndex = JSON.parse(fs.readFileSync(gtestLogsIndexPath, 'utf8'));
+              const beforePruneCount = Object.keys(cachedGtestLogsIndex).length;
+              core.info(`[CACHE] Loaded ${beforePruneCount} gtest log entries (before pruning)`);
+
+              // Prune old logs (removes entries from index)
+              cachedGtestLogsIndex = pruneLogsIndex(cachedGtestLogsIndex, cachedGrouped, cutoffDate);
+              const afterPruneCount = Object.keys(cachedGtestLogsIndex).length;
+              core.info(`[CACHE] Pruned ${beforePruneCount - afterPruneCount} gtest log entries`);
+
+              // Also remove log directories for runs not in pruned index
+              const keptGtestRunIds = new Set(Object.keys(cachedGtestLogsIndex));
+              const removedDirs = removeUnkeptDirectories(gtestLogsRoot, keptGtestRunIds, 'gtest-logs-index.json');
+              if (removedDirs > 0) {
+                core.info(`[CACHE] Removed ${removedDirs} gtest log directories for pruned runs`);
+              }
+              fs.writeFileSync(gtestLogsIndexPath, JSON.stringify(cachedGtestLogsIndex));
+              core.info(`[CACHE] Restored gtest logs index with ${afterPruneCount} entries`);
+            }
+          } catch (e) {
+            core.warning(`Failed to restore gtest logs: ${e.message}`);
           }
-          core.info(`[TEST MODE] Restored gtest logs to ${gtestLogsRoot}`);
-        } else {
-          core.info('[TEST MODE] No workflow-gtest-logs artifact found in selected run; creating empty index');
-          if (!fs.existsSync(gtestLogsIndexPath)) fs.writeFileSync(gtestLogsIndexPath, JSON.stringify({}));
         }
 
         // Restore other logs
@@ -317,38 +550,115 @@ async function run() {
         let otherLogsIndexPath = path.join(otherLogsRoot, 'other-logs-index.json');
         const otherLogsArtifact = artifacts.find(a => a && a.name === 'workflow-other-logs');
         if (otherLogsArtifact) {
-          const logsZipPath = path.join(tmpDir, `${otherLogsArtifact.name}.zip`);
-          const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: otherLogsArtifact.id, archive_format: 'zip' });
-          fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
-          const extractLogsDir = path.join(tmpDir, `${otherLogsArtifact.name}-extract`);
-          if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
-          execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
-          // Copy the extracted logs tree into workspace logs/other/
-          fs.cpSync(extractLogsDir, otherLogsRoot, { recursive: true });
-          const candidateIdx = path.join(otherLogsRoot, 'other-logs-index.json');
-          if (fs.existsSync(candidateIdx)) {
-            otherLogsIndexPath = candidateIdx;
-          } else if (!fs.existsSync(otherLogsIndexPath)) {
-            fs.writeFileSync(otherLogsIndexPath, JSON.stringify({}));
+          try {
+            const extractLogsDir = await downloadAndExtractArtifact(octokit, owner, repo, otherLogsArtifact, tmpDir);
+            fs.cpSync(extractLogsDir, otherLogsRoot, { recursive: true });
+            const candidateIdx = path.join(otherLogsRoot, 'other-logs-index.json');
+            if (fs.existsSync(candidateIdx)) {
+              otherLogsIndexPath = candidateIdx;
+              cachedOtherLogsIndex = JSON.parse(fs.readFileSync(otherLogsIndexPath, 'utf8'));
+              const beforePruneCount = Object.keys(cachedOtherLogsIndex).length;
+              core.info(`[CACHE] Loaded ${beforePruneCount} other log entries (before pruning)`);
+
+              // Prune old logs (removes entries from index)
+              cachedOtherLogsIndex = pruneLogsIndex(cachedOtherLogsIndex, cachedGrouped, cutoffDate);
+              const afterPruneCount = Object.keys(cachedOtherLogsIndex).length;
+              core.info(`[CACHE] Pruned ${beforePruneCount - afterPruneCount} other log entries`);
+
+              // Also remove log directories for runs not in pruned index
+              const keptOtherRunIds = new Set(Object.keys(cachedOtherLogsIndex));
+              const removedDirs = removeUnkeptDirectories(otherLogsRoot, keptOtherRunIds, 'other-logs-index.json');
+              if (removedDirs > 0) {
+                core.info(`[CACHE] Removed ${removedDirs} other log directories for pruned runs`);
+              }
+              fs.writeFileSync(otherLogsIndexPath, JSON.stringify(cachedOtherLogsIndex));
+              core.info(`[CACHE] Restored other logs index with ${afterPruneCount} entries`);
+            }
+          } catch (e) {
+            core.warning(`Failed to restore other logs: ${e.message}`);
           }
-          core.info(`[TEST MODE] Restored other logs to ${otherLogsRoot}`);
-        } else {
-          core.info('[TEST MODE] No workflow-other-logs artifact found in selected run; creating empty index');
-          if (!fs.existsSync(otherLogsIndexPath)) fs.writeFileSync(otherLogsIndexPath, JSON.stringify({}));
         }
 
-        core.setOutput('gtest-logs-root', gtestLogsRoot);
-        core.setOutput('gtest-logs-index-path', gtestLogsIndexPath);
-        core.setOutput('other-logs-root', otherLogsRoot);
-        core.setOutput('other-logs-index-path', otherLogsIndexPath);
-      } catch (e) {
-        core.warning(`[TEST MODE] Failed to restore logs artifact: ${e.message}`);
-      }
+        // Restore commits
+        const commitsArtifact = artifacts.find(a => a && a.name === 'commits-main');
+        let commitsPath = path.join(workspace, 'commits-main.json');
+        if (commitsArtifact) {
+          try {
+            const extractCommitsDir = await downloadAndExtractArtifact(octokit, owner, repo, commitsArtifact, tmpDir);
+            const foundCommitsPath = findFileInDirectory(extractCommitsDir, 'commits-main.json');
+            if (foundCommitsPath) {
+              core.info(`[CACHE] Found commits-main.json at ${foundCommitsPath}`);
+              const beforePrune = JSON.parse(fs.readFileSync(foundCommitsPath, 'utf8'));
+              const beforePruneCount = beforePrune.length;
+              cachedCommits = beforePrune;
+              core.info(`[CACHE] Loaded ${beforePruneCount} commits (before pruning)`);
 
-      // Exit early
-      return;
+              cachedCommits = pruneCommits(cachedCommits, cutoffDate);
+              const afterPruneCount = cachedCommits.length;
+              core.info(`[CACHE] Pruned ${beforePruneCount - afterPruneCount} commits older than ${cutoffDate.toISOString()}`);
+
+              fs.writeFileSync(commitsPath, JSON.stringify(cachedCommits));
+              core.info(`[CACHE] Restored ${afterPruneCount} commits from cache`);
+            } else {
+              core.info(`[CACHE] commits-main.json not found in artifacts, starting fresh`);
+            }
+          } catch (e) {
+            core.warning(`Failed to restore commits: ${e.message}`);
+          }
+        }
+
+        // Restore last success timestamps
+        const lastSuccessArtifact = artifacts.find(a => a && a.name === 'last-success-timestamps');
+        let lastSuccessPath = path.join(workspace, 'last-success-timestamps.json');
+        if (lastSuccessArtifact) {
+          try {
+            const extractTimestampsDir = await downloadAndExtractArtifact(octokit, owner, repo, lastSuccessArtifact, tmpDir);
+            const foundTimestampsPath = findFileInDirectory(extractTimestampsDir, 'last-success-timestamps.json');
+            if (foundTimestampsPath) {
+              core.info(`[CACHE] Found last-success-timestamps.json at ${foundTimestampsPath}`);
+              cachedLastSuccessTimestamps = JSON.parse(fs.readFileSync(foundTimestampsPath, 'utf8'));
+              fs.writeFileSync(lastSuccessPath, JSON.stringify(cachedLastSuccessTimestamps));
+              core.info(`[CACHE] Restored last success timestamps for ${Object.keys(cachedLastSuccessTimestamps).length} workflows`);
+            } else {
+              core.info(`[CACHE] last-success-timestamps.json not found in artifacts, starting fresh`);
+            }
+          } catch (e) {
+            core.warning(`Failed to restore last success timestamps: ${e.message}`);
+          }
+        }
+
+        // Clean up temp directory
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+          core.info(`[CACHE] Cleaned up temp directory`);
+        } catch (_) { /* ignore */ }
+
+        core.info(`[CACHE] Artifact restoration completed successfully`);
+      } catch (e) {
+        core.warning(`[CACHE] Failed to restore artifacts from previous run: ${e.message}`);
+        core.warning(`[CACHE] Stack trace: ${e.stack}`);
+      }
+    } else {
+      core.info('[CACHE] No previous aggregate run found, starting fresh');
     }
-    // Fetch new runs from GitHub (for the last N days, only after latest cached run)
+
+    // Convert cached grouped map to array of runs for merging
+    for (const runs of cachedGrouped.values()) {
+      previousRuns.push(...runs);
+    }
+
+    // Build set of cached run IDs to avoid re-downloading logs/annotations
+    const cachedRunIds = new Set();
+    for (const runs of cachedGrouped.values()) {
+      for (const run of runs) {
+        cachedRunIds.add(String(run.id));
+      }
+    }
+
+    core.info(`[CACHE] Summary: ${previousRuns.length} runs restored, ${cachedGrouped.size} workflows`);
+    core.info(`[CACHE] Cached run IDs: ${cachedRunIds.size} unique run IDs`);
+
+    // Fetch new runs from GitHub (skipping runs that are already cached)
 
     // 1. Fetch runs for each event type separately
 
@@ -356,36 +666,41 @@ async function run() {
 
 
     core.info('Fetching all runs...');
-    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate);
-    core.info(`Fetched allRuns count: ${allRuns.length}`);
+    const allRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds);
+    core.info(`[FETCH] Fetched ${allRuns.length} new runs (skipped cached runs during fetch)`);
 
     // Wait for 1 second to avoid rate limiting
     await delay(1000);
 
-    core.info('Fetching scheduled runs...');
-    const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, latestCachedDate, 'schedule');
-    core.info(`Fetched scheduledRuns count: ${scheduledRuns.length}`);
+    core.info('[FETCH] Fetching scheduled runs...');
+    const scheduledRuns = await fetchAllWorkflowRuns(octokit, github.context, days, cachedRunIds, 'schedule');
+    core.info(`[FETCH] Fetched ${scheduledRuns.length} new scheduled runs (skipped cached runs during fetch)`);
 
-    // 2. Combine all the results into a single array
+    // 2. Combine all the results into a single array (already filtered for new runs only)
     const newRuns = [...scheduledRuns, ...allRuns];
+    core.info(`[FETCH] Total new runs fetched: ${newRuns.length} (${allRuns.length} all events + ${scheduledRuns.length} scheduled)`);
 
-    core.info(`Fetched a total of ${newRuns.length} new runs across all event types.`);
-
-    core.info(`Fetched newRuns count: ${newRuns.length}`);
-    // Merge and deduplicate by run id
+    // Merge and deduplicate by run id (though newRuns should already be deduplicated from cache)
     // This ensures we keep the most recent data for each run and avoid duplicates
+    core.info(`[MERGE] Merging ${previousRuns.length} cached runs + ${newRuns.length} new runs`);
     const seen = new Map();
     [...previousRuns, ...newRuns].forEach(run => seen.set(run.id, run));
     let mergedRuns = Array.from(seen.values());
+    core.info(`[MERGE] After deduplication: ${mergedRuns.length} unique runs`);
+
     // Only keep runs on main branch, completed, and within the last N days
     const cutoff = getCutoffDate(days);
+    const beforeFilter = mergedRuns.length;
     mergedRuns = mergedRuns.filter(run =>
       run.head_branch === branch &&
       run.status === 'completed' &&
       new Date(run.created_at) >= cutoff
     );
+    core.info(`[MERGE] After filtering (branch=${branch}, status=completed, date>=${cutoff.toISOString()}): ${mergedRuns.length} runs (removed ${beforeFilter - mergedRuns.length})`);
+
     // Group runs by workflow name
     const grouped = groupRunsByName(mergedRuns);
+    core.info(`[MERGE] Grouped into ${grouped.size} workflows`);
     // Ensure output directory exists
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
@@ -394,26 +709,173 @@ async function run() {
     // Save grouped runs to artifact file
     fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
 
+    // Merge cached last success timestamps with new ones (cached takes precedence for existing workflows)
+    const lastSuccessTimestamps = new Map(Object.entries(cachedLastSuccessTimestamps || {}));
+    core.info(`[LAST_SUCCESS] Starting last success search (cached: ${lastSuccessTimestamps.size} workflows)`);
+
+    // Filter workflows to only those matching the configuration (if provided)
+    const workflowsToCheck = [];
+    if (workflowConfigs.length > 0) {
+      for (const [name, runs] of grouped.entries()) {
+        if (workflowMatchesConfig(name, workflowConfigs)) {
+          workflowsToCheck.push([name, runs]);
+        } else {
+          core.info(`[LAST_SUCCESS] Skipping workflow '${name}' (not in workflow_configs)`);
+        }
+      }
+      core.info(`[LAST_SUCCESS] Filtered to ${workflowsToCheck.length} workflows matching config (out of ${grouped.size} total)`);
+    } else {
+      // If no configs provided, check all workflows (backward compatibility)
+      workflowsToCheck.push(...grouped.entries());
+      core.info(`[LAST_SUCCESS] No workflow_configs provided, checking all ${workflowsToCheck.length} workflows`);
+    }
+
+    for (const [name, runs] of workflowsToCheck) {
+      try {
+        // Check if latest run on main is failing
+        const mainRuns = runs
+          .filter(r => r.head_branch === branch)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+        const latestRun = mainRuns[0];
+        if (!latestRun || latestRun.conclusion === 'success') {
+          // Workflow is passing, store the success timestamp
+          if (latestRun && latestRun.conclusion === 'success') {
+            lastSuccessTimestamps.set(name, {
+              timestamp: latestRun.created_at,
+              sha: latestRun.head_sha,
+              run_id: latestRun.id,
+              in_window: true
+            });
+            core.info(`[LAST_SUCCESS] Workflow '${name}' is passing (run ${latestRun.id})`);
+          }
+          continue;
+        }
+
+        // Workflow is currently failing - check if we already have a success in our window
+        const successInWindow = mainRuns.find(r => r.conclusion === 'success');
+        if (successInWindow) {
+          // We already have the info, no API call needed
+          lastSuccessTimestamps.set(name, {
+            timestamp: successInWindow.created_at,
+            sha: successInWindow.head_sha,
+            run_id: successInWindow.id,
+            in_window: true
+          });
+          core.info(`[LAST_SUCCESS] Workflow '${name}' failing, found success in window (run ${successInWindow.id})`);
+          continue;
+        }
+
+        // Workflow is failing and no success in window
+        // Check if we have a cached timestamp - if so, reuse it instead of making API calls
+        const cachedTimestamp = lastSuccessTimestamps.get(name);
+        if (cachedTimestamp && !cachedTimestamp.never_succeeded) {
+          // We have a cached timestamp and no new success was found, so reuse the cached one
+          core.info(`[LAST_SUCCESS] Workflow '${name}' failing, no new success found, reusing cached timestamp (run ${cachedTimestamp.run_id || 'unknown'}, timestamp: ${cachedTimestamp.timestamp})`);
+          // Keep the cached timestamp (it's already in the map)
+          continue;
+        }
+
+        // No cached timestamp or workflow never succeeded - make targeted API call to search all history
+        const workflowPath = runs[0]?.path;
+        if (!workflowPath) {
+          core.info(`[LAST_SUCCESS] Workflow '${name}' has no path, skipping`);
+          continue;
+        }
+
+        core.info(`[LAST_SUCCESS] Searching for last success in full history for failing workflow: ${name}${cachedTimestamp ? ' (no cached timestamp found)' : ''}`);
+
+        // Search through workflow history to find the last successful run
+        let foundSuccess = false;
+        const maxPagesToSearch = 10; // Limit search to up to 1000 most recent runs to avoid excessive API calls
+
+        for (let page = 1; page <= maxPagesToSearch; page++) {
+          const { data } = await octokit.rest.actions.listWorkflowRuns({
+            owner,
+            repo,
+            workflow_id: workflowPath,
+            branch,
+            status: 'completed',
+            per_page: 100,
+            page
+          });
+
+          if (!data.workflow_runs || data.workflow_runs.length === 0) {
+            break; // No more runs to check
+          }
+
+          // Find first successful run on this page
+          const successRun = data.workflow_runs.find(r => r.conclusion === 'success');
+          if (successRun) {
+            lastSuccessTimestamps.set(name, {
+              timestamp: successRun.created_at,
+              sha: successRun.head_sha,
+              run_id: successRun.id,
+              in_window: false
+            });
+            core.info(`[LAST_SUCCESS] Found last success for '${name}': run ${successRun.id} at ${successRun.created_at}`);
+            foundSuccess = true;
+            break;
+          }
+
+          // If we got fewer runs than requested, we've reached the end
+          if (data.workflow_runs.length < 100) {
+            break;
+          }
+        }
+
+        if (!foundSuccess) {
+          // Never succeeded in searchable history
+          core.info(`[LAST_SUCCESS] No successful run found in history for '${name}' (never succeeded or very old)`);
+          lastSuccessTimestamps.set(name, { never_succeeded: true });
+        }
+
+        // Small delay to avoid rate limiting
+        await delay(500);
+      } catch (e) {
+        core.warning(`Failed to fetch last success timestamp for ${name}: ${e.message}`);
+      }
+    }
+
+    // Save the last success timestamps index (merge cached + new)
+    const lastSuccessPath = path.join(outputDir, 'last-success-timestamps.json');
+    // Update cached timestamps with any new ones found
+    const finalLastSuccessTimestamps = Object.fromEntries(lastSuccessTimestamps);
+    fs.writeFileSync(lastSuccessPath, JSON.stringify(finalLastSuccessTimestamps));
+    core.setOutput('last-success-timestamps-path', lastSuccessPath);
+    core.info(`[LAST_SUCCESS] Saved last success timestamps for ${lastSuccessTimestamps.size} workflows to ${lastSuccessPath}`);
+
     // Download logs for the latest failing run per workflow and build an index
     // Constraint: Only fetch logs when the latest run for that workflow (on target branch)
     // is failing (i.e., conclusion neither success nor skipped/cancelled).
     // The logs will be extracted under a dedicated directory so downstream steps
     // can parse them without performing network calls again.
     // Separate gtest logs from other logs (non-gtest failures with no annotations)
-    const owner = github.context.repo.owner;
-    const repo = github.context.repo.repo;
-    const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+    const annotationsRoot = path.join(workspace, 'annotations');
     const gtestLogsRoot = path.join(workspace, 'logs', 'gtest');
     const otherLogsRoot = path.join(workspace, 'logs', 'other');
+    if (!fs.existsSync(annotationsRoot)) {
+      fs.mkdirSync(annotationsRoot, { recursive: true });
+    }
     if (!fs.existsSync(gtestLogsRoot)) {
       fs.mkdirSync(gtestLogsRoot, { recursive: true });
     }
     if (!fs.existsSync(otherLogsRoot)) {
       fs.mkdirSync(otherLogsRoot, { recursive: true });
     }
-    const annotationsIndex = {};
-    const gtestLogsIndex = {};
-    const otherLogsIndex = {};
+    // Initialize indices from cache
+    const annotationsIndex = { ...cachedAnnotationsIndex };
+    const gtestLogsIndex = { ...cachedGtestLogsIndex };
+    const otherLogsIndex = { ...cachedOtherLogsIndex };
+
+    // Build a map of run ID -> workflow name for quick lookup
+    const runIdToWorkflowName = new Map();
+    for (const [name, runs] of grouped.entries()) {
+      for (const run of runs) {
+        runIdToWorkflowName.set(String(run.id), name);
+      }
+    }
+
     for (const [name, runs] of grouped.entries()) {
       try {
         // Consider only the target branch and sort newest first
@@ -438,7 +900,86 @@ async function run() {
           targetRun = run;
           break;
         }
-        if (!targetRun) continue;
+
+        // Remove old annotations/logs for this workflow (only keep the latest failing run)
+        const runsToKeep = targetRun ? new Set([String(targetRun.id)]) : new Set();
+        let removedAnnotations = 0;
+        let removedGtestLogs = 0;
+        let removedOtherLogs = 0;
+
+        // Remove old annotations for this workflow
+        for (const [runId, dir] of Object.entries(annotationsIndex)) {
+          if (runIdToWorkflowName.get(runId) === name && !runsToKeep.has(runId)) {
+            delete annotationsIndex[runId];
+            removedAnnotations++;
+            // Remove directory from disk (dir is relative to workspace)
+            const fullPath = path.join(workspace, dir);
+            try {
+              if (fs.existsSync(fullPath)) {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+                core.info(`[LOGS] Removed old annotations directory for run ${runId} (workflow: ${name})`);
+              }
+            } catch (e) {
+              core.warning(`[LOGS] Failed to remove old annotations directory ${fullPath}: ${e.message}`);
+            }
+          }
+        }
+
+        // Remove old gtest logs for this workflow
+        for (const [runId, dir] of Object.entries(gtestLogsIndex)) {
+          if (runIdToWorkflowName.get(runId) === name && !runsToKeep.has(runId)) {
+            delete gtestLogsIndex[runId];
+            removedGtestLogs++;
+            // Remove directory from disk (dir is relative to workspace)
+            const fullPath = path.join(workspace, dir);
+            try {
+              if (fs.existsSync(fullPath)) {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+                core.info(`[LOGS] Removed old gtest logs directory for run ${runId} (workflow: ${name})`);
+              }
+            } catch (e) {
+              core.warning(`[LOGS] Failed to remove old gtest logs directory ${fullPath}: ${e.message}`);
+            }
+          }
+        }
+
+        // Remove old other logs for this workflow
+        for (const [runId, dir] of Object.entries(otherLogsIndex)) {
+          if (runIdToWorkflowName.get(runId) === name && !runsToKeep.has(runId)) {
+            delete otherLogsIndex[runId];
+            removedOtherLogs++;
+            // Remove directory from disk (dir is relative to workspace)
+            const fullPath = path.join(workspace, dir);
+            try {
+              if (fs.existsSync(fullPath)) {
+                fs.rmSync(fullPath, { recursive: true, force: true });
+                core.info(`[LOGS] Removed old other logs directory for run ${runId} (workflow: ${name})`);
+              }
+            } catch (e) {
+              core.warning(`[LOGS] Failed to remove old other logs directory ${fullPath}: ${e.message}`);
+            }
+          }
+        }
+
+        if (removedAnnotations > 0 || removedGtestLogs > 0 || removedOtherLogs > 0) {
+          core.info(`[LOGS] Workflow '${name}': removed ${removedAnnotations} old annotation entries, ${removedGtestLogs} old gtest log entries, ${removedOtherLogs} old other log entries`);
+        }
+
+        // If workflow is passing (no targetRun), we're done (already cleaned up old logs)
+        if (!targetRun) {
+          if (removedAnnotations > 0 || removedGtestLogs > 0 || removedOtherLogs > 0) {
+            core.info(`[LOGS] Workflow '${name}' is now passing, cleaned up old logs`);
+          }
+          continue;
+        }
+
+        // Skip if this run is already cached
+        if (cachedRunIds.has(String(targetRun.id))) {
+          core.info(`[LOGS] Skipping download for run ${targetRun.id} (workflow: ${name}) - already in cache`);
+          continue;
+        }
+
+        core.info(`[LOGS] Processing failing run ${targetRun.id} for workflow '${name}' (conclusion: ${targetRun.conclusion})`);
 
         // Fetch check-run annotations for this failing run
         let sawGtestFailure = false;
@@ -509,7 +1050,7 @@ async function run() {
           fs.writeFileSync(annPath, JSON.stringify(allAnnotations));
           const relativeAnn = path.relative(workspace, annRoot) || annRoot;
           annotationsIndex[String(targetRun.id)] = relativeAnn;
-          core.info(`Fetched annotations for failing run ${targetRun.id} → ${allAnnotations.length} items`);
+          core.info(`[LOGS] Fetched annotations for run ${targetRun.id} → ${allAnnotations.length} items`);
         } catch (e) {
           core.warning(`Failed to fetch annotations for run ${targetRun.id}: ${e.message}`);
           annotationsFetchFailed = true;
@@ -567,7 +1108,7 @@ async function run() {
             fs.writeFileSync(jobsIndexPath, JSON.stringify(jobsIndex));
             const relativeRunDir = path.relative(workspace, runDir) || runDir;
             gtestLogsIndex[String(targetRun.id)] = relativeRunDir;
-            core.info(`Downloaded and indexed gtest logs for failing run ${targetRun.id} → ${jobsIndex.jobs.length} job(s)`);
+            core.info(`[LOGS] Downloaded and indexed gtest logs for run ${targetRun.id} → ${jobsIndex.jobs.length} job(s), ${jobsIndex.jobs.reduce((sum, j) => sum + (j.files || []).length, 0)} files`);
           } else if (!sawAnyFailureAnnotations || annotationsFetchFailed) {
             // Download other logs (non-gtest failures with no annotations, or if annotation fetch failed entirely)
             // Just download and list files, no detailed indexing
@@ -601,7 +1142,7 @@ async function run() {
             fs.writeFileSync(logsListPath, JSON.stringify({ files: logFiles }));
             const relativeRunDir = path.relative(workspace, runDir) || runDir;
             otherLogsIndex[String(targetRun.id)] = relativeRunDir;
-            core.info(`Downloaded other logs for failing run ${targetRun.id} → ${logFiles.length} file(s)`);
+            core.info(`[LOGS] Downloaded other logs for run ${targetRun.id} → ${logFiles.length} file(s)`);
           }
         } catch (e) {
           core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
@@ -611,8 +1152,6 @@ async function run() {
       }
     }
     // Persist annotations index alongside annotations directory
-    const annotationsRoot = path.join(workspace, 'annotations');
-    if (!fs.existsSync(annotationsRoot)) fs.mkdirSync(annotationsRoot, { recursive: true });
     const annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
     fs.writeFileSync(annotationsIndexPath, JSON.stringify(annotationsIndex));
 
@@ -635,9 +1174,19 @@ async function run() {
     // Build a commits index for the main branch within the last N days
     // The index is an array of commits sorted by commit author/commit date ascending.
     // Each entry: { sha, short, url, author_login, author_name, author_url, date }
+    // Start with cached commits and merge with new ones
+    core.info(`[COMMITS] Starting commits fetch (cached: ${cachedCommits.length})`);
+    const cachedCommitsSet = new Map((cachedCommits || []).map(c => [c.sha, c]));
+    // Initialize commits as empty array to avoid keeping cached commits in memory twice
+    // We'll add cached commits back at the end if needed, or push them as we process
     const commits = [];
+    let newCommitsCount = 0;
+    let skippedCachedCommits = 0;
+    let consecutiveCachedCommits = 0;
+    const MAX_CONSECUTIVE_CACHED = 10; // If we see 10 consecutive cached commits, assume we've caught up
     try {
       const sinceIso = getCutoffDate(days).toISOString();
+      core.info(`[COMMITS] Fetching commits since ${sinceIso}`);
       const perPage = 100;
       let page = 1;
       while (true) {
@@ -650,9 +1199,39 @@ async function run() {
           page,
         });
         const arr = resp.data || [];
-        if (!arr.length) break;
+        if (!arr.length) {
+          core.info(`[COMMITS] No more commits (page ${page})`);
+          break;
+        }
+        core.info(`[COMMITS] Fetched page ${page}: ${arr.length} commits`);
+        let shouldBreak = false;
         for (const c of arr) {
           const sha = c.sha;
+          // Skip if already in cache
+          if (cachedCommitsSet.has(sha)) {
+            consecutiveCachedCommits++;
+            skippedCachedCommits++;
+            if (skippedCachedCommits <= 5) {
+              core.info(`[COMMITS] Skipping cached commit ${sha.substring(0, 7)}`);
+            }
+            // If we've seen many consecutive cached commits, we've likely reached the boundary
+            // Commits are returned newest-first, so all subsequent commits will also be cached
+            if (consecutiveCachedCommits >= MAX_CONSECUTIVE_CACHED) {
+              core.info(`[COMMITS] Early exit: found ${consecutiveCachedCommits} consecutive cached commits, stopping fetch`);
+              core.info(`[COMMITS] Summary: added ${newCommitsCount} new commits, skipped ${skippedCachedCommits} cached`);
+              shouldBreak = true;
+              break;
+            }
+            continue;
+          }
+
+          // Reset consecutive cached counter when we find a new commit
+          if (consecutiveCachedCommits > 0) {
+            core.info(`[COMMITS] Found new commit after ${consecutiveCachedCommits} cached commits, resetting counter`);
+          }
+          consecutiveCachedCommits = 0;
+
+          newCommitsCount++;
           const short = sha ? sha.substring(0, 7) : '';
           const url = `https://github.com/${owner}/${repo}/commit/${sha}`;
           const author_login = c.author?.login;
@@ -661,19 +1240,41 @@ async function run() {
           const date = c.commit?.author?.date || c.commit?.committer?.date || null;
           const message = c.commit?.message || '';
           const description = typeof message === 'string' ? (message.split(/\r?\n/)[0] || '') : '';
-          commits.push({ sha, short, url, author_login, author_name, author_url, date, message, description });
+          const commitObj = { sha, short, url, author_login, author_name, author_url, date, message, description };
+          commits.push(commitObj);
+          cachedCommitsSet.set(sha, commitObj);
+          if (newCommitsCount <= 10) {
+            core.info(`[COMMITS] Added new commit ${sha.substring(0, 7)} (${date || 'no date'})`);
+          }
         }
+
+        // Break if we hit the early exit condition
+        if (shouldBreak) {
+          break;
+        }
+
         if (arr.length < perPage) break;
         page++;
       }
+
+      if (skippedCachedCommits > 5) {
+        core.info(`[COMMITS] Skipped ${skippedCachedCommits} cached commits (showing first 5)`);
+      }
+      // Add all cached commits to the array (they've already been pruned by date)
+      commits.push(...cachedCommits);
+
       // Sort oldest -> newest by date for deterministic slicing
       commits.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+      core.info(`[COMMITS] Total commits: ${commits.length}; cached: ${cachedCommits.length}; new: ${newCommitsCount}`);
     } catch (e) {
-      core.warning(`Failed to build commits index: ${e.message}`);
+      core.warning(`[COMMITS] Failed to build commits index: ${e.message}`);
     }
     const commitsPath = path.join(workspace, 'commits-main.json');
     fs.writeFileSync(commitsPath, JSON.stringify(commits));
+    core.info(`[COMMITS] Saved commits index to ${commitsPath}`);
+
     // Set output
+    core.info(`[OUTPUT] Setting action outputs...`);
     core.setOutput('total-runs', mergedRuns.length);
     core.setOutput('workflow-count', grouped.size);
     core.setOutput('cache-path', outputPath);
@@ -684,11 +1285,18 @@ async function run() {
     core.setOutput('annotations-root', annotationsRoot);
     core.setOutput('annotations-index-path', annotationsIndexPath);
     core.setOutput('commits-path', commitsPath);
-    // Log remaining GitHub API rate limit
-    const rateLimit = await octokit.rest.rateLimit.get();
-    const remaining = rateLimit.data.resources.core.remaining;
-    const limit = rateLimit.data.resources.core.limit;
-    core.info(`GitHub API rate limit remaining: ${remaining} / ${limit}`);
+    core.info(`[OUTPUT] total-runs: ${mergedRuns.length}, workflow-count: ${grouped.size}`);
+    core.info(`[OUTPUT] annotations: ${Object.keys(annotationsIndex).length} entries`);
+    core.info(`[OUTPUT] gtest-logs: ${Object.keys(gtestLogsIndex).length} entries`);
+    core.info(`[OUTPUT] other-logs: ${Object.keys(otherLogsIndex).length} entries`);
+
+    // Log final GitHub API rate limit and calculate usage
+    const finalRateLimit = await octokit.rest.rateLimit.get();
+    const finalRemaining = finalRateLimit.data.resources.core.remaining;
+    const finalLimit = finalRateLimit.data.resources.core.limit;
+    const apiCallsUsed = initialRemaining - finalRemaining;
+    core.info(`[RATE_LIMIT] Final GitHub API rate limit: ${finalRemaining} / ${finalLimit} (${((finalRemaining/finalLimit)*100).toFixed(1)}%)`);
+    core.info(`[RATE_LIMIT] API calls used during this run: ${apiCallsUsed} (${initialRemaining} → ${finalRemaining})`);
   } catch (error) {
     core.setFailed(error.message);
   }

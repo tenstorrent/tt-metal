@@ -49,8 +49,7 @@ struct ParsedTrafficPatternConfig {
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<ParsedDestinationConfig> destination;
-    std::optional<uint16_t> atomic_inc_val;
-    std::optional<uint16_t> atomic_inc_wrap;
+    std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
 };
 
@@ -83,8 +82,7 @@ struct TrafficPatternConfig {
     std::optional<uint32_t> size;
     std::optional<uint32_t> num_packets;
     std::optional<DestinationConfig> destination;
-    std::optional<uint16_t> atomic_inc_val;
-    std::optional<uint16_t> atomic_inc_wrap;
+    std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
 
     // Credit info
@@ -114,6 +112,7 @@ enum class HighLevelTrafficPattern {
     FullRing,
     HalfRing,
     AllDevicesUniformPattern,
+    SequentialAllToAll,
 };
 
 struct TestFabricSetup {
@@ -268,7 +267,7 @@ struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
     std::vector<std::vector<EthCoord>> eth_coord_mapping;
 
-    PhysicalMeshConfig() : mesh_descriptor_path(""), eth_coord_mapping({}) {
+    PhysicalMeshConfig() : eth_coord_mapping({}) {
         // Default path to the mesh descriptor.
     }
 };
