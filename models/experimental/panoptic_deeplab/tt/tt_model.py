@@ -24,7 +24,7 @@ from models.experimental.panoptic_deeplab.tt.tt_semseg import TtPanopticDeepLabS
 from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabInsEmbedHead
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
-from models.experimental.panoptic_deeplab.tt.common import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
 
 
 class TtPanopticDeepLab:

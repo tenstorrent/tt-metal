@@ -9,7 +9,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
 from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
     create_panoptic_deeplab_parameters,
     fuse_conv_bn_parameters,
@@ -19,13 +19,13 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import Pytorch
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
-    PANOPTIC_DEEPLAB,
-    DEEPLAB_V3_PLUS,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
 )
 from models.experimental.panoptic_deeplab.tests.pcc.common import check_ttnn_output
 from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input_tensor
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+
 
 @pytest.mark.parametrize(
     "model_category",
@@ -36,10 +36,7 @@ from models.experimental.panoptic_deeplab.tt.common import preprocess_nchw_input
 def test_model_panoptic_deeplab(device, model_category, model_location_generator):
     """Test PCC comparison between PyTorch and TTNN implementations with fused Conv+BatchNorm."""
 
-    compute_grid = device.compute_with_storage_grid_size()
-    if compute_grid.x != 5 or compute_grid.y != 4:
-        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
-
+    skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(0)
 
     # Get the weights path using the common utility function

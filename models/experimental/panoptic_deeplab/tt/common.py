@@ -13,8 +13,6 @@ import ttnn
 import os
 
 PDL_L1_SMALL_SIZE = 4 * 1024  # Minimum L1 small size for Panoptic DeepLab
-PANOPTIC_DEEPLAB = "panoptic_deeplab"
-DEEPLAB_V3_PLUS = "deeplab_v3_plus"
 
 
 def load_images(image_dir: str):

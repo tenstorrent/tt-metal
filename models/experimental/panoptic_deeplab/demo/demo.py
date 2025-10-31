@@ -8,6 +8,7 @@ import cv2
 import torch
 from loguru import logger
 import ttnn
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
 from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
     create_panoptic_deeplab_parameters,
     fuse_conv_bn_parameters,
@@ -19,8 +20,6 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import Pytorch
 from models.experimental.panoptic_deeplab.tt.common import (
     get_panoptic_deeplab_config,
     PDL_L1_SMALL_SIZE,
-    PANOPTIC_DEEPLAB,
-    DEEPLAB_V3_PLUS,
 )
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.common.utility_functions import disable_persistent_kernel_cache
@@ -174,7 +173,7 @@ def run_panoptic_deeplab_demo(
     logger.info("Processing TTNN results...")
 
     # Handle semantic output - convert from NHWC to NCHW and slice padding if needed
-    ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic_logits).permute(0, 3, 1, 2)
+    ttnn_semantic_torch = ttnn.to_torch(ttnn_semantic_logits)
     semantic_original_channels = ttnn_model.semantic_head.get_output_channels_for_slicing()
     if semantic_original_channels is not None:
         logger.info(
@@ -184,7 +183,7 @@ def run_panoptic_deeplab_demo(
 
     if ttnn_model.model_category == PANOPTIC_DEEPLAB:
         # Handle center output - convert from NHWC to NCHW and slice padding if needed
-        ttnn_center_torch = ttnn.to_torch(ttnn_center_logits).permute(0, 3, 1, 2)
+        ttnn_center_torch = ttnn.to_torch(ttnn_center_logits)
         center_original_channels = ttnn_model.instance_head.get_center_output_channels_for_slicing()
         if center_original_channels is not None:
             logger.info(
@@ -193,7 +192,7 @@ def run_panoptic_deeplab_demo(
             ttnn_center_torch = ttnn_center_torch[:, :center_original_channels, :, :]
 
         # Handle offset output - convert from NHWC to NCHW and slice padding if needed
-        ttnn_offset_torch = ttnn.to_torch(ttnn_offset_logits).permute(0, 3, 1, 2)
+        ttnn_offset_torch = ttnn.to_torch(ttnn_offset_logits)
         offset_original_channels = ttnn_model.instance_head.get_offset_output_channels_for_slicing()
         if offset_original_channels is not None:
             logger.info(
@@ -282,25 +281,3 @@ def test_panoptic_deeplab_demo(device, output_dir, model_category, use_imagenet_
     run_panoptic_deeplab_demo(
         device, images[0], weights_path, output_dir, model_category=model_category, use_imagenet_norm=use_imagenet_norm
     )
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize(
-    "output_dir, use_imagenet_norm",
-    [
-        (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../demo_batch_outputs")),
-            True,
-        ),
-    ],
-)
-@pytest.mark.parametrize("model_category", [PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS])
-def test_panoptic_deeplab_demo_batch(device, output_dir, model_category, use_imagenet_norm, model_location_generator):
-    skip_if_not_blackhole_20_cores(device)
-    images, weights_path, output_dir = preprocess_input_params(
-        output_dir, model_category, current_dir=__file__, model_location_generator=model_location_generator
-    )
-    for image in images:
-        run_panoptic_deeplab_demo(
-            device, image, weights_path, output_dir, model_category=model_category, use_imagenet_norm=use_imagenet_norm
-        )

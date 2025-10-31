@@ -21,7 +21,9 @@ from models.experimental.panoptic_deeplab.reference.pytorch_semseg import Panopt
 from models.experimental.panoptic_deeplab.reference.pytorch_insemb import PanopticDeepLabInsEmbedHead
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.panoptic_deeplab.reference.pytorch_resnet import ResNet
-from models.experimental.panoptic_deeplab.tt.common import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
+
+PANOPTIC_DEEPLAB = "panoptic_deeplab"
+DEEPLAB_V3_PLUS = "deeplab_v3_plus"
 
 
 class PytorchPanopticDeepLab(nn.Module):

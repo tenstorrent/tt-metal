@@ -4,7 +4,7 @@
 
 import pytest
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.experimental.panoptic_deeplab.tt.common import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
 
 
 @pytest.mark.parametrize(
