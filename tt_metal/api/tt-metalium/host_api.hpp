@@ -602,6 +602,126 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
 
 // clang-format off
 /**
+ * Set runtime args for a kernel using a POD struct. The struct is converted to a vector of uint32_t internally.
+ * This is a convenience API that allows passing structured data as runtime arguments.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args struct to be written                                  | const T &                                              | Any POD struct                                                      | Yes      |
+ */
+// clang-format on
+template <typename T, typename = std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::vector<uint32_t>>>>
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel_id,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const T& runtime_args) {
+    constexpr size_t size_in_words = (sizeof(T) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    std::vector<uint32_t> args_buffer(size_in_words, 0);
+    // TODO: this memcpy can be avoided
+    std::memcpy(args_buffer.data(), &runtime_args, sizeof(T));
+    SetRuntimeArgs(program, kernel_id, core_spec, stl::Span<const uint32_t>(args_buffer.data(), size_in_words));
+}
+
+// clang-format off
+/**
+ * Set multiple runtime arguments of a kernel at once using POD structs, each mapping to a specific core.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                            | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                            | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector<CoreCoord> &                         | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
+ * | runtime_args | The runtime args structs to be written                                 | const std::vector<T> &                                 | Vector size must be equal to size of core_spec vector                      | Yes      |
+ */
+// clang-format on
+template <typename T, typename = std::enable_if_t<!std::is_same_v<std::decay_t<T>, uint32_t>>>
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel_id,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<T>& runtime_args) {
+    constexpr size_t size_in_words = (sizeof(T) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+
+    std::vector<std::vector<uint32_t>> runtime_args_uint32;
+    runtime_args_uint32.reserve(runtime_args.size());
+    for (const auto& args : runtime_args) {
+        std::vector<uint32_t> args_buffer(size_in_words, 0);
+        // TODO: this memcpy can be avoided
+        std::memcpy(args_buffer.data(), &args, sizeof(T));
+        runtime_args_uint32.push_back(std::move(args_buffer));
+    }
+    SetRuntimeArgs(program, kernel_id, core_spec, runtime_args_uint32);
+}
+
+// clang-format off
+/**
+ * Set common runtime args for a kernel using a POD struct. The struct is converted to a vector of uint32_t internally.
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)       |                                    | Yes      |
+ * | runtime_args | The runtime args struct to be written                                  | const T &                     | Any POD struct                     | Yes      |
+ */
+// clang-format on
+template <typename T, typename = std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::vector<uint32_t>>>>
+void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, const T& runtime_args) {
+    constexpr size_t size_in_words = (sizeof(T) + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    std::vector<uint32_t> args_buffer(size_in_words, 0);
+    // TODO: this memcpy can be avoided
+    std::memcpy(args_buffer.data(), &runtime_args, sizeof(T));
+    SetCommonRuntimeArgs(program, kernel_id, stl::Span<const uint32_t>(args_buffer.data(), size_in_words));
+}
+
+// clang-format off
+/**
+ * Get the runtime args for a kernel as a POD struct reference.
+ *
+ * Return value: T &
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel                                                       | KernelHandle (uint64_t)       |                                    | Yes      |
+ * | logical_core | The location of the Tensix core                                        | const CoreCoord &             | Any logical Tensix core coordinate | Yes      |
+ */
+// clang-format on
+template <typename T>
+T& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core) {
+    RuntimeArgsData& args_data = GetRuntimeArgs(program, kernel_id, logical_core);
+    return *reinterpret_cast<T*>(args_data.data());
+}
+
+// clang-format off
+/**
+ * Get the common runtime args for a kernel as a POD struct reference.
+ *
+ * Return value: T &
+ *
+ * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
+ * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &               |                                    | Yes      |
+ * | kernel_id    | ID of the kernel                                                       | KernelHandle (uint64_t)       |                                    | Yes      |
+ */
+// clang-format on
+template <typename T>
+T& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id) {
+    RuntimeArgsData& args_data = GetCommonRuntimeArgs(program, kernel_id);
+    return *reinterpret_cast<T*>(args_data.data());
+}
+
+// clang-format off
+/**
  * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
  * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
  * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
