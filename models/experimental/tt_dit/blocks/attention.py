@@ -213,7 +213,7 @@ class Attention(Module):
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
         qkv = self.to_qkv(
-            spatial, core_grid=core_grid
+            spatial
         )  # [batch_size, spatial_sequence_length / sp_factor, 3 * n_local_heads * head_dim (in this order)]
         local_heads = self.n_local_heads
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -228,7 +228,7 @@ class Attention(Module):
             k = _apply_rope(k, spatial_rope)
 
         if self.add_qkv_proj is not None:
-            add_qkv = self.add_qkv_proj(prompt, core_grid=core_grid)
+            add_qkv = self.add_qkv_proj(prompt)
             add_q, add_k, add_v = ttnn.transformer.split_query_key_value_and_split_heads(
                 add_qkv, num_heads=local_heads, transpose_key=False
             )
@@ -314,13 +314,13 @@ class Attention(Module):
             spatial = self.ccl_manager.all_gather_persistent_buffer(
                 spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True
             )
-            spatial = self.to_out(spatial, core_grid=core_grid)
+            spatial = self.to_out(spatial)
 
         if self.to_add_out is not None:
             prompt = self.ccl_manager.all_gather_persistent_buffer(
                 prompt, dim=2, mesh_axis=tp_axis, use_hyperparams=True
             )
-            prompt = self.to_add_out(prompt, core_grid=core_grid)
+            prompt = self.to_add_out(prompt)
 
         return spatial, prompt
 
