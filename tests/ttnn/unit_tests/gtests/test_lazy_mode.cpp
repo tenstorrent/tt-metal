@@ -29,6 +29,8 @@ protected:
         TTNNFixtureWithDevice::SetUp();
         // Enable lazy mode by setting environment variable
         setenv("TTNN_LAZY_MODE", "1", 1);
+        // TODO: old device infra doesn't work well with cache enabled for some reason
+        ttnn::disable_and_clear_program_cache(*device_);
     }
 
     void TearDown() override {
@@ -384,28 +386,16 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
         matmul_shape2[0],
         matmul_shape2[1]);
 
-    auto matmul_result_eager =
-        ttnn::matmul(matmul_input1_eager, matmul_input2_eager, /* transpose_a */ false, /* transpose_b */ false);
+    auto matmul_result_eager = ttnn::matmul(matmul_input1_eager, matmul_input2_eager, false, false);
     auto add_result_eager = ttnn::add(matmul_result_eager, add_input_eager);
     auto relu_result_eager = ttnn::relu(add_result_eager);
-    auto matmul_result2_eager =
-        ttnn::matmul(relu_result_eager, matmul_input1_eager, /* transpose_a */ false, /* transpose_b */ false);
+    auto matmul_result2_eager = ttnn::matmul(relu_result_eager, matmul_result_eager, false, false);
     auto exp_result_eager = ttnn::exp(matmul_result2_eager);
-    auto final_eager = ttnn::multiply(exp_result_eager, matmul_input1_eager);
+    auto final_eager = ttnn::multiply(exp_result_eager, matmul_result_eager);
     auto eager_result = final_eager.cpu();
 
     // Clean up eager tensors to free device memory before running lazy mode
     log_info(tt::LogTest, "Cleaning up eager tensors...");
-    // TODO:: Test fails without this, why???
-    matmul_input1_eager = Tensor();
-    matmul_input2_eager = Tensor();
-    add_input_eager = Tensor();
-    matmul_result_eager = Tensor();
-    add_result_eager = Tensor();
-    relu_result_eager = Tensor();
-    matmul_result2_eager = Tensor();
-    exp_result_eager = Tensor();
-    final_eager = Tensor();
 
     // ========== Now run LAZY mode and compare ==========
     log_info(tt::LogTest, "Running same operations in LAZY mode...");
@@ -418,12 +408,12 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
 
     // Apply matmul and element-wise operations - these should be captured lazily
     log_info(tt::LogTest, "Applying operations in lazy mode...");
-    auto matmul_result = ttnn::matmul(matmul_input1, matmul_input2, /* transpose_a */ false, /* transpose_b */ false);
+    auto matmul_result = ttnn::matmul(matmul_input1, matmul_input2, false, false);
     auto add_result = ttnn::add(matmul_result, add_input);
     auto relu_result = ttnn::relu(add_result);
-    auto matmul_result2 = ttnn::matmul(relu_result, matmul_input1, /* transpose_a */ false, /* transpose_b */ false);
+    auto matmul_result2 = ttnn::matmul(relu_result, matmul_result, false, false);
     auto exp_result = ttnn::exp(matmul_result2);
-    auto final_result = ttnn::multiply(exp_result, matmul_input1);
+    auto final_result = ttnn::multiply(exp_result, matmul_result);
 
     ASSERT_TRUE(matmul_input1.lazy()->is_materialized()) << "Lazy tensor should be materialized";
     ASSERT_TRUE(matmul_input2.lazy()->is_materialized()) << "Lazy tensor should be materialized";
