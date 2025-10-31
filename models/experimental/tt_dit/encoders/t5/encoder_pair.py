@@ -78,25 +78,17 @@ class T5TokenizerEncoderPair:
             parallel_config=self._parallel_config,
         )
 
-        if cache.cache_dir_is_set():
-            cache_path = cache.get_and_create_cache_path(
-                model_name=checkpoint,
-                subfolder="",
-                parallel_config=self._parallel_config,
-                mesh_shape=self._device.shape,
-                dtype="bf16",
-            )
-            if cache.cache_dict_exists(cache_path):
-                logger.info("loading T5 encoder from cache...")
-                model.from_cached_state_dict(cache.load_cache_dict(cache_path))
-            else:
-                logger.info("loading T5 encoder from torch state...")
-                model.load_state_dict(torch_model.state_dict())
-                logger.info("saving T5 encoder to cache...")
-                cache.save_cache_dict(model.to_cached_state_dict(cache_path), cache_path)
-        else:
+        if not cache.initialize_from_cache(
+            tt_model=model,
+            torch_state_dict=torch_model.state_dict(),
+            model_name=checkpoint,
+            subfolder="",
+            parallel_config=self._parallel_config,
+            mesh_shape=tuple(self._device.shape),
+            dtype="bf16",
+        ):
             logger.info("loading T5 encoder from torch state...")
-            model.load_state_dict(torch_model.state_dict())
+            model.load_torch_state_dict(torch_model.state_dict())
 
         return model
 
