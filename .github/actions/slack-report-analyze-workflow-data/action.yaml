@@ -107,13 +107,13 @@ runs:
           --arg failing_list "$FAILING_WORKFLOWS_LIST" \
           '
           {
-            text: ($header + "\n" + $body + $failing_list),
-            blocks: [
+            "text": ($header + "\n" + $body + $failing_list),
+            "blocks": ([
               { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
               { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
             ] + (if ($failing_list | length > 0) then
               [ { "type": "section", "text": { "type": "mrkdwn", "text": $failing_list } } ]
-            else [] end)
+            else [] end))
           }
         ')
 
