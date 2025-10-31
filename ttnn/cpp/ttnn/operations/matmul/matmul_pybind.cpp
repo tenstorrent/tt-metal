@@ -993,7 +993,7 @@ void py_module(py::module& module) {
         The two input tensors must be be tiled and each have a rank of 4.
         The sparsity tensor must be a rank 4 tensor in row major layout.
 
-        Based on the input tensor shapes and `is_input_a_sparse` and `is_input_b_sparse` values, the output tensor shape is computed. See table below.
+        Based on the input tensor shapes and `is_input_a_sparse` and `is_input_b_sparse` values, the output tensor shape is computed. See the supported modes table below.
 
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
@@ -1002,8 +1002,8 @@ void py_module(py::module& module) {
             sparsity (ttnn.Tensor): the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.
             program_config (ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig): the program configuration for the matmul operation. Only this config type is supported. ``mcast_in0`` must be set to True.
             nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.
-            is_input_a_sparse (bool, optional): boolean indicating whether `input_tensor_a` is sparse. Defaults to `False`. Together with `is_input_b_sparse`, it determines how the sparsity tensor is interpreted. See table below.
-            is_input_b_sparse (bool, optional): boolean indicating whether `input_tensor_b` is sparse. Defaults to `True`. Together with `is_input_a_sparse`, it determines how the sparsity tensor is interpreted. See table below.
+            is_input_a_sparse (bool, optional): boolean indicating whether `input_tensor_a` is sparse. Defaults to `False`. Together with `is_input_b_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
+            is_input_b_sparse (bool, optional): boolean indicating whether `input_tensor_b` is sparse. Defaults to `True`. Together with `is_input_a_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
             memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
@@ -1062,7 +1062,7 @@ void py_module(py::module& module) {
 
                 * - dtype
                   - layout
-                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                * - BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32
                   - TILE
 
             .. list-table:: input_tensor_b
@@ -1070,7 +1070,7 @@ void py_module(py::module& module) {
 
                 * - dtype
                   - layout
-                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                * - BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32
                   - TILE
 
             .. list-table:: sparsity
