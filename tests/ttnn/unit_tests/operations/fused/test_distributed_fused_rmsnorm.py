@@ -19,7 +19,7 @@ from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_ulp impor
 
 
 def run_distributed_fused_rmsnorm(
-    mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device=1
+    mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device=1, use_weight=True
 ):
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
@@ -37,20 +37,38 @@ def run_distributed_fused_rmsnorm(
 
     num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
 
-    canon_inp = torch.randn(inp_shape) * 4 - 1
+    torch_input = torch.randn(inp_shape) * 4 - 1
+
+    if use_weight:
+        torch_weight = torch.rand(inp_shape[-1:]).unsqueeze(0)
+        assert torch_weight.shape == (1, inp_shape[-1])
+
     epsilon = 1e-5
 
     tensor_shard_dims = [None, None]
     tensor_shard_dims[tp_mesh_axis] = -1
     tensor_shard_dims[1 - tp_mesh_axis] = -2
     tt_inp = ttnn.from_torch(
-        canon_inp,
+        torch_input,
         dtype=dtype,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tensor_shard_dims, mesh_shape=list(mesh_device.shape)),
     )
+
+    tt_weight = None
+    if use_weight:
+        weight_shard_dims = [None, None]
+        weight_shard_dims[tp_mesh_axis] = -1
+        tt_weight = ttnn.from_torch(
+            torch_weight,
+            dtype=dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=weight_shard_dims, mesh_shape=list(mesh_device.shape)),
+        )
 
     ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -78,6 +96,7 @@ def run_distributed_fused_rmsnorm(
         tt_stats_gathered,
         epsilon=epsilon,
         num_heads_per_device=num_heads_per_device,
+        weight=tt_weight,
         compute_kernel_config=compute_kernel_config,
     )
     # tt_out = ttnn.rms_norm_post_all_gather(
@@ -93,7 +112,9 @@ def run_distributed_fused_rmsnorm(
     )
 
     # reference impl
-    out_torch = torch.nn.functional.rms_norm(canon_inp, normalized_shape=(inp_shape[-1],), eps=epsilon)
+    out_torch = torch.nn.functional.rms_norm(torch_input, normalized_shape=(inp_shape[-1],), eps=epsilon)
+    if use_weight:
+        out_torch = out_torch * torch_weight
 
     # create heads fusion
     out_torch = out_torch.reshape(inp_shape[0], inp_shape[2], num_heads, -1).permute(0, 2, 1, 3)
@@ -113,6 +134,7 @@ def run_distributed_fused_rmsnorm(
     "hidden_dim", [256, 2048, 5120, 8192], ids=["hidden_dim256", "hidden_dim2048", "hidden_dim5120", "hidden_dim8192"]
 )
 @pytest.mark.parametrize("num_heads_per_device", [1, 2, 10], ids=["num_heads1_", "num_heads2", "num_heads10"])
+@pytest.mark.parametrize("use_weight", [True, False], ids=["has_weight", "no_weight"])
 @pytest.mark.parametrize(
     "mesh_device, tp_mesh_axis",
     [
@@ -132,12 +154,21 @@ def run_distributed_fused_rmsnorm(
     indirect=["device_params"],
 )
 def test_distributed_fused_rmsnorm(
-    mesh_device, tp_mesh_axis, seqlen, hidden_dim, dtype, stats_dtype, topology, num_heads_per_device, reset_seeds
+    mesh_device,
+    tp_mesh_axis,
+    seqlen,
+    hidden_dim,
+    dtype,
+    stats_dtype,
+    topology,
+    num_heads_per_device,
+    use_weight,
+    reset_seeds,
 ):
     num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
     if hidden_dim // 32 % num_heads != 0:
         pytest.skip("hidden_dim must be divisible by 32 * num_heads")
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
-        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device
+        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight
     )
