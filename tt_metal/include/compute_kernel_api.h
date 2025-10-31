@@ -31,6 +31,7 @@
 #ifdef TRISC_PACK
 #include "llk_pack_api.h"
 #include "llk_io_pack.h"
+#include "llk_math_sfpu_reduce_sdpa.h"
 #define PACK(x) x
 #define MAIN pack_main()
 #else
@@ -53,6 +54,12 @@
 #endif
 
 namespace ckernel {
+
+ALWI void sfpu_reduce_max_sdpa_init() { PACK((llk_math_sfpu_reduce_max_sdpa_init())); }
+
+ALWI void sfpu_reduce_max_sdpa(uint32_t idst, int vector_mode = (int)VectorMode::RC_custom) {
+    PACK((llk_math_sfpu_reduce_max_sdpa(idst, vector_mode)));
+}
 
 /**
  * Please refer to documentation for any_init.

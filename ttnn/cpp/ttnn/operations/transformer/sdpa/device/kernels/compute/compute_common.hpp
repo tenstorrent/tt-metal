@@ -20,6 +20,9 @@
 #include "compute_kernel_api/reduce.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#include "debug/dprint.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
     // inputs come in full, outputs go out full
@@ -105,13 +108,23 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
+    DPRINT << rows << "x" << cols << ENDL();
+
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
-        reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
+        // reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
+        sfpu_reduce_max_sdpa_init();
         for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+            // reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+            copy_tile(in0_cb, i * cols + j, reduce_dst_idx);
+
+            _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+
+            sfpu_reduce_max_sdpa(reduce_dst_idx, static_cast<int>(VectorMode::RC_custom));
+            DPRINT << "FINISHED ONE REDUCE" << ENDL();
         }
-        reduce_uninit();
+        // reduce_uninit();
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
@@ -120,9 +133,11 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
 
         pack_tile(reduce_dst_idx, out_cb);
         release_dst();
+        DPRINT << "FINISHED ONE I LOOP ITERATION" << ENDL();
     }
 
     cb_push_back(out_cb, rows);
+    DPRINT << "PACKED OUT" << ENDL();
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
