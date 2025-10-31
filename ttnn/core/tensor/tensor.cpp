@@ -38,7 +38,6 @@
 #include "ttnn/distributed/api.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
-#include <ttnn/operations/core/core.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -1071,7 +1070,7 @@ Tensor tt::tt_metal::convert_python_tensor_to_tt_tensor(
     const ttnn::Shape& tensor_shape,
     const TensorLayout& tensor_layout,
     const host_buffer_data_type& host_data_type,
-    std::function<HostBuffer(DataType)> get_host_data,
+    const std::function<HostBuffer(DataType)>& get_host_data,
     ttnn::distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,

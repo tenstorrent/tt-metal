@@ -344,7 +344,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     const ttnn::Shape& tensor_shape,
     const TensorLayout& tensor_layout,
     const host_buffer_data_type& host_data_type,
-    std::function<HostBuffer(DataType)> get_host_data,
+    const std::function<HostBuffer(DataType)>& get_host_data,
     tt::tt_metal::distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
     float pad_value,
