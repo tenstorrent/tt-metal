@@ -7,6 +7,8 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/operations/core/get_tensor_id/get_tensor_id_op.hpp"
+#include "ttnn/operations/core/set_tensor_id/set_tensor_id_op.hpp"
 #include <cxxabi.h>
 #include <memory>
 #include <string>
@@ -278,15 +280,15 @@ int GraphProcessor::add_tensor(const Tensor& t) {
             return nullptr;
         },
         storage);
-    std::int64_t tensor_id;
-    if (not t.tensor_id.has_value()) {
+    std::uint64_t tensor_id = t.tensor_id;
+    if (tensor_id == 0) {
         log_debug(
             tt::LogAlways,
-            "Tensor doesn't have tensor_id, generating new one. Ideally this should not happen. Please set tensor_id "
+            "Tensor doesn't have tensor_id (sentinel value is 0), generating new one. Ideally this should not happen. "
+            "Please set tensor_id "
             "for this tensor ahead of time.");
-        tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
-    } else {
-        tensor_id = t.tensor_id.value();
+        tensor_id = ttnn::operations::core::GetTensorId::invoke();
+        ttnn::operations::core::SetTensorId::invoke(tensor_id + 1);
     }
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();

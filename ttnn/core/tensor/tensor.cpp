@@ -16,6 +16,8 @@
 #include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/get_tensor_id/get_tensor_id_op.hpp"
+#include "ttnn/operations/core/set_tensor_id/set_tensor_id_op.hpp"
 #include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
@@ -38,6 +40,9 @@
 #include "ttnn/distributed/api.hpp"
 
 namespace tt::tt_metal {
+
+std::atomic<std::uint64_t> Tensor::tensor_id_counter{0};
+
 namespace {
 
 template <typename T>
@@ -81,6 +86,7 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
+    tensor_id = tensor_id_counter.fetch_add(1);
 }
 
 void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
@@ -104,6 +110,7 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
+    other.tensor_id = 0;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
@@ -643,7 +650,8 @@ Tensor set_tensor_id(const Tensor& tensor) {
         return tensor;
     }
     auto output = tensor;
-    output.tensor_id = ttnn::CoreIDs::instance().fetch_and_increment_tensor_id();
+    output.tensor_id = ttnn::operations::core::GetTensorId::invoke();
+    ttnn::operations::core::SetTensorId::invoke(output.tensor_id + 1);
     return output;
 };
 

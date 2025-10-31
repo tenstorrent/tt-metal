@@ -203,7 +203,9 @@ def set_tensor_id(tensor, force=False):
     if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
+        current_id = ttnn.get_tensor_id()
+        ttnn.set_tensor_id(current_id + 1)
+        tensor.tensor_id = current_id
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
@@ -548,7 +550,7 @@ class Operation:
                     latest_tensor = ttnn.database.query_latest_tensor(ttnn.CONFIG.report_path)
                     if latest_tensor is not None:
                         tensor_id = latest_tensor.tensor_id + 1
-                        ttnn._ttnn.set_tensor_id(tensor_id)
+                        ttnn.set_tensor_id(tensor_id)
 
                 operation_id = ttnn._ttnn.get_python_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
