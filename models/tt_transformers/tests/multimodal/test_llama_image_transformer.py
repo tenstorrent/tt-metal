@@ -189,7 +189,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
         # below the same input to tt model is inputed to reference HF model
         tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
-            :, :, :, :
+            0, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
         feats = callable_reference(tens_input[:, :ntok, :], attention_mask=mask)
         reference_output = feats.last_hidden_state
