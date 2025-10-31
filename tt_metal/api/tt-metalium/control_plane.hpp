@@ -25,17 +25,24 @@ class PhysicalSystemDescriptor;
 
 }  // namespace tt::tt_metal
 
+namespace tt::umd {
+
+class Cluster;
+
+}   // namespace tt::umd
+
 namespace tt::tt_fabric {
 
 class TopologyMapper;
 
-// TODO: remove this once UMD provides API for UBB ID
+// TODO: remove this once UMD provides API for UBB ID and bus ID
  struct UbbId {
      std::uint32_t tray_id;
      std::uint32_t asic_id;
  };
 
- UbbId get_ubb_id(ChipId chip_id);
+ uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip);
+ UbbId get_ubb_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id);
 
  class FabricContext;
 
