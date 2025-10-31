@@ -214,8 +214,9 @@ class TTRegNetBottleneck:
             se_out = ttnn.from_torch(
                 se_out_torch,
                 dtype=ttnn.bfloat16,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                device=device,
             )
-            se_out = ttnn.to_device(se_out, device)
             se_out = ttnn.permute(se_out, (0, 2, 3, 1))
 
         else:

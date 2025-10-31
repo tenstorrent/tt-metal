@@ -87,6 +87,7 @@ class StageInfra:
         device,
         stage_name,
         input_shape,
+        use_fallback,
     ):
         super().__init__()
         self._init_seeds()
@@ -152,12 +153,14 @@ class StageInfra:
             stride=2,
             model_config=model_config,
             stage_name=stage_name,
+            torch_model=torch_model,
+            use_fallback=use_fallback,
         )
 
         # Convert input to TTNN format
         self.tt_input = ttnn.from_torch(
             self.torch_input,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             device=device,
             mesh_mapper=self.inputs_mesh_mapper,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -227,9 +230,9 @@ class StageInfra:
 
 # High accuracy model config
 model_config = {
-    "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
-    "WEIGHTS_DTYPE": ttnn.bfloat16,
-    "ACTIVATIONS_DTYPE": ttnn.bfloat16,
+    "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
+    "WEIGHTS_DTYPE": ttnn.bfloat8_b,
+    "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
     "fp32_dest_acc_en": True,
     "packer_l1_acc": True,
     "math_approx_mode": False,
@@ -242,23 +245,26 @@ model_config = {
     [
         # ImageCNN Tests
         ("layer1", (1, 32, 80, 352)),
-        # ("layer2", (1, 72, 40, 176)),
-        # ("layer3", (1, 216, 20, 88)),
-        # ("layer4", (1, 576, 10, 44)),
-        # # LidarEncoder Tests
-        # ("layer1", (1, 32, 128, 128)),
-        # ("layer2", (1, 72, 64, 64)),
-        # ("layer3", (1, 216, 32, 32)),
-        # ("layer4", (1, 576, 16, 16)),
+        ("layer2", (1, 72, 40, 176)),
+        ("layer3", (1, 216, 20, 88)),
+        ("layer4", (1, 576, 10, 44)),
+        # LidarEncoder Tests
+        ("layer1", (1, 32, 128, 128)),
+        ("layer2", (1, 72, 64, 64)),
+        ("layer3", (1, 216, 32, 32)),
+        ("layer4", (1, 576, 16, 16)),
     ],
 )
+@pytest.mark.parametrize("use_fallback", [True])
 def test_stage(
     device,
     stage_name,
     input_shape,
+    use_fallback,
 ):
     StageInfra(
         device,
         stage_name,
         input_shape,
+        use_fallback,
     )

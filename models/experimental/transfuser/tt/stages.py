@@ -208,6 +208,8 @@ class Ttstages:
             groups=config["groups"],
             model_config=model_config,
             stage_name=stage_name,
+            torch_model=torch_model,
+            use_fallback=use_fallback,
         )
 
     @staticmethod
