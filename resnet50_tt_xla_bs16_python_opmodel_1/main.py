@@ -11068,8 +11068,8 @@ def _main(v1):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(v489, False)
-    # ttnn.deallocate(v273, False)
-    # ttnn.deallocate(v272, False)
+    ttnn.deallocate(v273, False)
+    ttnn.deallocate(v272, False)
 
     # ---------------------------------------------------------- #
     # * * * Max Pool * * *                                       #
@@ -11160,8 +11160,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v493, False)
-    # ttnn.deallocate(v329, False)
-    # ttnn.deallocate(v328, False)
+    ttnn.deallocate(v329, False)
+    ttnn.deallocate(v328, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 3 * * *                                  #
@@ -11227,8 +11227,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v496, False)
-    # ttnn.deallocate(v416, False)
-    # ttnn.deallocate(v415, False)
+    ttnn.deallocate(v416, False)
+    ttnn.deallocate(v415, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 4 * * *                                  #
@@ -11270,8 +11270,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v497, False)
-    # ttnn.deallocate(v353, False)
-    # ttnn.deallocate(v352, False)
+    ttnn.deallocate(v353, False)
+    ttnn.deallocate(v352, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 5 * * *                                  #
@@ -11311,8 +11311,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v498, False)
-    # ttnn.deallocate(v420, False)
-    # ttnn.deallocate(v419, False)
+    ttnn.deallocate(v420, False)
+    ttnn.deallocate(v419, False)
 
     v500 = ttnn.add(
         v499,
@@ -11399,8 +11399,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v501, False)
-    # ttnn.deallocate(v313, False)
-    # ttnn.deallocate(v312, False)
+    ttnn.deallocate(v313, False)
+    ttnn.deallocate(v312, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 7 * * *                                  #
@@ -11442,8 +11442,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v503, False)
-    # ttnn.deallocate(v317, False)
-    # ttnn.deallocate(v316, False)
+    ttnn.deallocate(v317, False)
+    ttnn.deallocate(v316, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 8 * * *                                  #
@@ -11483,8 +11483,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v504, False)
-    # ttnn.deallocate(v337, False)
-    # ttnn.deallocate(v336, False)
+    ttnn.deallocate(v337, False)
+    ttnn.deallocate(v336, False)
 
     # ---------------------------------------------------------- #
     # * * *                                  #
@@ -11575,8 +11575,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v507, False)
-    # ttnn.deallocate(v289, False)
-    # ttnn.deallocate(v288, False)
+    ttnn.deallocate(v289, False)
+    ttnn.deallocate(v288, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 10 * * *                                 #
@@ -11618,8 +11618,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v509, False)
-    # ttnn.deallocate(v408, False)
-    # ttnn.deallocate(v407, False)
+    ttnn.deallocate(v408, False)
+    ttnn.deallocate(v407, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 11 * * *                                 #
@@ -11659,8 +11659,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v510, False)
-    # ttnn.deallocate(v456, False)
-    # ttnn.deallocate(v455, False)
+    ttnn.deallocate(v456, False)
+    ttnn.deallocate(v455, False)
 
     v512 = ttnn.add(
         v511,
@@ -11749,8 +11749,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v514, False)
-    # ttnn.deallocate(v333, False)
-    # ttnn.deallocate(v332, False)
+    ttnn.deallocate(v333, False)
+    ttnn.deallocate(v332, False)
 
     v516 = ttnn.to_memory_config(
         v515, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
@@ -11797,8 +11797,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v513, False)
-    # ttnn.deallocate(v357, False)
-    # ttnn.deallocate(v356, False)
+    ttnn.deallocate(v357, False)
+    ttnn.deallocate(v356, False)
 
     v518 = ttnn.to_memory_config(
         v517,
@@ -11849,8 +11849,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v518, False)
-    # ttnn.deallocate(v484, False)
-    # ttnn.deallocate(v483, False)
+    ttnn.deallocate(v484, False)
+    ttnn.deallocate(v483, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 15 * * *                                 #
@@ -11885,8 +11885,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v519, False)
-    # ttnn.deallocate(v452, False)
-    # ttnn.deallocate(v451, False)
+    ttnn.deallocate(v452, False)
+    ttnn.deallocate(v451, False)
 
     v521 = ttnn.add(
         v520,
@@ -11956,8 +11956,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v522, False)
-    # ttnn.deallocate(v369, False)
-    # ttnn.deallocate(v368, False)
+    ttnn.deallocate(v369, False)
+    ttnn.deallocate(v368, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 17 * * *                                 #
@@ -11994,8 +11994,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v524, False)
-    # ttnn.deallocate(v385, False)
-    # ttnn.deallocate(v384, False)
+    ttnn.deallocate(v385, False)
+    ttnn.deallocate(v384, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 18 * * *                                 #
@@ -12030,8 +12030,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v525, False)
-    # ttnn.deallocate(v373, False)
-    # ttnn.deallocate(v372, False)
+    ttnn.deallocate(v373, False)
+    ttnn.deallocate(v372, False)
 
     v527 = ttnn.add(
         v526,
@@ -12101,8 +12101,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v528, False)
-    # ttnn.deallocate(v412, False)
-    # ttnn.deallocate(v411, False)
+    ttnn.deallocate(v412, False)
+    ttnn.deallocate(v411, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 20 * * *                                 #
@@ -12139,8 +12139,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v530, False)
-    # ttnn.deallocate(v436, False)
-    # ttnn.deallocate(v435, False)
+    ttnn.deallocate(v436, False)
+    ttnn.deallocate(v435, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 21 * * *                                 #
@@ -12175,8 +12175,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v531, False)
-    # ttnn.deallocate(v281, False)
-    # ttnn.deallocate(v280, False)
+    ttnn.deallocate(v281, False)
+    ttnn.deallocate(v280, False)
 
     # ---------------------------------------------------------- #
     # * * *  * * *                                 #
@@ -12250,8 +12250,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v534, False)
-    # ttnn.deallocate(v404, False)
-    # ttnn.deallocate(v403, False)
+    ttnn.deallocate(v404, False)
+    ttnn.deallocate(v403, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 23 * * *                                 #
@@ -12288,8 +12288,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v536, False)
-    # ttnn.deallocate(v361, False)
-    # ttnn.deallocate(v360, False)
+    ttnn.deallocate(v361, False)
+    ttnn.deallocate(v360, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 24 * * *                                 #
@@ -12324,8 +12324,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v537, False)
-    # ttnn.deallocate(v309, False)
-    # ttnn.deallocate(v308, False)
+    ttnn.deallocate(v309, False)
+    ttnn.deallocate(v308, False)
 
     # ---------------------------------------------------------- #
     # * * *   * * *                                 #
@@ -12406,8 +12406,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v541, False)
-    # ttnn.deallocate(v381, False)
-    # ttnn.deallocate(v380, False)
+    ttnn.deallocate(v381, False)
+    ttnn.deallocate(v380, False)
 
     v543 = ttnn.to_memory_config(
         v542, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
@@ -12462,8 +12462,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v544, False)
-    # ttnn.deallocate(v448, False)
-    # ttnn.deallocate(v447, False)
+    ttnn.deallocate(v448, False)
+    ttnn.deallocate(v447, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 27 * * *                                 #
@@ -12500,8 +12500,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v545, False)
-    # ttnn.deallocate(v424, False)
-    # ttnn.deallocate(v423, False)
+    ttnn.deallocate(v424, False)
+    ttnn.deallocate(v423, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 28 * * *                                 #
@@ -12536,8 +12536,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v546, False)
-    # ttnn.deallocate(v285, False)
-    # ttnn.deallocate(v284, False)
+    ttnn.deallocate(v285, False)
+    ttnn.deallocate(v284, False)
 
     v548 = ttnn.add(
         v547,
@@ -12607,8 +12607,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v549, False)
-    # ttnn.deallocate(v365, False)
-    # ttnn.deallocate(v364, False)
+    ttnn.deallocate(v365, False)
+    ttnn.deallocate(v364, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 30 * * *                                 #
@@ -12645,8 +12645,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v551, False)
-    # ttnn.deallocate(v396, False)
-    # ttnn.deallocate(v395, False)
+    ttnn.deallocate(v396, False)
+    ttnn.deallocate(v395, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 31 * * *                                 #
@@ -12681,8 +12681,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v552, False)
-    # ttnn.deallocate(v277, False)
-    # ttnn.deallocate(v276, False)
+    ttnn.deallocate(v277, False)
+    ttnn.deallocate(v276, False)
 
     v554 = ttnn.add(
         v553,
@@ -12752,8 +12752,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v555, False)
-    # ttnn.deallocate(v472, False)
-    # ttnn.deallocate(v471, False)
+    ttnn.deallocate(v472, False)
+    ttnn.deallocate(v471, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 33 * * *                                 #
@@ -12790,8 +12790,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v557, False)
-    # ttnn.deallocate(v440, False)
-    # ttnn.deallocate(v439, False)
+    ttnn.deallocate(v440, False)
+    ttnn.deallocate(v439, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 34 * * *                                 #
@@ -12826,8 +12826,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v558, False)
-    # ttnn.deallocate(v345, False)
-    # ttnn.deallocate(v344, False)
+    ttnn.deallocate(v345, False)
+    ttnn.deallocate(v344, False)
 
     v560 = ttnn.add(
         v559,
@@ -12897,8 +12897,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v561, False)
-    # ttnn.deallocate(v305, False)
-    # ttnn.deallocate(v304, False)
+    ttnn.deallocate(v305, False)
+    ttnn.deallocate(v304, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 36 * * *                                 #
@@ -12935,8 +12935,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v563, False)
-    # ttnn.deallocate(v389, False)
-    # ttnn.deallocate(v388, False)
+    ttnn.deallocate(v389, False)
+    ttnn.deallocate(v388, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 37 * * *                                 #
@@ -12971,8 +12971,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v564, False)
-    # ttnn.deallocate(v444, False)
-    # ttnn.deallocate(v443, False)
+    ttnn.deallocate(v444, False)
+    ttnn.deallocate(v443, False)
 
     v566 = ttnn.add(
         v565,
@@ -13042,8 +13042,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v567, False)
-    # ttnn.deallocate(v460, False)
-    # ttnn.deallocate(v459, False)
+    ttnn.deallocate(v460, False)
+    ttnn.deallocate(v459, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 39 * * *                                 #
@@ -13080,8 +13080,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v569, False)
-    # ttnn.deallocate(v480, False)
-    # ttnn.deallocate(v479, False)
+    ttnn.deallocate(v480, False)
+    ttnn.deallocate(v479, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 40 * * *                                 #
@@ -13116,8 +13116,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v570, False)
-    # ttnn.deallocate(v377, False)
-    # ttnn.deallocate(v376, False)
+    ttnn.deallocate(v377, False)
+    ttnn.deallocate(v376, False)
 
     v572 = ttnn.add(
         v571,
@@ -13187,8 +13187,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v573, False)
-    # ttnn.deallocate(v432, False)
-    # ttnn.deallocate(v431, False)
+    ttnn.deallocate(v432, False)
+    ttnn.deallocate(v431, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 42 * * *                                 #
@@ -13225,8 +13225,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v575, False)
-    # ttnn.deallocate(v400, False)
-    # ttnn.deallocate(v399, False)
+    ttnn.deallocate(v400, False)
+    ttnn.deallocate(v399, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 43 * * *                                 #
@@ -13261,8 +13261,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v576, False)
-    # ttnn.deallocate(v464, False)
-    # ttnn.deallocate(v463, False)
+    ttnn.deallocate(v464, False)
+    ttnn.deallocate(v463, False)
 
     v578 = ttnn.add(
         v577,
@@ -13339,8 +13339,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v580, False)
-    # ttnn.deallocate(v341, False)
-    # ttnn.deallocate(v340, False)
+    ttnn.deallocate(v341, False)
+    ttnn.deallocate(v340, False)
 
     v582 = ttnn.to_memory_config(
         v581, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None)
@@ -13382,8 +13382,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v579, False)
-    # ttnn.deallocate(v297, False)
-    # ttnn.deallocate(v296, False)
+    ttnn.deallocate(v297, False)
+    ttnn.deallocate(v296, False)
 
     v584 = ttnn.to_memory_config(
         v583,
@@ -13434,8 +13434,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v584, False)
-    # ttnn.deallocate(v349, False)
-    # ttnn.deallocate(v348, False)
+    ttnn.deallocate(v349, False)
+    ttnn.deallocate(v348, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 47 * * *                                 #
@@ -13470,8 +13470,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v585, False)
-    # ttnn.deallocate(v476, False)
-    # ttnn.deallocate(v475, False)
+    ttnn.deallocate(v476, False)
+    ttnn.deallocate(v475, False)
 
     v587 = ttnn.add(
         v586,
@@ -13541,8 +13541,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v588, False)
-    # ttnn.deallocate(v321, False)
-    # ttnn.deallocate(v320, False)
+    ttnn.deallocate(v321, False)
+    ttnn.deallocate(v320, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 49 * * *                                 #
@@ -13579,8 +13579,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v590, False)
-    # ttnn.deallocate(v468, False)
-    # ttnn.deallocate(v467, False)
+    ttnn.deallocate(v468, False)
+    ttnn.deallocate(v467, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 50 * * *                                 #
@@ -13615,8 +13615,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v591, False)
-    # ttnn.deallocate(v293, False)
-    # ttnn.deallocate(v292, False)
+    ttnn.deallocate(v293, False)
+    ttnn.deallocate(v292, False)
 
     v593 = ttnn.add(
         v592,
@@ -13686,8 +13686,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v594, False)
-    # ttnn.deallocate(v301, False)
-    # ttnn.deallocate(v300, False)
+    ttnn.deallocate(v301, False)
+    ttnn.deallocate(v300, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 52 * * *                                 #
@@ -13724,8 +13724,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v596, False)
-    # ttnn.deallocate(v428, False)
-    # ttnn.deallocate(v427, False)
+    ttnn.deallocate(v428, False)
+    ttnn.deallocate(v427, False)
 
     # ---------------------------------------------------------- #
     # * * * Convolution 53 * * *                                 #
@@ -13760,8 +13760,8 @@ def _main(v1):
         ),
     )
     ttnn.deallocate(v597, False)
-    # ttnn.deallocate(v325, False)
-    # ttnn.deallocate(v324, False)
+    ttnn.deallocate(v325, False)
+    ttnn.deallocate(v324, False)
 
     v599 = ttnn.add(
         v598,
@@ -13853,7 +13853,7 @@ def _main(v1):
         memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
     )
     ttnn.deallocate(v606, False)
-    # ttnn.deallocate(v392, False)
+    ttnn.deallocate(v392, False)
 
     v608 = [v607]
     return v608
@@ -14538,6 +14538,7 @@ def main():
     print(100 * "-")
     print("\n")
 
+    """
     # Additional Warmup Runs
     loop_count = 4
     add_warmup_start = time.time()
@@ -14556,7 +14557,9 @@ def main():
     print(f"Samples per second: {loop_count * batch_size / add_warmup_duration}")
     print(100 * "-")
     print("\n")
+    """
 
+    """
     # Measured Run
     loop_count = 15
     start = time.time()
@@ -14575,6 +14578,7 @@ def main():
     print(f"Samples per second: {loop_count * batch_size / duration}")
     print(100 * "-")
     print("\n")
+    """
 
 
 if __name__ == "__main__":
