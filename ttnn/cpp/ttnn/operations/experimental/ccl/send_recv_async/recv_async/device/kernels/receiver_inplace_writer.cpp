@@ -24,13 +24,15 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+
+    // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);            // pages for this core
-    uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);    // page start offset for this core
-    uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets for this core
-    uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages for this core
+    uint32_t page_start_offset = get_arg_val<uint32_t>(rt_args_idx++);    // page start offset
+    uint32_t num_whole_packets = get_arg_val<uint32_t>(rt_args_idx++);    // whole packets
+    uint32_t num_pages_remainder = get_arg_val<uint32_t>(rt_args_idx++);  // remainder pages
 
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
