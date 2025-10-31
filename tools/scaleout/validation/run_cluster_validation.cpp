@@ -280,6 +280,7 @@ void print_usage_info() {
     std::cout << "Compares live system state against the requested Cabling and Deployment Specifications" << std::endl
               << std::endl;
     std::cout << "Arguments:" << std::endl;
+    // validation mode
     std::cout << "  --cabling-descriptor-path: Path to cabling descriptor" << std::endl;
     std::cout << "  --deployment-descriptor-path: Path to deployment descriptor" << std::endl;
     std::cout << "  --factory-descriptor-path: Path to factory descriptor" << std::endl;
@@ -296,6 +297,7 @@ void print_usage_info() {
                  "testing)"
               << std::endl;
     std::cout << "  --help: Print usage information" << std::endl << std::endl;
+    // add separate command for that, liek commit in git commit
     std::cout << "  --reset_host: Host name of the source ASIC" << std::endl;
     std::cout << "  --reset_tray_id: Tray ID of the source ASIC" << std::endl;
     std::cout << "  --reset_asic_location: ASIC location of the source ASIC" << std::endl;
@@ -312,6 +314,8 @@ void perform_link_reset(
     
     log_output_rank0("Operating in reset mode for specific link");
 
+    // loop over input args and make sure they arent specified
+
     bool link_retrain_supported = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
     TT_FATAL(
         link_retrain_supported,
@@ -322,6 +326,7 @@ void perform_link_reset(
 
     reset_ethernet_links(physical_system_descriptor, reset_topology);
 
+    // print appropriate, please run again to send traffic
     log_output_rank0("Link reset completed. Please run the validation tool again to verify the link.");
 }
 
