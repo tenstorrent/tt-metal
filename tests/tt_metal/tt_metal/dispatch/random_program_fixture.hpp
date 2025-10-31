@@ -12,7 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>
-#include "impl/buffers/circular_buffer_constants.h"
+#include "impl/buffers/circular_buffer_constants.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/buffers/semaphore.hpp"
