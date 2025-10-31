@@ -131,7 +131,6 @@ class TTResNetFeatures:
                 padding=(conv_pt.maxpool.padding, conv_pt.maxpool.padding),
                 dilation=(conv_pt.maxpool.dilation, conv_pt.maxpool.dilation),
                 deallocate_input=True,
-                in_place=True,
             ),
             device=device,
         )
