@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <optional>
 #include <unordered_set>
+#include <ctime>
 
 namespace tt::telemetry {
 

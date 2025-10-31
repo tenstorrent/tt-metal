@@ -594,9 +594,8 @@ on:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
-
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.runner-label }}
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs['runner-label'] || 'N150' }}
   cancel-in-progress: true
 
 jobs:
@@ -610,12 +609,13 @@ jobs:
       version: "22.04"
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   ttnn-generate-sweeps:
-    name: Generate Sweep Vectors ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
     needs: build-artifact
     strategy:
       matrix:
-        arch:
-          - ${{ inputs.arch }}
+        include:
+          - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -639,8 +639,8 @@ jobs:
     timeout-minutes: 30
     runs-on: >-
       ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label== 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+        (matrix.runner_label == 'topology-6u' || matrix.runner_label == 'BH-LLMBox' || matrix.runner_label == 'BH-DeskBox' || matrix.runner_label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.runner_label)
       }}
     steps:
       - name: ⬇️  Setup Job
@@ -739,14 +739,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: ttnn sweep tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-            arch: ${{ inputs.arch }}
-            tt-smi-cmd: ${{ (inputs.runner-label == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
-            runs-on: >-
-              ${{
-                (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-                || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-              }}
+          - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
+            arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -758,7 +753,7 @@ jobs:
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
-        TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -773,7 +768,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 720
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: >-
+      ${{
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
+      }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
