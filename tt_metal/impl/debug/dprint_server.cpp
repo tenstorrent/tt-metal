@@ -760,7 +760,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     device_to_core_range_[device_id] = print_cores_sanitized;
     device_to_core_range_lock_.unlock();
 
-    // if TTSIM is enabled, set the debug core for the cores enabled for DPRINT
+    // if TTSIM is enabled, allow the cores enabled for DPRINT to perform a TENSIX_DUMP
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
         for (const auto& core_desc : print_cores_sanitized) {
             uint32_t x = core_desc.coord.x;
