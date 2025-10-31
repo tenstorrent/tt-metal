@@ -1,8 +1,18 @@
-name: "[impl] TTSim Unit Tests Impl"
+name: "[impl] TTSim unit tests impl"
 
 on:
   workflow_call:
     inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 5
       docker-image:
         required: true
         type: string
@@ -12,27 +22,23 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      build-suffix:
+        required: true
+        type: string
+      soc-desc:
+        required: true
+        type: string
       ttsim-ref:
         required: false
         type: string
         default: "4f05a65a961d4a3ca14f65ff9633030e0a35358e"
 
 jobs:
-  ttsim-unit-tests:
+  ttsim-cpp-unit-tests:
     runs-on: tt-ubuntu-2204-small-stable
-    name: "TTSim Unit Tests - ${{ matrix.arch }}"
+    name: "TTSim C++ tests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - arch: wormhole_b0
-            build_suffix: release_wh
-            soc_desc: wormhole_b0_80_arch.yaml
-          - arch: blackhole
-            build_suffix: release_bh
-            soc_desc: blackhole_140_arch.yaml
-    permissions:
-      contents: read
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       volumes:
@@ -72,8 +78,7 @@ jobs:
           cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
-      - name: Run Idle Eth Tests
-        timeout-minutes: 5
+      - name: ${{ matrix.test-group.name }} tests
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"

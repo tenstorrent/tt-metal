@@ -170,8 +170,17 @@ jobs:
     secrets: inherit
     strategy:
       fail-fast: false
+      matrix:
+        test-group: [
+          { arch: wormhole_b0, build_suffix: release_wh, soc_desc: wormhole_b0_80_arch.yaml, runner-label: tt-ubuntu-2204-small-stable },
+          { arch: blackhole, build_suffix: release_bh, soc_desc: blackhole_140_arch.yaml, runner-label: tt-ubuntu-2204-small-stable },
+        ]
     uses: ./.github/workflows/ttsim-post-commit.yaml
     with:
+      arch: ${{ matrix.test-group.arch }}
+      build-suffix: ${{ matrix.test-group.build_suffix }}
+      soc-desc: ${{ matrix.test-group.soc_desc }}
+      runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
