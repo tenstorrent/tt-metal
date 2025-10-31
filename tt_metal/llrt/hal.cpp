@@ -99,9 +99,9 @@ const std::string& HalCoreInfoType::get_processor_class_name(uint32_t processor_
     uint32_t processor_class_idx = ttsl::as_underlying_type<HalProcessorClassType>(processor_class);
     TT_ASSERT(ttsl::as_underlying_type<HalProcessorClassType>(processor_class) < this->processor_classes_names_.size());
     if (is_abbreviated) {
-        return this->processor_classes_names_[processor_class_idx][processor_index].first;
+        return this->processor_classes_names_[processor_class_idx][processor_type_idx].first;
     } else {
-        return this->processor_classes_names_[processor_class_idx][processor_index].second;
+        return this->processor_classes_names_[processor_class_idx][processor_type_idx].second;
     }
 }
 

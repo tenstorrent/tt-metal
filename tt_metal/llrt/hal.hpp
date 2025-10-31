@@ -439,7 +439,7 @@ public:
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
-    const std::string get_processor_class_name(
+    const std::string& get_processor_class_name(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const;
 
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
@@ -618,7 +618,7 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
 }
 
-inline const std::string Hal::get_processor_class_name(
+inline const std::string& Hal::get_processor_class_name(
     HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const {
     auto idx = get_programmable_core_type_index(programmable_core_type);
     return this->core_info_[idx].get_processor_class_name(processor_index, is_abbreviated);
