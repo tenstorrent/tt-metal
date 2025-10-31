@@ -41,7 +41,7 @@ class TopologyMapper;
      std::uint32_t asic_id;
  };
 
- uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip);
+ uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id);
  UbbId get_ubb_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id);
 
  class FabricContext;
