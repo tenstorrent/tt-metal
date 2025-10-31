@@ -23,7 +23,7 @@ public:
 };
 #define TTSIM_DUMP_DST true
 #define TTSIM_TENSIX_DUMP(dump_dst) auto dump_guard = TTSIM_Dump_Guard(dump_dst)
-#define TTSIM_START_TENSIX_DUMP auto dump_guard_ptr = new TTSIM_Dump_Guard(dump_dst)
+#define TTSIM_START_TENSIX_DUMP(dump_dst) auto dump_guard_ptr = new TTSIM_Dump_Guard(dump_dst)
 #define TTSIM_END_TENSIX_DUMP delete dump_guard_ptr
 #else
 #define TTSIM_TENSIX_DUMP
