@@ -31,7 +31,7 @@ from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTI
             "",
         ),
     ],
-    ids=["test_panoptic_deeplab", "test_deeplab_v3_plus"],
+    ids=["test_deeplab_v3_plus"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_pdl(

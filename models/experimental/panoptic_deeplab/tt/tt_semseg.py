@@ -477,6 +477,8 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             logger.debug(f"Final upsample: input y is allocated (shape={y.shape}, dtype={y.dtype}, layout={y.layout})")
 
         # Matmul based upsample
+        print("y shape: ", y.shape)
+        y = ttnn.reshape(y, (y.shape[0], 128, 256, y.shape[3]))
         y = self.final_upsample(y)
 
         # Check allocation after final upsample
