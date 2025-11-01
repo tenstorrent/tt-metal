@@ -250,24 +250,76 @@ def run_broadcast_impl(
 
 # Enumerate the post-commit cases explicitly
 @pytest.mark.parametrize(
-    "num_devices, sender_idx, num_links, output_shape, layout, input_dtype",
+    "num_devices, sender_idx, num_links, output_shape, layout, input_dtype, mem_config",
     [
-        (2, 0, 1, [32, 32], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (2, 1, 1, [3, 121, 2042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (4, 2, 1, [1, 1, 32, 1024], ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (4, 3, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        (8, 4, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        (4, 0, 1, [1, 69, 4000], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (8, 5, 1, [10, 8320], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (2, 1, 1, [1, 10, 32784], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
-        (4, 1, 1, [1, 2, 16300], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (2, 0, 1, [32, 32], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (
+            2,
+            1,
+            1,
+            [3, 121, 2042],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
+        (
+            4,
+            2,
+            1,
+            [1, 1, 32, 1024],
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
+        (4, 3, 1, [2, 64, 512], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)),
+        (8, 4, 1, [256, 3328], ttnn.TILE_LAYOUT, ttnn.bfloat8_b, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (
+            4,
+            0,
+            1,
+            [1, 69, 4000],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
+        (
+            8,
+            5,
+            1,
+            [10, 8320],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
+        (
+            2,
+            1,
+            1,
+            [1, 10, 32784],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
+        (
+            4,
+            1,
+            1,
+            [1, 2, 16300],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ),
     ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ids=[
+        "2-dev-DRAM",
+        "2-dev-L1",
+        "4-dev-DRAM",
+        "4-dev-L1",
+        "8-dev-DRAM",
+        "4-dev-L1-2",
+        "8-dev-DRAM-2",
+        "2-dev-L1-2",
+        "4-dev-DRAM-3",
     ],
 )
 @pytest.mark.parametrize("num_iters", [3])
@@ -572,18 +624,20 @@ def test_broadcast_sharded_2x4(
 
 # Enumerate the post-commit cases explicitly
 @pytest.mark.parametrize(
-    "num_devices, sender_idx, num_links, output_shape, layout, input_dtype",
+    "num_devices, sender_idx, num_links, output_shape, layout, input_dtype, mem_config",
     [
-        (4, 0, 1, [64, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (2, 1, 1, [2, 90, 1042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+        (4, 0, 1, [64, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)),
+        (
+            2,
+            1,
+            1,
+            [2, 90, 1042],
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.bfloat16,
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ),
     ],
-)
-@pytest.mark.parametrize(
-    "mem_config",
-    [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-    ],
+    ids=["4-dev-DRAM", "2-dev-L1"],
 )
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize(

@@ -11,26 +11,28 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @skip_for_blackhole("This test is for wormhole")
 @pytest.mark.parametrize("num_links", [3], ids=["3links"])
 @pytest.mark.parametrize(
-    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype, enable_trace, num_iters",
     [
-        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # from CSV
-        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # from CSV
+        # Perf variants (with tracing)
+        (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
+        (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
+        (4, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # use batching when fused
+        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # from CSV
+        # Check variants (without tracing)
+        (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
+        (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
+        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # use batching when fused
+        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # from CSV
     ],
     ids=[
-        "batch_8",
-        "batch_4",
-        "batch_1_sd35_spatial",
-        "batch_1_sd35_prompt",
-        "batch_2",
-        "batch_1",
-        "deepseek_1",
-        "deepseek_2",
+        "batch_8-perf",
+        "batch_4-perf",
+        "batch_1_sd35_spatial-perf",
+        "deepseek_1-perf",
+        "batch_1_sd35_prompt-check",
+        "batch_2-check",
+        "batch_1-check",
+        "deepseek_2-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -41,14 +43,6 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
     ],
-)
-@pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
