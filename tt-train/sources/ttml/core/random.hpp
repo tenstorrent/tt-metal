@@ -10,7 +10,10 @@
 #include <thread>
 #include <vector>
 
+#include "random_sse.hpp"
+
 namespace ttml::core {
+namespace legacy {
 
 template <typename T, typename DistGenFunc>
 void sequential_generate(std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed) {
@@ -52,6 +55,29 @@ void parallel_generate(
     for (auto& thread : threads) {
         thread.join();
     }
+}
+
+}  // namespace legacy
+
+template <typename T, typename DistGenFunc>
+void sequential_generate(std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed) {
+    if (static const auto new_rng = std::getenv("TT_RNG"); new_rng != nullptr) {
+        return sse::sequential_generate(seq, dist_factory, seed);
+    }
+    return legacy::sequential_generate(seq, dist_factory, seed);
+}
+
+template <typename T, typename DistGenFunc>
+void parallel_generate(
+    std::span<T> seq,
+    DistGenFunc dist_factory,
+    uint32_t seed,
+    uint32_t max_threads = std::thread::hardware_concurrency()) {
+    static const bool new_rng = (std::getenv("TT_RNG") != nullptr);
+    if (new_rng) {
+        return sse::parallel_generate(seq, dist_factory, seed, max_threads);
+    }
+    return legacy::parallel_generate(seq, dist_factory, seed, max_threads);
 }
 
 }  // namespace ttml::core
