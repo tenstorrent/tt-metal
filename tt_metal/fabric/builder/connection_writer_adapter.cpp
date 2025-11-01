@@ -13,7 +13,26 @@ void ChannelConnectionWriterAdapter::add_downstream_connection(
     eth_chan_directions downstream_direction,
     CoreCoord downstream_noc_xy,
     bool is_2D_routing,
-    bool is_vc1) {}
+    bool is_vc1) {
+    downstream_edms_connected_by_vc.at(inbound_vc_idx)
+        .push_back({downstream_direction, CoreCoord(downstream_noc_xy.x, downstream_noc_xy.y)});
+
+    if (is_2D_routing) {
+        if (!is_vc1) {
+            this->downstream_edms_connected |= (1 << downstream_direction);
+        }
+    } else {
+        this->downstream_edms_connected = 1;
+    }
+    this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
+    this->downstream_edm_vcs_worker_registration_address.at(inbound_vc_idx) =
+        adapter_spec.edm_connection_handshake_addr;
+    this->downstream_edm_vcs_worker_location_info_address.at(inbound_vc_idx) =
+        adapter_spec.edm_worker_location_info_addr;
+
+    this->add_downstream_connection_impl(
+        adapter_spec, inbound_vc_idx, downstream_direction, downstream_noc_xy, is_2D_routing, is_vc1);
+}
 
 void ChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     uint32_t vc_idx, std::vector<uint32_t>& args_out) const {

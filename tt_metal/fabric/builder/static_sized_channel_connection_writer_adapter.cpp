@@ -21,6 +21,22 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection_impl(
     this->downstream_edm_vcs_worker_registration_address.at(inbound_vc_idx) = adapter_spec.edm_connection_handshake_addr;
     this->downstream_edm_vcs_worker_location_info_address.at(inbound_vc_idx) = adapter_spec.edm_worker_location_info_addr;
     this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) = adapter_spec.num_buffers_per_channel;
+    TT_FATAL(
+        this->downstream_sender_channels_num_buffers.at(inbound_vc_idx) != 0,
+        "A Downstream sender channels num buffers must be greater than 0 for vc_idx: {}",
+        inbound_vc_idx);
+    TT_FATAL(
+        this->downstream_edm_vcs_buffer_base_address.at(inbound_vc_idx) != 0,
+        "Downstream edm vcs buffer base address must be non-zero for vc_idx: {}",
+        inbound_vc_idx);
+    TT_FATAL(
+        this->downstream_edm_vcs_worker_registration_address.at(inbound_vc_idx) != 0,
+        "Downstream edm vcs worker registration address must be non-zero for vc_idx: {}",
+        inbound_vc_idx);
+    TT_FATAL(
+        this->downstream_edm_vcs_worker_location_info_address.at(inbound_vc_idx) != 0,
+        "Downstream edm vcs worker location info address must be non-zero for vc_idx: {}",
+        inbound_vc_idx);
 }
 
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args_impl(

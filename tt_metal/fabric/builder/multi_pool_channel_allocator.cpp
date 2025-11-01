@@ -38,8 +38,6 @@ void MultiPoolChannelAllocator::emit_ct_args(
     // Step 0: Emit special tag (replaces the tag that was in static allocator)
     ct_args.push_back(0xabcd1234);
 
-    log_info(tt::LogMetal, "MultiPoolChannelAllocator::emit_ct_args");
-
     auto get_static_channel_allocator_num_channels =
         [](FabricChannelAllocator* allocator) -> std::pair<size_t, size_t> {
         size_t num_sender_channels = 0;
@@ -68,7 +66,6 @@ void MultiPoolChannelAllocator::emit_ct_args(
         }
     }
     ct_args.push_back(static_cast<uint32_t>(num_pools));
-    log_info(tt::LogMetal, "\tnum_pools={}", num_pools);
 
     // Step 2: Emit array of pool types
     for (size_t i = 0; i < pool_types_.size(); ++i) {
@@ -84,7 +81,6 @@ void MultiPoolChannelAllocator::emit_ct_args(
             ct_args.push_back(static_cast<uint32_t>(pool_type));
         }
     }
-    log_info(tt::LogMetal, "\tpool_types={}", this->pool_types_);
 
     // Step 3: Emit individual pool CT args
     // Each pool allocator emits its own compile-time arguments (WITHOUT special tags)
@@ -134,7 +130,6 @@ void MultiPoolChannelAllocator::emit_ct_args(
         for (size_t i = 0; i < num_used_sender_channels; ++i) {
             ct_args.push_back(static_cast<uint32_t>(sender_channel_to_pool_index[i]));
         }
-        log_info(tt::LogMetal, "\tsender_channel_to_pool_index_map={}", sender_channel_to_pool_index);
     }
     if (num_used_receiver_channels > 0) {
         auto receiver_channel_to_pool_index = build_channel_to_pool_index_map(
@@ -147,7 +142,6 @@ void MultiPoolChannelAllocator::emit_ct_args(
         for (size_t i = 0; i < num_used_receiver_channels; ++i) {
             ct_args.push_back(static_cast<uint32_t>(receiver_channel_to_pool_index[i]));
         }
-        log_info(tt::LogMetal, "\treceiver_channel_to_pool_index_map={}", receiver_channel_to_pool_index);
     }
 }
 

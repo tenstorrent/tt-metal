@@ -582,34 +582,17 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(
     size_t num_fwd_paths,
     size_t num_used_sender_channels,
     size_t num_used_receiver_channels) const {
-    log_info(tt::LogMetal, "\tFabricStaticSizedChannelsAllocator::emit_ct_args");
-    log_info(tt::LogMetal, "\t\tnum_used_sender_channels={}", this->num_used_sender_channels);
     for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
         ct_args.push_back(static_cast<uint32_t>(this->sender_channels_base_address[i]));
         ct_args.push_back(this->sender_channels_num_buffers[i]);
         ct_args.push_back(static_cast<uint32_t>(this->remote_sender_channels_base_address[i]));
         ct_args.push_back(this->remote_sender_channels_num_buffers[i]);
-        log_info(
-            tt::LogMetal,
-            "\t\t\taddr={}, n_bufs={}, rem_addr={}, rem_n_bufs={}",
-            this->sender_channels_base_address[i],
-            this->sender_channels_num_buffers[i],
-            this->remote_sender_channels_base_address[i],
-            this->remote_sender_channels_num_buffers[i]);
     }
-    log_info(tt::LogMetal, "\t\tnum_used_receiver_channels={}", this->num_used_receiver_channels);
     for (size_t i = 0; i < this->num_used_receiver_channels; ++i) {
         ct_args.push_back(static_cast<uint32_t>(this->receiver_channels_base_address[i]));
         ct_args.push_back(this->receiver_channels_num_buffers[i]);
         ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[i]));
         ct_args.push_back(this->remote_receiver_channels_num_buffers[i]);
-        log_info(
-            tt::LogMetal,
-            "\t\t\taddr={}, n_bufs={}, rem_addr={}, rem_n_bufs={}",
-            this->receiver_channels_base_address[i],
-            this->receiver_channels_num_buffers[i],
-            this->remote_receiver_channels_base_address[i],
-            this->remote_receiver_channels_num_buffers[i]);
     }
 }
 

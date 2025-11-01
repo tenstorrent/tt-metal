@@ -2449,24 +2449,26 @@ void kernel_main() {
 
     // downstream EDM semaphore location
     const auto has_downstream_edm_vc0_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_edm_vc0_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
-
     const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
+    // static size channel specific: TODO - generalize
+    const auto downstream_edm_vc0_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
+
     // unused - to be deleted
     [[maybe_unused]]
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = 0;
 
     // downstream EDM semaphore location
     const auto has_downstream_edm_vc1_buffer_connection = get_arg_val<uint32_t>(arg_idx++);
-    const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
-
     const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
+    // static size channel specific: TODO - generalize
+    const auto downstream_edm_vc1_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
+
     // unused now - to be deleted
     [[maybe_unused]]
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = 0;

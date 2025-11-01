@@ -465,90 +465,6 @@ std::pair<FabricRouterRecipes, std::shared_ptr<tt::tt_fabric::MultiPoolChannelAl
     return {std::move(recipes), multi_pool_allocator};
 }
 
-void FabricEriscDatamoverConfig::add_receiver_channel_to_downstream_adapters(
-    const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator,
-    size_t vc_idx,
-    const FabricEriscDatamoverOptions& options) {
-    // find the allocator that is mapped to the sender channels of the vc_idx
-    // 1D_LINE: always VC0 (fatal)
-    // 1D_RING: VC0: CH1, VC1: CH2
-    // 2D_MESH: always VC0: {CH0, CH1, CH2, CH3; if CH != my_direction}
-    // 2D_TORUS: VC0: {CH0, CH1, CH2, CH3; if CH != my_direction}, VC1: {CH4}
-
-    TT_FATAL(
-        this->receiver_channel_to_downstream_adapters[vc_idx] == nullptr,
-        "Receiver channel to downstream adapter already initialized for vc_idx: {}",
-        vc_idx);
-
-    // Get sender channel to pool index mapping from recipe
-    auto recipes =
-        choose_router_recipe(this->topology, options, this->num_used_sender_channels, this->num_used_receiver_channels);
-    const auto& sender_channel_to_pool_index = recipes.local.get_sender_channel_to_pool_index();
-
-    // Determine first sender channel for this VC based on simplified rules
-    std::vector<size_t> vc_sender_channels;
-    const bool is_2d = FabricContext::is_2D_topology(this->topology);
-
-    if (!is_2d) {
-        // 1D: Linear/Ring → VC0->CH1, VC1->CH2
-        TT_FATAL(this->topology != Topology::Linear || vc_idx == 0, "VC1 is not supported for Linear topology");
-        size_t first_channel = vc_idx + 1;
-        vc_sender_channels = {first_channel};
-    } else {
-        // 2D: Mesh/Torus
-        TT_FATAL(this->topology != Topology::Mesh || vc_idx == 0, "VC1 is not supported for Mesh topology");
-        size_t first_channel = (vc_idx == 0) ? ((static_cast<size_t>(options.direction) == 0) ? 1 : 0) : 4;
-        vc_sender_channels = {first_channel};
-    }
-
-    TT_FATAL(
-        !vc_sender_channels.empty(),
-        "No sender channels found for VC{} in topology {}",
-        vc_idx,
-        static_cast<int>(this->topology));
-
-    // Get pool index for the first sender channel (all channels for a VC should map to the same pool)
-    size_t first_channel = vc_sender_channels[0];
-    TT_FATAL(
-        first_channel < sender_channel_to_pool_index.size(),
-        "Sender channel {} is out of range for topology {}",
-        first_channel,
-        static_cast<int>(this->topology));
-    size_t pool_idx = sender_channel_to_pool_index[first_channel];
-
-    // Verify all channels for this VC map to the same pool
-    for (size_t ch : vc_sender_channels) {
-        TT_FATAL(ch < sender_channel_to_pool_index.size(), "Sender channel {} is out of range", ch);
-        TT_FATAL(
-            sender_channel_to_pool_index[ch] == pool_idx,
-            "Sender channels for VC{} map to different pools (channel {} maps to pool {}, expected pool {})",
-            vc_idx,
-            ch,
-            sender_channel_to_pool_index[ch],
-            pool_idx);
-    }
-
-    // Get pool type and allocator
-    TT_FATAL(pool_idx < multi_pool_allocator->get_num_pools(), "Pool index {} is out of range", pool_idx);
-
-    bool downstream_is_elastic =
-        multi_pool_allocator->get_pool_type(pool_idx) == tt::tt_fabric::FabricChannelPoolType::ELASTIC;
-    if (downstream_is_elastic) {
-        auto elastic_allocator = std::dynamic_pointer_cast<tt::tt_fabric::ElasticChannelsAllocator>(
-            multi_pool_allocator->get_pool(pool_idx));
-        TT_FATAL(elastic_allocator != nullptr, "Failed to cast allocator to ElasticChannelsAllocator");
-        this->receiver_channel_to_downstream_adapters[vc_idx] =
-            std::make_shared<tt::tt_fabric::ElasticChannelConnectionWriterAdapter>(*elastic_allocator, this->topology);
-    } else {
-        auto static_allocator = std::dynamic_pointer_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
-            multi_pool_allocator->get_pool(pool_idx));
-        TT_FATAL(static_allocator != nullptr, "Failed to cast allocator to FabricStaticSizedChannelsAllocator");
-        this->receiver_channel_to_downstream_adapters[vc_idx] =
-            std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
-                *static_allocator, this->topology);
-    }
-}
-
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
@@ -645,12 +561,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->channel_buffer_size_bytes,
         this->available_buffer_memory_regions);
 
-    add_receiver_channel_to_downstream_adapters(multi_pool_allocator, 0, options);
-    bool vc1_enabled = topology == Topology::Ring || topology == Topology::Torus;
-    if (vc1_enabled) {
-        add_receiver_channel_to_downstream_adapters(multi_pool_allocator, 1, options);
-    }
-
     // Assign allocators from the multi pool allocator
     // For now, use the first local allocator as the main channel allocator
     if (multi_pool_allocator->get_num_pools() > 0) {
@@ -670,46 +580,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
                 *static_allocator, this->num_used_receiver_channels);
         }
     }
-    // // Compute available channel buffering space from memory regions
-    // size_t available_channel_buffering_space = std::accumulate(
-    //     this->available_buffer_memory_regions.begin(),
-    //     this->available_buffer_memory_regions.end(),
-    //     size_t{0},
-    //     [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
-    //
-    //// replaced with initialize_channel_configs(...)
-    // // Create a default recipe with a single static pool for backward compatibility
-    // // All channels map to pool 0 (the single static pool)
-    // auto recipes = choose_router_recipe(topology, options, this->num_used_sender_channels,
-    // this->num_used_receiver_channels);
-
-    // // Create the single static pool allocator
-    // auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
-    //     topology,
-    //     options,
-    //     this->num_used_sender_channels,
-    //     this->num_used_receiver_channels,
-    //     this->channel_buffer_size_bytes,
-    //     available_channel_buffering_space,
-    //     this->available_buffer_memory_regions);
-
-    // // Assign static allocator directly to channel_allocator (composition, not wrapped)
-    // this->channel_allocator = static_allocator;
-
-    // // Create remote channels allocator from the static allocator
-    // this->remote_channels_allocator =
-    // std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator);
-
-    // // Create multi-pool coordinator that manages the pool allocators
-    // std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>> pool_allocators;
-    // pool_allocators.push_back(static_allocator);
-
-    // std::vector<tt::tt_fabric::FabricChannelPoolType> pool_types;
-    // pool_types.push_back(tt::tt_fabric::FabricChannelPoolType::STATIC);
-
-    // this->multi_pool_allocator =
-    //     std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(std::move(pool_allocators),
-    //     std::move(pool_types));
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {
@@ -871,6 +741,90 @@ size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args
     return starting_arg_idx + 10;
 }
 
+void FabricEriscDatamoverBuilder::initialize_downstream_adapter_for_vc(
+    const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator, size_t vc_idx) {
+    // find the allocator that is mapped to the sender channels of the vc_idx
+    // 1D_LINE: always VC0 (fatal)
+    // 1D_RING: VC0: CH1, VC1: CH2
+    // 2D_MESH: always VC0: {CH0, CH1, CH2, CH3; if CH != my_direction}
+    // 2D_TORUS: VC0: {CH0, CH1, CH2, CH3; if CH != my_direction}, VC1: {CH4}
+
+    TT_FATAL(
+        this->receiver_channel_to_downstream_adapter[vc_idx] == nullptr,
+        "Receiver channel to downstream adapter already initialized for vc_idx: {}",
+        vc_idx);
+
+    // Get sender channel to pool index mapping from recipe
+    auto recipes = choose_router_recipe(
+        this->config.topology, {}, this->config.num_used_sender_channels, this->config.num_used_receiver_channels);
+    const auto& sender_channel_to_pool_index = recipes.local.get_sender_channel_to_pool_index();
+
+    // Determine first sender channel for this VC based on simplified rules
+    std::vector<size_t> vc_sender_channels;
+    const bool is_2d = FabricContext::is_2D_topology(this->config.topology);
+
+    if (!is_2d) {
+        // 1D: Linear/Ring → VC0->CH1, VC1->CH2
+        TT_FATAL(this->config.topology != Topology::Linear || vc_idx == 0, "VC1 is not supported for Linear topology");
+        size_t first_non_worker_channel = vc_idx + 1;
+        vc_sender_channels = {first_non_worker_channel};
+    } else {
+        // 2D: Mesh/Torus
+        TT_FATAL(this->config.topology != Topology::Mesh || vc_idx == 0, "VC1 is not supported for Mesh topology");
+        size_t first_non_worker_channel = (vc_idx == 0) ? ((static_cast<size_t>(this->direction) == 0) ? 1 : 0) : 4;
+        // size_t first_channel = (vc_idx == 0) ? static_cast<size_t>(this->direction) : 4;
+        vc_sender_channels = {first_non_worker_channel};
+    }
+
+    TT_FATAL(
+        !vc_sender_channels.empty(),
+        "No sender channels found for VC{} in topology {}",
+        vc_idx,
+        static_cast<int>(this->config.topology));
+
+    // Get pool index for the first sender channel (all channels for a VC should map to the same pool)
+    size_t first_non_worker_channel = vc_sender_channels[0];
+    TT_FATAL(
+        first_non_worker_channel < sender_channel_to_pool_index.size(),
+        "Sender channel {} is out of range for topology {}",
+        first_non_worker_channel,
+        static_cast<int>(this->config.topology));
+    size_t pool_idx = sender_channel_to_pool_index[first_non_worker_channel];
+
+    // Verify all channels for this VC map to the same pool
+    for (size_t ch : vc_sender_channels) {
+        TT_FATAL(ch < sender_channel_to_pool_index.size(), "Sender channel {} is out of range", ch);
+        TT_FATAL(
+            sender_channel_to_pool_index[ch] == pool_idx,
+            "Sender channels for VC{} map to different pools (channel {} maps to pool {}, expected pool {})",
+            vc_idx,
+            ch,
+            sender_channel_to_pool_index[ch],
+            pool_idx);
+    }
+
+    // Get pool type and allocator
+    TT_FATAL(pool_idx < multi_pool_allocator->get_num_pools(), "Pool index {} is out of range", pool_idx);
+
+    bool downstream_is_elastic =
+        multi_pool_allocator->get_pool_type(pool_idx) == tt::tt_fabric::FabricChannelPoolType::ELASTIC;
+    if (downstream_is_elastic) {
+        auto elastic_allocator = std::dynamic_pointer_cast<tt::tt_fabric::ElasticChannelsAllocator>(
+            multi_pool_allocator->get_pool(pool_idx));
+        TT_FATAL(elastic_allocator != nullptr, "Failed to cast allocator to ElasticChannelsAllocator");
+        this->receiver_channel_to_downstream_adapter[vc_idx] =
+            std::make_shared<tt::tt_fabric::ElasticChannelConnectionWriterAdapter>(
+                *elastic_allocator, this->config.topology);
+    } else {
+        auto static_allocator = std::dynamic_pointer_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
+            multi_pool_allocator->get_pool(pool_idx));
+        TT_FATAL(static_allocator != nullptr, "Failed to cast allocator to FabricStaticSizedChannelsAllocator");
+        this->receiver_channel_to_downstream_adapter[vc_idx] =
+            std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
+                *static_allocator, this->config.topology);
+    }
+}
+
 FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const CoreCoord& my_eth_core_logical,
     size_t my_noc_x,
@@ -931,6 +885,20 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         static_allocator != nullptr,
         "Channel allocator must be a FabricStaticSizedChannelsAllocator. Failed to build TT-Fabric router. Internal "
         "error.");
+
+    // Initialize receiver channel to downstream adapters
+    // This logic was moved from FabricEriscDatamoverConfig::add_receiver_channel_to_downstream_adapters
+    TT_FATAL(config.multi_pool_allocator != nullptr, "Multi pool allocator must be set");
+    auto multi_pool_allocator = config.multi_pool_allocator;
+
+    // Initialize adapter for VC0
+    initialize_downstream_adapter_for_vc(multi_pool_allocator, 0);
+
+    // Initialize adapter for VC1 if enabled (Ring/Torus topologies)
+    bool vc1_enabled = config.topology == Topology::Ring || config.topology == Topology::Torus;
+    if (vc1_enabled) {
+        initialize_downstream_adapter_for_vc(multi_pool_allocator, 1);
+    }
 
     // Add this log right at the beginning of the constructor body
     log_debug(
@@ -1229,7 +1197,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
 
     ct_args.push_back(0xabaddad7);
-    for (auto& adapter : config.receiver_channel_to_downstream_adapters) {
+    for (auto& adapter : receiver_channel_to_downstream_adapter) {
         if (adapter) {
             adapter->emit_ct_args(ct_args, config.num_fwd_paths);
         }
@@ -1314,9 +1282,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[3],
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4]};
 
-    config.receiver_channel_to_downstream_adapters[0]->pack_inbound_channel_rt_args(0, rt_args);
-    if (config.receiver_channel_to_downstream_adapters[1]) {
-        config.receiver_channel_to_downstream_adapters[1]->pack_inbound_channel_rt_args(1, rt_args);
+    TT_FATAL(receiver_channel_to_downstream_adapter[0] != nullptr, "Downstream adapter for VC0 must be non-null");
+    // TODO: clean this up to make the `downstream_connection` carry the VC internally
+    receiver_channel_to_downstream_adapter[0]->pack_inbound_channel_rt_args(0, rt_args);
+    if (receiver_channel_to_downstream_adapter[1]) {
+        receiver_channel_to_downstream_adapter[1]->pack_inbound_channel_rt_args(1, rt_args);
     } else {
         // placeholder until device side connection stuct ctor is generalized
         rt_args.push_back(false);
@@ -1484,32 +1454,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         has_tensix_extension);
 }
 
-// SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_channel() const {
-//     log_trace(tt::LogOp, "Building connection to persistent fabric");
-//     static constexpr uint32_t worker_chan = 0;
-//     TT_FATAL(
-//         sender_channels_buffer_index_semaphore_id[worker_chan] !=
-//             sender_channels_flow_control_semaphore_id[worker_chan],
-//         "Internal error - sender_channel_buffer_index_semaphore_id and sender_channel_flow_control_semaphore_id "
-//         "aliased eachother");
-
-//     auto channel_allocator = config.channel_allocator.get();
-//     TT_FATAL(dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator) != nullptr, "Only
-//     FabricStaticSizedChannelsAllocator is supported currently."); const auto static_channel_allocator =
-//     dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator); return
-//     SenderWorkerAdapterSpec{
-//         this->my_noc_x,
-//         this->my_noc_y,
-//         static_channel_allocator->get_sender_channel_base_address(worker_chan),
-//         static_channel_allocator->get_sender_channel_number_of_slots(worker_chan),
-//         this->sender_channels_flow_control_semaphore_id[worker_chan],
-//         this->sender_channels_connection_semaphore_id[worker_chan],
-//         this->config.sender_channels_worker_conn_info_base_address[worker_chan],
-//         this->config.channel_buffer_size_bytes,
-//         this->sender_channels_buffer_index_semaphore_id[worker_chan],
-//         this->direction};
-// }
-
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(uint32_t ds_edm) {
     const bool is_2D_routing =
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
@@ -1533,12 +1477,13 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
         // for dateline upstream channel 1 is removed and we need to use channel 2.
         // static constexpr std::size_t none_zero_buffer_slot_idx = 1;
         // static constexpr std::size_t dateline_upstream_none_zero_idx = 2;
-        int64_t none_zero_buffer_slot_idx = is_2D_routing ? direction : 0;
+        int64_t none_zero_buffer_slot_idx = is_2D_routing ? (direction == 0 ? 1 : 0) : 1;
         // Need to look into the allocator to get the localized index
         auto sender_channel_to_pool_index = static_channel_allocator->get_sender_local_to_global_index_map();
         int64_t dateline_upstream_none_zero_idx = -1;
         for (int64_t i = 0; i < sender_channel_to_pool_index.size(); ++i) {
-            if (sender_channel_to_pool_index[i] == 0) {
+            if (sender_channel_to_pool_index[i] ==
+                0) {  // Why did I make it 0... revisit for ring/torus; especially when elastic channels enabled
                 dateline_upstream_none_zero_idx = i;
                 break;
             }
@@ -1558,7 +1503,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
                 sender_channels_num_buffer =
                     static_channel_allocator->get_sender_channel_number_of_slots(none_zero_buffer_slot_idx);
                 sender_channel_base_address =
-                    static_channel_allocator->get_sender_channel_base_address(dateline_upstream_none_zero_idx);
+                    static_channel_allocator->get_sender_channel_base_address(none_zero_buffer_slot_idx);
                 TT_FATAL(sender_channel_base_address != 0, "sender_channel_base_address should not be 0!");
                 TT_FATAL(sender_channels_num_buffer != 0, "sender_channels_num_buffer should not be 0!");
                 break;
@@ -1614,7 +1559,7 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm_impl(
             // Setup VC0 connection
             constexpr uint32_t ds_vc0_index = 0;
             auto ds_vc0_send_chan = get_downstream_edm_sender_channel(is_2D_routing, this->direction);
-            setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan, false);
+            this->setup_downstream_vc_connection(builder, ds_vc0_index, ds_vc0_send_chan, false);
 
             if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
                 return;
@@ -1681,7 +1626,7 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
     TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
     TT_FATAL(vc_idx == static_cast<size_t>(is_vc1), "VC index mismatch");
-    auto adapter_ptr = config.receiver_channel_to_downstream_adapters[vc_idx].get();
+    auto adapter_ptr = receiver_channel_to_downstream_adapter[vc_idx].get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(adapter_spec, vc_idx, ds_dir, CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing, is_vc1);
 }

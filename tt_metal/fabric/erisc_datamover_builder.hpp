@@ -283,6 +283,7 @@ struct FabricEriscDatamoverConfig {
 
     std::vector<FabricRiscConfig> risc_configs;
     // ----------- Sender Channels
+    // flow control address
     std::array<std::size_t, builder_config::num_sender_channels> sender_channels_buffer_index_address = {};
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
@@ -368,17 +369,8 @@ struct FabricEriscDatamoverConfig {
     // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
-    // Receiver channel to downstream adapters
-    std::array<std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter>, builder_config::num_receiver_channels>
-        receiver_channel_to_downstream_adapters = {};
-
 private:
     void configure_skip_connection_flags(Topology topology, FabricEriscDatamoverOptions const& options);
-
-    void add_receiver_channel_to_downstream_adapters(
-        const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator,
-        size_t vc_idx,
-        const FabricEriscDatamoverOptions& options);
 
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
@@ -544,8 +536,8 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter> receiver_channel_to_downstream_adapter;
-    std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators = {};
+    std::array<std::shared_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter>, builder_config::num_receiver_channels>
+        receiver_channel_to_downstream_adapter;
 
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
@@ -595,6 +587,10 @@ private:
     // Internal implementation for connect_to_downstream_edm
     void connect_to_downstream_edm_impl(
         FabricDatamoverBuilder downstream_builder, FabricDatamoverBuilder vc1_edm_builder);
+
+    // Initialize downstream adapter for a specific VC
+    void initialize_downstream_adapter_for_vc(
+        const std::shared_ptr<tt::tt_fabric::MultiPoolChannelAllocator>& multi_pool_allocator, size_t vc_idx);
 };
 
 }  // namespace tt::tt_fabric
