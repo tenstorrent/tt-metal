@@ -83,6 +83,7 @@ target_sources(
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
         telemetry/arc/arc_metrics.cpp
+        telemetry/system/system_metrics.cpp
         telemetry/hal/hal.cpp
 )
 target_include_directories(
