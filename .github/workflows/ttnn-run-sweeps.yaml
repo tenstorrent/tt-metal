@@ -11,6 +11,7 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - ALL SWEEPS (Comprehensive)
+          - ALL SWEEPS (model_traced)
           - add
           - ccl.generality.all_broadcast
           - ccl.generality.all_gather
@@ -659,10 +660,10 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run ttnn sweeps generation (single sweep)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (model_traced)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (model_traced)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
@@ -673,7 +674,7 @@ jobs:
   ttnn-compute-module-matrix:
     name: Compute module matrix
     needs: ttnn-generate-sweeps
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (model_traced)' }}
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -741,7 +742,7 @@ jobs:
     needs:
       - ttnn-generate-sweeps
       - build-artifact
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (model_traced)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -827,7 +828,7 @@ jobs:
       - ttnn-generate-sweeps
       - build-artifact
       - ttnn-compute-module-matrix
-    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' }}
+    if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (model_traced)' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -916,7 +917,9 @@ jobs:
             python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
           else
             # Regular batch execution
-            if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            if [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (model_traced)" ]]; then
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name model_traced --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
+            elif [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
               python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
             else
               python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
@@ -938,7 +941,7 @@ jobs:
     needs:
       - build-artifact
       - ttnn-run-sweeps-parallel
-    if: ${{ always() && needs.ttnn-run-sweeps-parallel.result != 'skipped' }}
+    if: ${{ always() && (needs.ttnn-run-sweeps-parallel.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -971,7 +974,9 @@ jobs:
         run: |
           # Determine run type based on schedule or input
           RUN_TYPE="nightly"
-          if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (model_traced)" ]]; then
+            RUN_TYPE="model_traced"
+          elif [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
           fi
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
@@ -986,7 +991,7 @@ jobs:
     needs:
       - ttnn-homogenize-run-result
       - ttnn-run-single-sweep
-    if: ${{ always() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
+    if: ${{ always() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (github.event_name == 'schedule' || github.event.inputs.upload_results != 'false') }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
