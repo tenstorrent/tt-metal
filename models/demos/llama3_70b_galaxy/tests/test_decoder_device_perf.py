@@ -371,6 +371,9 @@ def load_perf_targets(galaxy_type):
     return perf_targets
 
 
+# This pytest flag is necessary to ensure that we do NOT open the device in the main process for device perf tests that run
+# the test inside a subprocess since UMD does not allow multiple subprocesses opening the device at the same time.
+@pytest.mark.no_reset_device
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
