@@ -15,6 +15,7 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 
 namespace ttml::ops {
 
@@ -65,6 +66,37 @@ autograd::TensorPtr layernorm(
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ std::nullopt);
 
+
+        tensor->add_grad(res[0].value());
+        gamma->add_grad(res[1].value());
+        beta->add_grad(res[2].value());
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+
+    return out;
+}
+
+autograd::TensorPtr layernorm_fused(
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
+    auto tensor_shape = tensor->get_value().logical_shape();
+    auto mean = core::empty(
+        ttnn::Shape({tensor_shape[0], tensor_shape[1], tensor_shape[2], 1}),
+        &autograd::ctx().get_device(),
+        tensor->get_value().memory_config());
+    auto rstd = ttnn::empty_like(mean);
+    auto output = ttnn::empty_like(tensor->get_value());
+
+    auto out_tensors =
+        ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta->get_value(), 1e-6F, true);
+
+    auto out = autograd::create_tensor();
+    out->set_value(out_tensors[0].value());
+    mean = out_tensors[1].value();
+    rstd = out_tensors[2].value();
+    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
+        auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         beta->add_grad(res[2].value());
@@ -166,6 +198,24 @@ autograd::TensorPtr composite_layernorm(
         auto dtensor = ttnn::subtract(ttnn::subtract(dtensor_normalized, dnorm_mean), norm_dnorm_norm_mean);
         dtensor = ttnn::multiply(dtensor, rstd);
 
+        auto host_tensor = ttml::core::to_vector(dtensor);
+        std::cout << "res[0] elements: ";
+        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+            std::cout << host_tensor[j] << " ";
+        }
+        std::cout << std::endl;
+        host_tensor = ttml::core::to_vector(dgamma);
+        std::cout << "res[1] elements: ";
+        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+            std::cout << host_tensor[j] << " ";
+        }
+        std::cout << std::endl;
+        host_tensor = ttml::core::to_vector(dbeta);
+        std::cout << "res[2] elements: ";
+        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
+            std::cout << host_tensor[j] << " ";
+        }
+        std::cout << std::endl;
         tensor->add_grad(dtensor);
         gamma->add_grad(dgamma);
         beta->add_grad(dbeta);
