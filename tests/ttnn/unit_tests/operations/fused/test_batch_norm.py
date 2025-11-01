@@ -19,6 +19,7 @@ from models.common.utility_functions import comp_pcc
         torch.Size([5, 8, 32, 32]),
         torch.Size([7, 3, 23, 23]),
         torch.Size([3, 5, 64, 120]),
+        torch.Size([1, 256, 14, 14]),
     ],
 )
 @pytest.mark.parametrize(
