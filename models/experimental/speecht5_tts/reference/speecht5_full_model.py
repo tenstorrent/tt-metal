@@ -157,8 +157,27 @@ class SpeechT5FullReference(nn.Module):
             attention_mask=encoder_attention_mask,
         )
 
-        # Postnet (following HF implementation)
-        mel_before_postnet, mel_after_postnet, _ = self.postnet(decoder_hidden_states)
+        # Check if TTNN postnet is available
+        if hasattr(self, "ttnn_postnet"):
+            # TTNN postnet - need to convert tensors
+            import ttnn
+
+            ttnn_input = ttnn.from_torch(
+                decoder_hidden_states,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.ttnn_postnet.device,
+            )
+
+            ttnn_pre, ttnn_post, ttnn_stop = self.ttnn_postnet(ttnn_input)
+
+            # Convert back to PyTorch
+            mel_before_postnet = ttnn.to_torch(ttnn_pre)
+            mel_after_postnet = ttnn.to_torch(ttnn_post)
+            stop_logits = ttnn.to_torch(ttnn_stop)
+        else:
+            # PyTorch postnet
+            mel_before_postnet, mel_after_postnet, stop_logits = self.postnet(decoder_hidden_states)
 
         # Return the last decoder hidden state (for stop prediction) and mel output
         last_decoder_hidden = decoder_hidden_states[:, -1, :]  # [batch, hidden_size]

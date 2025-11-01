@@ -377,6 +377,10 @@ def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
         if reliability_mode is None:
             reliability_mode = ttnn.FabricReliabilityMode.STRICT_INIT
 
+        # Convert boolean to proper FabricConfig enum
+        if isinstance(fabric_config, bool) and fabric_config:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D
+
         # Apply default logic for fabric_tensix_config,
         # fabric_tensix_config is used for enabling tensix extensions for the fabric router,
         # some sender channels in the fabric router are moved to the fabric tensix extension

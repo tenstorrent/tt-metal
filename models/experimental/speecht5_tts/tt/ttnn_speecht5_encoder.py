@@ -76,6 +76,9 @@ class TTNNSpeechT5FeedForward:
         self.config = config
         self.training = False  # Inference mode
 
+        # Memory configs for operations
+        self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
         Args:
@@ -89,6 +92,7 @@ class TTNNSpeechT5FeedForward:
             hidden_states,
             self.parameters["intermediate_dense"]["weight"],
             bias=self.parameters["intermediate_dense"]["bias"],
+            memory_config=self.L1_MEMCFG,
         )
 
         # Op 2: GELU activation
@@ -103,6 +107,7 @@ class TTNNSpeechT5FeedForward:
             hidden_states,
             self.parameters["output_dense"]["weight"],
             bias=self.parameters["output_dense"]["bias"],
+            memory_config=self.L1_MEMCFG,
         )
 
         # Op 5: Dropout (skip in inference)
@@ -141,6 +146,9 @@ class TTNNSpeechT5Attention:
         self.hidden_size = config.hidden_size
         self.scaling = 1.0 / math.sqrt(self.head_dim)
 
+        # Memory configs for operations
+        self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
+
     def __call__(self, hidden_states: ttnn.Tensor, position_bias: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass with relative position bias.
@@ -161,6 +169,7 @@ class TTNNSpeechT5Attention:
             hidden_states,
             self.parameters["q_proj"]["weight"],
             bias=self.parameters["q_proj"]["bias"],
+            memory_config=self.L1_MEMCFG,
         )
         # Scale query
         query_states = ttnn.multiply(query_states, self.scaling)
@@ -169,12 +178,14 @@ class TTNNSpeechT5Attention:
             hidden_states,
             self.parameters["k_proj"]["weight"],
             bias=self.parameters["k_proj"]["bias"],
+            memory_config=self.L1_MEMCFG,
         )
 
         value_states = ttnn.linear(
             hidden_states,
             self.parameters["v_proj"]["weight"],
             bias=self.parameters["v_proj"]["bias"],
+            memory_config=self.L1_MEMCFG,
         )
 
         # Ops 4-6: Reshape for multi-head attention
@@ -198,7 +209,7 @@ class TTNNSpeechT5Attention:
         # Op 7: Compute attention scores: Q @ K^T
         # Need to transpose key_states: [batch*heads, seq, head_dim] -> [batch*heads, head_dim, seq]
         key_states_t = ttnn.permute(key_states, [0, 2, 1])
-        attn_weights = ttnn.matmul(query_states, key_states_t)
+        attn_weights = ttnn.matmul(query_states, key_states_t, memory_config=self.L1_MEMCFG)
         # attn_weights: [batch*num_heads, seq, seq]
 
         # Ops 8-12: Add relative position bias (SpeechT5-specific)
@@ -214,7 +225,7 @@ class TTNNSpeechT5Attention:
             # Op 10: Matmul for relative position bias
             # [seq, batch*heads, head_dim] @ [seq, 64, seq] -> [seq, batch*heads, seq]
             # Note: head_dim must be 64 for this to work!
-            rel_pos_bias = ttnn.matmul(reshape_q, position_bias_t)
+            rel_pos_bias = ttnn.matmul(reshape_q, position_bias_t, memory_config=self.L1_MEMCFG)
 
             # Op 11: Transpose back
             # [seq, batch*heads, seq] -> [batch*heads, seq, seq]
@@ -228,7 +239,7 @@ class TTNNSpeechT5Attention:
 
         # Op 14: Apply attention to values
         # [batch*heads, seq, seq] @ [batch*heads, seq, head_dim]
-        attn_output = ttnn.matmul(attn_weights, value_states)
+        attn_output = ttnn.matmul(attn_weights, value_states, memory_config=self.L1_MEMCFG)
         # attn_output: [batch*heads, seq, head_dim]
 
         # Ops 15-16: Reshape back to [batch, seq, hidden]
@@ -246,6 +257,7 @@ class TTNNSpeechT5Attention:
             attn_output,
             self.parameters["out_proj"]["weight"],
             bias=self.parameters["out_proj"]["bias"],
+            memory_config=self.L1_MEMCFG,
         )
 
         return output
@@ -346,7 +358,12 @@ class TTNNSpeechT5Encoder:
         self.parameters = parameters
         self.config = config
         self.training = False  # Inference mode
-        self.max_relative_distance = config.max_relative_distance  # Use config value (160 for HF)
+        self.max_relative_distance = getattr(
+            config, "max_relative_distance", getattr(config, "encoder_max_relative_position", 160)
+        )  # Use config value (160 for HF)
+
+        # Memory configs for operations
+        self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
         # Encoder blocks
         self.layers = [
@@ -380,6 +397,7 @@ class TTNNSpeechT5Encoder:
         hidden_states = ttnn.embedding(
             input_ids,
             self.parameters["embed_tokens"]["weight"],
+            memory_config=self.L1_MEMCFG,
         )
 
         # Op 2: Pre-encoder layer norm (SpeechT5 uses relative PE in attention, not absolute)
@@ -388,6 +406,7 @@ class TTNNSpeechT5Encoder:
             weight=self.parameters["layer_norm"]["weight"],
             bias=self.parameters["layer_norm"]["bias"],
             epsilon=self.config.layer_norm_eps,
+            memory_config=self.L1_MEMCFG,
         )
 
         # Op 4: Pre-encoder dropout (skip in inference)
@@ -448,6 +467,7 @@ class TTNNSpeechT5Encoder:
             position_embeddings = ttnn.embedding(
                 relative_positions_ttnn,
                 self.parameters["relative_pe_k"]["weight"],
+                memory_config=self.L1_MEMCFG,
             )
 
             # Cache the result
@@ -468,8 +488,7 @@ class TTNNSpeechT5Encoder:
             For trace support, the sequence length must be pre-computed in the cache.
             On-the-fly computation will fail during trace capture.
         """
-        # TEMPORARILY DISABLE CACHE FOR DEBUGGING
-        # Check cache first
+        # Check cache first (required for trace support)
         if seq_len in self.position_bias_cache:
             return self.position_bias_cache[seq_len]
 
@@ -498,6 +517,7 @@ class TTNNSpeechT5Encoder:
             relative_positions_ttnn,
             self.parameters["relative_pe_k"]["weight"],
             layout=ttnn.TILE_LAYOUT,
+            memory_config=self.L1_MEMCFG,
         )
 
         return position_embeddings
@@ -524,6 +544,7 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
 
     # Memory configs
     DRAM_MEMCFG = ttnn.DRAM_MEMORY_CONFIG
+    L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
     # 1. Embedding weights (from prenet in composite encoder)
     parameters["embed_tokens"] = {

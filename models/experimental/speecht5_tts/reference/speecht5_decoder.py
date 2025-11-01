@@ -60,11 +60,14 @@ class SpeechT5Decoder(nn.Module):
     3. Output projection
     """
 
-    def __init__(self, config: SpeechT5DecoderConfig):
+    def __init__(self, config: SpeechT5DecoderConfig, hf_prenet=None):
         super().__init__()
 
-        # Speech decoder prenet
-        self.prenet = SpeechDecoderPrenet(config)
+        # Speech decoder prenet - use HF prenet if provided
+        if hf_prenet is not None:
+            self.prenet = hf_prenet
+        else:
+            self.prenet = SpeechDecoderPrenet(config)
 
         # Decoder layers (no relative positional encoding - uses absolute only)
         self.layers = nn.ModuleList([SpeechT5DecoderLayer(config) for _ in range(config.num_layers)])
@@ -88,8 +91,13 @@ class SpeechT5Decoder(nn.Module):
         Returns:
             hidden_states: [batch, seq_len, hidden_size]
         """
-        # Op 1: Prenet (mel -> hidden + positional encoding + speaker embedding)
-        hidden_states = self.prenet(decoder_input_values, speaker_embeddings=speaker_embeddings)
+        # Check if using HF prenet (which handles speaker embeddings internally)
+        if hasattr(self.prenet, "encode_positions"):  # HF prenet has this attribute
+            # HF prenet: handles everything internally
+            hidden_states = self.prenet(decoder_input_values, speaker_embeddings=speaker_embeddings)
+        else:
+            # Our prenet: separate speaker processing
+            hidden_states = self.prenet(decoder_input_values, speaker_embeddings=speaker_embeddings)
 
         batch_size, seq_len, _ = hidden_states.shape
 
@@ -137,13 +145,16 @@ class SpeechDecoderPrenet(nn.Module):
 
         self.dropout_p = config.dropout
         self.prenet_dropout_p = 0.5  # Fixed dropout for prenet layers
+        self.positional_dropout_p = config.dropout  # Dropout for positional encoding
 
     def _consistent_dropout(self, inputs_embeds: torch.Tensor, p: float) -> torch.Tensor:
         """
         Consistent dropout: creates mask from first batch element, applies to all.
         From HuggingFace SpeechT5SpeechDecoderPrenet._consistent_dropout
         """
-        mask = torch.bernoulli(inputs_embeds[0], p=p)
+        # HF implementation: torch.bernoulli(inputs_embeds[0], p=p)
+        # This creates a mask by sampling with probability p for each element
+        mask = torch.bernoulli(torch.full_like(inputs_embeds[0], p))
         all_masks = mask.unsqueeze(0).repeat(inputs_embeds.size(0), 1, 1)
         return torch.where(all_masks == 1, inputs_embeds, 0) * 1 / (1 - p)
 
@@ -174,14 +185,13 @@ class SpeechDecoderPrenet(nn.Module):
         # Op N+1: Final projection
         hidden_states = self.final_layer(hidden_states)
 
-        # Op N+2: Add scaled positional encoding
+        # Op N+2: Add scaled positional encoding (matches HF SpeechT5ScaledPositionalEncoding)
         seq_len = hidden_states.size(1)
         pe_slice = self.positional_encoding[:, :seq_len, :]
         hidden_states = hidden_states + self.encode_positions_alpha * pe_slice
 
-        # Op N+3: Dropout (from encode_positions, respects training mode)
-        if self.training:
-            hidden_states = F.dropout(hidden_states, p=self.dropout_p, training=True)
+        # Op N+3: Dropout (HF always applies dropout, even in eval mode - see §2.2)
+        hidden_states = F.dropout(hidden_states, p=self.positional_dropout_p, training=True)
 
         # Op N+4: Add speaker embeddings if provided
         if speaker_embeddings is not None:
@@ -408,6 +418,7 @@ def load_from_huggingface(model_name: str = "microsoft/speecht5_tts") -> SpeechT
     # Load HF model
     hf_model = SpeechT5ForTextToSpeech.from_pretrained(model_name)
     hf_decoder = hf_model.speecht5.decoder
+    hf_prenet = hf_decoder.prenet  # Get prenet before creating decoder
     hf_config = hf_model.config
 
     # Create config
@@ -427,20 +438,8 @@ def load_from_huggingface(model_name: str = "microsoft/speecht5_tts") -> SpeechT
         speaker_embedding_dim=hf_config.speaker_embedding_dim,
     )
 
-    # Create decoder
-    decoder = SpeechT5Decoder(config)
-
-    # Load prenet weights
-    hf_prenet = hf_decoder.prenet
-    for i, layer in enumerate(decoder.prenet.layers):
-        layer.weight.data.copy_(hf_prenet.layers[i].weight.data)
-        layer.bias.data.copy_(hf_prenet.layers[i].bias.data)
-
-    decoder.prenet.final_layer.weight.data.copy_(hf_prenet.final_layer.weight.data)
-    decoder.prenet.final_layer.bias.data.copy_(hf_prenet.final_layer.bias.data)
-    decoder.prenet.encode_positions_alpha.data.copy_(hf_prenet.encode_positions.alpha.data.unsqueeze(0))
-    decoder.prenet.speaker_embeds_layer.weight.data.copy_(hf_prenet.speaker_embeds_layer.weight.data)
-    decoder.prenet.speaker_embeds_layer.bias.data.copy_(hf_prenet.speaker_embeds_layer.bias.data)
+    # Create decoder with HF prenet for exact matching
+    decoder = SpeechT5Decoder(config, hf_prenet=hf_prenet)
 
     # Load layer weights (decoder does NOT have relative position encoding)
     hf_wrapped = hf_decoder.wrapped_decoder
