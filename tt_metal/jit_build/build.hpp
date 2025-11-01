@@ -59,6 +59,7 @@ public:
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
+    uint64_t get_build_key() const { return build_key_; }
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
@@ -78,6 +79,8 @@ private:
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+
+    std::uint64_t build_key_{};
 };
 
 // All the state used for a build in an abstract base class

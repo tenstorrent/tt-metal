@@ -11,9 +11,9 @@ from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
-        (True, 128, {"prefill_t/s": 10900, "decode_t/s": 3737, "decode_t/s/u": 14.6}, False, None),
-        (True, 1024, {"prefill_t/s": 13300, "decode_t/s": 3379, "decode_t/s/u": 13.2}, False, None),
-        (True, 2048, {"prefill_t/s": 11600, "decode_t/s": 3174, "decode_t/s/u": 12.4}, False, None),
+        (True, 128, {"prefill_t/s": 15500, "decode_t/s": 3737, "decode_t/s/u": 14.6}, False, None),
+        (True, 1024, {"prefill_t/s": 22100, "decode_t/s": 3379, "decode_t/s/u": 13.2}, False, None),
+        (True, 2048, {"prefill_t/s": 19150, "decode_t/s": 3174, "decode_t/s/u": 12.4}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),

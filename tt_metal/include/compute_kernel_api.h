@@ -589,6 +589,47 @@ ALWI void max_reduce_with_indices_init() {
     MATH((llk_math_eltwise_binary_sfpu_max_pool_with_indices_init<true, layout>()));
 }
 
+// clang-format off
+/**
+ * Performs reduce operation (sum or average) on a 32x32 tile, placing output values into the first row.
+ * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Only 32x32 tile dimensions are supported.
+ *  - This kernel is optimized for 32x32 tile dimensions and uses VectorMode::RC_custom for customized reduction
+ * Only column-wise reduction is supported at this time.
+ *
+ * | Argument        | Description                                                              | Type      | Valid Range                                           | Required |
+ * |-----------------|--------------------------------------------------------------------------|-----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register containing the data to be reduced  | uint32_t  | Must be less than the size of the DST register buffer | True     |
+ * | pool_type       | The type of reduction operation, SUM or AVG (MAX not supported)          | PoolType  | SUM, AVG                                              | True     |
+ * | format          | The data format for the reduction operation                              | DataFormat| Float32, Int32, UInt32                                | True     |
+ * | reduce_dim      | The reduction dimension, set to column for column reduce                 | ReduceDim | REDUCE_COL                                            | False    |
+ */
+// clang-format on
+template <PoolType pool_type, DataFormat format, ReduceDim reduce_dim = ReduceDim::REDUCE_COL>
+ALWI void sfpu_reduce(uint32_t idst) {
+    static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
+    static_assert(pool_type != PoolType::MAX, "MAX pool type is not supported for reduce operations");
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+
+    // This kernel is optimized for 32x32 tiles and uses RC_custom vector mode for custom reduction
+    MATH((llk_math_eltwise_unary_sfpu_reduce<true, pool_type, reduce_dim, format>(idst, VectorMode::RC_custom)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+template <DataFormat format>
+ALWI void sfpu_reduce_init() {
+    static_assert(
+        format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
+        "Unsupported data format. Supported formats: Float32, Int32, UInt32");
+    MATH((llk_math_eltwise_unary_sfpu_reduce_init<true, format>()));
+}
+
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
  *

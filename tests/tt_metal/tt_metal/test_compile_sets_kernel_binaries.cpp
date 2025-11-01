@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
             TT_FATAL(compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
 
             // Run iteration to get golden
-            auto mask = tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+            auto mask = tt_metal::BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
             tt_metal::detail::CompileProgram(device, program);
             compute_binaries.insert({mask, tt_metal::KernelImpl::from(*compute_kernel).binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
                     for (int j = 0; j < num_compiles; j++) {
                         auto mask = tt_metal::BuildEnvManager::get_instance()
                                         .get_device_build_env(device->build_id())
-                                        .build_key;
+                                        .build_key();
                         tt_metal::detail::CompileProgram(device, program);
                         uint32_t programmable_core_index =
                             tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(

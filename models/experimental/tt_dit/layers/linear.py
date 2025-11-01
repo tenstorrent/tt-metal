@@ -64,16 +64,8 @@ class Linear(Module):
             fused_activation=self.fused_activation_fn,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation_fn == "decomposed_gelu":
-            output = gelu_decomposed(output)
-        elif self.activation_fn == "quick_gelu":
-            output = output * ttnn.sigmoid_accurate(1.702 * output)  # quick approx gelu
-        elif self.activation_fn == "swiglu":
-            output, gate = ttnn.chunk(output, 2, -1)
-            output = output * ttnn.silu(gate)
-        else:
-            assert self.activation_fn is None, f"Unsupported activation: {self.activation_fn}"
-        return output
+
+        return _apply_activation_fn(output, self.activation_fn)
 
 
 def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -141,13 +133,15 @@ class ColParallelLinear(Module):
             else None
         )
 
+        self._mesh_axis_size = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight = state.pop("weight", None)
         bias = state.pop("bias", None)
 
         def permute_for_swiglu(tensor):
             assert self.activation_fn == "swiglu"
-            ndev = self.mesh_device.shape[self.mesh_axis]
+            ndev = self._mesh_axis_size
             tensor = tensor.reshape(-1, 2, ndev, tensor.shape[-1] // 2 // ndev)
             tensor = tensor.permute(0, 2, 1, 3)
             tensor = tensor.reshape(-1, self.out_features)
@@ -191,18 +185,8 @@ class ColParallelLinear(Module):
             fused_activation=self.fused_activation_fn,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation_fn == "decomposed_gelu":
-            output = gelu_decomposed(output)
-        elif self.activation_fn == "quick_gelu":
-            output = output * ttnn.sigmoid_accurate(1.702 * output)  # quick approx gelu
-        elif self.activation_fn == "swiglu":
-            output, gate = ttnn.chunk(output, 2, -1)
-            output = output * ttnn.silu(gate)
-        elif self.activation_fn is None:
-            pass
-        else:
-            raise ValueError(f"Activation function {self.activation_fn} not supported")
-        return output
+
+        return _apply_activation_fn(output, self.activation_fn)
 
 
 class RowParallelLinear(Module):
@@ -240,7 +224,7 @@ class RowParallelLinear(Module):
             packer_l1_acc=True,
         )
 
-        ndev = tuple(self.mesh_device.shape)[self.mesh_axis]
+        ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1
 
         self.weight = Parameter(
             total_shape=[self.in_features, self.out_features], mesh_axes=[mesh_axis, fsdp_mesh_axis], device=mesh_device
@@ -251,6 +235,8 @@ class RowParallelLinear(Module):
             else None
         )
 
+        self._mesh_axis_size = ndev
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
             state["weight"] = state["weight"].transpose(0, 1)
@@ -258,8 +244,8 @@ class RowParallelLinear(Module):
         bias = state.pop("bias", None)
         if bias is not None:
             bias = bias.reshape(1, -1)
-            if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
-                zero_bias = torch.zeros(1, bias.shape[1] * (tuple(self.mesh_device.shape)[self.mesh_axis] - 1))
+            if self._mesh_axis_size > 1:
+                zero_bias = torch.zeros(1, bias.shape[1] * (self._mesh_axis_size - 1))
                 bias = torch.cat([bias, zero_bias], dim=-1)
             state["bias"] = bias
 
@@ -289,7 +275,7 @@ class RowParallelLinear(Module):
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
 
-        if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+        if self._mesh_axis_size > 1:
             needs_reshape = len(output.shape) <= 3
             if needs_reshape:
                 output = ttnn.unsqueeze(output, 0)
@@ -312,3 +298,39 @@ class RowParallelLinear(Module):
                 output = ttnn.squeeze(output, 0)
 
         return output
+
+
+def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tensor:
+    if activation_fn is None:
+        return t
+    if activation_fn == "silu":
+        return ttnn.silu(t)
+    if activation_fn == "decomposed_gelu":
+        return gelu_decomposed(t)
+    if activation_fn == "quick_gelu":
+        return t * ttnn.sigmoid_accurate(1.702 * t)  # quick approx gelu
+    if activation_fn == "swiglu":
+        t, gate = ttnn.chunk(t, 2, -1)
+        return t * ttnn.silu(gate)
+
+    msg = f"Activation function {activation_fn} not supported"
+    raise ValueError(msg)
+
+
+def prepare_chunked_linear_output(
+    state: dict[str, torch.Tensor], *, prefix: str, device_count: int, chunks: int
+) -> None:
+    weight_key = f"{prefix}.weight"
+    bias_key = f"{prefix}.bias"
+
+    weight = state.get(weight_key)
+    bias = state.get(bias_key)
+
+    if weight is not None:
+        _, in_dim = weight.shape
+        weight = weight.reshape([chunks, device_count, -1, in_dim]).transpose(0, 1).reshape([-1, in_dim])
+        state[weight_key] = weight
+
+    if bias is not None:
+        bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
+        state[bias_key] = bias

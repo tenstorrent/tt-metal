@@ -9,7 +9,7 @@
 
 namespace {
 
-uint32_t GetStateAddress() {
+constexpr uint32_t GetStateAddress() {
     return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, config) +
            offsetof(lite_fabric::FabricLiteConfig, current_state);
 }
@@ -173,7 +173,7 @@ std::vector<std::string> BlackholeLiteFabricHal::build_defines() {
         "ERISC",
         "RISC_B0_HW",
         "FW_BUILD",
-        "NOC_INDEX=0",
+        "NOC_INDEX=1",
         "DISPATCH_MESSAGE_ADDR=0",
         "COMPILE_FOR_LITE_FABRIC=1",
         "ROUTING_FW_ENABLED",

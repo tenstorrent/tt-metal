@@ -115,6 +115,36 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
+TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
+    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+}
+
+TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
+    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+
+    // Test routing from first chip (0) to last chip (31) in the 1x32 topology
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test routing on second routing plane
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+}
+
 class T3kCustomMeshGraphControlPlaneFixture
     : public ControlPlaneFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {};
@@ -732,6 +762,25 @@ TEST(MeshGraphValidation, TestDualGalaxyMeshGraph) {
     EXPECT_EQ(
         mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(1)),
         MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(7, 7)));
+}
+
+TEST(MeshGraphValidation, TestSingleGalaxy1x32MeshGraph) {
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
+    MeshGraph mesh_graph_desc(galaxy_6u_mesh_graph_desc_path.string());
+
+    // Verify the mesh has correct topology for 1x32 Galaxy configuration
+    EXPECT_EQ(
+        mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 31)));
+
+    // Verify mesh shape is 1x32
+    EXPECT_EQ(mesh_graph_desc.get_mesh_shape(MeshId{0}), MeshShape(1, 32));
+
+    // Verify there's only one mesh
+    EXPECT_EQ(mesh_graph_desc.get_mesh_ids().size(), 1);
+    EXPECT_EQ(mesh_graph_desc.get_mesh_ids()[0], MeshId{0});
 }
 
 // Black hole tests for p150, p100, p150 x8
