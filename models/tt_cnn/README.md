@@ -291,3 +291,132 @@ For complete working examples, see the test implementations in [test_builder.py]
 - PyTorch layer conversion and validation
 - Multi-layer block construction and execution
 - Performance comparison between configurations
+
+## Testing
+
+The TT-CNN Testing module provides utilities to simplify testing and performance benchmarking of CNN models. These utilities eliminate boilerplate code and ensure consistent testing practices across models.
+
+### Layer Unit Testing
+
+Automatically test layer correctness by comparing TT implementation against PyTorch reference.
+
+#### verify_conv2d_from_config
+
+Test a Conv2d layer configuration without writing boilerplate:
+
+```python
+from models.tt_cnn.tt.builder import Conv2dConfiguration
+from models.tt_cnn.tt.testing import verify_conv2d_from_config
+
+# Create a configuration
+config = Conv2dConfiguration.with_random_weights(
+    input_height=224,
+    input_width=224,
+    in_channels=64,
+    out_channels=128,
+    batch_size=1,
+    kernel_size=(3, 3),
+    padding=(1, 1),
+)
+
+# Verify correctness - automatically creates inputs, runs both implementations, and checks PCC
+verify_conv2d_from_config(config, device)
+# ✓ Test passed with PCC: 0.99987 > 0.99900
+```
+
+**What it does:**
+- Creates random input tensors in the correct format
+- Runs both TT and PyTorch implementations
+- Verifies output shapes match
+- Checks correctness with PCC (Pearson Correlation Coefficient)
+
+**Use in pytest:**
+```python
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "in_channels,out_channels,kernel_size",
+    [(64, 128, 3), (128, 256, 3), (256, 512, 1)],
+)
+def test_conv2d_layers(in_channels, out_channels, kernel_size, device):
+    config = Conv2dConfiguration.with_random_weights(
+        input_height=224, input_width=224,
+        in_channels=in_channels, out_channels=out_channels,
+        batch_size=1, kernel_size=(kernel_size, kernel_size),
+        padding=(kernel_size // 2, kernel_size // 2),
+    )
+    verify_conv2d_from_config(config, device)
+```
+
+#### verify_maxpool2d_from_config
+
+Test a MaxPool2d layer configuration:
+
+```python
+from models.tt_cnn.tt.builder import MaxPool2dConfiguration
+from models.tt_cnn.tt.testing import verify_maxpool2d_from_config
+
+config = MaxPool2dConfiguration(
+    input_height=224,
+    input_width=224,
+    channels=64,
+    batch_size=1,
+    kernel_size=(2, 2),
+    stride=(2, 2),
+)
+
+verify_maxpool2d_from_config(config, device)
+```
+
+### Device Performance Testing
+
+Simplify setting up device performance tests that measure device time.
+
+```python
+from models.tt_cnn.tt.testing import DevicePerformanceTestConfiguration, run_device_perf_test
+
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize(
+    "batch, expected_throughput_fps",
+    [(1, 500.0), (2, 900.0)],
+)
+def test_my_model_device_perf(batch, expected_throughput_fps):
+    run_device_perf_test(
+        DevicePerformanceTestConfiguration(
+            model_name=f"my_model_batch{batch}",
+            test_command="pytest path/to/my_model/tests/test_model.py::test_my_model",
+            batch_size=batch,
+            expected_throughput_fps=expected_throughput_fps,
+            subdir="my_model",  # Optional: output subdirectory
+        )
+    )
+```
+
+### Input Tensor Utilities
+
+Create random input tensors for tests:
+
+```python
+from models.tt_cnn.tt.testing import create_random_input_tensor
+
+# Create input tensors with various options
+torch_input, ttnn_input = create_random_input_tensor(
+    batch=1,
+    groups=1,
+    input_channels=3,
+    input_height=480,
+    input_width=640,
+    channel_order="first",  # "first" (NCHW) or "last" (NHWC)
+    fold=True,              # Fold spatial dimensions
+    pad=False,              # Pad channels to 16
+    device=device,          # Optional: place on device
+    memory_config=None,     # Optional: custom memory config
+    mesh_mapper=None,       # Optional: for multi-device
+)
+```
+
+### Examples
+
+See [test_testing.py](tests/test_testing.py) for complete examples of:
+- Layer verification with parameterized tests
+- Input tensor creation and validation
+- Device performance test configuration
