@@ -80,10 +80,6 @@ class DeepseekGenerator:
         )
         # self._ensure_max_seq_len(self.hf_config)
         self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
-        self.hf_config.num_hidden_layers = 5
-        logger.info("================================================")
-        logger.info(f"hf_config.num_hidden_layers: {self.hf_config.num_hidden_layers}")
-        logger.info("================================================")
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -116,8 +112,6 @@ class DeepseekGenerator:
             )
             for _ in range(self.hf_config.num_hidden_layers)
         )
-        for page_table in self.page_tables_tt:
-            logger.info(f"page_table shape: {page_table.shape}")
         self.random_weights = random_weights
         self.single_layer = single_layer
         self._prepare_weight_configs(cache_dir)
@@ -407,7 +401,6 @@ class DeepseekGenerator:
         )
 
         # RowPipelinedModel forward
-
         logits_tt = RowBatchedModel.forward_decode(
             tt_tokens,
             tt_positions,
@@ -468,7 +461,8 @@ class DeepseekGenerator:
 
         prompts = list(prompts)
         num_of_prompts = len(prompts)
-        assert 1 <= num_of_prompts <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
+        num_of_users = USERS_PER_ROW * self.mesh_device.shape[0]
+        assert 1 <= num_of_prompts <= num_of_users, f"Supports 1..{num_of_users} prompts"
 
         logger.info("Creating model run configs...")
         profiler.start("preparing_prefill_config")
@@ -488,46 +482,22 @@ class DeepseekGenerator:
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
 
-        # Prefill via repeated decode steps over prompt tokens
-        profiler.start("inference_prefill")
-        # positions = torch.zeros(self.batch_size, dtype=torch.int32)
-        # last_logits = None
-
-        # for step in range(tokens_batched.shape[1]):
-        #     step_tokens = tokens_batched[:, step]  # [B]
-        #     last_logits = (
-        #         self._decode_step(step_tokens, positions, batch_size_per_row=self.batch_size_per_row)
-        #         .squeeze(0)
-        #         .squeeze(0)
-        #     )
-        #     positions += 1
-
-        # assert last_logits is not None
-
-        # prefill loop
-        # profiler.start("inference_prefill")
-        # num_of_users = tokens_batched.shape[0]
-        # last_logits = []
-        # for user_id in range(num_of_users):
-        #     if lengths[user_id] == 0:
-        #         logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
-        #         last_logits.append(torch.zeros(self.hf_config.vocab_size))
-        #         continue
-        #     logger.info(f"Running prefill for user_id: {user_id}")
-        #     logger.info(
-        #         f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
-        #     )
-        #     user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
-        #     user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
-        #     last_logits.append(user_out)
-        # last_logits = torch.stack(last_logits)
-        # profiler.end("inference_prefill")
-
         profiler.start("inference_prefill")
         num_of_users = tokens_batched.shape[0]
-        user_out = self._prefill(tokens_batched, user_id=torch.randint(0, num_of_users, ()).item())
-        logger.info(f"user_out shape: {user_out.shape}")
-        user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
+        last_logits = []
+        for user_id in range(num_of_users):
+            if lengths[user_id] == 0:
+                logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
+                last_logits.append(torch.zeros(self.hf_config.vocab_size))
+                continue
+            logger.info(f"Running prefill for user_id: {user_id}")
+            logger.info(
+                f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
+            )
+            user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
+            user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
+            last_logits.append(user_out)
+        last_logits = torch.stack(last_logits)
         profiler.end("inference_prefill")
 
         assert len(last_logits) == num_of_users
@@ -657,8 +627,10 @@ class DeepseekGenerator:
             logits: [1, 1, seq_len, V] logits for the full sequence
         """
 
-        # tokens = tokens.view(1, 1, -1)
+        tokens = tokens.view(1, 1, -1)
+        logger.info(f"tokens shape: {tokens.shape}")
         seq_len = tokens.shape[-1]
+        logger.info(f"seq_len: {seq_len}")
 
         # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
         tt_tokens = ttnn.from_torch(
