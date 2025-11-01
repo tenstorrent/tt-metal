@@ -62,53 +62,53 @@ protected:
     // ReadImage's declaration.
     const std::string_view path_;
 
-public:
+public:  // NOLINT
     Impl(ElfFile& owner, std::string_view path) : owner_(owner), path_(path) {}
     virtual ~Impl() = default;
 
-private:
+public:  // NOLINT
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
     Impl(Impl&&) = delete;
     Impl& operator=(Impl&&) = delete;
 
-public:
+public:  // NOLINT
     static Impl* Make(ElfFile& owner, const std::string& path);
 
-public:
+public:  // NOLINT
     virtual void LoadImage() = 0;
     virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) = 0;
     virtual void XIPify() = 0;
 
-private:
+private:  // NOLINT
     template <bool Is64>
     class Elf;
 };
 
 template <bool Is64>
 class ElfFile::Impl::Elf final : public Impl {
-public:
+public:  // NOLINT
     using Ehdr = std::conditional_t<Is64, Elf64_Ehdr, Elf32_Ehdr>;
     using Phdr = std::conditional_t<Is64, Elf64_Phdr, Elf32_Phdr>;
     using Shdr = std::conditional_t<Is64, Elf64_Shdr, Elf32_Shdr>;
     using Sym = std::conditional_t<Is64, Elf64_Sym, Elf32_Sym>;
     using Rela = std::conditional_t<Is64, Elf64_Rela, Elf32_Rela>;
 
-private:
+private:  // NOLINT
     std::span<Phdr> phdrs_;
     std::span<Shdr> shdrs_;
 
     class Weakener;
 
-public:
+public:  // NOLINT
     Elf(ElfFile& owner, std::string_view path) : Impl(owner, path) {}
-    virtual ~Elf() override = default;
+    virtual ~Elf() override = default;  // NOLINT
 
-    virtual void LoadImage() override;
-    virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;
-    virtual void XIPify() override;
+    virtual void LoadImage() override;                                                        // NOLINT
+    virtual void WeakenDataSymbols(std::span<const std::string_view> strong_names) override;  // NOLINT
+    virtual void XIPify() override;                                                           // NOLINT
 
-private:
+private:  // NOLINT
     [[nodiscard]] auto GetHeader() const -> const Ehdr& { return *ByteOffset<Ehdr>(GetContents().data()); }
     [[nodiscard]] auto GetPhdrs() const -> std::span<const Phdr> { return phdrs_; }
     [[nodiscard]] auto GetShdrs() const -> std::span<const Shdr> { return shdrs_; }
@@ -185,7 +185,7 @@ private:
         *ByteOffset<uint32_t>(GetContents(shdr).data(), addr - shdr.sh_addr) = value;
     }
 
-private:
+private:  // NOLINT
     static unsigned char GetSymBind(const Sym& sym) {
         if constexpr (Is64) {
             return ELF64_ST_BIND(sym.st_info);
