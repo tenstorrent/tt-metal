@@ -219,7 +219,7 @@ void JitBuildEnv::init(
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
     }
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        this->defines_ += "-DUSING_TTSIM ";
+        this->defines_ += "-DTTSIM_ENABLED ";
     }
 
     if (rtoptions.get_record_noc_transfers()) {
