@@ -34,6 +34,32 @@ def to_torch_auto_compose(tensor: ttnn.Tensor, device: Optional[ttnn.MeshDevice]
     return ttnn.to_torch(tensor, mesh_composer=composer)
 
 
+def extract_tensor_topology_info(
+    tensor: ttnn.Tensor,
+) -> tuple[list[object], list[int]]:
+    """
+    Extract placements and distribution shape from a tensor's topology.
+
+    Returns:
+        (placements, dist_shape)
+    """
+    topology = tensor.tensor_topology()
+    placements = topology.placements()
+    dist_shape = list(topology.distribution_shape())
+    return placements, dist_shape
+
+
+def get_device_from_tensor(tensor: ttnn.Tensor) -> Optional[ttnn.MeshDevice]:
+    """Get device from tensor or fallback to provided mesh_device."""
+    device = tensor.device()
+    # tensor.device() returns None if the tensor is on the host (ttnn/core/tensor/tensor.cpp --> Tensor::device())
+    if device is None:
+        logger.info("tensor.device() returns None, tensor is on the host")
+    else:
+        logger.info(f"tensor.device() returns {device}")
+    return device
+
+
 # ======================================================================================
 # Private Implementation
 # ======================================================================================
@@ -56,13 +82,13 @@ def _infer_mesh_composer_from_topology(
     Returns:
         MeshToTensor composer or None if no composition needed
     """
-    placements, dist_shape = _extract_tensor_topology_info(tensor)
+    placements, dist_shape = extract_tensor_topology_info(tensor)
 
     # No distribution or trivial 1-device case
     if len(dist_shape) == 0 or (len(dist_shape) == 1 and dist_shape[0] == 1):
         return None
 
-    tensor_device = _get_device_from_tensor(tensor)
+    tensor_device = get_device_from_tensor(tensor)
     mesh_device = tensor_device or device
     if mesh_device is None:
         # As a last resort, try default device for backward-compatibility
@@ -81,32 +107,6 @@ def _infer_mesh_composer_from_topology(
     else:
         # N >= 2 dimensions
         return _compose_nd_sharded(mesh_device, placements, dist_shape)
-
-
-def _extract_tensor_topology_info(
-    tensor: ttnn.Tensor,
-) -> tuple[list[object], list[int]]:
-    """
-    Extract placements and distribution shape from a tensor's topology.
-
-    Returns:
-        (placements, dist_shape)
-    """
-    topology = tensor.tensor_topology()
-    placements = topology.placements()
-    dist_shape = list(topology.distribution_shape())
-    return placements, dist_shape
-
-
-def _get_device_from_tensor(tensor: ttnn.Tensor) -> Optional[ttnn.MeshDevice]:
-    """Get device from tensor or fallback to provided mesh_device."""
-    device = tensor.device()
-    # tensor.device() returns None if the tensor is on the host (ttnn/core/tensor/tensor.cpp --> Tensor::device())
-    if device is None:
-        logger.info("tensor.device() returns None, tensor is on the host")
-    else:
-        logger.info(f"tensor.device() returns {device}")
-    return device
 
 
 def _compose_1d_sharded(
