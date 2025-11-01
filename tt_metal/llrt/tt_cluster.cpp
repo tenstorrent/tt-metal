@@ -1149,12 +1149,29 @@ std::set<tt_fabric::chan_id_t> Cluster::get_fabric_ethernet_channels(ChipId chip
     std::set<tt_fabric::chan_id_t> fabric_ethernet_channels;
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& active_eth_cores = control_plane.get_active_ethernet_cores(chip_id, false);
+
+    // Check if chip_id exists in device_eth_routing_info_
+    auto chip_routing_info_it = this->device_eth_routing_info_.find(chip_id);
+    if (chip_routing_info_it == this->device_eth_routing_info_.end()) {
+        return fabric_ethernet_channels;
+    }
+
     for (const auto& eth_core : active_eth_cores) {
-        if (!this->is_ethernet_link_up(chip_id, eth_core)) {
+        // Skip cores that aren't in device_eth_routing_info_ (not connected to any chip)
+        auto eth_core_it = chip_routing_info_it->second.find(eth_core);
+        if (eth_core_it == chip_routing_info_it->second.end()) {
             continue;
         }
-        if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
-            fabric_ethernet_channels.insert(this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core));
+
+        const auto& routing_mode = eth_core_it->second;
+        const bool link_up = this->is_ethernet_link_up(chip_id, eth_core);
+
+        if (!link_up) {
+            continue;
+        }
+        if (routing_mode == EthRouterMode::FABRIC_ROUTER) {
+            const auto& chan_id = this->get_soc_desc(chip_id).logical_eth_core_to_chan_map.at(eth_core);
+            fabric_ethernet_channels.insert(chan_id);
         }
     }
     return fabric_ethernet_channels;

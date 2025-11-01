@@ -727,31 +727,17 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
 // order ethernet channels using translated coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
-        log_info(tt::LogTest, "fabric_node_id: {}", fabric_node_id);
         auto phys_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);
         const auto src_asic_id = tt::tt_metal::AsicID{
             tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(phys_chip_id)};
         const auto& asic_neighbors = physical_system_descriptor_->get_asic_neighbors(src_asic_id);
-        log_info(tt::LogTest, "src phys_chip_id: {}, src_asic_id: {}", phys_chip_id, src_asic_id.get());
-        for (const auto& asic_neighbor : asic_neighbors) {
-            log_info(tt::LogTest, "asic_neighbor: {}", asic_neighbor.get());
-        }
         for (auto& [direction, eth_chans] : eth_chans_by_dir) {
-            log_info(tt::LogTest, "direction: {}", direction);
-            for (const auto& eth_chan : eth_chans) {
-                log_info(tt::LogTest, "eth_chan: {}", eth_chan);
-            }
-
             std::optional<tt::tt_metal::AsicID> neighbor_asic_id;
             std::vector<tt::tt_metal::EthConnection> eth_connections;
             for (const auto& asic_neighbor : asic_neighbors) {
                 eth_connections = physical_system_descriptor_->get_eth_connections(src_asic_id, asic_neighbor);
                 for (const auto& eth_connection : eth_connections) {
                     if (std::find(eth_chans.begin(), eth_chans.end(), eth_connection.src_chan) != eth_chans.end()) {
-                        log_info(tt::LogTest, "found neighbor asic_neighbor: {}", asic_neighbor.get());
-                        for (const auto& n_chan : eth_connections) {
-                            log_info(tt::LogTest, "neighbor channel: {}", n_chan.dst_chan);
-                        }
                         assert(eth_connections.size() == eth_chans.size());
                         neighbor_asic_id = asic_neighbor;
                         break;
@@ -771,9 +757,6 @@ void ControlPlane::order_ethernet_channels() {
                     auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
                     return translated_coords_a.x < translated_coords_b.x;
                 });
-                for (const auto& eth_chan : eth_chans) {
-                    log_info(tt::LogTest, "sorted eth_chan: {}", eth_chan);
-                }
             } else {
                 std::sort(eth_connections.begin(), eth_connections.end(), [&soc_desc](const auto& a, const auto& b) {
                     auto translated_coords_a = soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
@@ -782,7 +765,6 @@ void ControlPlane::order_ethernet_channels() {
                 });
                 for (uint32_t i = 0; i < eth_connections.size(); i++) {
                     eth_chans[i] = eth_connections[i].src_chan;
-                    log_info(tt::LogTest, "sorted eth_chan w.r.t neighbor: {}", eth_chans[i]);
                 }
                 // auto inverted_direction = direction;
                 // if (inverted_direction == RoutingDirection::N) {
@@ -2089,21 +2071,11 @@ std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId c
 void ControlPlane::assign_direction_to_fabric_eth_chan(
     const FabricNodeId& fabric_node_id, chan_id_t chan_id, RoutingDirection direction) {
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
-    const auto& connected_chips =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
-            physical_chip_id);
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
-    auto eth_core = soc_desc.get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
-
-    bool is_active_connection = false;
-    for (const auto& [connected_chip_id, eth_cores] : connected_chips) {
-        if (std::find(eth_cores.begin(), eth_cores.end(), eth_core) != eth_cores.end()) {
-            is_active_connection = true;
-            break;
-        }
-    }
-
-    if (is_active_connection) {
+    // TODO: get_fabric_ethernet_channels accounts for down links, but we should manage down links in control plane
+    auto fabric_router_channels_on_chip =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_fabric_ethernet_channels(physical_chip_id);
+    // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
+    if (fabric_router_channels_on_chip.contains(chan_id)) {
         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
     } else {
         log_debug(
@@ -2113,6 +2085,31 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
             fabric_node_id.chip_id,
             chan_id);
     }
+    // auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
+    // const auto& connected_chips =
+    //     tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
+    //         physical_chip_id);
+    // const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    // auto eth_core = soc_desc.get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+
+    // bool is_active_connection = false;
+    // for (const auto& [connected_chip_id, eth_cores] : connected_chips) {
+    //     if (std::find(eth_cores.begin(), eth_cores.end(), eth_core) != eth_cores.end()) {
+    //         is_active_connection = true;
+    //         break;
+    //     }
+    // }
+
+    // if (is_active_connection) {
+    //     this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)[direction].push_back(chan_id);
+    // } else {
+    //     log_debug(
+    //         tt::LogFabric,
+    //         "Control Plane: Disabling router on M{}D{} eth channel {}",
+    //         fabric_node_id.mesh_id,
+    //         fabric_node_id.chip_id,
+    //         chan_id);
+    // }
 }
 
 void ControlPlane::assign_direction_to_fabric_eth_core(
