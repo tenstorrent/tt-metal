@@ -33,7 +33,8 @@ void kernel_main() {
     uint32_t cmd_ptr = cmd_cb_base;
     uint32_t dispatch_data_ptr = dispatch_cb_base;
 
-    cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(dispatch_cb_pages);
+    CBWriter<dispatch_cb_sem, my_noc_index, dispatch_noc_xy, dispatch_cb_sem> writer;
+    writer.acquire_pages(dispatch_cb_pages);
     for (uint32_t i = 0; i < dispatch_cb_pages; i++) {
         noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
         cmd_ptr += dispatch_cb_page_size;
@@ -41,14 +42,14 @@ void kernel_main() {
     }
 
     int iterations = get_arg_val<int>(0);
-    cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(dispatch_cb_pages * iterations);
+    writer.release_pages(dispatch_cb_pages * iterations);
     volatile tt_l1_ptr uint32_t* sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(dispatch_cb_sem));
     WAYPOINT("ZZZ");
-    while (*sem_addr != dispatch_cb_pages * iterations - 96);
+    while ((writer.additional_count + *sem_addr) != dispatch_cb_pages * iterations - 96);
     // Send finish, last cmd in the chain
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_cb_base), dispatch_cb_page_size);
-    cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(1);
+    writer.release_pages(1);
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }
@@ -58,10 +59,11 @@ void kernel_main() {
 
     uint32_t cmd_ptr;
     uint32_t dispatch_data_ptr = dispatch_cb_base;
+    CBWriter<dispatch_cb_sem, my_noc_index, dispatch_noc_xy, dispatch_cb_sem> writer;
     for (int i = 0; i < iterations; i++) {
         cmd_ptr = cmd_cb_base;
         for (uint32_t j = 0; j < (cmd_cb_pages - 1) / page_batch_size; j++) {
-            cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(page_batch_size);
+            writer.acquire_pages(page_batch_size);
             for (uint32_t k = 0; k < page_batch_size; k++) {
                 noc_async_write(
                     cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
@@ -71,14 +73,14 @@ void kernel_main() {
                     dispatch_data_ptr = dispatch_cb_base;
                 }
             }
-            cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(page_batch_size);
+            writer.release_pages(page_batch_size);
         }
     }
 
     // Send finish, last cmd in the chain
-    cb_acquire_pages<my_noc_xy, dispatch_cb_sem>(1);
+    writer.acquire_pages(1);
     noc_async_write(cmd_ptr, get_noc_addr_helper(dispatch_noc_xy, dispatch_data_ptr), dispatch_cb_page_size);
-    cb_release_pages<my_noc_index, dispatch_noc_xy, dispatch_cb_sem>(1);
+    writer.release_pages(1);
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 }

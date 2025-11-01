@@ -7,13 +7,11 @@
 #include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
-#include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 
@@ -284,24 +282,6 @@ void CaptureProgramConstructor(Program& program) {
 
     auto cmd = tt::tt_metal::flatbuffer::CreateProgramConstructorCommand(ctx.get_builder(), program_global_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand, cmd.Union());
-}
-
-void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
-    auto& ctx = LightMetalCaptureContext::get();
-
-    // When Metal Trace is enabled, skip EnqueueProgram capture (replaced with LoadTrace + ReplayTrace)
-    if (cq.sysmem_manager().get_bypass_mode()) {
-        return;
-    }
-
-    uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    uint32_t program_global_id = ctx.get_global_id(&program);
-    log_debug(
-        tt::LogMetalTrace, "{}: cq_global_id: {} program_global_id: {}", __FUNCTION__, cq_global_id, program_global_id);
-
-    auto cmd = tt::tt_metal::flatbuffer::CreateEnqueueProgramCommand(
-        ctx.get_builder(), cq_global_id, program_global_id, blocking);
-    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand, cmd.Union());
 }
 
 void CaptureCreateKernel(

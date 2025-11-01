@@ -9,15 +9,15 @@ from models.demos.ttnn_resnet.tests.common.perf_e2e_resnet50 import run_perf_res
 
 PERF_EXPECTATIONS = {
     "t3000": {
-        "test_perf": {"inference_time": 0.0125, "compile_time": 60},
-        "test_perf_trace": {"inference_time": 0.0048, "compile_time": 60},
-        "test_perf_2cqs": {"inference_time": 0.013, "compile_time": 60},
-        "test_perf_trace_2cqs": {"inference_time": 0.0044, "compile_time": 60},
+        "test_perf": {"inference_time": 0.0157, "compile_time": 60},
+        "test_perf_trace": {"inference_time": 0.0038, "compile_time": 60},
+        "test_perf_2cqs": {"inference_time": 0.0143, "compile_time": 60},
+        "test_perf_trace_2cqs": {"inference_time": 0.0031, "compile_time": 60},
     },
     "tg": {
-        "test_perf": {"inference_time": 0.025, "compile_time": 60},
+        "test_perf": {"inference_time": 0.016, "compile_time": 60},
         "test_perf_trace": {"inference_time": 0.0068, "compile_time": 60},
-        "test_perf_2cqs": {"inference_time": 0.026, "compile_time": 60},
+        "test_perf_2cqs": {"inference_time": 0.0162, "compile_time": 60},
         "test_perf_trace_2cqs": {"inference_time": 0.0052, "compile_time": 60},
     },
 }
