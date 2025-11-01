@@ -32,6 +32,7 @@
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
+#include "hostdevcommon/fabric_telemetry_common.h"
 
 #include <array>
 #include <cstddef>
@@ -1886,6 +1887,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     size_t did_nothing_count = 0;
+    RiscTimestampV2 local_heartbeat_counter = {.full = 0};
+    auto fabric_telemetry =
+        reinterpret_cast<volatile FabricTelemetry<1>*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
+    auto* heartbeat_addr = &fabric_telemetry->dynamic_info[0].heartbeat;
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
@@ -2038,6 +2043,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 write_perf_recording_window_results(inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
             }
         }
+
+        local_heartbeat_counter.full++;
+        heartbeat_addr->full = local_heartbeat_counter.full;
     }
 }
 

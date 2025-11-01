@@ -85,6 +85,7 @@ public:
     void configure_routing_tables_for_fabric_ethernet_channels(
         tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
     void write_routing_tables_to_all_chips() const;
+    void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
 
     // Return mesh_id, chip_id from physical chip id
     FabricNodeId get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const;
