@@ -11,7 +11,9 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 def load_shakespeare_text():
     ds = load_dataset(
         "text",
-        data_files={"train": f'{os.environ["TT_METAL_HOME"]}/tt-train/data/shakespeare.txt'},
+        data_files={
+            "train": f'{os.environ["TT_METAL_HOME"]}/tt-train/data/shakespeare.txt'
+        },
     )
     text = "\n".join(ds["train"]["text"])
     return text
@@ -49,7 +51,9 @@ def prepare_data(yaml_config):
     decode_fn = None
     if use_bpe:
         assert tokenizer_path, "tokenizer_path is required when use_bpe is true"
-        tokenizer_path = os.path.join(os.environ["TT_METAL_HOME"], "tt-train", tokenizer_path)
+        tokenizer_path = os.path.join(
+            os.environ["TT_METAL_HOME"], "tt-train", tokenizer_path
+        )
         if os.path.isdir(tokenizer_path):
             bpe = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
         elif os.path.isfile(tokenizer_path):
@@ -79,7 +83,9 @@ def get_batch(split_ids: np.ndarray, seq_len: int, batch_size: int):
     n = len(split_ids) - seq_len - 1
     ix = np.random.randint(0, n, size=(batch_size,))
     x = np.stack([split_ids[i : i + seq_len] for i in ix], axis=0)  # [B, T]
-    y = np.stack([split_ids[i + 1 : i + seq_len + 1] for i in ix], axis=0)  # [B, T] next-token targets
+    y = np.stack(
+        [split_ids[i + 1 : i + seq_len + 1] for i in ix], axis=0
+    )  # [B, T] next-token targets
     return x.astype(np.uint32), y.astype(np.uint32)
 
 

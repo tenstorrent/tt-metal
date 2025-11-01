@@ -1,0 +1,34 @@
+[build-system]
+requires = [
+    "scikit-build-core>0.8.0",
+    "nanobind>=2.9.2",
+    "numpy >=1.24.4,<2",
+    "wheel",
+]
+build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+minimum-version = "0.4"
+#build-dir = "build/{wheel_tag}"
+build-dir = "build"
+wheel.packages = ["sources/ttml/ttml"]
+
+[tool.scikit-build.install]
+# Use CMake install components for packaging
+components = ["ttml"]
+
+[project]
+name = "ttml"
+authors=[
+    {name = "Tenstorrent", email = "info@tenstorrent.com"},
+]
+license = {text = "Apache-2.0"}
+requires-python=">=3.10"
+dependencies = [
+    "numpy>=1.24.4,<2",
+    "ttnn",
+    "ml_dtypes",
+]
+dynamic = ["version", "readme"]
+keywords = ["metalium", "ttml", "tenstorrent"]
+description = "TTML python bindings"
