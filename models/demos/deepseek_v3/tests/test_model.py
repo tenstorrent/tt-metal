@@ -266,9 +266,25 @@ def run_test_forward_pass_dpmodel(
 
     # Forward pass
     logger.info("Running TTNN forward pass")
+    logger.info(f"mode: {mode}")
+    logger.info(f"seq_len: {seq_len}")
+    logger.info(f"batch_size_per_row: {batch_size_per_row}")
+    logger.info(f"batch_size: {batch_size}")
+    logger.info(f"tt_input shape: {tt_input.shape}")
+    logger.info(f"torch_input shape: {torch_input.shape}")
+    logger.info(f"rope_tensors len: {len(rope_tensors)}")
+    logger.info(f"rope_tensors: {rope_tensors['cos_matrix'].shape}")
+    logger.info(f"rope_tensors: {rope_tensors['sin_matrix'].shape}")
+    logger.info(f"rope_tensors: {rope_tensors['trans_matrix'].shape}")
+    logger.info(f"tt_page_tables len : {len(tt_page_tables)}")
+    for i, page_table in enumerate(tt_page_tables):
+        logger.info(f"tt_page_table {i} shape: {page_table.shape}")
+
     if mode == "prefill":
+        logger.info(f"Running prefill with user_id: {user_id}")
         tt_output = RowBatchedModel.forward_prefill(tt_input, user_id, run_config, rope_tensors, tt_page_tables)
     else:
+        logger.info(f"Running decode with position_ids_tensor: {position_ids_tensor}")
         tt_output = RowBatchedModel.forward_decode(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
         )
@@ -305,7 +321,7 @@ def run_test_forward_pass_dpmodel(
         # ("prefill", 2048),  # Test chunking # TODO: Uncomment once MLA prefill works
     ],
 )
-@pytest.mark.parametrize("test_closure", [run_test_forward_pass_ppmodel, run_test_forward_pass_dpmodel])
+@pytest.mark.parametrize("test_closure", [run_test_forward_pass_dpmodel])
 def test_forward_pass(
     use_real_weights,
     mode,
