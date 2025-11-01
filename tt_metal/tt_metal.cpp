@@ -55,6 +55,8 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
+#include "impl/buffers/circular_buffer.hpp"
+#include "impl/buffers/circular_buffer_constants.hpp"
 
 namespace tt {
 
@@ -1158,11 +1160,11 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 }
 
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
-    std::shared_ptr<CircularBuffer> circular_buffer = program.impl().get_circular_buffer(cb_handle);
+    std::shared_ptr<CircularBufferImpl> circular_buffer = program.impl().get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
         program.impl().invalidate_circular_buffer_allocation();
     }
-    circular_buffer->config().set_total_size(total_size);
+    circular_buffer->config().impl()->set_total_size(total_size);
 }
 
 void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
@@ -1179,7 +1181,7 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
+    circular_buffer->config().impl()->set_globally_allocated_address_and_total_size(buffer, total_size);
     circular_buffer->assign_global_address();
 }
 
