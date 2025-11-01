@@ -10,6 +10,12 @@
 #include "compute_kernel_api/matmul.h"
 #endif
 
+#ifdef DO_NEGATE
+#include "compute_kernel_api/eltwise_unary/negative.h"
+#endif
+
+#include "debug/dprint.h"
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -23,6 +29,9 @@ void MAIN {
 #else
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
 #endif
+#ifdef DO_NEGATE
+    negative_tile_init();
+#endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
     for (uint32_t nc = 0; nc < NC; nc++) {
@@ -32,8 +41,9 @@ void MAIN {
             // tiles are expected to be coming in in NCHW order (W-contiguous)
             // reducing in W means out[h][0] = sum(w=0..W-1, in[h][w])
             // in this case we just sequentially add to accumulator all the W-tiles in a row
-            acquire_dst();
+            tile_regs_acquire();
             for (uint32_t wt = 0; wt < Wt; ++wt) {
+                MATH(DPRINT << "wt=" << wt << " ht=" << ht << ENDL());
                 cb_wait_front(tt::CBIndex::c_0, onetile);
                 // REDUCE_OP is expected to come from add_define
 #ifndef REDUCE_ROW_SUM_VIA_MM
@@ -44,10 +54,15 @@ void MAIN {
                 cb_pop_front(tt::CBIndex::c_0, onetile);
             }
 
+#ifdef DO_NEGATE
+            negative_tile(reduce_dst_idx);
+#endif
+            tile_regs_commit();
             cb_reserve_back(tt::CBIndex::c_3, onetile);
+            tile_regs_wait();
             pack_tile(reduce_dst_idx, tt::CBIndex::c_3);
             cb_push_back(tt::CBIndex::c_3, onetile);
-            release_dst();
+            tile_regs_release();
         }
     }
 }
