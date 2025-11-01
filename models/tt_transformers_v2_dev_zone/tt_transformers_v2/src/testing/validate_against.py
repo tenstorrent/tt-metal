@@ -349,6 +349,26 @@ def _prepare_metric_config(metric_tolerances_input):
     return metrics_map, hib, tol_map, logs_local
 
 
+# todo)) add capability to run the reference function instead of the decorated function on a per-module basis!
+
+# todo)) add a flag to make all exceptions in validate_against to raise instead of just logging!
+
+# todo)) also allow raise an exception from the a failed metric!
+
+# todo)) add support for multiple outputs from the reference function and the decorated function!
+# e.g., return logits, past_key_values, etc.
+
+# todo)) make sure the dtypes are taken care of in the validate_against decorator!
+# e.g., if the decorated function is of dtype bfp4, what is the dtype of the to_torch_auto_compose output?
+
+# todo)) add file line number to the validation results!
+
+# todo)) add function to export the validation results to a csv file!
+
+# todo)) enhance report to use file line number as index to summarize the validation results
+# e.g., ✗ FAIL - __main__.Attention.__call__ (line 100) -> 100 failed validations
+
+
 # todo)) stretch goals:
 # - generate unit test automatically from the failed validations
 def __validate_against(

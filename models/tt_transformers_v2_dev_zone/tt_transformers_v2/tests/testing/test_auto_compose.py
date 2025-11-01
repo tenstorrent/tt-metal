@@ -377,3 +377,6 @@ def test_device_sharded_shape_thresholds(ttnn_mesh_device: ttnn.MeshDevice, layo
 
     assert torch.equal(torch_ref, torch_in)
     assert torch.equal(torch_auto, torch_in)
+
+
+# todo)) add test cases along the dtype axis!
