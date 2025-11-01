@@ -24,11 +24,15 @@ public:
 
     void wait_for_state(tt_cxy_pair virtual_core, lite_fabric::InitState state) override;
 
+    std::vector<std::filesystem::path> build_srcs(const std::filesystem::path& root_dir) override;
+
     std::vector<std::filesystem::path> build_includes(const std::filesystem::path& root_dir) override;
 
     std::vector<std::string> build_defines() override;
 
     std::vector<std::filesystem::path> build_linker(const std::filesystem::path& root_dir) override;
+
+    std::optional<std::filesystem::path> build_asm_startup(const std::filesystem::path& root_dir) override;
 
     std::string build_target_name() override { return "wormhole"; }
 };
