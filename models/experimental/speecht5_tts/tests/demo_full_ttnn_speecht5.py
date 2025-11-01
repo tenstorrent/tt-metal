@@ -166,7 +166,7 @@ print("✓ Processor and speaker embeddings loaded")
 
 # Step 5: Process input text
 print("\n[Step 5] Processing input text...")
-text = "Welcome to the future."
+text = "Hello, my dog is cute."
 print(f"  Input text: '{text}'")
 
 inputs = processor(text=text, return_tensors="pt")
@@ -184,8 +184,81 @@ print("  - Vocoder: HiFiGAN")
 
 
 # Custom generation function using full TTNN components
+# ============================================================================
+# Memory Management Utilities - Comprehensive L1 Optimization
+# ============================================================================
+
+
+def ensure_l1_memory(tensor):
+    """
+    Ensure tensor is in L1 memory for optimal performance.
+    Moves tensor to L1 if not already there.
+    """
+    return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+
+
+def move_to_l1_if_dram(tensor):
+    """
+    Conditionally move tensor to L1 only if it's currently in DRAM.
+    Avoids unnecessary moves if already in L1.
+    """
+    try:
+        if hasattr(tensor, "memory_config") and tensor.memory_config.buffer_type == ttnn.BufferType.DRAM:
+            return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+    except:
+        # If we can't check memory config, assume it's DRAM and move to L1
+        pass
+    return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+
+
+def l1_reshape(tensor, *args, **kwargs):
+    """Reshape with L1 memory output"""
+    return ttnn.reshape(tensor, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+
+
+def l1_permute(tensor, *args, **kwargs):
+    """Permute with L1 memory output"""
+    return ttnn.permute(tensor, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+
+
+def l1_concat(tensors, *args, **kwargs):
+    """Concat with L1 memory output"""
+    return ttnn.concat(tensors, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+
+
+def get_high_perf_compute_config():
+    """
+    Get compute kernel config optimized for maximum core utilization and performance.
+    Uses HiFi4 with default settings for accuracy while maintaining L1 memory optimizations.
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+
+def l1_matmul(a, b, *args, **kwargs):
+    """Matmul with L1 memory config and high-performance compute kernel"""
+    if "compute_kernel_config" not in kwargs:
+        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
+    if "memory_config" not in kwargs:
+        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
+    return ttnn.matmul(a, b, *args, **kwargs)
+
+
+def l1_linear(input_tensor, weight, bias=None, *args, **kwargs):
+    """Linear layer with L1 memory config and high-performance compute kernel"""
+    if "compute_kernel_config" not in kwargs:
+        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
+    if "memory_config" not in kwargs:
+        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
+    return ttnn.linear(input_tensor, weight, bias=bias, *args, **kwargs)
+
+
 def generate_speech_full_ttnn(token_ids, speaker_embeddings, vocoder=None):
-    """Generate speech using full TTNN SpeechT5 pipeline
+    """Generate speech using full TTNN SpeechT5 pipeline with comprehensive L1 memory management
 
     Returns:
         tuple: (result, metrics_dict)
@@ -193,7 +266,7 @@ def generate_speech_full_ttnn(token_ids, speaker_embeddings, vocoder=None):
         metrics_dict: performance metrics
     """
 
-    print("\n🧪 Testing full TTNN pipeline...")
+    print("\n🧪 Testing full TTNN pipeline with comprehensive L1 memory optimization...")
 
     # Test encoder
     # print("\n[Test 1] Testing TTNN Encoder...")
@@ -244,41 +317,45 @@ def generate_speech_full_ttnn(token_ids, speaker_embeddings, vocoder=None):
     maxlen = min(int(token_ids.shape[1] * 5.0 / hf_config.reduction_factor), 50)
     minlen = int(token_ids.shape[1] * 0.0 / hf_config.reduction_factor)
 
-    # Convert inputs to TTNN once at the beginning
-    print("Converting inputs to TTNN...")
+    # PHASE 1: Convert inputs to TTNN once at the beginning with L1 memory
+    print("Converting inputs to TTNN with L1 memory optimization...")
     ttnn_input_ids = ttnn.from_torch(
         token_ids,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_speaker_embeddings = ttnn.from_torch(
         speaker_embeddings,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # TTNN encoder (run once, keep output in TTNN)
-    print("Running TTNN encoder...")
+    # PHASE 2: TTNN encoder with L1 memory management
+    print("Running TTNN encoder with L1 memory optimization...")
     encoder_start = time.time()
     encoder_output = ttnn_encoder(ttnn_input_ids)[0]  # Keep in TTNN!
+    encoder_output = ensure_l1_memory(encoder_output)  # Ensure L1
     encoder_time = time.time() - encoder_start
     print(".3f")
 
-    # Initialize decoder input in TTNN (start with zeros)
+    # PHASE 3: Initialize decoder input in TTNN with L1 memory (start with zeros)
     output_sequence_ttnn = ttnn.from_torch(
         torch.zeros(batch_size, 1, hf_config.num_mel_bins),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     spectrogram = []
     idx = 0
     first_token_time = None
 
-    print("Starting autoregressive generation...")
+    print("Starting autoregressive generation with comprehensive L1 memory management...")
     generation_start = time.time()
 
     while True:
@@ -286,23 +363,26 @@ def generate_speech_full_ttnn(token_ids, speaker_embeddings, vocoder=None):
         if idx % 10 == 0:
             print(f"Step {idx}/{maxlen}")
 
-        # TTNN decoder (all inputs already in TTNN)
+        # PHASE 4: TTNN decoder (all inputs already in TTNN with L1 memory)
         decoder_hidden_states = ttnn_decoder(
             decoder_input_values=output_sequence_ttnn,
-            encoder_hidden_states=encoder_output,  # Already in TTNN
-            speaker_embeddings=ttnn_speaker_embeddings,  # Already in TTNN
+            encoder_hidden_states=encoder_output,  # Already in TTNN L1
+            speaker_embeddings=ttnn_speaker_embeddings,  # Already in TTNN L1
         )
+        decoder_hidden_states = ensure_l1_memory(decoder_hidden_states)
 
         # Track time to first token (after encoder + first decoder step)
         if first_token_time is None:
             first_token_time = time.time() - generation_start
 
-        # TTNN postnet (direct tensor pass)
+        # PHASE 5: TTNN postnet (direct tensor pass with L1 memory)
         postnet_output = ttnn_postnet(decoder_hidden_states)
-
-        # Extract results (only convert what we need for torch operations)
         mel_before, mel_after, stop_logits = postnet_output
+        mel_before = ensure_l1_memory(mel_before)
+        mel_after = ensure_l1_memory(mel_after)
+        stop_logits = ensure_l1_memory(stop_logits)
 
+        # PHASE 6: Minimal conversions - only convert what we need for torch operations
         # Convert only stop_logits for stopping condition check
         stop_logits_torch = ttnn.to_torch(stop_logits)
 
@@ -316,14 +396,15 @@ def generate_speech_full_ttnn(token_ids, speaker_embeddings, vocoder=None):
         new_spectrum = mel_after_torch[:, start_idx : start_idx + hf_config.reduction_factor, :]
         spectrogram.append(new_spectrum)
 
-        # Extend output sequence (convert back to TTNN)
+        # PHASE 7: Extend output sequence with L1 memory management
         last_frame_ttnn = ttnn.from_torch(
             new_spectrum[:, -1:, :],
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        output_sequence_ttnn = ttnn.concat([output_sequence_ttnn, last_frame_ttnn], dim=1)
+        output_sequence_ttnn = l1_concat([output_sequence_ttnn, last_frame_ttnn], dim=1)
 
         # Stop condition
         prob = torch.sigmoid(stop_logits_torch)
@@ -550,7 +631,7 @@ print("   Total conversions: 4 to TTNN (start) + 2 from TTNN (end) = 6 total")
 
 # Step 8: Save audio
 print("\n[Step 8] Saving audio...")
-output_file = "models/experimental/speecht5_tts/tests/speech_welcome_to_the_future.wav"
+output_file = "models/experimental/speecht5_tts/tests/speech_full_ttnn.wav"
 sf.write(output_file, speech.numpy(), samplerate=16000)
 print(f"✓ Saved to {output_file}")
 

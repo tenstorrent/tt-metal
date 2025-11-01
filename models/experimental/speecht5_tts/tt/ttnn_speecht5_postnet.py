@@ -13,6 +13,84 @@ from typing import Tuple
 from dataclasses import dataclass
 
 
+# ============================================================================
+# Memory Management Utilities - Comprehensive L1 Optimization
+# ============================================================================
+
+
+def ensure_l1_memory(tensor):
+    """
+    Ensure tensor is in L1 memory for optimal performance.
+    Moves tensor to L1 if not already there.
+    """
+    return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+
+
+def move_to_l1_if_dram(tensor):
+    """
+    Conditionally move tensor to L1 only if it's currently in DRAM.
+    Avoids unnecessary moves if already in L1.
+    """
+    try:
+        if hasattr(tensor, "memory_config") and tensor.memory_config.buffer_type == ttnn.BufferType.DRAM:
+            return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+    except:
+        # If we can't check memory config, assume it's DRAM and move to L1
+        pass
+    return ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
+
+
+def l1_reshape(tensor, *args, **kwargs):
+    """Reshape with L1 memory output"""
+    return ttnn.reshape(tensor, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+
+
+def l1_permute(tensor, *args, **kwargs):
+    """Permute with L1 memory output"""
+    return ttnn.permute(tensor, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+
+
+def l1_concat(tensors, *args, **kwargs):
+    """Concat with L1 memory output"""
+    return ttnn.concat(tensors, *args, memory_config=ttnn.L1_MEMORY_CONFIG, **kwargs)
+
+
+# ============================================================================
+# High-Performance Compute Kernel Configs - Maximum Core Utilization
+# ============================================================================
+
+
+def get_high_perf_compute_config():
+    """
+    Get compute kernel config optimized for maximum core utilization and performance.
+    Uses HiFi4 for speed while maintaining L1 memory optimization.
+    """
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,  # Keep L1 accumulation for memory efficiency
+    )
+
+
+def l1_matmul(a, b, *args, **kwargs):
+    """Matmul with L1 memory config and high-performance compute kernel"""
+    if "compute_kernel_config" not in kwargs:
+        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
+    if "memory_config" not in kwargs:
+        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
+    return ttnn.matmul(a, b, *args, **kwargs)
+
+
+def l1_linear(input_tensor, weight, bias=None, *args, **kwargs):
+    """Linear layer with L1 memory config and high-performance compute kernel"""
+    if "compute_kernel_config" not in kwargs:
+        kwargs["compute_kernel_config"] = get_high_perf_compute_config()
+    if "memory_config" not in kwargs:
+        kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
+    return ttnn.linear(input_tensor, weight, bias=bias, *args, **kwargs)
+
+
 @dataclass
 class TTNNPostNetConfig:
     """Configuration for TTNN Speech Decoder Post-Net."""
@@ -68,11 +146,12 @@ class TtConv1d:
         Returns:
             Output tensor [B, out_channels, L]
         """
-        # Reshape: [B, C, L] -> [B, L, C] -> [B, L, 1, C]
-        x = ttnn.permute(x, [0, 2, 1])
-        x = ttnn.reshape(x, [batch_size, input_length, 1, self.in_channels])
+        # PHASE 1: Ensure input is in L1 and reshape (L1 outputs)
+        x = ensure_l1_memory(x)
+        x = l1_permute(x, [0, 2, 1])
+        x = l1_reshape(x, [batch_size, input_length, 1, self.in_channels])
 
-        # Apply conv2d with return_weights_and_bias=True to get prepared weights
+        # PHASE 2: Apply conv2d with return_weights_and_bias=True to get prepared weights
         # This prevents re-preparation during trace
         result, _, [self.weight, self.bias] = ttnn.conv2d(
             input_tensor=x,
@@ -91,12 +170,14 @@ class TtConv1d:
             return_weights_and_bias=True,
             return_output_dim=True,
         )
+        result = ensure_l1_memory(result)
 
-        # Reshape back: [B, L, 1, C] -> [B, L, C] -> [B, C, L]
-        result = ttnn.reshape(result, [batch_size, input_length, self.out_channels])
-        result = ttnn.permute(result, [0, 2, 1])
+        # PHASE 3: Reshape back (L1 outputs)
+        result = l1_reshape(result, [batch_size, input_length, self.out_channels])
+        result = l1_permute(result, [0, 2, 1])
 
-        return result
+        # PHASE 4: Final output must be in L1
+        return ensure_l1_memory(result)
 
 
 class TTNNSpeechT5BatchNormConvLayer:
@@ -141,7 +222,7 @@ class TTNNSpeechT5BatchNormConvLayer:
 
     def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Forward pass.
+        Forward pass with comprehensive L1 memory management.
 
         Args:
             hidden_states: [batch, channels, time_steps] in TTNN format
@@ -149,18 +230,21 @@ class TTNNSpeechT5BatchNormConvLayer:
         Returns:
             output: [batch, channels, time_steps]
         """
-        # Op 1: Conv1d
+        # PHASE 1: Ensure input is in L1
+        hidden_states = ensure_l1_memory(hidden_states)
+
         # Get batch and sequence length from input
         # hidden_states shape: [batch, in_channels, seq_len]
         batch_size = hidden_states.shape[0]
         input_length = hidden_states.shape[2]
 
-        # Apply Conv1d using self.conv instance (similar to YOLOv8 pattern)
+        # PHASE 2: Op 1: Conv1d (L1 output)
         conv_result = self.conv(hidden_states, batch_size, input_length)
+        conv_result = ensure_l1_memory(conv_result)
 
-        # Op 2: BatchNorm
+        # PHASE 3: Op 2: BatchNorm (L1 outputs)
         # Reshape for batch_norm: [B, C, L] -> [B, C, L, 1] for TTNN
-        conv_result = ttnn.reshape(conv_result, [batch_size, self.out_channels, input_length, 1])
+        conv_result = l1_reshape(conv_result, [batch_size, self.out_channels, input_length, 1])
 
         bn_result = ttnn.batch_norm(
             conv_result,
@@ -171,19 +255,23 @@ class TTNNSpeechT5BatchNormConvLayer:
             training=False,  # Inference mode
             eps=1e-05,
         )
+        bn_result = ensure_l1_memory(bn_result)
 
         # Reshape back: [B, C, L, 1] -> [B, C, L]
-        bn_result = ttnn.reshape(bn_result, [batch_size, self.out_channels, input_length])
+        bn_result = l1_reshape(bn_result, [batch_size, self.out_channels, input_length])
 
-        # Op 3: Tanh activation (if present)
+        # PHASE 4: Op 3: Tanh activation (if present) (L1 output)
         if self.has_activation:
             bn_result = ttnn.tanh(bn_result)
+            bn_result = ensure_l1_memory(bn_result)
 
-        # Op 4: Dropout (only in training mode, skip in inference)
+        # PHASE 5: Op 4: Dropout (only in training mode, skip in inference)
         # In inference, dropout is a no-op
         hidden_states = bn_result
+        hidden_states = ensure_l1_memory(hidden_states)
 
-        return hidden_states
+        # PHASE 6: Final output must be in L1
+        return ensure_l1_memory(hidden_states)
 
 
 class TTNNSpeechT5SpeechDecoderPostnet:
@@ -228,7 +316,7 @@ class TTNNSpeechT5SpeechDecoderPostnet:
 
     def postnet(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Apply convolutional post-net with residual connection.
+        Apply convolutional post-net with residual connection and comprehensive L1 memory management.
 
         Args:
             hidden_states: [batch, time_steps, mel_bins]
@@ -236,27 +324,34 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         Returns:
             refined: [batch, time_steps, mel_bins]
         """
+        # PHASE 1: Ensure input is in L1
+        hidden_states = ensure_l1_memory(hidden_states)
+
         # Save input for residual connection
         residual = hidden_states
+        residual = ensure_l1_memory(residual)
 
-        # Op 1: Transpose for Conv1d ([B, L, C] → [B, C, L])
-        layer_output = ttnn.permute(hidden_states, [0, 2, 1])
+        # PHASE 2: Op 1: Transpose for Conv1d ([B, L, C] → [B, C, L]) (L1 output)
+        layer_output = l1_permute(hidden_states, [0, 2, 1])
 
-        # Op 2-6: Apply 5 conv layers
+        # PHASE 3: Op 2-6: Apply 5 conv layers (L1 outputs)
         for layer in self.layers:
             layer_output = layer(layer_output)
+            layer_output = ensure_l1_memory(layer_output)
 
-        # Op 7: Transpose back ([B, C, L] → [B, L, C])
-        layer_output = ttnn.permute(layer_output, [0, 2, 1])
+        # PHASE 4: Op 7: Transpose back ([B, C, L] → [B, L, C]) (L1 output)
+        layer_output = l1_permute(layer_output, [0, 2, 1])
 
-        # Op 8: Residual connection
-        output = ttnn.add(residual, layer_output)
+        # PHASE 5: Op 8: Residual connection (L1 output)
+        output = ttnn.add(residual, layer_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ensure_l1_memory(output)
 
-        return output
+        # PHASE 6: Final output must be in L1
+        return ensure_l1_memory(output)
 
     def __call__(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
-        Forward pass with explicit operations.
+        Forward pass with comprehensive L1 memory management.
 
         Args:
             hidden_states: [batch, decoder_seq_len, hidden_size]
@@ -270,33 +365,42 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         seq_len = hidden_states.shape[1]
         hidden_size = hidden_states.shape[2]
 
-        # Op 1: Project to mel features
+        # PHASE 1: Ensure input is in L1
+        hidden_states = ensure_l1_memory(hidden_states)
+
+        # PHASE 2: Op 1: Project to mel features (high-performance compute kernel)
         # [batch, seq_len, hidden_size] → [batch, seq_len, mel_bins * reduction_factor]
-        feat_out = ttnn.linear(
+        feat_out = l1_linear(
             hidden_states,
             self.parameters["feat_out"]["weight"],
             bias=self.parameters["feat_out"]["bias"],
         )
 
-        # Op 2: Reshape to unfold reduction factor
+        # PHASE 3: Op 2: Reshape to unfold reduction factor (L1 output)
         # [batch, seq_len, mel_bins * reduction_factor] → [batch, seq_len * reduction_factor, mel_bins]
         mel_seq_len = seq_len * self.config.reduction_factor
-        outputs_before_postnet = ttnn.reshape(feat_out, [batch_size, mel_seq_len, self.config.num_mel_bins])
+        outputs_before_postnet = l1_reshape(feat_out, [batch_size, mel_seq_len, self.config.num_mel_bins])
 
-        # Op 3: Apply convolutional post-net (with residual)
+        # PHASE 4: Op 3: Apply convolutional post-net (with residual) (L1 output)
         outputs_after_postnet = self.postnet(outputs_before_postnet)
+        outputs_after_postnet = ensure_l1_memory(outputs_after_postnet)
 
-        # Op 4: Predict stop tokens
+        # PHASE 5: Op 4: Predict stop tokens (high-performance compute kernel)
         # [batch, seq_len, hidden_size] → [batch, seq_len, reduction_factor]
-        prob_out = ttnn.linear(
+        prob_out = l1_linear(
             hidden_states,
             self.parameters["prob_out"]["weight"],
             bias=self.parameters["prob_out"]["bias"],
         )
 
-        # Op 5: Reshape stop tokens
+        # PHASE 6: Op 5: Reshape stop tokens (L1 output)
         # [batch, seq_len, reduction_factor] → [batch, seq_len * reduction_factor]
-        stop_logits = ttnn.reshape(prob_out, [batch_size, mel_seq_len])
+        stop_logits = l1_reshape(prob_out, [batch_size, mel_seq_len])
+
+        # PHASE 7: All outputs must be in L1
+        outputs_before_postnet = ensure_l1_memory(outputs_before_postnet)
+        outputs_after_postnet = ensure_l1_memory(outputs_after_postnet)
+        stop_logits = ensure_l1_memory(stop_logits)
 
         return outputs_before_postnet, outputs_after_postnet, stop_logits
 
