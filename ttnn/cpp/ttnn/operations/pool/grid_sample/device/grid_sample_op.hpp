@@ -44,17 +44,29 @@ struct GridSample {
 
 }  // namespace ttnn::operations::grid_sample
 
-// Program factory declaration
+// Program factory declarations
 namespace ttnn::operations::grid_sample {
 
-tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
+namespace nearest {
+tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factory(
     const Tensor& input_tensor,
     const Tensor& grid_tensor,
     const Tensor& output_tensor,
-    const std::string& mode,
     const std::string& padding_mode,
     bool align_corners,
     bool use_precomputed_grid,
     bool batch_output_channels);
+}
+
+namespace bilinear {
+tt::tt_metal::operation::ProgramWithCallbacks grid_sample_bilinear_program_factory(
+    const Tensor& input_tensor,
+    const Tensor& grid_tensor,
+    const Tensor& output_tensor,
+    const std::string& padding_mode,
+    bool align_corners,
+    bool use_precomputed_grid,
+    bool batch_output_channels);
+}
 
 }  // namespace ttnn::operations::grid_sample

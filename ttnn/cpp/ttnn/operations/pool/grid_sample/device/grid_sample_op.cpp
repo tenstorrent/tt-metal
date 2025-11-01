@@ -243,15 +243,27 @@ operation::ProgramWithCallbacks GridSample::create_program(
     const Tensor& grid_tensor = input_tensors.at(1);
     Tensor& output_tensor = output_tensors.at(0);
 
-    return grid_sample_program_factory(
-        input_tensor,
-        grid_tensor,
-        output_tensor,
-        mode_,
-        padding_mode_,
-        align_corners_,
-        use_precomputed_grid_,
-        batch_output_channels_);
+    if (mode_ == "nearest") {
+        return nearest::grid_sample_nearest_program_factory(
+            input_tensor,
+            grid_tensor,
+            output_tensor,
+            padding_mode_,
+            align_corners_,
+            use_precomputed_grid_,
+            batch_output_channels_);
+    } else if (mode_ == "bilinear") {
+        return bilinear::grid_sample_bilinear_program_factory(
+            input_tensor,
+            grid_tensor,
+            output_tensor,
+            padding_mode_,
+            align_corners_,
+            use_precomputed_grid_,
+            batch_output_channels_);
+    } else {
+        TT_FATAL(false, "Unsupported grid_sample mode: {}. Supported modes are 'nearest' and 'bilinear'.", mode_);
+    }
 }
 
 }  // namespace ttnn::operations::grid_sample
