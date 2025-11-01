@@ -7,6 +7,25 @@ import pytest
 import ttnn
 
 
+def create_full_range_tensor(input_shape, dtype, value_ranges):
+    num_elements = torch.prod(torch.tensor(input_shape)).item()
+
+    num_ranges = len(value_ranges)
+    elements_per_range = num_elements // num_ranges
+    remainder = num_elements % num_ranges
+
+    segments = []
+    for i, (low, high) in enumerate(value_ranges):
+        range_elements = elements_per_range + (1 if i < remainder else 0)
+
+        segment = torch.linspace(low, high, steps=range_elements, dtype=dtype)
+        segments.append(segment)
+
+    in_data = torch.cat(segments)
+    in_data = in_data.reshape(input_shape)
+    return in_data
+
+
 @pytest.mark.parametrize(
     "ttnn_op, value_ranges",
     [
@@ -28,16 +47,6 @@ import ttnn
                 (30000, 40000, 10000, 15000),
                 (50000, 55000, 1000, 2000),
                 (80000, 200000, 0, 70000),
-            ],
-        ),
-        (
-            ttnn.mul,
-            [
-                (0, 100, 0, 500),
-                (500, 1e3, 1e3, 1e4),
-                (1e4, 1e5, 1e5, 1e6),
-                (1e6, 1e7, 1, 1e2),
-                (0, 65535, 0, 65535),
             ],
         ),
     ],
@@ -120,7 +129,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
     [
         (ttnn.add, 0, 100, 100, 200),  # Addition: ranges don't overlap to avoid overflow
         (ttnn.sub, 50000, 100000, 0, 40000),  # Subtraction: ensure a > b for valid results
-        (ttnn.mul, 0, 100, 200, 300),
+        (ttnn.mul, 0, 23170, 23170, 46340),
     ],
 )
 @pytest.mark.parametrize(
@@ -384,6 +393,110 @@ def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
     assert torch.equal(z_torch, tt_out)
 
 
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 2, 32, 128])),),
+)
+def test_binary_mul_uint32(input_shapes, device):
+    value_ranges_a = [
+        (0, 100),  # Very small numbers
+        (500, 1e3),  # Small numbers
+        (1e4, 1e5),  # Medium numbers
+        (1e6, 1e7),  # Large numbers
+        (2e9, 2147483647),  # Very large numbers
+    ]
+
+    value_ranges_b = [
+        (0, 500),  # Very small numbers
+        (1e3, 1e4),  # Small numbers
+        (1e2, 1e4),  # Medium numbers
+        (1, 1e2),  # Small numbers to pair with large A values
+        (1, 1),  # 1 to pair with very large A values
+    ]
+
+    torch_input_tensor_a = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_a
+    )
+    torch_input_tensor_b = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),  # scalar bcast
+        pytest.param([(8, 1, 32), (8, 16, 32)], id="broadcast_lhs_3"),  # row bcast
+        pytest.param([(8, 16, 32), (8, 16, 1)], id="broadcast_rhs_5"),  # col bcast
+        pytest.param([(1, 16, 1), (8, 1, 32)], id="broadcast_both_5"),  # mixed bcast
+    ],
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (0, 46340),
+    ],
+)
+def test_binary_mul_uint32_bcast(input_shapes, low, high, device):
+    a_shape, b_shape = input_shapes
+
+    num_elements_a = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
+    torch_input_tensor_a = torch.linspace(low, high, num_elements_a, dtype=torch.int32)
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements_a].reshape(a_shape)
+
+    num_elements_b = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
+    torch_input_tensor_b = torch.linspace(low, high, num_elements_b, dtype=torch.int32)
+    torch_input_tensor_b = torch_input_tensor_b[:num_elements_b].reshape(b_shape)
+
+    golden_function = ttnn.get_golden_function(ttnn.mul)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
 # For inputs within int32 range [0, 2147483647]
 def test_binary_mul_uint32_lower_edge_cases(device):
     torch_input_tensor_a = torch.tensor([0, 1, 0, 2147483647, 1, 1073741823, 715827882, 46340])
@@ -440,5 +553,5 @@ def test_binary_mul_uint32_upper_edge_cases(device):
     output_tensor = ttnn.mul(input_tensor_a, input_tensor_b)
     # Since ttnn.to_torch does not support int64, we cannot compare with the torch output. We can manually check the outputs:
     # Torch output: tensor([4294967295, 4294967295, 0, 4294967294, 4294967294, 4294967295, 4294967040, 4294836225])
-    # TT output: ttnn.Tensor([4294967290, 4150000000, 4294967295, 4294967294, 4294967292, 4294967295, 4294967295],
+    # TT output: ttnn.Tensor([4294967295, 4294967295, 0, 4294967294, 4294967294, 4294967295, 4294967040, 4294836225],
     #               shape=Shape([8]), dtype=DataType::UINT32, layout=Layout::TILE)
