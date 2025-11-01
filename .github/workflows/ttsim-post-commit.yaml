@@ -149,6 +149,6 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: ${{ inputs.timeout }}
         run: |
-          ./build/test/tt_metal/unit_tests_noc --gtest_filter="MeshDispatchFixture.TestDynamicNoCOneProgram"
+          ./build/test/tt_metal/unit_tests_noc --gtest_filter="*StreamRegWrite*"
+          ./build/test/tt_metal/unit_tests_noc --gtest_filter="*InlineWrite*"
