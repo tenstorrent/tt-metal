@@ -322,6 +322,10 @@ void write_tensor(
 
 Tensor set_tensor_id(const Tensor& tensor);
 
+namespace operations {
+Tensor to_dtype(const Tensor& tensor, DataType dtype);
+}  // namespace operations
+
 }  // namespace tt_metal
 
 }  // namespace tt
