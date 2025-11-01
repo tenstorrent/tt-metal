@@ -148,12 +148,15 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
-template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header = {},
+    CommandHeaderT noc_unicast_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
@@ -178,12 +181,12 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
-template <UnicastWriteUpdateMask UpdateMask>
+template <UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header = {},
+    CommandHeaderT noc_unicast_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
@@ -314,11 +317,14 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
  */
 // clang-format on
-template <UnicastAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -338,11 +344,13 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
  */
 // clang-format on
-template <UnicastAtomicIncUpdateMask UpdateMask>
+template <
+    UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_unicast_noc_unicast_atomic_inc_with_state<UpdateMask>(
@@ -481,12 +489,15 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                       | False    |
  */
 // clang-format on
-template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header = {},
+    CommandHeaderT noc_unicast_scatter_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_scatter_write_fields<UpdateMask>(
@@ -512,12 +523,14 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
-template <UnicastScatterWriteUpdateMask UpdateMask>
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header = {},
+    CommandHeaderT noc_unicast_scatter_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
@@ -648,11 +661,14 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
  * | noc_unicast_inline_write_command_header | Inline write command header           | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
  */
 // clang-format on
-template <UnicastInlineWriteUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_inline_fields<UpdateMask>(packet_header, noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -672,11 +688,13 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
  * | noc_unicast_inline_write_command_header | Inline write command header        | tt::tt_fabric::NocUnicastInlineWriteCommandHeader  | False |
  */
 // clang-format on
-template <UnicastInlineWriteUpdateMask UpdateMask>
+template <
+    UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_unicast_noc_unicast_inline_write_with_state<UpdateMask>(
@@ -811,12 +829,15 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
  * | packet_size_bytes                         | Payload size override if masked        | uint16_t                                          | False    |
  */
 // clang-format on
-template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header = {},
+    CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_fused_atomic_inc_fields<UpdateMask>(
@@ -842,12 +863,14 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
  * | packet_size_bytes                         | Payload size override if masked        | uint16_t                                          | False    |
  */
 // clang-format on
-template <UnicastFusedAtomicIncUpdateMask UpdateMask>
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header = {},
+    CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
@@ -993,12 +1016,15 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
  * | packet_size_bytes          | Payload size override if masked         | uint16_t                                   | False    |
  */
 // clang-format on
-template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header = {},
+    CommandHeaderT noc_unicast_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
@@ -1023,12 +1049,12 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
  * | packet_size_bytes          | Payload size override if masked         | uint16_t                                  | False    |
  */
 // clang-format on
-template <UnicastWriteUpdateMask UpdateMask>
+template <UnicastWriteUpdateMask UpdateMask = UnicastWriteUpdateMask::None, typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header = {},
+    CommandHeaderT noc_unicast_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
@@ -1167,11 +1193,14 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
  */
 // clang-format on
-template <UnicastAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -1191,11 +1220,13 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
  */
 // clang-format on
-template <UnicastAtomicIncUpdateMask UpdateMask>
+template <
+    UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
+    CommandHeaderT noc_unicast_atomic_inc_command_header = nullptr) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_unicast_atomic_inc_with_state<UpdateMask>(
@@ -1351,12 +1382,15 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
-template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header = {},
+    CommandHeaderT noc_unicast_scatter_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_scatter_write_fields<UpdateMask>(
@@ -1382,12 +1416,14 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
-template <UnicastScatterWriteUpdateMask UpdateMask>
+template <
+    UnicastScatterWriteUpdateMask UpdateMask = UnicastScatterWriteUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header = {},
+    CommandHeaderT noc_unicast_scatter_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
@@ -1526,11 +1562,14 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
  * | noc_unicast_inline_write_command_header | Inline write command header   | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
  */
 // clang-format on
-template <UnicastInlineWriteUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_inline_fields<UpdateMask>(packet_header, noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -1550,11 +1589,13 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
  * | noc_unicast_inline_write_command_header | Inline write command header           | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
  */
 // clang-format on
-template <UnicastInlineWriteUpdateMask UpdateMask>
+template <
+    UnicastInlineWriteUpdateMask UpdateMask = UnicastInlineWriteUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
+    CommandHeaderT noc_unicast_inline_write_command_header = nullptr) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_unicast_inline_write_with_state<UpdateMask>(
@@ -1703,12 +1744,15 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
  * | packet_size_bytes                     | Payload size override if masked  | uint16_t                                          | False    |
  */
 // clang-format on
-template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
+    typename FabricSenderType,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header = {},
+    CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
     populate_unicast_fused_atomic_inc_fields<UpdateMask>(
@@ -1734,12 +1778,14 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
  * | packet_size_bytes                     | Payload size override if masked          | uint16_t                                     | False    |
  */
 // clang-format on
-template <UnicastFusedAtomicIncUpdateMask UpdateMask>
+template <
+    UnicastFusedAtomicIncUpdateMask UpdateMask = UnicastFusedAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
-    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header = {},
+    CommandHeaderT noc_fused_unicast_atomic_inc_command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
