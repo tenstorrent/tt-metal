@@ -116,7 +116,8 @@ protected:
     // Used when JitBuildSettings is not provided
     std::string default_linker_opt_level_;
 
-    void compile(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
+    bool need_compile(const std::string& out_dir, const std::string& obj) const;
+    size_t compile(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
     void compile_one(
         const std::string& log_file,
         const std::string& out_path,

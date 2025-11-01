@@ -27,6 +27,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
+#include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
 #include "jit_build_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -162,6 +163,7 @@ void JitBuildEnv::init(
 
     this->cflags_ = common_flags;
     this->cflags_ +=
+        "-MMD "
         "-fno-use-cxa-atexit "
         "-Wall -Werror -Wno-unknown-pragmas "
         "-Wno-deprecated-declarations "
@@ -393,7 +395,6 @@ void JitBuildState::compile_one(
     const string& src,
     const string& obj) const {
     // ZoneScoped;
-    fs::create_directories(out_dir);
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
@@ -458,17 +459,27 @@ void JitBuildState::compile_one(
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
     }
+    jit_build::write_dependency_hashes(out_dir, obj);
 }
 
-void JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
+bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
+    return MetalContext::instance().rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
+           !jit_build::dependencies_up_to_date(out_dir, obj);
+}
+
+size_t JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        launch_build_step(
-            [this, &log_file, &out_dir, settings, i] {
-                this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
-            },
-            events);
+        if (need_compile(out_dir, this->objs_[i])) {
+            launch_build_step(
+                [this, &log_file, &out_dir, settings, i] {
+                    this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
+                },
+                events);
+        } else {
+            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+        }
     }
 
     sync_events(events);
@@ -476,6 +487,7 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
+    return events.size();
 }
 
 void JitBuildState::link(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
@@ -537,9 +549,18 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
             tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
-        // Only interested in log entries with KERNEL_PROFILER inside them as device code
-        // tags source location info with it using pragma messages
-        string cmd = "cat " + log_file + " | grep KERNEL_PROFILER";
+        // Cache zone src locations to per-kernel location, so this info is not lost
+        // next time when the jit build cache is reused (no compile logs to look at).
+        auto cached_path = fs::path(log_file).replace_filename("zone_src_locations.txt");
+        std::string cmd;
+        if (fs::exists(cached_path)) {
+            // Append cached zone src locations to the new log
+            cmd = "cat " + cached_path.string();
+        } else {
+            // Only interested in log entries with KERNEL_PROFILER inside them as device code
+            // tags source location info with it using pragma messages
+            cmd = fmt::format("grep KERNEL_PROFILER {} | tee {}", log_file, cached_path.string());
+        }
         tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
     }
 }
@@ -550,16 +571,20 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                          ? this->out_path_ + this->target_name_ + "/"
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
+    fs::create_directories(out_dir);
     string log_file = out_dir + "build.log";
     if (fs::exists(log_file)) {
-        std::remove(log_file.c_str());
+        fs::resize_file(log_file, 0);
     }
-    compile(log_file, out_dir, settings);
-    link(log_file, out_dir, settings);
-    if (this->is_fw_) {
-        weaken(log_file, out_dir);
+    if (compile(log_file, out_dir, settings) > 0) {
+        link(log_file, out_dir, settings);
+        if (this->is_fw_) {
+            weaken(log_file, out_dir);
+        }
     }
 
+    // `extract_zone_src_locations` must be called every time, because it writes to a global file
+    // that gets cleared in each run.
     extract_zone_src_locations(log_file);
 }
 
