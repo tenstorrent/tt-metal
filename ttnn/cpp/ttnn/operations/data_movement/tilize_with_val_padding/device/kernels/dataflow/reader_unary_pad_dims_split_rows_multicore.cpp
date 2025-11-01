@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,10 +6,21 @@
 
 #include "dataflow_api.h"
 
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
+// Compile-time recursively calculates floor(log2(n))
+constexpr int log2(uint32_t n) { return (n <= 1) ? 0 : 1 + log2(n >> 1); }
+
+// This function is templated to choose the pointer data-type based on 'val' size
+// to avoid unaligned addresses and out-of-bounds access.
+template <uint32_t val_size>
+FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n_bytes, uint32_t val) {
+    using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
+
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(begin_addr);
+    IntType val_ = static_cast<IntType>(val);
+    constexpr uint32_t val_size_log2 = log2(val_size);
+    uint32_t n = n_bytes >> val_size_log2;  // = divup(n_bytes, sizeof(val))
     for (uint32_t i = 0; i < n; ++i) {
-        ptr[i] = val;
+        ptr[i] = val_;
     }
 }
 
@@ -19,7 +30,8 @@ void kernel_main() {
 
     constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(0);
     constexpr uint32_t unpadded_X_size = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t elem_size = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t padded_X_size = get_arg_val<uint32_t>(1);
@@ -37,7 +49,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, num_tiles_per_row);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
             // pad the tile by reading values from zero buffer in L1
-            fill_with_val(l1_write_addr, padded_X_size << 3, pad_value);
+            fill_with_val<elem_size>(l1_write_addr, padded_X_size << 5, pad_value);  // "<< 5" = "* tile_height"
             cb_push_back(cb_id_in0, num_tiles_per_row);
         }
     };
@@ -54,14 +66,14 @@ void kernel_main() {
             // Read from DRAM to tmp buffer
             noc_async_read(src_noc_addr, l1_write_addr, unpadded_X_size);
 
-            fill_with_val(l1_write_addr + unpadded_X_size, (padded_X_size - unpadded_X_size) >> 2, pad_value);
+            fill_with_val<elem_size>(l1_write_addr + unpadded_X_size, padded_X_size - unpadded_X_size, pad_value);
 
             // Block before copying data from tmp to cb buffer
             noc_async_read_barrier();
             l1_write_addr += padded_X_size;
         }
 
-        fill_with_val(l1_write_addr, padding_rows * (padded_X_size >> 2), pad_value);
+        fill_with_val<elem_size>(l1_write_addr, padding_rows * padded_X_size, pad_value);
         cb_push_back(cb_id_in0, num_tiles_per_row * has_rows);
     };
 
