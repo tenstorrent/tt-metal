@@ -166,7 +166,12 @@ int main(int argc, char** argv) {
             topology,
             routing_type,
             fabric_tensix_config);
-        test_context.open_devices(test_config.fabric_setup);
+
+        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
+        if (!open_devices_success) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
+            continue;
+        }
         device_opened = true;
 
         for (uint32_t iter = 0; iter < test_config.num_top_level_iterations; ++iter) {

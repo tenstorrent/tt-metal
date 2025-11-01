@@ -270,6 +270,7 @@ target_link_libraries(
         lite_fabric
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
+        TT::ScaleoutTools
 )
 
 target_precompile_headers(tt_metal REUSE_FROM TT::CommonPCH)
