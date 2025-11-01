@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import tt_sharded_distributed_rmsnorm, tt_distributed_rmsnorm
+from models.demos.llama3_70b_galaxy.tt.llama_ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
 
 
 class DistributedNorm(LightweightModule):
@@ -15,7 +15,10 @@ class DistributedNorm(LightweightModule):
         self.ccl_topology = ccl_topology
 
         if TG:
-            core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(2, 0)
+            if args.qk_norm:
+                core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
+            else:
+                core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(2, 0)
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
@@ -39,6 +42,11 @@ class DistributedNorm(LightweightModule):
                 inplace=False,
             )
             self.ln_sharded_stats_memcfg = None
+            # self.ln_sharded_stats_memcfg = ttnn.create_sharded_memory_config(
+            #     shape=[1, 1, 32, 32 * 4],
+            #     core_grid=ttnn.CoreGrid(y=1, x=1),
+            #     strategy=ttnn.ShardStrategy.WIDTH,
+            # )
             # ttnn.create_sharded_memory_config(
             #     shape=[1, 1, 32, 32 * 4],
             #     core_grid=ttnn.CoreGrid(y=1, x=1),

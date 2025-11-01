@@ -191,6 +191,7 @@ class TTSampling(LightweightModule):
             topk_global_indices_interleaved, use_multicore=True, sub_core_grids=self.args.sub_core_grids
         )
         ttnn.deallocate(topk_global_indices_interleaved)
+
         # Sampling
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,
