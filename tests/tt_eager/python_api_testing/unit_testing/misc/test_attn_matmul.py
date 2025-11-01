@@ -78,7 +78,8 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
 
             compute_grid_size = device.compute_with_storage_grid_size()
 
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
                 math_fidelity=ttnn.MathFidelity.LoFi,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
@@ -421,7 +422,8 @@ def test_group_attn_matmul_fp32(
         else:
             output_mem_config = interleaved_mem_config
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
