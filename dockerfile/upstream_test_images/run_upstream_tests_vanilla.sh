@@ -215,6 +215,41 @@ test_suite_bh_ttnn_stress_tests() {
     pytest tests/ttnn/stress_tests/
 }
 
+test_suite_bh_glx_metal_unit_tests() {
+    echo "[upstream-tests] running BH GLX upstream metal unit tests"
+    # Fabric
+    ./build/test/tt_metal/tt_fabric/test_system_health
+    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*"
+    RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*"
+    # RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+    # RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_6U_galaxy.yaml
+
+    # Dispatch
+    build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=**RandomProgram**
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeL1ReadWrites
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardBufferFixture.ShardedBufferLargeDRAMReadWrites
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestSubDeviceAllocations
+    build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQMultiDeviceEventFixture.*
+    build/test/tt_metal/unit_tests_device --gtest_filter=UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1
+}
+
+test_suite_bh_glx_python_unit_tests() {
+    echo "[upstream-tests] running BH GLX upstream python unit tests"
+    # CCL / Ops
+    pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_mesh.py
+}
+
+test_suite_bh_glx_llama_demo_tests() {
+    echo "[upstream-tests] running BH GLX upstream Llama demo tests with weights"
+
+    verify_llama_dir_
+
+    # Skipped due to https://github.com/tenstorrent/tt-metal/issues/28342
+    # pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
+    # pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 32 --max_generated_tokens 220
+}
+
 # Define test suite mappings for different hardware topologies
 declare -A hw_topology_test_suites
 
@@ -268,6 +303,11 @@ test_suite_wh_6u_metal_qsfp_links_health_check_tests"
 
 hw_topology_test_suites["blackhole_ttnn_stress_tests"]="
 test_suite_bh_ttnn_stress_tests"
+
+hw_topology_test_suites["blackhole_glx"]="
+test_suite_bh_glx_metal_unit_tests
+test_suite_bh_glx_python_unit_tests
+test_suite_bh_glx_llama_demo_tests"
 
 # Function to display help
 show_help() {
