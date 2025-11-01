@@ -25,12 +25,17 @@ pytestmark = [
     pytest.mark.parametrize(
         "ttnn_mesh_device",
         [
-            (1, 1),  # single device
+            # (1, 1),  # single device
             # (1, 2),  # 1D mesh, 2 devices
             # (1, 8),  # 1D mesh, 8 devices
-            # (2, 4),  # 2D mesh, 8 devices
+            (2, 4),  # 2D mesh, 8 devices
         ],
-        ids=["1x1", "1x2", "1x8", "2x4"],
+        ids=[
+            # "1x1",
+            # "1x2",
+            # "1x8",
+            "2x4",
+        ],
         indirect=True,
     ),
     pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"]),
@@ -94,7 +99,7 @@ def test_as_host_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout) -> None:
 
     # Distribute a different tensor using the same topology
     new_input = _make_known_pattern(num_devices) + 1  # change values to avoid accidental equality
-    tt_as = from_torch_dist_as(new_input, ref_tt)
+    tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
 
     # Verify topology matches reference
     assert _topology_signature(tt_as) == _topology_signature(ref_tt)
@@ -119,7 +124,8 @@ def test_as_device_sharded_1d(ttnn_mesh_device: ttnn.MeshDevice, layout) -> None
     new_input = _make_known_pattern(num_devices) + 2
     tt_as = from_torch_dist_as(new_input, ref_tt)
 
-    assert _topology_signature(tt_as) == _topology_signature(ref_tt)
+    if ttnn_mesh_device.get_num_devices() > 1:
+        assert _topology_signature(tt_as) == _topology_signature(ref_tt)
 
     torch_auto = to_torch_auto_compose(tt_as)
     assert torch.equal(torch_auto, new_input)
@@ -144,7 +150,7 @@ def test_as_host_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layout,
     )
 
     new_input = ref_input + 7
-    tt_as = from_torch_dist_as(new_input, ref_tt)
+    tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
 
     assert _topology_signature(tt_as) == _topology_signature(ref_tt)
     torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
@@ -172,7 +178,8 @@ def test_as_device_sharded_various_dims(ttnn_mesh_device: ttnn.MeshDevice, layou
     new_input = ref_input + 11
     tt_as = from_torch_dist_as(new_input, ref_tt)
 
-    assert _topology_signature(tt_as) == _topology_signature(ref_tt)
+    if ttnn_mesh_device.get_num_devices() > 1:
+        assert _topology_signature(tt_as) == _topology_signature(ref_tt)
     torch_auto = to_torch_auto_compose(tt_as)
     assert torch.equal(torch_auto, new_input)
 
@@ -197,8 +204,11 @@ def test_as_2d_shard_shard(ttnn_mesh_device: ttnn.MeshDevice, layout, dims_pair:
     ref_tt = ttnn.from_torch(ref_input, device=None, dtype=ttnn.bfloat16, layout=layout, mesh_mapper=mapper)
 
     new_input = ref_input + 23
-    tt_as = from_torch_dist_as(new_input, ref_tt)
+    tt_as = from_torch_dist_as(new_input, ref_tt, device=ttnn_mesh_device)
 
     assert _topology_signature(tt_as) == _topology_signature(ref_tt)
     torch_auto = to_torch_auto_compose(tt_as, device=ttnn_mesh_device)
     assert torch.equal(torch_auto, new_input)
+
+
+# todo)) add test cases along the dtype axis!

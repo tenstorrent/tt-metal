@@ -16,7 +16,9 @@ import ttnn
 from .auto_compose import extract_tensor_topology_info, get_device_from_tensor
 
 
-def from_torch_dist_as(from_tensor_pt: torch.Tensor, as_tensor_tt: ttnn.Tensor) -> ttnn.Tensor:
+def from_torch_dist_as(
+    from_tensor_pt: torch.Tensor, as_tensor_tt: ttnn.Tensor, device: Optional[ttnn.MeshDevice] = None
+) -> ttnn.Tensor:
     """
     Distribute a torch.Tensor over a mesh using the same topology as an existing TTNN tensor.
 
@@ -27,29 +29,24 @@ def from_torch_dist_as(from_tensor_pt: torch.Tensor, as_tensor_tt: ttnn.Tensor) 
     Returns:
         A TTNN tensor distributed according to `tensor_tt`'s topology.
     """
-    mapper, mesh_device = _infer_mesh_mapper_from_topology(as_tensor_tt)
+    mapper, device = _infer_mesh_mapper_from_topology(as_tensor_tt, device=device)
 
-    # If trivial (single-device / no distribution), just place on the device without a mapper
-    if mapper is None:
-        return ttnn.from_torch(
-            from_tensor_pt,
-            dtype=getattr(as_tensor_tt, "dtype", None),
-            layout=getattr(as_tensor_tt, "layout", None),
-            device=mesh_device,
-        )
-
+    # Usage Patterns: unlike ttnn.to_torch, `device` is required here!
+    # Pattern 1: Using mesh_mapper without device (tensor stays in host memory) Programming_Mesh_of_Devices_with_TT-NN.md:370-375
+    # Then transfer to device separately: Programming_Mesh_of_Devices_with_TT-NN.md:404-405
+    # Pattern 2: Using both mesh_mapper and device together (direct to device) llms.md:1204-1218
     return ttnn.from_torch(
         from_tensor_pt,
         dtype=getattr(as_tensor_tt, "dtype", None),
         layout=getattr(as_tensor_tt, "layout", None),
-        device=mesh_device,
+        device=device,
         mesh_mapper=mapper,
     )
 
 
 def _infer_mesh_mapper_from_topology(
     tensor: ttnn.Tensor, *, device: Optional[ttnn.MeshDevice] = None
-) -> tuple[Optional[ttnn.CppTensorToMesh], ttnn.MeshDevice]:
+) -> Optional[ttnn.CppTensorToMesh]:
     """
     Return a TensorToMesh mapper inferred from the tensor's TensorTopology,
     or (None, mesh_device) if no distribution is needed (fully replicated, single-device).
