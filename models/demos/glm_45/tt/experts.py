@@ -282,6 +282,8 @@ class Experts:
         )
         rw_rm = ttnn.to_layout(rw_2d, ttnn.ROW_MAJOR_LAYOUT)
         sparsity = ttnn.reshape(rw_rm, (1, tokens_total, self.num_experts))
+        # Binary mask for expert selection (top-k), used in gate/up to avoid early weighting
+        mask = ttnn.gt(sparsity, 0.0)
 
         # Program config: mirror smoke3 (1D multicast, in0 multicast)
         output_tile = ttnn.Tile([32, 32])
@@ -305,7 +307,7 @@ class Experts:
         gate = ttnn.sparse_matmul(
             tokens_3d,
             self.gate_proj,
-            sparsity=sparsity,
+            sparsity=mask,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             # program_config=pc,
@@ -315,7 +317,7 @@ class Experts:
         up = ttnn.sparse_matmul(
             tokens_3d,
             self.up_proj,
-            sparsity=sparsity,
+            sparsity=mask,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
         )
