@@ -39,12 +39,13 @@ class MeshConfig:
             raise ValueError(f"TP({tp}) > mesh_{tp_axis}_size({tp_dim_size})")
 
     def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None):
-        """Unified 2D sharding - replaces all individual mappers"""
+        """Unified 2D sharding using correct argument order for ShardTensor2dMesh"""
         if mesh_dims is None:
             # Default: shard along TP axis only
             mesh_dims = (None, tensor_dim) if self.tp_axis == 1 else (tensor_dim, None)
 
-        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
+        # Use named arguments to avoid positional-order mistakes
+        return ttnn.ShardTensor2dMesh(dims=mesh_dims, mesh_shape=mesh_device.shape, mesh_device=mesh_device)
 
     # Clean semantic helpers (all use unified shard_mapper)
     def column_parallel(self, mesh_device):

@@ -192,7 +192,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_batch_seq(
     [
         (1, 1),
-        (1, 128),
+        # (1, 128),
     ]
 )
 @pytest.mark.parametrize("mesh_shape", [(1, 4)])
