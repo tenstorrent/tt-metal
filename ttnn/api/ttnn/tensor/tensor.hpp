@@ -32,6 +32,17 @@
 #include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
 
+// Forward declarations for friend access
+namespace ttnn {
+namespace operations {
+namespace core {
+struct GetTensorId;
+struct SetTensorId;
+struct FetchAndIncrementTensorId;
+}  // namespace core
+}  // namespace operations
+}  // namespace ttnn
+
 namespace tt {
 
 namespace tt_metal {
@@ -43,7 +54,7 @@ class MeshCommandQueue;
 
 class Tensor {
 public:
-    std::optional<std::int64_t> tensor_id = std::nullopt;
+    std::uint64_t tensor_id;
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
@@ -57,7 +68,7 @@ public:
     // ======================================================================================
     //                                  Hi Level APIs
     // ======================================================================================
-    [[nodiscard]] explicit Tensor() = default;
+    [[nodiscard]] explicit Tensor() : tensor_id(0) {}
     [[nodiscard]] Tensor(const Tensor& other);
     [[nodiscard]] Tensor(Tensor&& other) noexcept = default;
     Tensor& operator=(const Tensor& other);
@@ -266,7 +277,13 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
+    friend struct ttnn::operations::core::GetTensorId;
+    friend struct ttnn::operations::core::SetTensorId;
+    friend struct ttnn::operations::core::FetchAndIncrementTensorId;
+
 private:
+    static std::atomic<std::uint64_t> tensor_id_counter;
+
     void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
