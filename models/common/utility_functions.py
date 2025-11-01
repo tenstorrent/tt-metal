@@ -1098,18 +1098,6 @@ def skip_for_slow_dispatch(reason_str="not working for slow dispatch"):
     return ti_skip(is_slow_dispatch(), reason=reason_str)
 
 
-def get_devices_for_t3000(all_devices, num_devices):
-    """
-    all_devices comes from fixture which devices in order from 0 to 7.
-    """
-    assert num_devices <= len(all_devices), "Not enough devices detected!"
-
-    if num_devices <= 4 or num_devices == 8:
-        return all_devices[:num_devices]
-    else:
-        raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")
-
-
 def ttl_complex_2_torch_complex(tt_tensor):
     torch_tensor = tt2torch_tensor(tt_tensor)
 
