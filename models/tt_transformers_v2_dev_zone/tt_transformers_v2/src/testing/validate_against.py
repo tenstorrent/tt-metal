@@ -59,6 +59,7 @@ def device_validate_against(
     *,
     metric_tolerances: Optional[Dict[Any, Any]] = None,
     enabled: bool = True,
+    raise_exceptions: bool = False,
 ):
     """
     Convenience wrapper for TTNN-on-device comparison. This is the most useful when the reference function is a TTNN-native function.
@@ -74,6 +75,7 @@ def device_validate_against(
         output_map=None,
         metric_tolerances=metric_tolerances,
         enabled=enabled,
+        raise_exceptions=raise_exceptions,
     )
 
 
@@ -84,6 +86,7 @@ def host_validate_against(
     output_to_torch: Optional[Callable] = None,
     metric_tolerances: Optional[Dict[Any, Any]] = None,
     enabled: bool = True,
+    raise_exceptions: bool = False,
 ):
     """
     Convenience wrapper for host/CPU comparison using torch.
@@ -130,6 +133,7 @@ def host_validate_against(
         output_map=output_to_torch or _default_output_map,
         metric_tolerances=metric_tolerances,
         enabled=enabled,
+        raise_exceptions=raise_exceptions,
     )
 
 
@@ -351,7 +355,6 @@ def _prepare_metric_config(metric_tolerances_input):
 
 # todo)) add capability to run the reference function instead of the decorated function on a per-module basis!
 
-# todo)) add a flag to make all exceptions in validate_against to raise instead of just logging!
 
 # todo)) also allow raise an exception from the a failed metric!
 
@@ -378,6 +381,7 @@ def __validate_against(
     output_map: Optional[Callable] = None,
     metric_tolerances: Optional[Dict[Any, Any]] = None,
     enabled: bool = True,
+    raise_exceptions: bool = False,
 ):
     """
     Decorator to validate a function against a reference implementation.
@@ -398,6 +402,9 @@ def __validate_against(
               - MetricSpec instance
             Validation fails if any metric exceeds its tolerance
         enabled: Whether validation is enabled (can disable globally via registry)
+        raise_exceptions: When True, re-raise any exceptions encountered during
+            reference execution, output mapping, or metric computation instead
+            of logging them into validation results.
 
     Examples:
         # Pattern 1: TTNN-native metrics (recommended, 100-1000× faster!)
@@ -449,7 +456,28 @@ def __validate_against(
             if input_map:
                 _nm = getattr(input_map, "__name__", None) or type(input_map).__name__
                 logs.append(f"input_map={_nm}")
-                mapped = input_map(*args, **kwargs)
+                try:
+                    mapped = input_map(*args, **kwargs)
+                except Exception as e:
+                    # If input mapping fails, log error, record result, and return impl output
+                    logs.append(f"input_mapping_error={str(e)}")
+                    result = ValidationResult(
+                        function_name=f"{func.__module__}.{func.__qualname__}",
+                        passed=False,
+                        metrics={
+                            "input_mapping": MetricResult(
+                                value=None, passed=False, error=f"Input mapping failed: {str(e)}"
+                            )
+                        },
+                        execution_time_impl=impl_time,
+                        execution_time_ref=0.0,
+                        logs=logs,
+                    )
+                    _validation_registry.add_result(result)
+                    # Re-raise exception if raise_exceptions is True
+                    if raise_exceptions:
+                        raise
+                    return impl_output
                 # Normalize mapper output:
                 # - If (ref_args, ref_kwargs) with kwargs as dict, use directly
                 # - Otherwise, treat return as positional args and use empty kwargs
@@ -485,6 +513,9 @@ def __validate_against(
                     logs=logs,
                 )
                 _validation_registry.add_result(result)
+                # Re-raise exception if raise_exceptions is True
+                if raise_exceptions:
+                    raise
                 return impl_output
 
             # Map outputs for comparison
@@ -509,6 +540,9 @@ def __validate_against(
                     logs=logs,
                 )
                 _validation_registry.add_result(result)
+                # Re-raise exception if raise_exceptions is True
+                if raise_exceptions:
+                    raise
                 return impl_output
 
             # Compute metrics
@@ -547,17 +581,16 @@ def __validate_against(
                             err = f"{metric_name}={value:.6e} exceeds tolerance {threshold:.6e}"
                         computed_metrics[metric_key] = MetricResult(value=value, passed=ok, error=err)
                 except Exception as e:
+                    if raise_exceptions:
+                        raise
                     msg = f"Metric {metric_name} failed: {str(e)}"
                     computed_metrics[metric_key] = MetricResult(value=None, passed=False, error=msg)
                     passed = False
 
             # Record results
-            try:
-                pass_count = sum(1 for v in computed_metrics.values() if v.passed)
-                fail_count = sum(1 for v in computed_metrics.values() if not v.passed)
-                logs.append(f"metrics={pass_count}_pass,{fail_count}_fail")
-            except Exception:
-                pass
+            pass_count = sum(1 for v in computed_metrics.values() if v.passed)
+            fail_count = sum(1 for v in computed_metrics.values() if not v.passed)
+            logs.append(f"metrics={pass_count}_pass,{fail_count}_fail")
             result = ValidationResult(
                 function_name=f"{func.__module__}.{func.__qualname__}",
                 passed=passed,

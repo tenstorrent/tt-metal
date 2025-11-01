@@ -390,6 +390,47 @@ def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
     assert registry.results[-1].passed
 
 
+def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDevice):
+    """When raise_exceptions=True, reference exceptions should propagate and not record results."""
+    registry = get_validation_registry()
+    before = len(registry.results)
+
+    a = torch.randn(1, 8, 8, dtype=torch.bfloat16)
+    b = torch.randn(1, 8, 8, dtype=torch.bfloat16)
+    a_tt = ttnn.from_torch(a.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    def _ref_raises(a, b):
+        pass
+
+    # [INFO] make a mismatched signature on reference function to force the reference function to raise an exception!
+    @host_validate_against(reference_fn=lambda a, b, c: _ref_raises(a, b), raise_exceptions=True)
+    def _matmul(a, b):
+        return ttnn.matmul(a, b)
+
+    with pytest.raises(TypeError) as e:
+        _ = _matmul(a_tt, b_tt)
+    assert "missing 1 required positional argument: 'c'" in str(e.value)
+
+    # [INFO] make a mismatched signature on output_to_torch to force the reference function to raise an exception!
+    @host_validate_against(reference_fn=lambda a, b: ..., output_to_torch=lambda x, y: ..., raise_exceptions=True)
+    def _matmul_too(a, b):
+        return ttnn.matmul(a, b)
+
+    with pytest.raises(TypeError) as e:
+        _ = _matmul_too(a_tt, b_tt)
+    assert "missing 1 required positional argument: 'y'" in str(e.value)
+
+    # [INFO] make a mismatched signature on input_to_torch to force the reference function to raise an exception!
+    @host_validate_against(reference_fn=lambda a, b: ..., input_to_torch=lambda x: ..., raise_exceptions=True)
+    def _matmul_three(a, b):
+        return ttnn.matmul(a, b)
+
+    with pytest.raises(TypeError) as e:
+        _ = _matmul_three(a_tt, b_tt)
+    assert "takes 1 positional argument but 2 were given" in str(e.value)
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _print_validation_report_after_module(request):
     # Runs once after all tests in this module finish
