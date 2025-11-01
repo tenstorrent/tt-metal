@@ -11,20 +11,11 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import comp_pcc, is_blackhole, run_for_blackhole
+from models.common.utility_functions import comp_pcc, run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 
 
-# Helper function to get welford parameters based on device type
-def get_welford_params():
-    """Return welford parameters - only legacy mode for Blackhole, both modes for other devices"""
-    if is_blackhole():
-        return (False,), ("legacy",)
-    else:
-        return (True, False), ("welford", "legacy")
-
-
-welford_flavors, welford_ids = get_welford_params()
+welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
 
 # for debug purpose
