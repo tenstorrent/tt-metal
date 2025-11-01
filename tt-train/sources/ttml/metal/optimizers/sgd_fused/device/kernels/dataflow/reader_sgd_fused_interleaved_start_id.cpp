@@ -13,8 +13,11 @@ constexpr auto cb_param_in_idx = tt::CBIndex::c_0;
 constexpr auto cb_grad_idx = tt::CBIndex::c_1;
 constexpr auto cb_momentum_in_idx = tt::CBIndex::c_2;
 
+constexpr auto cb_bcast_lr_idx = tt::CBIndex::c_12;
+constexpr auto cb_bcast_momentum_idx = tt::CBIndex::c_13;
+constexpr auto cb_bcast_dampening_idx = tt::CBIndex::c_14;
+constexpr auto cb_bcast_wd_idx = tt::CBIndex::c_15;
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
-constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
 template <typename AddrGen>
 inline void read_tiles(
@@ -37,22 +40,31 @@ void kernel_main() {
     uint32_t runtime_args_counter = 0;
     const uint32_t param_in_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t grad_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    const uint32_t momentum_in_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t momentum_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_lr = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_momentum = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_dampening = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t packed_wd = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t num_tiles_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_size_bytes = get_tile_size(cb_param_in_idx);
 
-    constexpr auto param_in_args = TensorAccessorArgs<2U>();
+    constexpr auto param_in_args = TensorAccessorArgs<1U>();
     constexpr auto grad_args = TensorAccessorArgs<param_in_args.next_compile_time_args_offset()>();
-    constexpr auto momentum_in_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
 
     const auto param_in_addr_gen = TensorAccessor(param_in_args, param_in_addr, tile_size_bytes);
     const auto grad_addr_gen = TensorAccessor(grad_args, grad_addr, tile_size_bytes);
 #if USE_MOMENTUM
-    const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_in_addr, tile_size_bytes);
+    constexpr auto momentum_in_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
+    const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_addr, tile_size_bytes);
 #endif
+
+    generate_tile_with_packed_bfloat16_value(cb_bcast_lr_idx, packed_lr);
+    generate_tile_with_packed_bfloat16_value(cb_bcast_momentum_idx, packed_momentum);
+    generate_tile_with_packed_bfloat16_value(cb_bcast_dampening_idx, packed_dampening);
+    generate_tile_with_packed_bfloat16_value(cb_bcast_wd_idx, packed_wd);
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {
