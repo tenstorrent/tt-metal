@@ -161,7 +161,7 @@ void MAIN {
             copy_tile(cb_tanh_exp, 0, 2);
             where_tile_init();
 #ifdef TANH_FP32
-            where_fp32_tile(0, 1, 2, 0);
+            where_fp32_tile(0, 1, 2);
             copy_dest_values(1, 0);
             copy_tile_init(cb_input);
             copy_tile(cb_input, 0, 0);
@@ -169,7 +169,7 @@ void MAIN {
             sub_binary_tile(0, 1, 0);
 #endif
 #ifdef TANH_BF16
-            where_tile(0, 1, 2, 0);
+            where_tile(0, 1, 2);
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_input);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                 cb_input, 0, 0);
