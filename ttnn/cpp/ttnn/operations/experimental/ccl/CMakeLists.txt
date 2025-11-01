@@ -73,6 +73,9 @@ target_sources(
         all_to_all_async/all_to_all_async.cpp
         all_to_all_async/device/all_to_all_program_factory.cpp
         all_to_all_async/device/all_to_all_async_op.cpp
+        all_to_all_async_generic/all_to_all_async_generic.cpp
+        all_to_all_async_generic/device/all_to_all_program_factory.cpp
+        all_to_all_async_generic/device/all_to_all_async_generic_op.cpp
         all_reduce_async/all_reduce_async.cpp
         all_gather_concat_heads_fused/all_gather_concat.cpp
         all_gather_concat_heads_fused/device/all_gather_concat_op.cpp

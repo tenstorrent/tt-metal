@@ -5,6 +5,7 @@
 #include "all_to_all_async.hpp"
 #include <utility>
 #include "ttnn/operations/experimental/ccl/all_to_all_async/device/all_to_all_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_op.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -31,17 +32,35 @@ ttnn::Tensor ExecuteAllToAllAsync::invoke(
             input_tensor, in_dim, out_dim, num_links, memory_config, subdevice_id);
         return persistent_output_buffer;
     } else {
-        return ttnn::operations::experimental::ccl::all_to_all_async(
-            input_tensor,
-            persistent_intermediate_buffer,
-            persistent_output_buffer,
-            in_dim,
-            out_dim,
-            multi_device_global_semaphore,
-            num_links,
-            memory_config,
-            topology,
-            subdevice_id);
+        auto input_shape = input_tensor.logical_shape();
+        auto rank = input_shape.rank();
+        uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
+
+        if (rank == 4 && ((in_dim == 2 && out_dim == 3 && (input_shape[out_dim] / num_devices) % 32 == 0) ||
+                          (in_dim == 3 && out_dim == 2 && input_shape[in_dim] % 32 == 0))) {
+            return ttnn::operations::experimental::ccl::all_to_all_async(
+                input_tensor,
+                persistent_intermediate_buffer,
+                persistent_output_buffer,
+                in_dim,
+                out_dim,
+                multi_device_global_semaphore,
+                num_links,
+                memory_config,
+                topology,
+                subdevice_id);
+        } else {
+            std::optional<ttnn::Tensor> optional_persistent_output_buffer = persistent_output_buffer;
+            return ttnn::operations::experimental::ccl::all_to_all_async_generic(
+                input_tensor,
+                optional_persistent_output_buffer,
+                in_dim,
+                out_dim,
+                num_links,
+                memory_config,
+                topology,
+                subdevice_id);
+        }
     }
 }
 
