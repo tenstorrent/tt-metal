@@ -294,69 +294,11 @@ def dram_group_norm_params_from_torch(
 
     tt_params = tt_params[0] if isinstance(torch_params, torch.Tensor) else tt_params
     if return_mask:
-        torch_mask = ttnn.create_group_norm_input_mask(channels_per_device, groups_per_device, num_virtual_cols)
-        tt_mask = ttnn.from_torch(torch_mask, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        tt_mask = ttnn.create_group_norm_input_mask(channels_per_device, groups_per_device, num_virtual_cols, dtype)
+        tt_mask = ttnn.to_device(tt_mask, device)
         return tt_params, tt_mask
     else:
         return tt_params
-
-
-def find_max_tile_span(W, group_size, tile_width):
-    """Finds the maximum (worst case) number of tiles a group of size group_size can span across.
-    This helps in setting the mask width conservatively.
-    """
-    current_position = 0
-    max_tile_span = 0
-
-    while current_position < W:
-        group_end = current_position + group_size
-        start_tile = current_position // tile_width
-        end_tile = (group_end - 1) // tile_width
-        current_tile_span = end_tile - start_tile + 1
-        max_tile_span = max(max_tile_span, current_tile_span)
-        current_position = group_end
-    return max_tile_span
-
-
-def create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=False):
-    """Create 4D mask [1, num_groups, 32, 32*block_wt] used by group norm.
-
-    - block_wt is computed from worst-case tile span across groups.
-    - num_cores_across_channel splits groups evenly across cores (must divide num_groups).
-    """
-    import torch
-
-    block_wt = find_max_tile_span(num_channel, num_channel // num_groups, 32)
-    if is_negative_mask == False:
-        input_mask_tensor = torch.zeros((1, num_groups, 32, int(32 * block_wt)), dtype=torch.bfloat16)
-    else:
-        input_mask_tensor = torch.ones((1, num_groups, 32, int(32 * block_wt)), dtype=torch.bfloat16)
-
-    num_groups_per_core = num_groups // num_cores_across_channel
-    num_cols_per_group = num_channel // num_groups
-
-    start_strides = []
-    for _ in range(num_cores_across_channel):
-        row_offset = 0
-        start_strides.append(0)
-        for _ in range(num_groups_per_core - 1):
-            if row_offset + (num_cols_per_group % 32) == 32:
-                row_offset = 0
-            elif row_offset + (num_cols_per_group % 32) > 32:
-                row_offset = (num_cols_per_group % 32) + row_offset - 32
-            else:
-                row_offset += num_cols_per_group % 32
-            start_strides.append(row_offset)
-        end_strides = [i + num_cols_per_group for i in start_strides]
-
-    mask_val = 1 if is_negative_mask == False else 0
-    for group in range(num_groups):
-        start_stride = start_strides[group]
-        end_stride = end_strides[group]
-        end_stride = min(end_stride, input_mask_tensor.shape[3])
-        input_mask_tensor[:, group, :, start_stride:end_stride] = mask_val
-
-    return input_mask_tensor
 
 
 def create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid):
@@ -395,14 +337,6 @@ def create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid):
 
     # Repeat the reciprocals tensor for each core so they all have identical copies
     return reciprocals_tensor.repeat(core_grid.x * core_grid.y, 1)
-
-
-def create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel):  #
-    return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=False)
-
-
-def create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel):
-    return create_group_norm_mask_impl(num_channel, num_groups, num_cores_across_channel, is_negative_mask=True)
 
 
 def create_group_norm_reciprocals(N, C, H, W, num_groups, core_grid):
