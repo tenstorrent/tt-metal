@@ -50,7 +50,7 @@ if [[ "$PROFILE" == "loudboxes" ]]; then
     RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5loudboxes/rank_bindings.yaml}"
 elif [[ "$PROFILE" == "galaxies" ]]; then
     USER="${USER:-local-rfurko}"
-    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama7b_pp_fabric_galaxy.yaml}"
+    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama8b_pp_fabric_galaxy.yaml}"
     HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5galaxies/hosts.txt}"
     RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5galaxies/rank_bindings.yaml}"
     MPI_EXTRA_ARGS="${MPI_EXTRA_ARGS:---allow-run-as-root --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0}"
