@@ -2048,18 +2048,20 @@ constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
 void wait_for_other_local_erisc() {
     constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
-    constexpr uint32_t multi_erisc_sync_step2_value = 0x1fed;
+    constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
     if constexpr (IS_TEARDOWN_MASTER()) {
-        init_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
-        while (get_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() != multi_erisc_sync_step2_value) {
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
+               multi_erisc_sync_step2_value) {
             invalidate_l1_cache();
         }
-        init_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
     } else {
-        while (get_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() != multi_erisc_sync_start_value) {
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
+               multi_erisc_sync_start_value) {
             invalidate_l1_cache();
         }
-        init_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
     }
 }
 

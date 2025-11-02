@@ -348,10 +348,6 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
-
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 

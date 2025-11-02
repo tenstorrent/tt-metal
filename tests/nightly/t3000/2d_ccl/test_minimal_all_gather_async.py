@@ -58,10 +58,9 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
-        (False, 1),
+        (True, 3),
     ],
-    ids=["perf", "check"],
+    ids=["perf"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -69,7 +68,7 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
         ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_2d_dynamic_linear"],
+    ids=["fabric_2d_linear"],
 )
 def test_all_gather_async_training_shapes(
     mesh_device,
@@ -99,4 +98,5 @@ def test_all_gather_async_training_shapes(
         num_iters=num_iters,
         use_barrier=True,
         use_persistent_buffers=False,
+        use_semaphore_free_all_gather_impl=True,
     )

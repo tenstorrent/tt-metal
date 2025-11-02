@@ -26,10 +26,16 @@ TIMEOUT = 45
 
 NUM_DEVICES = ttnn.get_num_devices()
 
-FABRIC_CONFIGS = [
+FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
 ]
+
+FABRIC_CONFIGS_2D = [
+    ttnn.FabricConfig.FABRIC_2D,
+]
+
+FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
 
 LEAD_MODEL_SHARD_SPECS = [
     get_serializable_shard_specs(
@@ -79,27 +85,32 @@ LEAD_MODEL_SHARD_SPECS = [
     ),
 ]
 
+GENERALITY_PARAMETERS = {
+    "mesh_shape": list(mesh_shape_iterator(NUM_DEVICES)),
+    "fabric_config": FABRIC_CONFIGS,
+    "num_links": [1],
+    "input_shape": [
+        [1, 1, 32, 256],
+        [1, 1, 32, 248],
+        [1, 1, 1, 32, 256],
+        [2, 32, 256],
+        [1, 1, 32, 16384],
+    ],
+    "dim": [0, 1, 2, 3, 4],
+    "cluster_axis": [0, 1, None],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "input_dtype": [ttnn.bfloat16],
+    "buffer_type": [ttnn.BufferType.DRAM],
+    "shard_specs": [None],
+    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+    "num_iters": [1],
+}
+
+
 parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
-        "input_shape": [
-            [1, 1, 32, 256],
-            [1, 1, 32, 248],
-            [1, 1, 1, 32, 256],
-            [2, 32, 256],
-            [1, 1, 32, 16384],
-        ],
-        "dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "buffer_type": [ttnn.BufferType.DRAM],
-        "shard_specs": [None],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
+    "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
+    "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
+    "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
     "lead_model_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": FABRIC_CONFIGS,

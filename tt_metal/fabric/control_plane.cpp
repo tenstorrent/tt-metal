@@ -322,6 +322,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
         std::vector<MeshId> local_mesh_ids;
         for (const auto& mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            // TODO: #24528 - Move this to use TopologyMapper once Topology mapper works for multi-mesh systems
             const auto& host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
             TT_FATAL(
                 host_ranks.size() == 1 && *host_ranks.values().front() == 0,
@@ -439,7 +440,8 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
@@ -454,8 +456,33 @@ void ControlPlane::init_control_plane(
         this->topology_mapper_ = nullptr;
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
+        std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+
+        // Pin start or mesh to match the Galaxy Topology so that external QSFP links align with corner of fabric mesh
+        // node ids This is for performance optimizations to make sure that MGD mapping does not bisect a device
+
+        // * * o o < Pinned corners marked with *
+        // * o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        bool is_1d = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[0] == 1 ||
+                     this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1] == 1;
+        if (cluster.is_ubb_galaxy() && !is_1d) {
+            int y_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1];
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 2}, FabricNodeId(MeshId{0}, y_size)});
+        }
+
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
+            *this->routing_table_generator_->mesh_graph,
+            *this->physical_system_descriptor_,
+            this->local_mesh_binding_,
+            fixed_asic_position_pinnings);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
@@ -1585,12 +1612,9 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
         (this->topology_mapper_ == nullptr)
             ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
             : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
-    uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
-                             ? MAX_CHIPS_LOWLAT_1D
-                             : static_cast<uint16_t>(local_mesh_chip_id_container.size());
-
+    auto mesh_shape = this->get_physical_mesh_shape(mesh_id);
     intra_mesh_routing_path_t<1, false> routing_path;
-    routing_path.calculate_chip_to_all_routing_fields(0, num_chips);
+    routing_path.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), MAX_CHIPS_LOWLAT_1D);
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
@@ -1653,7 +1677,6 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
     // Get mesh shape for 2D routing calculation
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
-    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
         mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
@@ -1666,7 +1689,7 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
+        routing_path.calculate_chip_to_all_routing_fields(src_fabric_node_id, mesh_shape[0] * mesh_shape[1]);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         write_to_all_tensix_cores(
             &routing_path,

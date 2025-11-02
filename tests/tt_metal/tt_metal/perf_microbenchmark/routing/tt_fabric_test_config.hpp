@@ -126,6 +126,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
+    {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
@@ -547,6 +548,16 @@ private:
                         "Auto-detected {} iterations for all_to_one pattern in test '{}'",
                         num_devices,
                         p_config.name);
+                } else if (p.type == "sequential_all_to_all") {
+                    // Dynamically calculate iterations for sequential_all_to_all patterns based on all device pairs
+                    auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+                    uint32_t num_pairs = static_cast<uint32_t>(all_pairs.size());
+                    max_iterations = std::max(max_iterations, num_pairs);
+                    log_info(
+                        LogTest,
+                        "Auto-detected {} iterations for sequential_all_to_all pattern in test '{}'",
+                        num_pairs,
+                        p_config.name);
                 }
             }
         }
@@ -880,6 +891,8 @@ private:
                 expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
             } else if (pattern.type == "all_devices_uniform_pattern") {
                 expand_all_devices_uniform_pattern(test, defaults);
+            } else if (pattern.type == "sequential_all_to_all") {
+                expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -936,6 +949,33 @@ private:
         log_debug(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
         auto random_pairs = this->route_manager_.get_full_device_random_pairs(this->gen_);
         add_senders_from_pairs(test, random_pairs, base_pattern);
+    }
+
+    void expand_sequential_all_to_all_unicast(
+        ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+        log_debug(
+            LogTest,
+            "Expanding sequential_all_to_all_unicast pattern for test: {} (iteration {})",
+            test.name,
+            iteration_idx);
+
+        auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+
+        if (all_pairs.empty()) {
+            log_warning(LogTest, "No valid pairs found for sequential_all_to_all pattern");
+            return;
+        }
+
+        // Select only the pair for this iteration
+        if (iteration_idx < all_pairs.size()) {
+            std::vector<std::pair<FabricNodeId, FabricNodeId>> single_pair = {all_pairs[iteration_idx]};
+            add_senders_from_pairs(test, single_pair, base_pattern);
+        } else {
+            TT_THROW(
+                "Iteration index {} exceeds number of available device pairs {} for sequential_all_to_all pattern",
+                iteration_idx,
+                all_pairs.size());
+        }
     }
 
     void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {

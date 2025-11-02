@@ -20,7 +20,7 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_broadcast_async(
+    tt_out_tensor = ttnn.all_broadcast(
         input_tensor_mesh,
         num_links=num_links,
         memory_config=output_mem_config,
@@ -33,7 +33,7 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_broadcast_async(
+        tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
             memory_config=output_mem_config,
@@ -193,7 +193,7 @@ def run_all_broadcast_impl(
         tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
-            tt_out_tensors = ttnn.experimental.all_broadcast_async(
+            tt_out_tensors = ttnn.all_broadcast(
                 input_tensor_mesh_list[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
@@ -521,3 +521,42 @@ def test_all_broadcast_sharded_2x4(
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+    ids=["fabric_linear", "fabric_2d"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, 1, 32],
+    ],
+)
+def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(2005)
+    devices = mesh_device.get_num_devices()
+    logger.info(f"devices: {devices}")
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for i in range(devices)]
+
+    torch_input = torch.cat(torch_inputs_per_device, dim=-1)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+    )  # [2, 2, 32, 32] per device after sharding
+    tt_output = ttnn.all_broadcast(tt_input)
+
+    for i, torch_reference in enumerate(torch_inputs_per_device):
+        tt_torch_output = ttnn.to_torch(tt_output[i], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        # split the tensor across dim = 0
+        tt_torch_output_slices = torch.chunk(tt_torch_output, devices, dim=0)
+        for tt_torch_output_slice in tt_torch_output_slices:
+            eq, output = comp_equal(tt_torch_output_slice, torch_reference)
+            assert eq, f"Tensor{i} FAILED: {output}"
