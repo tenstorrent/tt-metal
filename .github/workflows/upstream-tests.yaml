@@ -291,7 +291,8 @@ jobs:
           images_to_push_array=()
 
           # Parse the request-force-publish input
-          request_input="${{ inputs.request-force-publish || 'passing-only' }}"
+          # Single-quotes because of the doubles in this string for JSON
+          request_input='${{ inputs.request-force-publish || 'passing-only' }}'
 
           echo "Processing request: $request_input"
 
@@ -353,7 +354,7 @@ jobs:
               exit 1
             fi
 
-            # Validate it's an array
+            # Validate it's a JSON array
             if [[ $(echo "$request_input" | jq 'type') != '"array"' ]]; then
               echo "ERROR: When providing specific hw_topology values, input must be a JSON array like [\"wh-6u\", \"bh\"]" >&2
               exit 1
@@ -384,7 +385,8 @@ jobs:
             echo "No images to push"
           else
             echo "Converting ${#images_to_push_array[@]} images to JSON for next job's matrix"
-            images_to_push_json=$(printf '%s\n' "${images_to_push_array[@]}" | jq -R '.' | jq -s 'map({"image-tag": .})')
+            # Use -c because whitespace in GITHUB_OUTPUT might cause issues
+            images_to_push_json=$(printf '%s\n' "${images_to_push_array[@]}" | jq -R '.' | jq -c -s 'map({"image-tag": .})')
           fi
 
           echo "Final images to push:"
