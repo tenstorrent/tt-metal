@@ -31,14 +31,6 @@ inline void write_cb_block_to_dram(
     }
 }
 
-template <typename AddrGen>
-inline void write_single_tile_to_dram(
-    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t tile_idx, uint32_t tile_bytes) {
-    cb_wait_front(cb_idx, onetile);
-    uint32_t l1_read_addr = get_read_ptr(cb_idx);
-    noc_async_write_tile(tile_idx, addr_gen, l1_read_addr);
-}
-
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -72,8 +64,8 @@ void kernel_main() {
 
         // Write mean and rstd (one tile per row) if needed
         if constexpr (return_mean_rstd) {
-            write_single_tile_to_dram(cb_mean_idx, mean_output_addr_generator, r, tile_bytes);
-            write_single_tile_to_dram(cb_rstd_idx, rstd_output_addr_generator, r, tile_bytes);
+            write_cb_block_to_dram(cb_mean_idx, mean_output_addr_generator, r, 1, tile_bytes);
+            write_cb_block_to_dram(cb_rstd_idx, rstd_output_addr_generator, r, 1, tile_bytes);
             noc_async_write_barrier();
             cb_pop_front(cb_mean_idx, onetile);
             cb_pop_front(cb_rstd_idx, onetile);

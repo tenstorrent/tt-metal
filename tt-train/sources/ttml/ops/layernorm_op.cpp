@@ -21,7 +21,7 @@ namespace ttml::ops {
 
 // simplified version of layernorm
 // it works only for 4D tensors and for the last dimension
-autograd::TensorPtr layernorm(
+autograd::TensorPtr layernorm_moreh(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
     auto tensor_shape = tensor->get_value().logical_shape();
     auto mean = core::empty(
@@ -78,7 +78,7 @@ autograd::TensorPtr layernorm(
     return out;
 }
 
-autograd::TensorPtr layernorm_fused(
+autograd::TensorPtr layernorm(
     const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, const autograd::TensorPtr& beta) {
     auto tensor_shape = tensor->get_value().logical_shape();
     auto mean = core::empty(
@@ -198,24 +198,6 @@ autograd::TensorPtr composite_layernorm(
         auto dtensor = ttnn::subtract(ttnn::subtract(dtensor_normalized, dnorm_mean), norm_dnorm_norm_mean);
         dtensor = ttnn::multiply(dtensor, rstd);
 
-        auto host_tensor = ttml::core::to_vector(dtensor);
-        std::cout << "res[0] elements: ";
-        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
-            std::cout << host_tensor[j] << " ";
-        }
-        std::cout << std::endl;
-        host_tensor = ttml::core::to_vector(dgamma);
-        std::cout << "res[1] elements: ";
-        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
-            std::cout << host_tensor[j] << " ";
-        }
-        std::cout << std::endl;
-        host_tensor = ttml::core::to_vector(dbeta);
-        std::cout << "res[2] elements: ";
-        for (int j = 0; j < std::min(host_tensor.size(), (unsigned long)100); j++) {
-            std::cout << host_tensor[j] << " ";
-        }
-        std::cout << std::endl;
         tensor->add_grad(dtensor);
         gamma->add_grad(dgamma);
         beta->add_grad(dbeta);

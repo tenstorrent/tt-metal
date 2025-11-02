@@ -2,21 +2,11 @@ include(CTest)
 enable_testing()
 
 set(SOURCES
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 2db5011f3c (precision issue fixed, ready for review)
     core/tensor_utils_test.cpp
     core/n300_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
-<<<<<<< HEAD
-<<<<<<< HEAD
     core/random_tests.cpp
-=======
->>>>>>> 4bcee3238c (cleaning)
-=======
->>>>>>> 2db5011f3c (precision issue fixed, ready for review)
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
@@ -65,77 +55,8 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-    ops/layer_norm_op_fused_test.cpp
->>>>>>> 4bcee3238c (cleaning)
-=======
-    # core/tensor_utils_test.cpp
-    # core/n300_utils_test.cpp
-    # core/scoped_test.cpp
-    # core/clip_grad_norm_test.cpp
-    # model/linear_regression_ddp_test.cpp
-    # model/nano_gpt_test.cpp
-    # model/model_names_test.cpp
-    # model/gpt2s_test.cpp
-    # model/linear_regression_full_test.cpp
-    # model/weight_tying_test.cpp
-    # ttnn_fixed/concat_op_test.cpp
-    # ttnn_fixed/distributed/distributed_ttnn_ops_test.cpp
-    # ttnn_fixed/trivial_ttnn_ops_test.cpp
-    # ttnn_fixed/matmuls_test.cpp
-    # ttnn_fixed/reduce_ops_test.cpp
-    # ttnn_fixed/dropout_op_test.cpp
-    # ttnn_fixed/slice_op_test.cpp
-    # autograd/autograd_tensor.cpp
-    # autograd/autograd_test.cpp
-    # autograd/module_base_parameters_test.cpp
-    # schedulers/schedulers_test.cpp
-    # tokenizers/bpe_tokenizer_test.cpp
-    # tokenizers/char_tokenizer_trainer_test.cpp
-    # tokenizers/char_tokenizer_test.cpp
-    # 3rd_party/xtensor_test.cpp
-    # 3rd_party/tokenizers_test.cpp
-    # datasets/in_memory_token_dataset_test.cpp
-    # datasets/random_split_test.cpp
-    # datasets/utils_test.cpp
-    # datasets/generators_test.cpp
-    # datasets/dataloader_test.cpp
-    # optimizers/adamw_test.cpp
-    # optimizers/no_op_test.cpp
-    # modules/distributed/linear_test.cpp
-    # serialization/model_serializer_test.cpp
-    # serialization/msgpack_serializer_test.cpp
-    # serialization/tensor_serializer_test.cpp
-    # serialization/safetensors_test.cpp
-    # ops/cross_entropy_fw_op_test.cpp
-    # ops/positional_embedding_test.cpp
-    # ops/layer_norm_op_test.cpp
-    # ops/distributed/comm_ops_test.cpp
-    # ops/linear_op_test.cpp
-    # ops/profiler_no_op_test.cpp
-    # ops/cross_entropy_bw_op_test.cpp
-    # ops/rope_test.cpp
-    # ops/rmsnorm_op_test.cpp
-    # ops/unary_ops_test.cpp
-    # ops/embedding_op_test.cpp
-    # ops/softmax_test.cpp
-    # ops/silu_op_test.cpp
-    # ops/sdpa_fw_op_test.cpp
-    ops/layer_norm_op_fused_test.cpp
-    # padding_test_minimal.cpp
->>>>>>> f0893d1f65 (layernorm fw + attempt to improve precision)
-=======
-    ops/layer_norm_op_fused_test.cpp
-    ops/layernorm_fw_op_test.cpp
-=======
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
->>>>>>> 1856669142 (precision issue fixed, ready for review)
-    padding_test_minimal.cpp
->>>>>>> 2db5011f3c (precision issue fixed, ready for review)
 )
 
 add_executable(ttml_tests ${SOURCES})

@@ -17,8 +17,6 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormBackwardOperation::invoke(
     const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor) {
-    auto device_op = ttnn::prim::ttml_layernorm_bw;
-
     // Save original shape for reshaping outputs back
     const auto& original_shape = input_tensor.logical_shape();
 
@@ -38,7 +36,7 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormBackwardOperation::invoke(
 
     // Call the device operation with 2D tensors
     // Returns: [dx, dgamma_components, dbeta_components]
-    auto result = device_op(input_2d, gamma_tensor, mean_2d, rstd_2d, dy_2d);
+    auto result = ttnn::prim::ttml_layernorm_bw(input_2d, gamma_tensor, mean_2d, rstd_2d, dy_2d);
 
     // Reshape dx back to original shape
     auto dx = ttnn::reshape(result[0], original_shape);

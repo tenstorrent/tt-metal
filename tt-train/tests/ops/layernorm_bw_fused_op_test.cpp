@@ -93,7 +93,7 @@ std::tuple<xt::xarray<float>, xt::xarray<float>, xt::xarray<float>> layernorm_ba
     return std::make_tuple(dx, dgamma, dbeta);
 }
 
-class LayerNormFusedOpTest : public ::testing::Test {
+class LayerNormBackwardOpTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
@@ -104,7 +104,7 @@ protected:
     }
 };
 
-TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_One_Tile) {
+TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_One_Tile) {
     using namespace ttml;
 
     uint32_t batch_size = 1;
@@ -285,7 +285,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_One_Tile) {
     }
 }
 
-TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_Two_Incomplete_Tiles) {
+TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_Two_Incomplete_Tiles) {
     using namespace ttml;
 
     uint32_t batch_size = 1;
@@ -468,7 +468,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_Two_Incomplete_Tiles) {
     }
 }
 
-TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_LargeFeatures_NoL1Fit) {
+TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_LargeFeatures_NoL1Fit) {
     using namespace ttml;
 
     uint32_t batch_size = 3;
@@ -649,7 +649,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_LargeFeatures_NoL1Fit) {
     }
 }
 
-TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_Everything_Small_L1Fit) {
+TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_Everything_Small_L1Fit) {
     using namespace ttml;
 
     uint32_t batch_size = 3;
@@ -834,7 +834,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_Everything_Small_L1Fit) {
     }
 }
 
-TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_One_Tile_Row) {
+TEST_F(LayerNormBackwardOpTest, MetalLayerNormBw_One_Tile_Row) {
     using namespace ttml;
 
     uint32_t batch_size = 1;
@@ -1019,7 +1019,7 @@ TEST_F(LayerNormFusedOpTest, MetalLayerNormBw_One_Tile_Row) {
     }
 }
 
-TEST_F(LayerNormFusedOpTest, CompositeLayerNormBackward_AgainstXTensor_NotThatLargeFeatures) {
+TEST_F(LayerNormBackwardOpTest, CompositeLayerNormBackward_AgainstXTensor_NotThatLargeFeatures) {
     using namespace ttml;
 
     uint32_t batch_size = 3;
@@ -1200,7 +1200,7 @@ TEST_F(LayerNormFusedOpTest, CompositeLayerNormBackward_AgainstXTensor_NotThatLa
     std::cout << "All gradients (dx, dgamma, dbeta) tested successfully against xarray reference!" << std::endl;
 }
 
-TEST_F(LayerNormFusedOpTest, CompositeLayerNormBackward_AgainstXTensor_LargeFeatures) {
+TEST_F(LayerNormBackwardOpTest, CompositeLayerNormBackward_AgainstXTensor_LargeFeatures) {
     using namespace ttml;
 
     uint32_t batch_size = 3;
@@ -1381,7 +1381,7 @@ TEST_F(LayerNormFusedOpTest, CompositeLayerNormBackward_AgainstXTensor_LargeFeat
     std::cout << "All gradients (dx, dgamma, dbeta) tested successfully against xarray reference!" << std::endl;
 }
 
-TEST_F(LayerNormFusedOpTest, MorehLayerNormBackward_AgainstXTensor_LargeFeatures) {
+TEST_F(LayerNormBackwardOpTest, MorehLayerNormBackward_AgainstXTensor_LargeFeatures) {
     using namespace ttml;
 
     uint32_t batch_size = 3;
@@ -1564,7 +1564,7 @@ TEST_F(LayerNormFusedOpTest, MorehLayerNormBackward_AgainstXTensor_LargeFeatures
               << std::endl;
 }
 
-TEST_F(LayerNormFusedOpTest, MorehLayerNormBackward_AgainstXTensor_NotThatLargeFeatures) {
+TEST_F(LayerNormBackwardOpTest, MorehLayerNormBackward_AgainstXTensor_NotThatLargeFeatures) {
     using namespace ttml;
 
     uint32_t batch_size = 3;
@@ -1747,7 +1747,7 @@ TEST_F(LayerNormFusedOpTest, MorehLayerNormBackward_AgainstXTensor_NotThatLargeF
               << std::endl;
 }
 
-TEST_F(LayerNormFusedOpTest, LayerNormFwFitsL1) {
+TEST_F(LayerNormBackwardOpTest, LayerNormFwFitsL1) {
     using namespace ttml;
 
     uint32_t batch_size = 6;

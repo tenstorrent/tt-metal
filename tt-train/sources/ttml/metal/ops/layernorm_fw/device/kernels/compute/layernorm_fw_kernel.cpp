@@ -58,18 +58,10 @@ constexpr bool return_mean_rstd = true;
 constexpr bool return_mean_rstd = false;
 #endif
 
-inline void zero_dst_reg(uint32_t i) {
-    float zero = 0.0f;
-    fill_tile_int(i, zero);
-    fill_tile(i, zero);
-}
-
 // Compute sum of all input tiles in the row
 // Result is stored in cb_sum_idx (before reduction across tile dimension)
 #ifdef EVERYTHING_FITS_IN_L1
 inline void compute_sum() {
-    cb_wait_front(cb_input_idx, Wt);
-
     const uint32_t sum_register = 0U;
     const uint32_t working_register = 1U;
 
@@ -171,7 +163,6 @@ inline void reduce_and_scale_to_mean() {
 // Compute sum of (x - mean)^2 for variance calculation
 #ifdef EVERYTHING_FITS_IN_L1
 inline void compute_variance_sum() {
-    cb_wait_front(cb_input_idx, Wt);
     cb_wait_front(cb_mean_bcast_idx, onetile);
 
     const uint32_t sum_register = 0U;
@@ -335,17 +326,9 @@ inline void compute_x_hat() {
             uint32_t temp_reg = x_hat_reg + 1;
             uint32_t input_tile_idx = col + block_idx;
 
-            // Load input tile
-            copy_tile_init(cb_input_idx);
-            copy_tile(cb_input_idx, input_tile_idx, x_hat_reg);
-
-            // Load broadcasted mean
-            copy_tile_init(cb_mean_bcast_idx);
-            copy_tile(cb_mean_bcast_idx, 0, temp_reg);
-
             // Subtract mean: (input - mean)
-            sub_binary_tile_init();
-            sub_binary_tile(x_hat_reg, temp_reg, x_hat_reg);
+            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_tiles(cb_input_idx, cb_mean_bcast_idx, input_tile_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
             copy_tile_init(cb_rstd_bcast_idx);
@@ -416,17 +399,9 @@ inline void compute_output() {
             uint32_t x_hat_reg = block_idx;
             uint32_t temp_reg = current_block_size + block_idx;
 
-            // Load input tile
-            copy_tile_init(cb_input_idx);
-            copy_tile(cb_input_idx, block_idx, x_hat_reg);
-
-            // Load broadcasted mean
-            copy_tile_init(cb_mean_bcast_idx);
-            copy_tile(cb_mean_bcast_idx, 0, temp_reg);
-
             // Subtract mean: (input - mean)
-            sub_binary_tile_init();
-            sub_binary_tile(x_hat_reg, temp_reg, x_hat_reg);
+            sub_tiles_init(cb_input_idx, cb_mean_bcast_idx);
+            sub_tiles(cb_input_idx, cb_mean_bcast_idx, block_idx, 0, x_hat_reg);
 
             // Load broadcasted rstd
             copy_tile_init(cb_rstd_bcast_idx);

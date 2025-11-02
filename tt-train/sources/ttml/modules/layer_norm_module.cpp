@@ -26,7 +26,7 @@ autograd::TensorPtr LayerNormLayer::operator()(const autograd::TensorPtr& tensor
     if (m_use_composite_op) {
         return ops::composite_layernorm(tensor, m_gamma, m_beta);
     }
-    return ops::layernorm_fused(tensor, m_gamma, m_beta);
+    return ops::layernorm(tensor, m_gamma, m_beta);
 }
 
 }  // namespace ttml::modules

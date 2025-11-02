@@ -17,8 +17,6 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormForwardOperation::invoke(
     const ttnn::Tensor& beta_tensor,
     float epsilon,
     bool return_mean_rstd) {
-    auto device_op = ttnn::prim::ttml_layernorm_fw;
-
     // Save original shape for reshaping outputs back
     const auto& original_shape = input_tensor.logical_shape();
 
@@ -35,19 +33,20 @@ std::vector<std::optional<ttnn::Tensor>> LayerNormForwardOperation::invoke(
 
     // Call the device operation with 2D tensors
     // Returns: [output, mean (optional), rstd (optional)]
-    auto result = device_op(input_2d, gamma_tensor, beta_tensor, epsilon, return_mean_rstd);
+    auto result = ttnn::prim::ttml_layernorm_fw(input_2d, gamma_tensor, beta_tensor, epsilon, return_mean_rstd);
 
     // Reshape output back to original shape
     auto output = ttnn::reshape(result[0].value(), original_shape);
 
     std::vector<std::optional<ttnn::Tensor>> return_tensors;
+    return_tensors.reserve(3);
     return_tensors.push_back(output);
 
     // If mean and rstd were requested, reshape them as well
     if (return_mean_rstd) {
         // Mean and rstd have shape [total_rows, 1] - reshape to [B, 1, S, 1]
         ttnn::SmallVector<uint32_t> mean_rstd_shape;
-        for (size_t i = 0; i < original_shape.rank() - 1; ++i) {
+        for (size_t i = 0; i + 1U < original_shape.rank(); ++i) {
             mean_rstd_shape.push_back(original_shape[i]);
         }
         mean_rstd_shape.push_back(1);  // Last dimension is 1
