@@ -12,6 +12,8 @@
 #include <tt_stl/assert.hpp>
 #include "device.hpp"
 
+#include "impl/buffers/buffer.hpp"
+
 namespace tt::tt_metal::distributed {
 namespace {
 

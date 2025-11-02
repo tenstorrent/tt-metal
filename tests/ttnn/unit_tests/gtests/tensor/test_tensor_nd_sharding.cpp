@@ -8,6 +8,8 @@
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/distributed.hpp>
 
+#include "impl/buffers/buffer.hpp"
+
 namespace {
 struct NDShardingParams {
     Shape shape;

@@ -5,6 +5,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 
+#include "impl/buffers/buffer.hpp"
+
 namespace tt::tt_metal {
 
 // Static factory methods

@@ -16,6 +16,7 @@
 #include "impl/allocator/allocator_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "impl/buffers/buffer.hpp"
 
 namespace tt {
 
