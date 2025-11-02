@@ -132,31 +132,51 @@ def generate_speech_ttnn(
     )
 
     spectrogram = []
-    max_steps = min(int(token_ids.shape[1] * 5.0), 50)  # Adaptive max steps
+    max_steps = 100  # Just run 1 step for debugging
 
-    # Autoregressive generation loop
+    # Autoregressive generation loop with detailed timing
+    import time
+
+    total_decoder_time = 0.0
+    total_postnet_time = 0.0
+    total_conversion_time = 0.0
+    total_concat_time = 0.0
+
     for step in range(max_steps):
+        step_start = time.time()
+        print(f"Step {step+1}/{max_steps}", end="", flush=True)
         # Decoder step
+        decoder_start = time.time()
         decoder_hidden_states = ttnn_decoder(
             decoder_input_values=output_sequence_ttnn,
             encoder_hidden_states=encoder_output,
             speaker_embeddings=ttnn_speaker_embeddings,
         )
         decoder_hidden_states = ensure_l1_memory(decoder_hidden_states)
+        decoder_time = time.time() - decoder_start
+        total_decoder_time += decoder_time
 
         # Postnet
+        postnet_start = time.time()
         postnet_output = ttnn_postnet(decoder_hidden_states)
         mel_before, mel_after, stop_logits = postnet_output
         mel_after = ensure_l1_memory(mel_after)
         stop_logits = ensure_l1_memory(stop_logits)
+        postnet_time = time.time() - postnet_start
+        total_postnet_time += postnet_time
 
         # Check stopping condition
         stop_logits_torch = ttnn.to_torch(stop_logits)
         prob = torch.sigmoid(stop_logits_torch)
         if torch.sum(prob, dim=-1) >= 0.5:
+            print(f" (Early stop)", flush=True)
             break
 
+        # ========== TIMING: Host operations ==========
+        conversion_start = time.time()
+
         # Extract new mel frame
+        mel_to_torch_start = time.time()
         mel_after_torch = ttnn.to_torch(mel_after)
         current_seq_len = output_sequence_ttnn.shape[1]
         start_idx = (current_seq_len - 1) * 2  # reduction_factor = 2
@@ -179,7 +199,24 @@ def generate_speech_ttnn(
     else:
         final_spectrogram = torch.zeros(batch_size, 1, num_mel_bins)
 
+    # Performance Analysis
+    print(f"\\n\\n🎯 Performance Analysis:")
+    print(f"   Total steps completed: {len(spectrogram)}")
+    print(f"   Total decoder time: {total_decoder_time:.3f}s ({total_decoder_time/len(spectrogram):.3f}s/step)")
+    print(f"   Total postnet time: {total_postnet_time:.3f}s ({total_postnet_time/len(spectrogram):.3f}s/step)")
+    print(
+        f"   Total conversion time: {total_conversion_time:.3f}s ({total_conversion_time/len(spectrogram):.3f}s/step)"
+    )
+    print(f"   Total concat time: {total_concat_time:.3f}s ({total_concat_time/len(spectrogram):.3f}s/step)")
+    print(
+        f"   Total generation time: {total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time:.3f}s"
+    )
+    print(
+        f"   Tokens/sec: {len(spectrogram) / (total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time):.2f}"
+    )
+
     # Generate audio
+    print("\\n🎵 Generating final audio...")
     speech = vocoder(final_spectrogram)
 
     # Cleanup TTNN tensors
