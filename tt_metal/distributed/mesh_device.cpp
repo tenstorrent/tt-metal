@@ -217,12 +217,12 @@ MeshDevice::MeshDevice(
     std::unique_ptr<MeshDeviceView> mesh_device_view,
     std::shared_ptr<MeshDevice> parent_mesh) :
     scoped_devices_(std::move(mesh_handle)),
-    view_(std::move(mesh_device_view)),
     mesh_id_(generate_unique_mesh_id()),
+    view_(std::move(mesh_device_view)),
     parent_mesh_(std::move(parent_mesh)),
-    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
     dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
-    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
+    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
+    program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -703,9 +703,6 @@ std::vector<CoreCoord> MeshDevice::worker_cores_from_logical_cores(const std::ve
     });
 }
 std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
-    TT_FATAL(
-        num_devices() == 1,
-        "get_optimal_dram_bank_to_logical_worker_assignment() is only supported on unit MeshDevice.");
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {

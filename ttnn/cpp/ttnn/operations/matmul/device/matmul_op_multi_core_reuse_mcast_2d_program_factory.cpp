@@ -1191,9 +1191,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                             num_iter++;
 
                             uint32_t stride = worker_core_stride + per_core_N_storage;
-                            if (stride >= per_core_N) {
-                                stride = per_core_N;
-                            }
+                            stride = std::min(stride, per_core_N);
 
                             mm_in1_sender_writer_args.push_back(
                                 (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes

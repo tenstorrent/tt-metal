@@ -44,7 +44,7 @@ from models.experimental.tt_dit.utils.check import assert_quality
 def test_clip_encoder(
     *,
     mesh_device: ttnn.Device,
-    submesh_shape: ttnn.MeshShape,
+    submesh_shape: tuple[int, int],
     model_name: str,
     clip_path: str,
     tokenizer_path: str,
@@ -58,7 +58,7 @@ def test_clip_encoder(
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
 
     # For N300 with parallel factor = 1, use factor=1 regardless of submesh shape
-    if mesh_device.shape == (1, 2) and (submesh_shape == (1, 1) or submesh_shape == (1, 2)):
+    if tuple(mesh_device.shape) == (1, 2) and submesh_shape in [(1, 1), (1, 2)]:
         parallel_factor = 1
     else:
         parallel_factor = encoder_submesh.shape[1]
@@ -127,11 +127,11 @@ def test_clip_encoder(
         parallel_config=parallel_config,
         eos_token_id=eos_token_id,
     )
-    tt_clip.load_state_dict(hf_model.state_dict())
+    tt_clip.load_torch_state_dict(hf_model.state_dict())
 
     # times TT model inference only
     tt_start_time = time.time()
-    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, encoder_submesh, with_projection=True)
+    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, encoder_submesh)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
@@ -142,12 +142,12 @@ def test_clip_encoder(
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
-    hf_sequence_output = hf_output.hidden_states[-2]  # second-to-last hidden state (before final projection)
+    hf_sequence_output = hf_output.hidden_states[-1]
     hf_projected_output = hf_output.text_embeds  # projected/pooled output
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
-    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-2])[0])
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-1])[0])
     tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     logger.info(f"TT model execution time: {tt_execution_time:.4f} seconds")

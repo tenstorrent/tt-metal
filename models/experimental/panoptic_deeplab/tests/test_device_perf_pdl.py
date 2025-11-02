@@ -4,24 +4,32 @@
 
 import pytest
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
 
 
 @pytest.mark.parametrize(
     "command, expected_device_perf_cycles_per_iteration, subdir, model_name, num_iterations, batch_size, margin",
     [
         (
-            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_panoptic_deeplab",
-            161_430_873,
-            "panoptic_deeplab",
-            "panoptic_deeplab",
+            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_panoptic_deeplab",
+            57_238_691,
+            PANOPTIC_DEEPLAB,
+            PANOPTIC_DEEPLAB,
+            1,
+            1,
+            0.015,
+        ),
+        (
+            "pytest models/experimental/panoptic_deeplab/tests/pcc/test_tt_model.py::test_model_panoptic_deeplab -k test_deeplab_v3_plus",
+            39_294_523,
+            DEEPLAB_V3_PLUS,
+            DEEPLAB_V3_PLUS,
             1,
             1,
             0.015,
         ),
     ],
-    ids=[
-        "test_panoptic_deeplab",
-    ],
+    ids=["test_panoptic_deeplab", "test_deeplab_v3_plus"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_pdl(

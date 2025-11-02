@@ -15,8 +15,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <algorithm>
-#include <array>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -32,7 +30,6 @@
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "program/program_device_map.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace/trace_node.hpp"
@@ -83,15 +80,14 @@ HWCommandQueue::HWCommandQueue(
     uint32_t id,
     NOC noc_index,
     uint32_t completion_queue_reader_core) :
-    manager_(device->sysmem_manager()),
-    completion_queue_thread_{},
     id_(id),
+    size_B_(0),
     completion_queue_reader_core_(completion_queue_reader_core),
-    device_(device),
+    manager_(device->sysmem_manager()),
     cq_shared_state_(std::move(cq_shared_state)),
-    noc_index_(noc_index),
     num_entries_in_completion_q_(0),
     num_completed_completion_q_reads_(0),
+    device_(device),
     prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(
         MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
@@ -406,153 +402,6 @@ void HWCommandQueue::enqueue_write_to_core(
     if (blocking) {
         this->finish(sub_device_ids);
     }
-}
-
-void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
-    ZoneScopedN("HWCommandQueue_enqueue_program");
-    std::vector<SubDeviceId> sub_device_ids = {program.impl().determine_sub_device_ids(device_)};
-    TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
-
-    if (!this->manager_.get_bypass_mode()) {
-        auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-        auto& sub_device = sub_device_cq_owner[*sub_device_ids[0]];
-        sub_device.take_ownership(sub_device_ids[0], this->id_);
-    }
-
-    // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
-    program.impl().finalize_offsets(device_);
-
-    if (program.impl().get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
-        // Write program binaries to device if it hasn't previously been cached
-        program.impl().allocate_kernel_bin_buf_on_device(device_);
-        if (!program.impl().get_program_transfer_info().binary_data.empty()) {
-            const BufferRegion buffer_region(0, program.impl().get_kernels_buffer(device_)->size());
-            this->enqueue_write_buffer(
-                *program.impl().get_kernels_buffer(device_),
-                program.impl().get_program_transfer_info().binary_data.data(),
-                buffer_region,
-                false);
-        }
-        program.impl().set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
-    }
-
-    // Lower the program to device: Generate dispatch commands.
-    // Values in these commands will get updated based on kernel config ring
-    // buffer state at runtime.
-    auto program_sizeB = program.impl().kernel_bins_sizeB;
-    bool use_prefetcher_cache = program_sizeB and program_sizeB <= this->prefetcher_cache_sizeB_;
-    program.impl().generate_dispatch_commands(device_, use_prefetcher_cache);
-    program.impl().set_last_used_command_queue_for_testing(this);
-
-    if (this->manager_.get_bypass_mode()) {
-        this->trace_nodes_.push_back(
-            program_dispatch::create_trace_node(program.impl(), device_, use_prefetcher_cache));
-        return;
-    }
-
-    const auto sub_device_id = sub_device_ids[0];
-    const auto sub_device_index = *sub_device_id;
-
-    uint32_t num_additional_workers = 0;
-    if (program.impl().runs_on_noc_multicast_only_cores()) {
-        num_additional_workers +=
-            calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
-    }
-    if (program.impl().runs_on_noc_unicast_only_cores()) {
-        num_additional_workers +=
-            calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
-    }
-
-    // Expected number of workers from the previous run. Used to generate the wait command in the EnqueueProgramCommand
-    const auto updated_worker_counts = program_dispatch::get_expected_num_workers_completed_updates(
-        expected_num_workers_completed_[sub_device_index], num_additional_workers);
-    if (updated_worker_counts.wrapped) {
-        program_dispatch::reset_expected_num_workers_completed_on_device(
-            device_, sub_device_id, expected_num_workers_completed_[sub_device_index], id());
-        get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
-    }
-    uint32_t expected_workers_completed = updated_worker_counts.previous;
-    expected_num_workers_completed_[sub_device_index] = updated_worker_counts.current;
-
-#ifdef DEBUG
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
-        TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto buffer = program.impl().get_kernels_buffer(device_)) {
-            std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            const BufferRegion region(0, buffer->size());
-            this->enqueue_read_buffer(*buffer, read_data.data(), region, true);
-            TT_FATAL(
-                program.impl().get_program_transfer_info().binary_data == read_data,
-                "Binary for program to be executed is corrupted. Another program likely corrupted this binary");
-        }
-    }
-#endif
-
-    auto& worker_launch_message_buffer_state =
-        this->cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id];
-
-    // Dispatch metadata contains runtime information based on
-    // the kernel config ring buffer state
-    program_dispatch::ProgramDispatchMetadata dispatch_metadata;
-    if (use_prefetcher_cache) {
-        bool& is_cached = dispatch_metadata.prefetcher_cache_info.is_cached;
-        uint32_t& cache_offset = dispatch_metadata.prefetcher_cache_info.offset;
-        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.impl().get_id(), program_sizeB);
-        TT_ASSERT(
-            cache_offset + program_sizeB <= this->prefetcher_cache_sizeB_,
-            "Prefetcher cache overflow: offset: {}, program size: {}, cache size: {}",
-            cache_offset,
-            program_sizeB,
-            this->prefetcher_cache_sizeB_);
-        dispatch_metadata.prefetcher_cache_info.mesh_max_program_kernels_sizeB = program_sizeB;
-    } else {
-        // prefetcher cache will be overwritten, reset for next program
-        this->reset_prefetcher_cache_manager();
-    }
-
-    auto command = EnqueueProgramCommand(
-        this->id_,
-        this->device_,
-        this->noc_index_,
-        program,
-        this->virtual_enqueue_program_dispatch_core_,
-        this->manager_,
-        this->get_config_buffer_mgr(sub_device_index),
-        expected_workers_completed,
-        // The assembled program command will encode the location of the launch messages in the ring buffer
-        worker_launch_message_buffer_state.get_mcast_wptr(),
-        worker_launch_message_buffer_state.get_unicast_wptr(),
-        sub_device_id,
-        dispatch_metadata);
-    // Update wptrs for tensix and eth launch message in the device class
-    if (program.impl().runs_on_noc_multicast_only_cores()) {
-        worker_launch_message_buffer_state.inc_mcast_wptr(1);
-    }
-    if (program.impl().runs_on_noc_unicast_only_cores()) {
-        worker_launch_message_buffer_state.inc_unicast_wptr(1);
-    }
-    this->enqueue_command(command, blocking, sub_device_ids);
-
-#ifdef DEBUG
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_validate_kernel_binaries()) {
-        TT_FATAL(!this->manager_.get_bypass_mode(), "Tracing cannot be used while validating program binaries");
-        if (const auto buffer = program.impl().get_kernels_buffer(device_)) {
-            std::vector<uint32_t> read_data(buffer->page_size() * buffer->num_pages() / sizeof(uint32_t));
-            const BufferRegion region(0, buffer->size());
-            this->enqueue_read_buffer(*buffer, read_data.data(), region, true);
-            TT_FATAL(
-                program.impl().get_program_transfer_info().binary_data == read_data,
-                "Binary for program that executed is corrupted. This program likely corrupted its own binary.");
-        }
-    }
-#endif
-
-    log_trace(
-        tt::LogMetal,
-        "Created EnqueueProgramCommand (active_cores: {} bypass_mode: {} expected_workers_completed: {})",
-        program.impl().get_program_transfer_info().num_active_cores,
-        this->manager_.get_bypass_mode(),
-        expected_workers_completed);
 }
 
 void HWCommandQueue::enqueue_record_event(

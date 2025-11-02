@@ -1,1 +1,0 @@
-../../../../tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_nightly.py
