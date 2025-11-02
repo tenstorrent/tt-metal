@@ -22,7 +22,6 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 def generate_token_embeddings(image_tensor, lidar_tensor, seq_len, n_embd):
-    print(f"{image_tensor.shape,lidar_tensor.shape, seq_len, n_embd =}")
     """
     Generate token embeddings from NCHW format tensors.
 
@@ -36,7 +35,6 @@ def generate_token_embeddings(image_tensor, lidar_tensor, seq_len, n_embd):
         token_embeddings: (batch, total_tokens, n_embd)
         Additional metadata for post-processing
     """
-    print(f"{image_tensor.shape, lidar_tensor.shape, seq_len, n_embd =}")
 
     bz = image_tensor.shape[0]
     img_c = image_tensor.shape[1]  # Should be 72
@@ -59,9 +57,6 @@ def generate_token_embeddings(image_tensor, lidar_tensor, seq_len, n_embd):
 
     # Concatenate image and lidar tokens along sequence dimension
     token_embeddings = torch.cat((image_tokens, lidar_tokens), dim=1)  # (1, 174, 72)
-
-    print(f"Generated token_embeddings shape: {token_embeddings.shape}")
-    print(f"  Image tokens: {img_h * img_w}, LiDAR tokens: {lidar_h * lidar_w}")
 
     return token_embeddings, bz, seq_len, img_h, img_w, lidar_h, lidar_w
 

@@ -69,15 +69,12 @@ def keep_only_stage_model(torch_model, stage_name="layer1"):
     allowed_keys = [stage_name]
     for name in list(features._modules.keys()):
         if name not in allowed_keys:
-            print(f"Removing {name} from model")
             del features._modules[name]
 
     # Remove old 's' module if it exists
     if hasattr(torch_model, "s"):
-        print("Removing old 's' module")
         del torch_model.s
 
-    print("Remaining features keys:", list(features._modules.keys()))
     return torch_model
 
 

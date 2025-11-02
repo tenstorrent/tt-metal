@@ -39,7 +39,6 @@ class TTRegNetBottleneck:
         self.block_name = block_name
         self.stage_name = stage_name
 
-        print(conv1_config.get("memory_config", ttnn.L1_MEMORY_CONFIG))
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
             kernel_size=1,

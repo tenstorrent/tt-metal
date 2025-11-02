@@ -40,7 +40,6 @@ def fix_and_filter_checkpoint_keys(
         The modified state dictionary (OrderedDict) containing only the filtered
         and renamed keys, ready for model loading.
     """
-    print(f"Loading checkpoint from: {checkpoint_path}")
     # 1. Load the checkpoint
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
 
@@ -63,9 +62,6 @@ def fix_and_filter_checkpoint_keys(
             # DISCARD: These keys are outside of the module._model scope
             removed_keys_count += 1
 
-    print(f"✅ Filtered and kept {len(new_state_dict)} keys starting with '{target_prefix}'.")
-    print(f"🗑️ Discarded {removed_keys_count} keys that did not match the prefix.")
-
     return new_state_dict
 
 
@@ -81,9 +77,7 @@ def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[st
         if k_del in new_state_dict:
             del new_state_dict[k_del]
             deleted_count += 1
-            print(f"🗑️ Deleted incompatible key: {k_del}")
 
-    print(f"Successfully deleted {deleted_count} key(s) for strict=True loading.")
     return new_state_dict
 
 

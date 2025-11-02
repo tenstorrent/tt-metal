@@ -197,9 +197,6 @@ def fix_and_filter_checkpoint_keys(
             # DISCARD: These keys are outside of the module._model scope
             removed_keys_count += 1
 
-    print(f"✅ Filtered and kept {len(new_state_dict)} keys starting with '{target_prefix}'.")
-    print(f"🗑️ Discarded {removed_keys_count} keys that did not match the prefix.")
-
     return new_state_dict
 
 
@@ -213,7 +210,6 @@ def load_trained_weights(weight_path: str):
     Returns:
         Cleaned state dict ready for model loading
     """
-    print(f"Loading trained weights from: {weight_path}")
 
     # Load the checkpoint
     checkpoint = torch.load(weight_path, map_location="cpu")
@@ -228,7 +224,6 @@ def load_trained_weights(weight_path: str):
         else:
             state_dict[key] = value
 
-    print(f"Loaded {len(state_dict)} parameters")
     print(
         f"Cleaned {len([k for k in checkpoint.keys() if k.startswith('module._model.')])} keys with 'module._model.' prefix"
     )
@@ -257,8 +252,6 @@ def load_trained_weights(weight_path: str):
                 backbone_renamed += 1
                 break
 
-    print(f"Added '_model.' prefix to {backbone_renamed} backbone keys")
-
     # Handle detection head and other components that need to be loaded without _model prefix
     # These components are at the top level in the model, not under _model
     detection_components = ["head", "pred_bev", "join", "decoder", "output"]
@@ -271,7 +264,6 @@ def load_trained_weights(weight_path: str):
                 detection_renamed += 1
                 break
 
-    print(f"Cleaned {detection_renamed} detection component keys")
     return state_dict
 
 
@@ -287,9 +279,7 @@ def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[st
         if k_del in new_state_dict:
             del new_state_dict[k_del]
             deleted_count += 1
-            print(f"🗑️ Deleted incompatible key: {k_del}")
 
-    print(f"Successfully deleted {deleted_count} key(s) for strict=True loading.")
     return new_state_dict
 
 
@@ -558,8 +548,6 @@ def test_lidar_center_net(
     logger.info(f"Box match: {box_match}")
 
     top_pcc, all_pcc_scores = compare_boxes_pcc(ref_rotated_bboxes, torch_rotated_bboxes)
-
-    print_results(top_pcc, all_pcc_scores)
 
     does_pass, wh_pcc_message = check_with_pcc(ref_wh, torch_wh, 0.80)
     logger.info(f"WH PCC: {wh_pcc_message}")

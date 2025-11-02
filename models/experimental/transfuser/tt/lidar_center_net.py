@@ -87,8 +87,6 @@ class LidarCenterNet(nn.Module):
             nn.Conv2d(channel, 3, kernel_size=(1, 1), stride=1, padding=0, bias=True),
         ).to(torch.device("cpu"))
 
-        print(f"channel: {channel}")
-
         # prediction heads
         # self.head = LidarCenterNetHead(channel, channel, 1, train_cfg=config).to(self.device)
         # Initialize TTNN model

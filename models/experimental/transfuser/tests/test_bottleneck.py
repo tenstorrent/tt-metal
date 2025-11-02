@@ -132,7 +132,6 @@ def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size, stage_name):
         downsample = True
         if in_chs == out_chs and stride == 1:
             downsample = False
-        print(f"downsample block bool check {downsample =}")
 
         bottle_ratio = 1.0
         group_size = 24

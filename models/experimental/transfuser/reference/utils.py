@@ -1239,7 +1239,6 @@ class BaseModule(nn.Module, metaclass=ABCMeta):
         module_name = self.__class__.__name__
         if not self._is_init:
             if self.init_cfg:
-                print_log(f"initialize {module_name} with init_cfg {self.init_cfg}")
                 initialize(self, self.init_cfg)
                 if isinstance(self.init_cfg, dict):
                     # prevent the parameters of

@@ -58,8 +58,6 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimi
                 qkv_weight = torch.cat([q_weight, k_weight, v_weight], dim=0)
                 qkv_bias = torch.cat([q_bias, k_bias, v_bias], dim=0)
 
-                print(f"QKV weight shape: {qkv_weight.shape}, bias shape: {qkv_bias.shape}")
-
                 parameters["query_key_value"] = {
                     "weight": preprocess_linear_weight(qkv_weight, dtype=weight_dtype),
                     "bias": preprocess_linear_bias(qkv_bias, dtype=weight_dtype),
