@@ -158,14 +158,6 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& out
 //                                  .tensor_view()
 // ======================================================================================
 Tensor tensor_view(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
-    /*
-    It is a view reshape, so no data is copied.
-    Requirements:
-    - tensor must have row major layout
-    - tensor new volume must be equal to input tensor volume
-    - no inferred dimensions
-    - no padding ???
-    */
     tt::tt_metal::GraphTracker::instance().track_function_start(
         "Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
