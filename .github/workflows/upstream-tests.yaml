@@ -300,12 +300,6 @@ jobs:
           else
             echo "Mode: Publishing specific hw_topology list"
 
-            # Validate JSON format
-            if ! echo "${request_input}" | jq empty 2>/dev/null; then
-              echo "ERROR: request-force-publish must be 'passing-only', 'all', or a valid JSON array" >&2
-              exit 1
-            fi
-
             # Validate it's a JSON array
             if [[ $(echo "${request_input}" | jq 'type') != '"array"' ]]; then
               echo "ERROR: When providing specific hw_topology values, input must be a JSON array like [\"wh-6u\", \"bh\"]" >&2
