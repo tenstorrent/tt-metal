@@ -1572,7 +1572,29 @@ void ControlPlane::write_routing_tables_to_tensix_cores(MeshId mesh_id, ChipId c
     // Compute and embed 2D routing path table and exit node table (per src chip id)
     intra_mesh_routing_path_t<2, true> routing_path_2d;
     {
-        MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
+        // Respect host_rank_id binding when determining validity of the src chip for this host
+        auto host_rank_id = this->get_local_host_rank_id_binding();
+        const auto& local_mesh_chip_id_container =
+            (this->topology_mapper_ == nullptr)
+                ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
+                : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
+
+        bool chip_is_local_to_host = false;
+        for (const auto& [_, local_chip_id] : local_mesh_chip_id_container) {
+            if (local_chip_id == chip_id) {
+                chip_is_local_to_host = true;
+                break;
+            }
+        }
+        TT_ASSERT(
+            chip_is_local_to_host,
+            "2D routing path: chip {} is not owned by local host_rank {} for mesh {}",
+            chip_id,
+            *host_rank_id,
+            *mesh_id);
+
+        // Calculate routing using global mesh geometry (device tables are indexed by global chip ids)
+        MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id, MeshScope::GLOBAL);
         uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
         uint16_t ew_dim = mesh_shape[1];
         TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
