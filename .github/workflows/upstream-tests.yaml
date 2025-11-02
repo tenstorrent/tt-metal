@@ -414,7 +414,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Show image
+        run: echo "${{ matrix.image-config.image-tag }}"
       - uses: ./.github/actions/push-latest-image-to-ghcr
+        if: false
         with:
           docker-image-tag: ${{ matrix.image-config.image-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
