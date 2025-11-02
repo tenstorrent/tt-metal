@@ -62,6 +62,19 @@ class TensorIO:
                     tile=arg.get_tile(),
                     mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
                 )
+                tensor_1 = ttnn.to_torch(
+                    args[i],
+                    dtype=torch.float32,
+                    mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0),
+                )
+                tensor_2 = ttnn.to_torch(
+                    self.new_args[i],
+                    dtype=torch.float32,
+                    mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0),
+                )
+                print(f" tensor_1[:10]={tensor_1.flatten()[:10]}")
+                print(f" tensor_2[:10]={tensor_2.flatten()[:10]}")
+
             self.print_if_tensor(arg, f"arg[{i}]")
             self.print_if_tensor(self.new_args[i], f"arg[{i}]")
             self.write_if_tensor(
@@ -74,14 +87,6 @@ class TensorIO:
 
         # TODO: Set the kernel config math fidelity.
 
-        # Some kwargs have data type information in them that must be modified.
-        cache_key_k = ("ag", tuple(args[1].shape), 2, self.parallel_config.sequence_parallel.mesh_axis)
-        cache_key_v = ("ag", tuple(args[2].shape), 2, self.parallel_config.sequence_parallel.mesh_axis)
-        # FIXME: Only do this on iteration 0?
-        if cache_key_k in self.ccl_manager._ping_pong_buffer_cache:
-            del self.ccl_manager._ping_pong_buffer_cache[cache_key_k]
-        if cache_key_v in self.ccl_manager._ping_pong_buffer_cache:
-            del self.ccl_manager._ping_pong_buffer_cache[cache_key_v]
         self.new_kwargs["persistent_output_buffer_k"] = self.ccl_manager.get_ag_ping_pong_buffer(
             args[1].shape,
             2,
@@ -125,8 +130,8 @@ class TensorIO:
                     mesh_composer=ttnn.concat_mesh_to_tensor_composer(self.mesh_device, dim=0),
                 )
                 passed, pcc = comp_pcc(tensor_1, tensor_2, 1.0)
-                print(f" tensor_1[:10]={tensor_1[:10]}")
-                print(f" tensor_2[:10]={tensor_2[:10]}")
+                print(f" tensor_1[:10]={tensor_1.flatten()[:10]}")
+                print(f" tensor_2[:10]={tensor_2.flatten()[:10]}")
                 print(
                     f" tensor_1.shape={tensor_1.shape} mean(tensor_1)={torch.mean(tensor_1)}, std(tensor_1)={torch.std(tensor_1)}"
                 )

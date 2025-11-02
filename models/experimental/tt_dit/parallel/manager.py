@@ -145,7 +145,7 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
-        cache_key = ("ag", tuple(shape), dim, mesh_axis)
+        cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
