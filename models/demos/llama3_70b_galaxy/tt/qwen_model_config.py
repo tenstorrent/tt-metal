@@ -1502,6 +1502,7 @@ class TtQwenModelArgs(TtModelArgs):
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
+            self.max_context_len = 190190
         else:
             self.max_context_len = (
                 # 128 * 1024
