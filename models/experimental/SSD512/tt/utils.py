@@ -70,8 +70,10 @@ class TtConv2d:
 
         # Create Conv instance - weights and biases stored in DRAM
         parameters = {
-            "weight": torch_to_tt_tensor_rm(self.weight, device, memory_config=self.weight_memory_config),
-            "bias": torch_to_tt_tensor_rm(self.bias, device, memory_config=self.weight_memory_config) if bias else None,
+            "weight": torch_to_tt_tensor_rm(self.weight, device),
+            # "weight": torch_to_tt_tensor_rm(self.weight, device, memory_config=self.weight_memory_config),
+            "bias": torch_to_tt_tensor_rm(self.bias, device) if bias else None,
+            # "bias": torch_to_tt_tensor_rm(self.bias, device, memory_config=self.weight_memory_config) if bias else None,
         }
 
         self.conv = Conv(

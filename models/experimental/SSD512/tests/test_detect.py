@@ -22,9 +22,13 @@ def test_detect_layer(device, pcc):
     batch_size = 1
     num_priors = 8732  # Total number of prior boxes in SSD300
 
-    # Create models
-    torch_detect = TorchDetect(num_classes, 0, top_k, conf_thresh, nms_thresh)
-    tt_detect = TtDetect(num_classes, top_k, conf_thresh, nms_thresh, device)
+    bkg_label = 0  # background class index, default is 0
+    size = 512  # image size (512 for SSD512)
+
+    torch_detect = TorchDetect(
+        num_classes, size=size, bkg_label=bkg_label, top_k=top_k, conf_thresh=conf_thresh, nms_thresh=nms_thresh
+    )
+    tt_detect = TtDetect(num_classes, top_k=top_k, conf_thresh=conf_thresh, nms_thresh=nms_thresh, device=device)
 
     # Create test inputs
     # Location predictions [batch, num_priors, 4]
