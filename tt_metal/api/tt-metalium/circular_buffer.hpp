@@ -7,13 +7,14 @@
 #include <stdint.h>
 #include <unordered_set>
 
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+
+// Intentional header leakage for convience
+#include <tt-metalium/circular_buffer_constants.h>
 
 namespace tt::tt_metal {
+
+using CBHandle = uintptr_t;
 
 class CircularBufferImpl;
 class CircularBuffer {
