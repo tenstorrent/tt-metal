@@ -330,6 +330,7 @@ void MAIN {
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
+                /* cb_out_accumulate_im *= cb_cur_sum */
                 pack_reconfig_data_format(cb_out);
                 mul_block_bcast_cols<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
 
