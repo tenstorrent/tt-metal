@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     ttnn_layer_norm_sharded,
 )
 
+
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("two_stage", [False])

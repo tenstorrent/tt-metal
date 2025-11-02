@@ -15,6 +15,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     rms_norm_golden,
 )
 
+
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
 @pytest.mark.parametrize("two_stage", [False])
 @pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])

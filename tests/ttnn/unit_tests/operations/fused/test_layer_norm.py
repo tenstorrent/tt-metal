@@ -10,6 +10,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
