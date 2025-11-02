@@ -23,8 +23,8 @@ template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
+    copy_tile_to_dst_init_short(in1);
     max_tile_init();
-
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
     cb_wait_front(in0, num_tiles);
@@ -102,7 +102,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 }
 
 template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, bool write_result_inplace = true) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -114,8 +114,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
 
-    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+    constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
     uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
@@ -128,8 +128,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             tile_regs_commit();
             tile_regs_wait();
 
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile(j, in0_cb);
+            if (write_result_inplace) {
+                for (uint32_t j = 0; j < dst_tiles; ++j) {
+                    pack_tile(j, in0_cb);
+                }
             }
 
             // While we have results in DST, take advantage of L1 accumulation
@@ -149,9 +151,57 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             PACK((llk_pack_reconfig_l1_acc(0)));
         }
     }
-    cb_pop_front(in0_cb, rows * cols);
-    cb_reserve_back(in0_cb, rows * cols);
-    cb_push_back(in0_cb, rows * cols);
+    if (write_result_inplace) {
+        cb_pop_front(in0_cb, rows * cols);
+        cb_reserve_back(in0_cb, rows * cols);
+        cb_push_back(in0_cb, rows * cols);
+    }
+    cb_push_back(reduce_cb, rows);
+}
+
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
+void sub_exp_block_bcast_cols_inplace2(uint32_t in1_cb, uint32_t reduce_cb) {
+    // Precondition: in0_cb has rows*cols produced
+    // Precondition: in1_cb has rows produced
+    // Postcondition: in1_cb has rows produced
+    sub_bcast_cols_init_short(in0_cb, in1_cb);
+
+    exp_tile_init<true, true, scale_fp32>();
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+    cb_reserve_back(reduce_cb, rows);
+
+    constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
+    uint32_t in0_index = 0;
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                exp_tile<true, true>(j);
+                in0_index++;
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+
+            // While we have results in DST, take advantage of L1 accumulation
+            // to reduce row x cols tiles to rows x 1 tiles.
+            if (u > 0) {
+                // If on the same row, keep accumulating
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, reduce_cb, i);
+                if (u == 0 && j == 0) {
+                    // If this was the first tile of a row, start accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+            }
+            tile_regs_release();
+            PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+    }
     cb_push_back(reduce_cb, rows);
 }
 
@@ -165,8 +215,8 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
     // Postcondition: out_cb has rows*cols produced
 
     constexpr uint32_t num_tiles = rows * cols;
-    constexpr uint32_t dst_tiles = DHT_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
+    constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
     cb_wait_front(in0_cb, num_tiles);
@@ -210,8 +260,8 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
     // Postcondition: in1_cb has rows consumed
 
     constexpr uint32_t num_tiles = rows * cols;
-    constexpr uint32_t dst_tiles = DHT_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
+    constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
@@ -426,6 +476,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
             const_20_fp32 /*threshold*/,
             (int)VectorMode::C)));
         // Negate the output of softplus
+        negative_tile_init();
         negative_tile(0);
         pack_tile(0, out_cb);
         release_dst();
