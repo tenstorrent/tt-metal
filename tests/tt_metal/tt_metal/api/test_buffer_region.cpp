@@ -19,13 +19,13 @@ TEST_F(MeshDeviceSingleCardBufferFixture, TestInvalidBufferRegion) {
         distributed::MeshBuffer::create(buffer_config, local_config, this->devices_[0].get());
 
     const BufferRegion buffer_region1(512, 4096);
-    EXPECT_FALSE(buffer->get_backing_buffer()->is_valid_region(buffer_region1));
+    EXPECT_FALSE(buffer->get_backing_buffer()->impl()->is_valid_region(buffer_region1));
 
     const BufferRegion buffer_region2(3072, 4096);
-    EXPECT_FALSE(buffer->get_backing_buffer()->is_valid_region(buffer_region2));
+    EXPECT_FALSE(buffer->get_backing_buffer()->impl()->is_valid_region(buffer_region2));
 
     const BufferRegion buffer_region3(0, 4096);
-    EXPECT_FALSE(buffer->get_backing_buffer()->is_valid_region(buffer_region3));
+    EXPECT_FALSE(buffer->get_backing_buffer()->impl()->is_valid_region(buffer_region3));
 }
 
 TEST_F(MeshDeviceSingleCardBufferFixture, TestValidBufferRegion) {
@@ -35,16 +35,16 @@ TEST_F(MeshDeviceSingleCardBufferFixture, TestValidBufferRegion) {
         distributed::MeshBuffer::create(buffer_config, local_config, this->devices_[0].get());
 
     const BufferRegion buffer_region1(1024, 1024);
-    EXPECT_TRUE(buffer->get_backing_buffer()->is_valid_region(buffer_region1));
+    EXPECT_TRUE(buffer->get_backing_buffer()->impl()->is_valid_region(buffer_region1));
 
     const BufferRegion buffer_region2(0, 2048);
-    EXPECT_TRUE(buffer->get_backing_buffer()->is_valid_region(buffer_region2));
+    EXPECT_TRUE(buffer->get_backing_buffer()->impl()->is_valid_region(buffer_region2));
 
     const BufferRegion buffer_region3(0, 512);
-    EXPECT_TRUE(buffer->get_backing_buffer()->is_valid_region(buffer_region3));
+    EXPECT_TRUE(buffer->get_backing_buffer()->impl()->is_valid_region(buffer_region3));
 
     const BufferRegion buffer_region4(512, 512);
-    EXPECT_TRUE(buffer->get_backing_buffer()->is_valid_region(buffer_region4));
+    EXPECT_TRUE(buffer->get_backing_buffer()->impl()->is_valid_region(buffer_region4));
 }
 
 TEST_F(MeshDeviceSingleCardBufferFixture, TestPartialBufferRegion) {
@@ -54,13 +54,13 @@ TEST_F(MeshDeviceSingleCardBufferFixture, TestPartialBufferRegion) {
         distributed::MeshBuffer::create(buffer_config, local_config, this->devices_[0].get());
 
     const BufferRegion buffer_region1(1024, 1024);
-    EXPECT_TRUE(buffer->get_backing_buffer()->is_valid_partial_region(buffer_region1));
+    EXPECT_TRUE(buffer->get_backing_buffer()->impl()->is_valid_partial_region(buffer_region1));
 
     const BufferRegion buffer_region2(0, 1024);
-    EXPECT_TRUE(buffer->get_backing_buffer()->is_valid_partial_region(buffer_region2));
+    EXPECT_TRUE(buffer->get_backing_buffer()->impl()->is_valid_partial_region(buffer_region2));
 
     const BufferRegion buffer_region3(512, 1024);
-    EXPECT_TRUE(buffer->get_backing_buffer()->is_valid_partial_region(buffer_region3));
+    EXPECT_TRUE(buffer->get_backing_buffer()->impl()->is_valid_partial_region(buffer_region3));
 }
 
 TEST_F(MeshDeviceSingleCardBufferFixture, TestFullBufferRegion) {
@@ -70,7 +70,7 @@ TEST_F(MeshDeviceSingleCardBufferFixture, TestFullBufferRegion) {
         distributed::MeshBuffer::create(buffer_config, local_config, this->devices_[0].get());
 
     const BufferRegion buffer_region(0, 2048);
-    EXPECT_FALSE(buffer->get_backing_buffer()->is_valid_partial_region(buffer_region));
+    EXPECT_FALSE(buffer->get_backing_buffer()->impl()->is_valid_partial_region(buffer_region));
 }
 
 }  // namespace tt::tt_metal

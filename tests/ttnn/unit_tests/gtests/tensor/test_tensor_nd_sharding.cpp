@@ -317,7 +317,7 @@ TEST_P(NDShardingBufferSizeTests, TestBufferSize) {
     auto buffer = tensor.buffer();
     EXPECT_EQ(buffer->size(), params.expected_buffer_size);
     EXPECT_EQ(buffer->num_pages(), params.expected_num_pages);
-    EXPECT_EQ(buffer->num_dev_pages(), params.expected_num_dev_pages);
+    EXPECT_EQ(buffer->impl()->num_dev_pages(), params.expected_num_dev_pages);
     EXPECT_EQ(buffer->aligned_size_per_bank(), params.expected_aligned_size_per_bank);
 }
 

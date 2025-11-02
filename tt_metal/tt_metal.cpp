@@ -1265,7 +1265,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         sub_device_id);
 }
 
-void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
+void DeallocateBuffer(Buffer& buffer) { buffer.impl()->deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());

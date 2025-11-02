@@ -100,17 +100,18 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
     /* These are the params allocator cares about; check all of them */
     EXPECT_EQ(shard_view->num_cores().value(), params.expected.num_cores);
     // For BufferDistributionSpec, defined as: max number of pages per core * num_cores
-    EXPECT_EQ(shard_view->num_dev_pages(), params.expected.num_dev_pages);
+    EXPECT_EQ(shard_view->impl()->num_dev_pages(), params.expected.num_dev_pages);
 
     // Alignment is handled internally, not testing that here
     // In local device buffer, defined as: num_dev_pages * aligned_page_size
-    EXPECT_EQ(shard_view->aligned_size(), params.expected.aligned_size);
+    EXPECT_EQ(shard_view->impl()->aligned_size(), params.expected.aligned_size);
     // In local device buffer, calculated from: aligned_size, aligned_page_size, num_banks, alignment
     // TODO: Fix local device buffer implementation to use aligned_size / num_cores? They should be equal...
     // - Need to make shard_view->num_cores() not optional...
     EXPECT_EQ(shard_view->aligned_size_per_bank(), params.expected.aligned_size_per_bank);
-    EXPECT_EQ(shard_view->aligned_size() % shard_view->num_cores().value(), 0);
-    EXPECT_EQ(shard_view->aligned_size_per_bank(), shard_view->aligned_size() / shard_view->num_cores().value());
+    EXPECT_EQ(shard_view->impl()->aligned_size() % shard_view->num_cores().value(), 0);
+    EXPECT_EQ(
+        shard_view->aligned_size_per_bank(), shard_view->impl()->aligned_size() / shard_view->num_cores().value());
 }
 
 // clang-format off

@@ -151,7 +151,7 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     this->globally_allocated_address_ = buffer.address();
     this->dynamic_cb_ = true;
     this->max_size_ = buffer.aligned_size_per_bank();
-    this->buffer_size_ = buffer.aligned_size();
+    this->buffer_size_ = buffer.impl()->aligned_size();
     this->shadow_global_buffer = &buffer;
     this->set_total_size(total_size);
     return *this;

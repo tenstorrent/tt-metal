@@ -173,13 +173,8 @@ struct BufferRegion {
     BufferRegion(DeviceAddr offset, DeviceAddr size) : offset(offset), size(size) {}
 };
 
+class BufferImpl;
 class Buffer final : public std::enable_shared_from_this<Buffer> {
-    // Used in public Buffer constructors so they are only callable within Buffer
-    // Buffer constructors are public so we can call std::make_shared on Buffer
-    struct Private {
-        explicit Private() = default;
-    };
-
 public:
     static std::shared_ptr<Buffer> create(
         IDevice* device,
@@ -209,6 +204,93 @@ public:
     Buffer(Buffer&& other) = delete;
     Buffer& operator=(Buffer&& other) = delete;
     ~Buffer();
+
+    IDevice* device() const;
+    Allocator* allocator() const;
+    DeviceAddr size() const;
+
+    // Returns address of buffer in the first bank
+    uint32_t address() const;
+
+    DeviceAddr page_size() const;
+    // Single Usage from view op
+    void set_page_size(DeviceAddr page_size);
+
+    uint32_t num_pages() const;
+
+    BufferType buffer_type() const;
+    CoreType core_type() const;
+
+    bool is_l1() const;
+    bool is_dram() const;
+
+    TensorMemoryLayout buffer_layout() const;
+
+    // Single Usage from reports.cpp
+    DeviceAddr page_address(DeviceAddr bank_id, DeviceAddr page_index) const;
+
+    uint32_t alignment() const;
+    DeviceAddr aligned_page_size() const;
+    DeviceAddr aligned_size_per_bank() const;
+
+    // SHARDED API STARTS HERE
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
+    ShardSpecBuffer shard_spec() const;
+    // Single Usage from view op
+    void set_shard_spec(const ShardSpecBuffer& shard_spec);
+    std::optional<uint32_t> num_cores() const;
+    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping();
+
+    // Single usage from graph_processor
+    size_t unique_id() const;
+
+    BufferImpl* impl();
+    const BufferImpl* impl() const;
+
+    Buffer(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args,
+        std::optional<bool> bottom_up,
+        std::optional<SubDeviceId> sub_device_id,
+        bool owns_data);
+
+private:
+    std::unique_ptr<BufferImpl> pimpl_;
+};
+
+class BufferImpl {
+public:
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args = std::nullopt,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+    static std::shared_ptr<Buffer> create(
+        IDevice* device,
+        DeviceAddr address,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args = std::nullopt,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+
+    // Creates a view of the region of the buffer.
+    // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
+    // The view keeps the underlying buffer alive as long as the view is alive.
+    std::shared_ptr<Buffer> view(const BufferRegion& region);
+
+    BufferImpl(const Buffer& other) = delete;
+    BufferImpl& operator=(const BufferImpl& other) = delete;
+    BufferImpl(BufferImpl&& other) = delete;
+    BufferImpl& operator=(BufferImpl&& other) = delete;
+    ~BufferImpl();
 
     IDevice* device() const { return device_; }
     Allocator* allocator() const { return allocator_; }
@@ -266,7 +348,7 @@ public:
     // Mark the buffer as deallocated, without releasing underlying device memory
     void mark_as_deallocated();
 
-    Buffer(
+    BufferImpl(
         IDevice* device,
         DeviceAddr size,
         DeviceAddr page_size,
@@ -275,7 +357,7 @@ public:
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
-        Private);
+        Buffer* pimpl_owner_);
 
 private:
     enum class AllocationStatus : uint8_t {
@@ -323,6 +405,8 @@ private:
 
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
+
+    Buffer* const pimpl_owner;
 };
 
 }  // namespace tt::tt_metal

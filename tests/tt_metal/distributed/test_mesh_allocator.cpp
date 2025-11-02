@@ -29,7 +29,7 @@ TEST_F(MeshAllocatorTest, BasicAllocationSanityCheck) {
 
     auto buffer = CreateBuffer(config);
 
-    EXPECT_TRUE(buffer->is_allocated());
+    EXPECT_TRUE(buffer->impl()->is_allocated());
     EXPECT_EQ(buffer->size(), allocation_size);
     EXPECT_EQ(buffer->buffer_type(), buffer_type);
 }
