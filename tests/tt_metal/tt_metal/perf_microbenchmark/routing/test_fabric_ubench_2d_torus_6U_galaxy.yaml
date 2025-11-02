@@ -50,7 +50,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     parametrization_params:
       num_links: [1, 2, 3, 4]
@@ -71,7 +71,7 @@ Tests:
     fabric_setup:
       topology: Torus
       torus_config: XY
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     parametrization_params:
       num_links: [1, 2, 3, 4]

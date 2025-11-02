@@ -1634,9 +1634,9 @@ private:
 struct ReceiverCreditManager {
     ReceiverCreditManager() : credit_fields_(0, 0, 0) {}
 
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
-        ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+        ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC>::parse_and_setup(
             arg_idx, packet_header_address, packet_header_);
 
         credit_fields_ = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
@@ -1646,7 +1646,7 @@ struct ReceiverCreditManager {
     }
 
     // Initialize with credit info and fabric connection array
-    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    template <bool IS_2D_FABRIC>
     void init(
         size_t& arg_idx, FabricConnectionArray* connections, uint8_t connection_idx, uint32_t credit_header_address) {
         connection_manager_ = connections;
@@ -1662,7 +1662,7 @@ struct ReceiverCreditManager {
         }
 
         packet_header_ = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(credit_header_address);
-        setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(arg_idx, credit_header_address);
+        setup_packet_header<IS_2D_FABRIC>(arg_idx, credit_header_address);
     }
 
     // Called after each packet is processed
@@ -2013,7 +2013,7 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
 2.1. TrafficConfigCommonFields
 2.2. Noc send type fields
 */
-template <uint8_t NUM_TRAFFIC_CONFIGS, uint8_t NUM_CREDIT_CONNECTIONS, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+template <uint8_t NUM_TRAFFIC_CONFIGS, uint8_t NUM_CREDIT_CONNECTIONS, bool IS_2D_FABRIC>
 struct ReceiverKernelConfig {
     static ReceiverKernelConfig build_from_args(
         const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
@@ -2113,7 +2113,7 @@ private:
                 // Allocate space for pre-built credit return header using memory map
                 const uint32_t credit_header_address = this->memory_map.get_credit_header_address();
                 const uint8_t connection_idx = traffic_config_to_credit_connection_map[i];
-                credit_managers_[i].template init<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+                credit_managers_[i].template init<IS_2D_FABRIC>(
                     local_args_idx, &credit_connections, connection_idx, credit_header_address);
 
                 // Link the credit manager to this traffic config so advance() can call it automatically

@@ -339,7 +339,7 @@ Tests:
     enable_flow_control: true
     fabric_setup:
       topology: Mesh
-      routing_type: Dynamic
+      routing_type: LowLatency
 
     parametrization_params:
       ftype: [unicast, mcast]
