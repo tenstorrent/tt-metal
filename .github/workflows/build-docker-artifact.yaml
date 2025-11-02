@@ -99,15 +99,66 @@ jobs:
             LATEST_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           fi
           
-          echo "Using version: $LATEST_VERSION"
+          echo "Base semantic version: $LATEST_VERSION"
           
-          # Use semantic version for all tags
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${LATEST_VERSION}" >> $GITHUB_OUTPUT
+          # Generate unique suffix based on content hash of key files for CI/Dev/Test images
+          CONTENT_HASH=$(cat \
+            .github/workflows/build-docker-artifact.yaml \
+            dockerfile/Dockerfile \
+            docs/requirements-docs.txt \
+            install_dependencies.sh \
+            tests/sweep_framework/requirements-sweeps.txt \
+            tt_metal/python_env/requirements-dev.txt \
+            tt_metal/sfpi-info.sh \
+            tt_metal/sfpi-version \
+            scripts/ttexalens_ref.txt \
+            tools/triage/requirements.txt \
+            | sha1sum | cut -c1-8)
+          
+          # Generate unique suffix for basic-dev image
+          BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -c1-8)
+          
+          # Generate unique suffix for basic-ttnn-runtime image
+          BASIC_TTNN_RUNTIME_HASH=$(cat \
+            dockerfile/Dockerfile.basic-dev \
+            install_dependencies.sh \
+            tt_metal/sfpi-info.sh \
+            tt_metal/sfpi-version \
+            | sha1sum | cut -c1-8)
+          
+          # Generate unique suffix for manylinux image
+          MANYLINUX_HASH=$(cat \
+            .github/workflows/build-docker-artifact.yaml \
+            dockerfile/Dockerfile.manylinux \
+            install_dependencies.sh \
+            tt_metal/sfpi-info.sh \
+            tt_metal/sfpi-version \
+            | sha1sum | cut -c1-8)
+          
+          # Combine semantic version with content hash for unique, meaningful tags
+          CI_BUILD_VERSION="${LATEST_VERSION}-${CONTENT_HASH}"
+          CI_TEST_VERSION="${LATEST_VERSION}-${CONTENT_HASH}"
+          DEV_VERSION="${LATEST_VERSION}-${CONTENT_HASH}"
+          BASIC_DEV_VERSION="${LATEST_VERSION}-${BASIC_DEV_HASH}"
+          BASIC_TTNN_RUNTIME_VERSION="${LATEST_VERSION}-${BASIC_TTNN_RUNTIME_HASH}"
+          MANYLINUX_VERSION="${LATEST_VERSION}-${MANYLINUX_HASH}"
+          
+          echo "=== Docker Image Tags ==="
+          echo "CI Build:             ${CI_BUILD_VERSION}"
+          echo "CI Test:              ${CI_TEST_VERSION}"
+          echo "Dev:                  ${DEV_VERSION}"
+          echo "Basic Dev:            ${BASIC_DEV_VERSION}"
+          echo "Basic TTNN Runtime:   ${BASIC_TTNN_RUNTIME_VERSION}"
+          echo "Manylinux:            ${MANYLINUX_VERSION}"
+          echo "========================="
+          
+          # Output the tags
+          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${CI_BUILD_VERSION}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${CI_TEST_VERSION}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${DEV_VERSION}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_VERSION}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_VERSION}" >> $GITHUB_OUTPUT
+          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_VERSION}" >> $GITHUB_OUTPUT
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
