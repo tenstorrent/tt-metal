@@ -30,20 +30,24 @@ void tensor_print(const Tensor& input_tensor);
 
 Tensor tensor_pad(
     const Tensor& input_tensor,
-    const ttnn::Shape& output_padded_shape,
-    const ttnn::Shape& input_tensor_start,
+    const tt::tt_metal::Shape& output_padded_shape,
+    const tt::tt_metal::Shape& input_tensor_start,
     float pad_value);
 
 Tensor tensor_unpad(
-    const Tensor& input_tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
+    const Tensor& input_tensor,
+    const tt::tt_metal::Shape& output_tensor_start,
+    const tt::tt_metal::Shape& output_tensor_end);
 
 Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value);
 
-Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& output_tensor_shape);
+Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& output_tensor_shape);
 
-Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape);
+Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor tensor_reshape(
-    const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape);
+    const Tensor& input_tensor,
+    const tt::tt_metal::Shape& new_logical_shape,
+    const tt::tt_metal::Shape& new_padded_shape);
 
 Tensor tensor_view(const Tensor& input_tensor, const tt::tt_metal::Shape& new_shape);
 Tensor tensor_view(

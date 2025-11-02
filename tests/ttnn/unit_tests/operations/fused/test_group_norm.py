@@ -709,7 +709,8 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
         return tt_output_tensor_host
 
     # Execute low-accuracy groupnorm
-    config_low = ttnn.WormholeComputeKernelConfig(
+    config_low = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -719,7 +720,8 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     _, pcc_low = comp_pcc(torch_output_tensor, tt_output_low)
 
     # Execute high-accuracy groupnorm
-    config_high = ttnn.WormholeComputeKernelConfig(
+    config_high = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
