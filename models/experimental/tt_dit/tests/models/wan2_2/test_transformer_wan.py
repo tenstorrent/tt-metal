@@ -365,7 +365,9 @@ def test_wan_transformer_model(
         end = time.time()
         logger.info(f"Time taken to load state dict: {end - start} seconds")
 
-    tensor_io = quantization_helper.TensorIO(mesh_device, filter_key="attention")
+    tensor_io = quantization_helper.TensorIO(
+        mesh_device, filter_key="attention", ccl_manager=ccl_manager, parallel_config=parallel_config
+    )
 
     # Run TT model
     logger.info(

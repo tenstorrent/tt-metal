@@ -131,7 +131,7 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis):
+    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -156,7 +156,13 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
-                output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                output_buffer = ttnn.from_torch(
+                    torch.empty(output_buffer_shape),
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
