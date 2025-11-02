@@ -2,21 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
-    comp_pcc,
     comp_and_get_pcc,
 )
 import ttnn
 from loguru import logger
 import pytest
-from enum import Enum
 from typing import Optional
-from models.common.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 import math
-import numpy as np
 from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
@@ -602,7 +596,6 @@ def run_scaled_dot_product_attention_decode(
 
     failures = []
     all_pcc_values = []
-    all_pos_pass = True
     tolerance = 0.95
     active_users = torch.tensor(cur_pos) != -1
     max_cur_pos = max(cur_pos)
@@ -751,20 +744,21 @@ def run_scaled_dot_product_attention_decode(
         (
             ttnn.CoreCoord(0, 0),
             None,
-        )(
-            ttnn.CoreCoord(1, 0),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-                ]
-            ),
         ),
         (
             ttnn.CoreCoord(0, 0),
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+                ]
+            ),
+        ),
+        (
+            ttnn.CoreCoord(1, 0),
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
                 ]
             ),
         ),
@@ -843,7 +837,7 @@ def test_sdpa_decode_core(
         pytest.skip("Paged attention is only supported for causal attention.")
 
     if nkv > 1 and q_dtype != ttnn.bfloat16:
-        pytest.skip("For Grouped Query Attention (nkv > 1)we require q_dtype to be bfloat16.")
+        pytest.skip("For Grouped Query Attention (nkv > 1) we require q_dtype to be bfloat16.")
 
     if not is_causal and (sharded_in or sharded_out):
         pytest.skip("Sharded input and output are only supported for causal attention.")
