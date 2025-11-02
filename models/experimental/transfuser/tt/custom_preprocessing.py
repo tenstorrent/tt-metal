@@ -10,10 +10,6 @@ from models.experimental.transfuser.reference.stage import Stage
 from models.experimental.transfuser.reference.common import Conv2d
 
 
-# =========================
-# Config / constants
-# =========================
-
 TT_DTYPE = ttnn.bfloat16
 BIAS_SHAPE = (1, 1, 1, -1)
 
@@ -24,11 +20,6 @@ STAGE_STRUCTURE = {
     "layer3": ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "b10", "b11", "b12", "b13"],
     "layer4": ["b1"],
 }
-
-
-# =========================
-# Small helpers
-# =========================
 
 
 def _get_or_create(root: dict, *keys: str) -> dict:
@@ -150,22 +141,12 @@ def _handle_stage(dst: dict, stage_module, stage_name: str, *, mesh_mapper):
             _handle_bottleneck(_get_or_create(stage_dst, block_name), block, mesh_mapper=mesh_mapper)
 
 
-# =========================
-# Added: helpers to mirror your snippet API
-# =========================
-
-
 def preprocess_conv_weight(weight: torch.Tensor, *, dtype=TT_DTYPE, mesh_mapper=None):
     return ttnn.from_torch(weight.contiguous(), dtype=dtype, mesh_mapper=mesh_mapper)
 
 
 def preprocess_conv_bias(bias: torch.Tensor, *, dtype=TT_DTYPE, mesh_mapper=None):
     return ttnn.from_torch(bias.reshape(BIAS_SHAPE).contiguous(), dtype=dtype, mesh_mapper=mesh_mapper)
-
-
-# =========================
-# Channel-downsample to 512 (1×1) handlers
-# =========================
 
 
 def _handle_1x1_downsample_conv(conv_module, *, mesh_mapper, who: str):
@@ -205,11 +186,6 @@ def _handle_1x1_downsample_conv(conv_module, *, mesh_mapper, who: str):
     return {"weight": w_t, "bias": b_t}
 
 
-# =========================
-# Public API
-# =========================
-
-
 def preprocess_conv_parameter(parameter, *, dtype):
     # Kept for API compatibility (your original helper)
     parameter = ttnn.from_torch(parameter, dtype=dtype, layout=ttnn.TILE_LAYOUT)
@@ -220,7 +196,6 @@ def custom_preprocessor(
     model, name, ttnn_module_args, convert_to_ttnn, custom_preprocessor_func=None, mesh_mapper=None
 ):
     """
-    DRY, refactored preprocessor:
     - Handles Conv2d (with inline BN folding)
     - TransfuserBackbone (conv1 for image & lidar, stages layer1..layer4 for both encoders)
     - Channel downsampling 1x1 convs to 512 for image & lidar

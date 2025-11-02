@@ -3,7 +3,6 @@
 import torch
 import ttnn
 from models.experimental.transfuser.tt.utils import TTConv2D
-from loguru import logger
 from models.experimental.transfuser.tt.gpt import TTGpt
 from models.experimental.transfuser.tt.topdown import TtTopDown
 from models.experimental.transfuser.tt.stages import Ttstages
@@ -23,227 +22,138 @@ class TtTransfuserBackbone:
         self.device = device
         self.config = config
         self.inplanes = 32
-        self.conv1 = TTConv2D(
-            kernel_size=3,
-            stride=2,
-            padding=1,
-            parameters=parameters.image_encoder.features.conv1,
-            kernel_fidelity=model_config,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            deallocate_activation=True,
-            reallocate_halo_output=True,
-            reshard_if_not_optimal=True,
-            enable_act_double_buffer=True,
-            enable_weights_double_buffer=True,
-            dtype=ttnn.bfloat16,
-            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
-            packer_l1_acc=model_config.get("packer_l1_acc", True),
-            math_approx_mode=model_config.get("math_approx_mode", False),
-        )
-        self.lidar_conv1 = TTConv2D(
-            kernel_size=3,
-            stride=2,
-            padding=1,
-            parameters=parameters.lidar_encoder._model.conv1,
-            kernel_fidelity=model_config,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            deallocate_activation=True,
-            reallocate_halo_output=True,
-            reshard_if_not_optimal=True,
-            enable_act_double_buffer=True,
-            enable_weights_double_buffer=True,
-            dtype=ttnn.bfloat16,
-            fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
-            packer_l1_acc=model_config.get("packer_l1_acc", True),
-            math_approx_mode=model_config.get("math_approx_mode", False),
-        )
-        # Layer1 for both encoders
-        self.image_layer1 = Ttstages._make_layer(
-            parameters=parameters.image_encoder.features.layer1,
-            planes=72,
-            blocks=2,  # no of bottlenecks
-            stride=2,
-            groups=3,  # conv2
-            model_config=model_config,
-            stage_name="layer1",
-            torch_model=torch_model,
-            use_fallback=use_fallback,
-        )
 
-        self.lidar_layer1 = Ttstages._make_layer(
-            parameters=parameters.lidar_encoder._model.layer1,
-            planes=72,
-            blocks=2,
-            stride=2,
-            groups=3,
-            model_config=model_config,
-            stage_name="layer1",
-        )
+        # ---------- Small factories ----------
+        def make_stem(params):
+            return TTConv2D(
+                kernel_size=3,
+                stride=2,
+                padding=1,
+                parameters=params,
+                kernel_fidelity=model_config,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                deallocate_activation=True,
+                reallocate_halo_output=True,
+                reshard_if_not_optimal=True,
+                enable_act_double_buffer=True,
+                enable_weights_double_buffer=True,
+                dtype=ttnn.bfloat16,
+                fp32_dest_acc_en=model_config.get("fp32_dest_acc_en", True),
+                packer_l1_acc=model_config.get("packer_l1_acc", True),
+                math_approx_mode=model_config.get("math_approx_mode", False),
+            )
 
-        # Layer2 for both encoders
-        self.image_layer2 = Ttstages._make_layer(
-            parameters=parameters.image_encoder.features.layer2,
-            planes=216,
-            blocks=5,
-            stride=2,
-            groups=9,  # conv2
-            model_config=model_config,
-            stage_name="layer2",
-            torch_model=torch_model,
-            use_fallback=use_fallback,
-        )
+        def make_stage(params, *, planes, blocks, s, groups, stage_name, with_torch):
+            return Ttstages._make_layer(
+                parameters=params,
+                planes=planes,
+                blocks=blocks,
+                stride=s,
+                groups=groups,
+                model_config=model_config,
+                stage_name=stage_name,
+                torch_model=(torch_model if with_torch else None),
+                use_fallback=(use_fallback if with_torch else False),
+            )
 
-        self.lidar_layer2 = Ttstages._make_layer(
-            parameters=parameters.lidar_encoder._model.layer2,
-            planes=216,
-            blocks=5,
-            stride=2,
-            groups=9,
-            model_config=model_config,
-            stage_name="layer2",
-        )
+        def make_1x1(params):
+            return TTConv2D(
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                parameters=params,
+                kernel_fidelity=model_config,
+                shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
 
-        # Layer3 for both encoders
-        self.image_layer3 = Ttstages._make_layer(
-            parameters=parameters.image_encoder.features.layer3,
-            planes=576,
-            blocks=13,
-            stride=2,
-            groups=24,  # conv2
-            model_config=model_config,
-            stage_name="layer3",
-            torch_model=torch_model,
-            use_fallback=use_fallback,
-        )
+        # ---------- Parameter roots ----------
+        img = parameters.image_encoder.features
+        lidar = parameters.lidar_encoder._model
 
-        self.lidar_layer3 = Ttstages._make_layer(
-            parameters=parameters.lidar_encoder._model.layer3,
-            planes=576,
-            blocks=13,
-            stride=2,
-            groups=24,
-            model_config=model_config,
-            stage_name="layer3",
-        )
+        # ---------- Stems ----------
+        self.conv1 = make_stem(img.conv1)
+        self.lidar_conv1 = make_stem(lidar.conv1)
 
-        # High accuracy compute kernel config
+        # ---------- Stage specs (shared for image & lidar) ----------
+        # (name, planes, blocks, stride, groups)
+        specs = [
+            ("layer1", 72, 2, 2, 3),
+            ("layer2", 216, 5, 2, 9),
+            ("layer3", 576, 13, 2, 24),
+            ("layer4", 1512, 1, 2, 63),
+        ]
+
+        # Build image stages (with torch_model/use_fallback), and lidar stages (pure TT)
+        for name, planes, blocks, s, groups in specs:
+            setattr(
+                self,
+                f"image_{name}",
+                make_stage(
+                    getattr(img, name),
+                    planes=planes,
+                    blocks=blocks,
+                    s=s,
+                    groups=groups,
+                    stage_name=name,
+                    with_torch=True,
+                ),
+            )
+            setattr(
+                self,
+                f"lidar_{name}",
+                make_stage(
+                    getattr(lidar, name),
+                    planes=planes,
+                    blocks=blocks,
+                    s=s,
+                    groups=groups,
+                    stage_name=name,
+                    with_torch=False,
+                ),
+            )
+
+        # ---------- GPT compute config ----------
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # Layer4 for both encoders
-        self.image_layer4 = Ttstages._make_layer(
-            parameters=parameters.image_encoder.features.layer4,
-            planes=1512,
-            blocks=1,
-            stride=2,
-            groups=63,  # conv2
-            model_config=model_config,
-            stage_name="layer4",
-            torch_model=torch_model,
-            use_fallback=use_fallback,
-        )
 
-        self.lidar_layer4 = Ttstages._make_layer(
-            parameters=parameters.lidar_encoder._model.layer4,
-            planes=1512,
-            blocks=1,
-            stride=2,
-            groups=63,
-            model_config=model_config,
-            stage_name="layer4",
-        )
+        # ---------- Transformers 1..4 ----------
+        # n_embd aligns with the planes of layer1..layer4
+        embds = {1: 72, 2: 216, 3: 576, 4: 1512}
+        for i in (1, 2, 3, 4):
+            setattr(
+                self,
+                f"transformer{i}",
+                TTGpt(
+                    device=self.device,
+                    parameters=parameters[f"transformer{i}"],
+                    n_head=config.n_head,
+                    n_layer=config.n_layer,
+                    use_velocity=config.use_velocity,
+                    img_vert_anchors=config.img_vert_anchors,
+                    img_horz_anchors=config.img_horz_anchors,
+                    lidar_vert_anchors=config.lidar_vert_anchors,
+                    lidar_horz_anchors=config.lidar_horz_anchors,
+                    seq_len=config.seq_len,
+                    n_embd=embds[i],
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=compute_kernel_config,
+                ),
+            )
 
-        self.transformer1 = TTGpt(
-            device=self.device,
-            parameters=parameters["transformer1"],
-            n_head=config.n_head,
-            n_layer=config.n_layer,
-            use_velocity=config.use_velocity,
-            img_vert_anchors=config.img_vert_anchors,
-            img_horz_anchors=config.img_horz_anchors,
-            lidar_vert_anchors=config.lidar_vert_anchors,
-            lidar_horz_anchors=config.lidar_horz_anchors,
-            seq_len=config.seq_len,
-            n_embd=72,  # layer1 output channels
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=compute_kernel_config,
-        )
-        self.transformer2 = TTGpt(
-            device=self.device,
-            parameters=parameters["transformer2"],
-            n_head=config.n_head,
-            n_layer=config.n_layer,
-            use_velocity=config.use_velocity,
-            img_vert_anchors=config.img_vert_anchors,
-            img_horz_anchors=config.img_horz_anchors,
-            lidar_vert_anchors=config.lidar_vert_anchors,
-            lidar_horz_anchors=config.lidar_horz_anchors,
-            seq_len=config.seq_len,
-            n_embd=216,  # layer2 output channels
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=compute_kernel_config,
-        )
-        self.transformer3 = TTGpt(
-            device=self.device,
-            parameters=parameters["transformer3"],
-            n_head=config.n_head,
-            n_layer=config.n_layer,
-            use_velocity=config.use_velocity,
-            img_vert_anchors=config.img_vert_anchors,
-            img_horz_anchors=config.img_horz_anchors,
-            lidar_vert_anchors=config.lidar_vert_anchors,
-            lidar_horz_anchors=config.lidar_horz_anchors,
-            seq_len=config.seq_len,
-            n_embd=576,  # layer3 output channels
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=compute_kernel_config,
-        )
-        self.transformer4 = TTGpt(
-            device=self.device,
-            parameters=parameters["transformer4"],
-            n_head=config.n_head,
-            n_layer=config.n_layer,
-            use_velocity=config.use_velocity,
-            img_vert_anchors=config.img_vert_anchors,
-            img_horz_anchors=config.img_horz_anchors,
-            lidar_vert_anchors=config.lidar_vert_anchors,
-            lidar_horz_anchors=config.lidar_horz_anchors,
-            seq_len=config.seq_len,
-            n_embd=1512,  # layer4 output channels
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            compute_kernel_config=compute_kernel_config,
-        )
-
+        # ---------- Optional channel adapters ----------
         if self.config.perception_output_features != 1512:
-            self.change_channel_conv_image = TTConv2D(
-                kernel_size=1,
-                stride=1,
-                padding=0,
-                parameters=parameters.change_channel_conv_image,
-                kernel_fidelity=model_config,
-                shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-            )
-            self.change_channel_conv_lidar = TTConv2D(
-                kernel_size=1,
-                stride=1,
-                padding=0,
-                parameters=parameters.change_channel_conv_lidar,
-                kernel_fidelity=model_config,
-                shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-            )
+            self.change_channel_conv_image = make_1x1(parameters.change_channel_conv_image)
+            self.change_channel_conv_lidar = make_1x1(parameters.change_channel_conv_lidar)
+
+        # ---------- Top-down head ----------
         self.top_down = TtTopDown(
             device=device,
             parameters=parameters,
@@ -279,44 +189,73 @@ class TtTransfuserBackbone:
         return x
 
     def __call__(self, image_x, lidar_x, velocity, device):
-        # Process image input
+        def _avgpool_to_L1(x, shape, out_hw):
+            return ttnn.sharded_to_interleaved(
+                ttnn.adaptive_avg_pool2d(
+                    input_tensor=x,
+                    batch_size=shape[0],
+                    input_h=shape[1],
+                    input_w=shape[2],
+                    channels=shape[3],
+                    output_size=out_hw,
+                ),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+        def _avgpool_to_L1_lidar_layer4(x, shape, out_hw):
+            return ttnn.sharded_to_interleaved(
+                ttnn.adaptive_avg_pool2d(
+                    input_tensor=x,
+                    batch_size=shape[0],
+                    input_h=shape[1],
+                    input_w=shape[2],
+                    channels=shape[3],
+                    output_size=out_hw,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                ),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+        def _interp_bilinear_rm_dram_pad_slice_back_to_tile(feat, pad_c, scale, slice_to):
+            # ROW_MAJOR + DRAM, optional pad(channel), upsample, optional slice, back to TILE
+            out = ttnn.to_layout(feat, ttnn.ROW_MAJOR_LAYOUT)
+            out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+            if pad_c and pad_c > 0:
+                out = ttnn.pad(out, padding=((0, 0), (0, 0), (0, 0), (0, pad_c)), value=0.0)
+            out = ttnn.upsample(out, scale_factor=scale, mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if slice_to is not None:
+                out = ttnn.slice(out, [0, 0, 0, 0], slice_to)
+            return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+
+        # ---------- input normalize (unchanged) ----------
         image_x = self.normalize_imagenet_ttnn(image_x)
-        logger.info(f"image_encoder_conv1")
+
+        # image_encoder_conv1
         image_out, image_shape = self.conv1(device, image_x, image_x.shape)
-        logger.info(f"lidar_encoder_conv1")
-        # Process lidar input
+
+        # lidar_encoder_conv1
         lidar_out, lidar_shape = self.lidar_conv1(device, lidar_x, lidar_x.shape)
-        logger.info(f"image_encoder_layer1")
-        # Process layer1 blocks
+
+        # image_encoder_layer1
         for block in self.image_layer1:
             image_out, image_shape = block(image_out, device, image_shape)
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"lidar_encoder_layer1")
+
+        # lidar_encoder_layer1
         for block in self.lidar_layer1:
             lidar_out, lidar_shape = block(lidar_out, device, lidar_shape)
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"img_avgpool")
-        image_embd_layer1 = ttnn.adaptive_avg_pool2d(
-            input_tensor=image_out,
-            batch_size=image_shape[0],
-            input_h=image_shape[1],
-            input_w=image_shape[2],
-            channels=image_shape[3],
-            output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
-        )
-        logger.info(f"lidar_avgpool")
-        lidar_embd_layer1 = ttnn.adaptive_avg_pool2d(
-            input_tensor=lidar_out,
-            batch_size=lidar_shape[0],
-            input_h=lidar_shape[1],
-            input_w=lidar_shape[2],
-            channels=lidar_shape[3],
-            output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
-        )
-        logger.info(f"Layer1 transformer")
-        image_embd_layer1 = ttnn.sharded_to_interleaved(image_embd_layer1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        lidar_embd_layer1 = ttnn.sharded_to_interleaved(lidar_embd_layer1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # Layer1 avgpool - image
+        image_embd_layer1 = _avgpool_to_L1(
+            image_out, image_shape, [self.config.img_vert_anchors, self.config.img_horz_anchors]
+        )
+        # Layer1 avgpool - lidar
+        lidar_embd_layer1 = _avgpool_to_L1(
+            lidar_out, lidar_shape, [self.config.lidar_vert_anchors, self.config.lidar_horz_anchors]
+        )
+
+        # Layer1 transformer
         image_features_layer1, lidar_features_layer1 = self.transformer1(
             image_embd_layer1, lidar_embd_layer1, velocity, 72
         )
@@ -324,68 +263,43 @@ class TtTransfuserBackbone:
         image_features_layer1 = ttnn.permute(image_features_layer1, (0, 2, 3, 1))
         lidar_features_layer1 = ttnn.permute(lidar_features_layer1, (0, 2, 3, 1))
 
-        logger.info(f"Layer1 image and lidar interpolation- bilinear")
-        logger.info(f"bilinear_image")
-        image_features_layer1 = ttnn.to_layout(image_features_layer1, ttnn.ROW_MAJOR_LAYOUT)
-        image_features_layer1 = ttnn.to_memory_config(image_features_layer1, ttnn.DRAM_MEMORY_CONFIG)
-        image_features_layer1 = ttnn.pad(
-            image_features_layer1, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0  # Pad 24 channels (96 - 72)
+        # Layer1 bilinear interpolation - image
+        image_features_layer1 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            image_features_layer1, pad_c=24, scale=(8, 8), slice_to=[1, 40, 176, 72]
         )
-        image_features_layer1 = ttnn.upsample(
-            image_features_layer1, scale_factor=(8, 8), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Layer1 bilinear interpolation - lidar
+        lidar_features_layer1 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            lidar_features_layer1, pad_c=24, scale=(8, 8), slice_to=[1, 64, 64, 72]
         )
-        # Slice back to original 72 channels
-        image_features_layer1 = ttnn.slice(image_features_layer1, [0, 0, 0, 0], [1, 40, 176, 72])
-        image_features_layer1 = ttnn.to_layout(image_features_layer1, ttnn.TILE_LAYOUT)
 
-        logger.info(f"bilinear_lidar")
-        lidar_features_layer1 = ttnn.to_layout(lidar_features_layer1, ttnn.ROW_MAJOR_LAYOUT)
-        lidar_features_layer1 = ttnn.to_memory_config(lidar_features_layer1, ttnn.DRAM_MEMORY_CONFIG)
-        lidar_features_layer1 = ttnn.pad(lidar_features_layer1, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0)
-        lidar_features_layer1 = ttnn.upsample(
-            lidar_features_layer1, scale_factor=(8, 8), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        # Slice back to original 72 channels
-        lidar_features_layer1 = ttnn.slice(lidar_features_layer1, [0, 0, 0, 0], [1, 64, 64, 72])
-        lidar_features_layer1 = ttnn.to_layout(lidar_features_layer1, ttnn.TILE_LAYOUT)
-        logger.info("Image and lidar - add")
+        # Layer1 Add
         image_out = ttnn.reshape(image_out, image_features_layer1.shape)
         lidar_out = ttnn.reshape(lidar_out, lidar_features_layer1.shape)
         image_features = ttnn.add(image_out, image_features_layer1)
         lidar_features = ttnn.add(lidar_out, lidar_features_layer1)
         image_shape = image_features.shape
         lidar_shape = lidar_features.shape
-        logger.info(f"image_encoder_layer2")
+
+        # image_encoder_layer2
         for block in self.image_layer2:
             image_features, image_shape = block(image_features, device, image_shape)
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"lidar_encoder_layer2")
+
+        # lidar_encoder_layer2
         for block in self.lidar_layer2:
             lidar_features, lidar_shape = block(lidar_features, device, lidar_shape)
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"img2_avgpool")
-        image_embd_layer2 = ttnn.adaptive_avg_pool2d(
-            input_tensor=image_features,
-            batch_size=image_shape[0],
-            input_h=image_shape[1],
-            input_w=image_shape[2],
-            channels=image_shape[3],
-            output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
+
+        # Layer2 avgpool - image
+        image_embd_layer2 = _avgpool_to_L1(
+            image_features, image_shape, [self.config.img_vert_anchors, self.config.img_horz_anchors]
+        )
+        # Layer2 avgpool - lidar
+        lidar_embd_layer2 = _avgpool_to_L1(
+            lidar_features, lidar_shape, [self.config.lidar_vert_anchors, self.config.lidar_horz_anchors]
         )
 
-        logger.info(f"lidar2_avgpool")
-        lidar_embd_layer2 = ttnn.adaptive_avg_pool2d(
-            input_tensor=lidar_features,
-            batch_size=lidar_shape[0],
-            input_h=lidar_shape[1],
-            input_w=lidar_shape[2],
-            channels=lidar_shape[3],
-            output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
-        )
-
-        logger.info(f"layer2 transformer")
-        image_embd_layer2 = ttnn.sharded_to_interleaved(image_embd_layer2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        lidar_embd_layer2 = ttnn.sharded_to_interleaved(lidar_embd_layer2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # layer2 transformer
         image_features_layer2, lidar_features_layer2 = self.transformer2(
             image_embd_layer2, lidar_embd_layer2, velocity, 216
         )
@@ -393,30 +307,16 @@ class TtTransfuserBackbone:
         image_features_layer2 = ttnn.permute(image_features_layer2, (0, 2, 3, 1))
         lidar_features_layer2 = ttnn.permute(lidar_features_layer2, (0, 2, 3, 1))
 
-        logger.info(f"Layer2 image and lidar interpolation- bilinear")
-        logger.info(f"bilinear_image")
-        image_features_layer2 = ttnn.to_layout(image_features_layer2, ttnn.ROW_MAJOR_LAYOUT)
-        image_features_layer2 = ttnn.to_memory_config(image_features_layer2, ttnn.DRAM_MEMORY_CONFIG)
-        image_features_layer2 = ttnn.pad(image_features_layer2, padding=((0, 0), (0, 0), (0, 0), (0, 8)), value=0.0)
-        image_features_layer2 = ttnn.upsample(
-            image_features_layer2, scale_factor=(4, 4), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Layer2 bilinear interpolation - image
+        image_features_layer2 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            image_features_layer2, pad_c=8, scale=(4, 4), slice_to=[1, 20, 88, 216]
         )
-        # Slice back to original 216 channels
-        image_features_layer2 = ttnn.slice(image_features_layer2, [0, 0, 0, 0], [1, 20, 88, 216])
-        image_features_layer2 = ttnn.to_layout(image_features_layer2, ttnn.TILE_LAYOUT)
-
-        logger.info(f"bilinear_lidar")
-        lidar_features_layer2 = ttnn.to_layout(lidar_features_layer2, ttnn.ROW_MAJOR_LAYOUT)
-        lidar_features_layer2 = ttnn.to_memory_config(lidar_features_layer2, ttnn.DRAM_MEMORY_CONFIG)
-        lidar_features_layer2 = ttnn.pad(lidar_features_layer2, padding=((0, 0), (0, 0), (0, 0), (0, 8)), value=0.0)
-        lidar_features_layer2 = ttnn.upsample(
-            lidar_features_layer2, scale_factor=(4, 4), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Layer2 bilinear interpolation - lidar
+        lidar_features_layer2 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            lidar_features_layer2, pad_c=8, scale=(4, 4), slice_to=[1, 32, 32, 216]
         )
-        # Slice back to original 216 channels
-        lidar_features_layer2 = ttnn.slice(lidar_features_layer2, [0, 0, 0, 0], [1, 32, 32, 216])
-        lidar_features_layer2 = ttnn.to_layout(lidar_features_layer2, ttnn.TILE_LAYOUT)
 
-        logger.info("layer2 Image and lidar - add")
+        # layer2 Add
         image_features = ttnn.reshape(image_features, image_features_layer2.shape)
         lidar_features = ttnn.reshape(lidar_features, lidar_features_layer2.shape)
         if image_features.memory_config().buffer_type != ttnn.BufferType.DRAM:
@@ -425,40 +325,27 @@ class TtTransfuserBackbone:
         lidar_features = ttnn.add(lidar_features, lidar_features_layer2)
         image_shape = image_features.shape
         lidar_shape = lidar_features.shape
-        logger.info(f"image_encoder_layer3")
+
+        # image_encoder_layer3
         for block in self.image_layer3:
             image_features, image_shape = block(image_features, device, image_shape)
-
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"lidar_encoder_layer3")
+
+        # lidar_encoder_layer3
         for block in self.lidar_layer3:
             lidar_features, lidar_shape = block(lidar_features, device, lidar_shape)
-
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"img3_avgpool")
-        image_embd_layer3 = ttnn.adaptive_avg_pool2d(
-            input_tensor=image_features,
-            batch_size=image_shape[0],
-            input_h=image_shape[1],
-            input_w=image_shape[2],
-            channels=image_shape[3],
-            output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
+
+        # Layer3 avgpool - image
+        image_embd_layer3 = _avgpool_to_L1(
+            image_features, image_shape, [self.config.img_vert_anchors, self.config.img_horz_anchors]
+        )
+        # Layer3 avgpool - lidar
+        lidar_embd_layer3 = _avgpool_to_L1(
+            lidar_features, lidar_shape, [self.config.lidar_vert_anchors, self.config.lidar_horz_anchors]
         )
 
-        logger.info(f"lidar3_avgpool")
-        lidar_embd_layer3 = ttnn.adaptive_avg_pool2d(
-            input_tensor=lidar_features,
-            batch_size=lidar_shape[0],
-            input_h=lidar_shape[1],
-            input_w=lidar_shape[2],
-            channels=lidar_shape[3],
-            output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
-        )
-
-        logger.info(f"layer3 transformer")
-        image_embd_layer3 = ttnn.sharded_to_interleaved(image_embd_layer3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        lidar_embd_layer3 = ttnn.sharded_to_interleaved(lidar_embd_layer3, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+        # layer3 transformer
         image_features_layer3, lidar_features_layer3 = self.transformer3(
             image_embd_layer3, lidar_embd_layer3, velocity, 576
         )
@@ -466,64 +353,43 @@ class TtTransfuserBackbone:
         image_features_layer3 = ttnn.permute(image_features_layer3, (0, 2, 3, 1))
         lidar_features_layer3 = ttnn.permute(lidar_features_layer3, (0, 2, 3, 1))
 
-        logger.info(f"Layer3 image and lidar interpolation- bilinear")
-        logger.info(f"bilinear_image")
-        image_features_layer3 = ttnn.to_layout(image_features_layer3, ttnn.ROW_MAJOR_LAYOUT)
-        image_features_layer3 = ttnn.to_memory_config(image_features_layer3, ttnn.DRAM_MEMORY_CONFIG)
-        image_features_layer3 = ttnn.upsample(
-            image_features_layer3, scale_factor=(2, 2), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Layer3 bilinear interpolation - image
+        image_features_layer3 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            image_features_layer3, pad_c=0, scale=(2, 2), slice_to=None
         )
-        image_features_layer3 = ttnn.to_layout(image_features_layer3, ttnn.TILE_LAYOUT)
-
-        logger.info(f"bilinear_lidar")
-        lidar_features_layer3 = ttnn.to_layout(lidar_features_layer3, ttnn.ROW_MAJOR_LAYOUT)
-        lidar_features_layer3 = ttnn.to_memory_config(lidar_features_layer3, ttnn.DRAM_MEMORY_CONFIG)
-        lidar_features_layer3 = ttnn.upsample(
-            lidar_features_layer3, scale_factor=(2, 2), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Layer3 bilinear interpolation - lidar
+        lidar_features_layer3 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            lidar_features_layer3, pad_c=0, scale=(2, 2), slice_to=None
         )
-        lidar_features_layer3 = ttnn.to_layout(lidar_features_layer3, ttnn.TILE_LAYOUT)
 
-        logger.info("layer3 Image and lidar - add")
+        # layer3 Add
         image_features = ttnn.reshape(image_features, image_features_layer3.shape)
         lidar_features = ttnn.reshape(lidar_features, lidar_features_layer3.shape)
         image_features = ttnn.add(image_features, image_features_layer3)
         lidar_features = ttnn.add(lidar_features, lidar_features_layer3)
         image_shape = image_features.shape
         lidar_shape = lidar_features.shape
-        logger.info(f"image_encoder_layer4")
+
+        # image_encoder_layer4
         for block in self.image_layer4:
             image_features, image_shape = block(image_features, device, image_shape)
-
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"lidar_encoder_layer4")
+
+        # lidar_encoder_layer4
         for block in self.lidar_layer4:
             lidar_features, lidar_shape = block(lidar_features, device, lidar_shape)
-
         ttnn.ReadDeviceProfiler(device)
-        logger.info(f"img4_avgpool")
-        image_embd_layer4 = ttnn.adaptive_avg_pool2d(
-            input_tensor=image_features,
-            batch_size=image_shape[0],
-            input_h=image_shape[1],
-            input_w=image_shape[2],
-            channels=image_shape[3],
-            output_size=[self.config.img_vert_anchors, self.config.img_horz_anchors],
+
+        # Layer4 avgpool - image
+        image_embd_layer4 = _avgpool_to_L1(
+            image_features, image_shape, [self.config.img_vert_anchors, self.config.img_horz_anchors]
+        )
+        # Layer4 avgpool - lidar
+        lidar_embd_layer4 = _avgpool_to_L1_lidar_layer4(
+            lidar_features, lidar_shape, [self.config.lidar_vert_anchors, self.config.lidar_horz_anchors]
         )
 
-        logger.info(f"lidar4_avgpool")
-        lidar_embd_layer4 = ttnn.adaptive_avg_pool2d(
-            input_tensor=lidar_features,
-            batch_size=lidar_shape[0],
-            input_h=lidar_shape[1],
-            input_w=lidar_shape[2],
-            channels=lidar_shape[3],
-            output_size=[self.config.lidar_vert_anchors, self.config.lidar_horz_anchors],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        image_embd_layer4 = ttnn.sharded_to_interleaved(image_embd_layer4, memory_config=ttnn.L1_MEMORY_CONFIG)
-        lidar_embd_layer4 = ttnn.sharded_to_interleaved(lidar_embd_layer4, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        logger.info(f"layer4 transformer")
+        # layer4 transformer
         image_features_layer4, lidar_features_layer4 = self.transformer4(
             image_embd_layer4, lidar_embd_layer4, velocity, 1512
         )
@@ -531,57 +397,41 @@ class TtTransfuserBackbone:
         image_features_layer4 = ttnn.permute(image_features_layer4, (0, 2, 3, 1))
         lidar_features_layer4 = ttnn.permute(lidar_features_layer4, (0, 2, 3, 1))
 
-        logger.info(f"Layer4 image and lidar interpolation- bilinear")
-        logger.info(f"bilinear_image")
-        image_features_layer4 = ttnn.to_layout(image_features_layer4, ttnn.ROW_MAJOR_LAYOUT)
-        image_features_layer4 = ttnn.to_memory_config(image_features_layer4, ttnn.DRAM_MEMORY_CONFIG)
-        image_features_layer4 = ttnn.pad(image_features_layer4, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0)
-        image_features_layer4 = ttnn.upsample(
-            image_features_layer4, scale_factor=(1, 1), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Layer4 bilinear interpolation - image
+        image_features_layer4 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            image_features_layer4, pad_c=24, scale=(1, 1), slice_to=[1, 5, 22, 1512]
         )
-        image_features_layer4 = ttnn.slice(image_features_layer4, [0, 0, 0, 0], [1, 5, 22, 1512])
-        image_features_layer4 = ttnn.to_layout(image_features_layer4, ttnn.TILE_LAYOUT)
-
-        logger.info(f"bilinear_lidar")
-        lidar_features_layer4 = ttnn.to_layout(lidar_features_layer4, ttnn.ROW_MAJOR_LAYOUT)
-        lidar_features_layer4 = ttnn.to_memory_config(lidar_features_layer4, ttnn.DRAM_MEMORY_CONFIG)
-        lidar_features_layer4 = ttnn.pad(lidar_features_layer4, padding=((0, 0), (0, 0), (0, 0), (0, 24)), value=0.0)
-        lidar_features_layer4 = ttnn.upsample(
-            lidar_features_layer4, scale_factor=(1, 1), mode="bilinear", memory_config=ttnn.DRAM_MEMORY_CONFIG
+        # Layer4 bilinear interpolation - lidar
+        lidar_features_layer4 = _interp_bilinear_rm_dram_pad_slice_back_to_tile(
+            lidar_features_layer4, pad_c=24, scale=(1, 1), slice_to=[1, 8, 8, 1512]
         )
-        lidar_features_layer4 = ttnn.slice(lidar_features_layer4, [0, 0, 0, 0], [1, 8, 8, 1512])
-        lidar_features_layer4 = ttnn.to_layout(lidar_features_layer4, ttnn.TILE_LAYOUT)
 
-        logger.info("layer4 Image and lidar - add")
+        # layer4 Add
         image_features = ttnn.reshape(image_features, image_features_layer4.shape)
         lidar_features = ttnn.reshape(lidar_features, lidar_features_layer4.shape)
         image_features = ttnn.add(image_features, image_features_layer4)
         lidar_features = ttnn.add(lidar_features, lidar_features_layer4)
 
-        logger.info("Downsamples channels to 512")
         # Downsamples channels to 512
         image_features, shape_ = self.change_channel_conv_image(device, image_features, image_features.shape)
         lidar_features, shape_l = self.change_channel_conv_lidar(device, lidar_features, lidar_features.shape)
         x4 = lidar_features  # Save for FPN
         image_features_grid = image_features  # For auxiliary information
-        # Reshape before feeding to FPN
         image_features_grid = ttnn.reshape(image_features_grid, shape_)
         x4 = ttnn.reshape(x4, shape_l)
 
-        logger.info("Global average pooling")
         # Global average pooling
         image_features = ttnn.global_avg_pool2d(image_features)
         lidar_features = ttnn.global_avg_pool2d(lidar_features)
 
-        logger.info("Flatten")
         # Flatten
         image_features = ttnn.reshape(image_features, (1, self.config.perception_output_features))
         lidar_features = ttnn.reshape(lidar_features, (1, self.config.perception_output_features))
 
-        logger.info("fused_features")
+        # fused_features
         fused_features = ttnn.add(image_features, lidar_features)
 
-        logger.info("FPN top-down")
+        # FPN top-down
         p2, p3, p4, p5 = self.top_down(x4)
         features = (p2, p3, p4, p5)
 
