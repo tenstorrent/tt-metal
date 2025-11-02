@@ -19,6 +19,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 
 /** @file */
 

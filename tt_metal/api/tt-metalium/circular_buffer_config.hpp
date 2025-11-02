@@ -8,20 +8,19 @@
 #include <map>
 #include <memory>
 
+// Forward Declaration
 namespace tt {
 enum class DataFormat : uint8_t;
 namespace tt_metal {
 class Buffer;
 struct Tile;
+class CircularBufferConfigImpl;  // Internal API
 }  // namespace tt_metal
 }  // namespace tt
 
 namespace tt::tt_metal {
 
 using CBHandle = uintptr_t;
-
-// Internal API
-class CircularBufferConfigImpl;
 
 class CircularBufferConfig {
 public:
