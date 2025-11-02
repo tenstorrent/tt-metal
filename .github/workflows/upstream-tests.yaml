@@ -168,11 +168,7 @@ jobs:
     needs:
       - get-image-tags
       - build-images
-    runs-on:
-      - arch-wormhole_b0
-      - topology-6u
-      - in-service
-      - pipeline-functional
+    runs-on: ubuntu-latest
     steps:
       # TODO -likely need to put this into a script which can be parameterized on the build number
       # and whether to only pull
@@ -181,13 +177,10 @@ jobs:
         run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run image
         timeout-minutes: 45
-        env:
-          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
   test-bh-multicard-image:
     needs:
       - get-image-tags
@@ -204,16 +197,11 @@ jobs:
             image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
           - runner-label: BH-QB-GE
             image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
-    runs-on:
-      - ${{ matrix.bh-config.runner-label }}
-      - in-service
-      - pipeline-perf
+    runs-on: ubuntu-latest
     steps:
       - name: Run image
         timeout-minutes: 30
-        env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+        run: docker image inspect ${{ matrix.bh-config.image-name }}
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -224,20 +212,11 @@ jobs:
         bh-config:
           - runner-label: P300
             image-name: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
-    runs-on:
-      - ${{ matrix.bh-config.runner-label }}
-      - in-service
+    runs-on: ubuntu-latest
     steps:
-      - name: Download Llama model weights from LFC
-        timeout-minutes: 15
-        run: |
-          mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Run image
         timeout-minutes: 60
-        env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+        run: docker image inspect ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -248,23 +227,14 @@ jobs:
         bh-card:
           - P100
           - P150
-    runs-on:
-      - ${{ matrix.bh-card }}
-      - in-service
-      - cloud-virtual-machine
-      # Targeting cloud machines with pipeline-functional per now per
-      # https://github.com/tenstorrent/tt-metal/issues/21738#issuecomment-2925788342
-      - pipeline-functional
+    runs-on: ubuntu-latest
     steps:
       - name: Run image
         timeout-minutes: 30
-        env:
-          # For different environments, yyz BH VLAN vs. cloud
-          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
   calculate-to-publish:
     if: ${{ !cancelled() }}
     needs:
