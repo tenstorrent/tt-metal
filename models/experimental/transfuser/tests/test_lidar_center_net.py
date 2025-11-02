@@ -322,7 +322,7 @@ def test_lidar_center_net(
 ):
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(True)
-    data_root = "models/experimental/transfuser/tests/Scenario3_Town01_curved_route0_11_23_20_02_59/"
+    data_root = "Scenario3_Town01_curved_route0_11_23_20_02_59/"
     frame = "0120"
 
     config = GlobalConfig(setting="eval")
@@ -348,7 +348,7 @@ def test_lidar_center_net(
         lidar_architecture=lidar_architecture,
         use_velocity=use_velocity,
     ).eval()
-    checkpoint_path = "model_ckpt/models_2022/transfuser/model_seed1_39.pth"
+    checkpoint_path = "model_seed1_39.pth"
     modified_state_dict = load_trained_weights(checkpoint_path)
     modified_state_dict = delete_incompatible_keys(
         modified_state_dict,
