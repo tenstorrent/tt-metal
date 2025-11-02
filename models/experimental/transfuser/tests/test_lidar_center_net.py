@@ -39,13 +39,6 @@ def create_lidar_center_net_head_preprocessor(device, weight_dtype=ttnn.bfloat16
             if hasattr(torch_model, head_name):
                 head = getattr(torch_model, head_name)
 
-                # Get output channels for this head
-                out_channels = head[2].weight.shape[0]  # From second conv layer
-
-                # Note: We cannot use prepare_conv_weights here because we need
-                # the full conv2d parameters (batch_size, input_height, etc.)
-                # which are only available at runtime, not during preprocessing.
-                # So we keep weights in PyTorch format and convert at runtime.
                 parameters[head_name] = {}
 
                 # Store weights in PyTorch format - will be prepared during first forward pass
@@ -85,8 +78,6 @@ def compare_boxes_pcc(ref_boxes, torch_boxes):
     """
     pcc_scores = []
 
-    print("Computing PCC between all pairs of boxes...")
-
     # Compare each reference box with all torch boxes
     for i, bbox_ref in enumerate(ref_boxes):
         # Handle different data structures
@@ -99,8 +90,6 @@ def compare_boxes_pcc(ref_boxes, torch_boxes):
             does_pass, pcc_value = check_with_pcc(
                 bbox_ref_array, bbox_torch_array, 0.0
             )  # Use 0.0 threshold to get raw PCC
-            print(f"PCC value: {pcc_value}")
-            print(f"PCC passed: {does_pass}")
             pcc_scores.append((i, j, pcc_value))
 
     # Sort by PCC descending (best first)
@@ -174,7 +163,6 @@ def fix_and_filter_checkpoint_keys(
         The modified state dictionary (OrderedDict) containing only the filtered
         and renamed keys, ready for model loading.
     """
-    print(f"Loading checkpoint from: {checkpoint_path}")
     # 1. Load the checkpoint
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
 
@@ -224,11 +212,6 @@ def load_trained_weights(weight_path: str):
         else:
             state_dict[key] = value
 
-    print(
-        f"Cleaned {len([k for k in checkpoint.keys() if k.startswith('module._model.')])} keys with 'module._model.' prefix"
-    )
-
-    # Add '_model.' prefix to backbone keys for compatibility with model structure
     backbone_keys = [
         "image_encoder",
         "lidar_encoder",
@@ -285,13 +268,12 @@ def delete_incompatible_keys(state_dict: Dict[str, Any], keys_to_delete: List[st
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "image_architecture, lidar_architecture, n_layer, use_velocity, target_point_image_shape, img_shape, lidar_bev_shape",
+    "image_architecture, lidar_architecture, n_layer, use_velocity",
     [
-        ("regnety_032", "regnety_032", 4, False, (1, 1, 256, 256), (1, 3, 160, 704), (1, 2, 256, 256)),
-    ],  # GPT-SelfAttention 1
+        ("regnety_032", "regnety_032", 4, False),
+    ],
 )
 @pytest.mark.parametrize("seed", list(range(1)))
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("use_fallback", [True])
 @pytest.mark.parametrize("use_optimized_self_attn", [False])
@@ -301,11 +283,7 @@ def test_lidar_center_net(
     lidar_architecture,
     n_layer,
     use_velocity,
-    target_point_image_shape,
-    img_shape,
-    lidar_bev_shape,
     seed,
-    input_dtype,
     weight_dtype,
     use_fallback,
     use_optimized_self_attn,
@@ -319,8 +297,6 @@ def test_lidar_center_net(
     config.n_layer = n_layer
     config.use_target_point_image = True
     inputs = process_input(data_root, frame, config=config, normalize_image=False)
-    # Load the saved demo inputs
-    # inputs = torch.load("models/experimental/transfuser/tests/transfuser_inputs_final.pt")
 
     # Extract each component
     image = inputs["image"]  # RGB camera image tensor
@@ -468,29 +444,26 @@ def test_lidar_center_net(
     tt_lidar_bev = ttnn.to_device(tt_lidar_input, device)
     tt_velocity = ttnn.to_device(tt_velocity_input, device)
 
-    # tt_features, tt_pred_wp = tt_layer.forward_ego(tt_image, tt_lidar_bev, tt_velocity, target_point)
     tt_features, tt_fused_features = tt_layer.forward_ego(tt_image, tt_lidar_bev, tt_velocity, target_point)
 
     tt_fused_torch = ttnn.to_torch(tt_fused_features, device=device)
-    does_pass, fused_features_pcc_message = check_with_pcc(ref_fused_features, tt_fused_torch, 0.80)
+    does_pass, fused_features_pcc_message = check_with_pcc(ref_fused_features, tt_fused_torch, 0.97)
     logger.info(f"fused features PCC: {fused_features_pcc_message}")
 
     tt_fused_torch = tt_fused_torch.to(torch.float32)
     tt_pred_wp, _, _, _, _ = ref_layer.forward_gru(tt_fused_torch, target_point)
-    does_pass, pred_wp_pcc_message = check_with_pcc(pred_wp, tt_pred_wp, 0.80)
+    does_pass, pred_wp_pcc_message = check_with_pcc(pred_wp, tt_pred_wp, 0.97)
     logger.info(f"pred wp PCC: {pred_wp_pcc_message}")
-    # assert does_pass, f"pred wp PCC check failed: {pred_wp_pcc_message}"
 
     tt_feature_0 = ttnn.to_torch(tt_features[0], device=device)
     tt_feature_0 = tt_feature_0.to(torch.float32)
     tt_feature_0 = tt_feature_0.permute(0, 3, 1, 2)
-    pcc_passed, pcc_msg = check_with_pcc(ref_feature, tt_feature_0, pcc=0.95)
+    pcc_passed, pcc_msg = check_with_pcc(ref_feature, tt_feature_0, pcc=0.97)
     logger.info(f"Feature PCC: {pcc_msg}")
 
     torch_results = ref_layer.head([tt_feature_0])
-    does_pass, results_pcc_message = check_with_pcc(ref_head_results[0][0], torch_results[0][0], 0.80)
+    does_pass, results_pcc_message = check_with_pcc(ref_head_results[0][0], torch_results[0][0], 0.97)
     logger.info(f"results PCC: {results_pcc_message}")
-    # assert does_pass, f"results PCC check failed: {results_pcc_message}"
 
     # # Unpack list outputs
     (
@@ -511,8 +484,6 @@ def test_lidar_center_net(
     torch_yaw_res = torch_yaw_res_list[0]
     torch_velocity = torch_velocity_list[0]
     torch_brake = torch_brake_list[0]
-
-    # After the pred_wp PCC check, add bbox post-processing for TTNN outputs
 
     # Convert TTNN outputs to torch for get_bboxes (it expects torch tensors)
     tt_preds_torch = (
@@ -549,25 +520,25 @@ def test_lidar_center_net(
 
     top_pcc, all_pcc_scores = compare_boxes_pcc(ref_rotated_bboxes, torch_rotated_bboxes)
 
-    does_pass, wh_pcc_message = check_with_pcc(ref_wh, torch_wh, 0.80)
+    does_pass, wh_pcc_message = check_with_pcc(ref_wh, torch_wh, 0.97)
     logger.info(f"WH PCC: {wh_pcc_message}")
 
-    does_pass, offset_pcc_message = check_with_pcc(ref_offset, torch_offset, 0.80)
+    does_pass, offset_pcc_message = check_with_pcc(ref_offset, torch_offset, 0.97)
     logger.info(f"Offset PCC: {offset_pcc_message}")
 
-    does_pass, yaw_class_pcc_message = check_with_pcc(ref_yaw_class, torch_yaw_class, 0.80)
+    does_pass, yaw_class_pcc_message = check_with_pcc(ref_yaw_class, torch_yaw_class, 0.97)
     logger.info(f"Yaw Class PCC: {yaw_class_pcc_message}")
 
-    does_pass, yaw_res_pcc_message = check_with_pcc(ref_yaw_res, torch_yaw_res, 0.80)
+    does_pass, yaw_res_pcc_message = check_with_pcc(ref_yaw_res, torch_yaw_res, 0.97)
     logger.info(f"Yaw Residual PCC: {yaw_res_pcc_message}")
 
-    does_pass, velocity_pcc_message = check_with_pcc(ref_velocity, torch_velocity, 0.80)
+    does_pass, velocity_pcc_message = check_with_pcc(ref_velocity, torch_velocity, 0.97)
     logger.info(f"Velocity PCC: {velocity_pcc_message}")
 
-    does_pass, brake_pcc_message = check_with_pcc(ref_brake, torch_brake, 0.80)
+    does_pass, brake_pcc_message = check_with_pcc(ref_brake, torch_brake, 0.97)
     logger.info(f"Brake PCC: {brake_pcc_message}")
 
-    does_pass, heatmap_pcc_message = check_with_pcc(ref_center_heatmap, torch_center_heatmap, 0.80)
+    does_pass, heatmap_pcc_message = check_with_pcc(ref_center_heatmap, torch_center_heatmap, 0.97)
     logger.info(f"Center Heatmap PCC: {heatmap_pcc_message}")
 
     assert does_pass, f"Center Heatmap PCC Failed! PCC: {heatmap_pcc_message}"
