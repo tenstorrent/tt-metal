@@ -272,7 +272,6 @@ void MAIN {
                 }
                 /**
                  * Performs final row-reduction on the partial sum.
-                 * The sum now includes contributions from both real tokens and attention sink.
                  */
                 matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
 
