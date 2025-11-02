@@ -384,8 +384,6 @@ void kernel_main() {
         }
     }
 
-    // TODO (GR): this happens at the very end of the op
-    // TODO (GR): might be able to simplify -> drain sync core stuff???
     uint64_t batch_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
     fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(

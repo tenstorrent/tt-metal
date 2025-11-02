@@ -604,13 +604,14 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 uint32_t start_row_offset = 0;         // not used for dim 0 scatter
 
                 uint32_t chunks_per_sync_val;
+
                 if (normalized_dim == 0) {
                     start_tiles_read = worker_id * output_batch_num_pages / num_workers;
                     start_tiles_to_read = (worker_id + 1) * output_batch_num_pages / num_workers;
 
-                    // TODO (GR): Old default assignment (before Saad sweep), need updated calculation
-                    chunks_per_sync_val = chunks_per_sync.value_or(
-                        std::max((start_tiles_to_read - start_tiles_read) / tile_granularity / 2, (uint32_t)1));
+                    chunks_per_sync_val =
+                        chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
+                            topology, start_tiles_to_read, start_tiles_read, tile_granularity));
                 } else {
                     start_tiles_read = worker_id * output_channel_num_pages / num_workers;
                     start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
