@@ -298,6 +298,8 @@ jobs:
             done
 
           else
+            echo ${request_input}
+            echo ${request_input} | jq 'type'
             echo "Mode: Publishing specific hw_topology list"
 
             # Validate it's a JSON array
@@ -309,9 +311,11 @@ jobs:
             # Get valid hw_topology values for error messages
             valid_topologies=$(printf '%s ' "${hw_topologies[@]}")
 
+            echo "Valid JSON array is provided"
+
             # Process each requested hw_topology
             while IFS= read -r hw_topology; do
-              hw_topology=$(echo "$hw_topology" | jq -r '.')
+              hw_topology=$(echo ${hw_topology} | jq -r '.')
               echo "Processing requested hw_topology: $hw_topology"
 
               # Validate hw_topology exists in config
