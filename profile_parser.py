@@ -176,7 +176,7 @@ for i in range(len(test_traces)):
 
 print(*get_zones(test_traces), sep="\n")
 
-# query here
+# write query here
 
 queries = [
     "cross b0-e",
