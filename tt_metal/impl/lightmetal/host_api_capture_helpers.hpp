@@ -10,6 +10,8 @@
 #include <tt-metalium/buffer.hpp>
 #include <kernel_types.hpp>
 
+#include "impl/buffers/buffer.hpp"
+
 namespace tt::tt_metal {
 
 // Many forward decls and aliases to reduce includes.
@@ -19,7 +21,6 @@ struct ComputeConfig;
 struct EthernetConfig;
 
 class IDevice;
-struct BufferConfig;
 class CircularBufferConfig;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 

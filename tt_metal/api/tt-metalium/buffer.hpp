@@ -106,14 +106,12 @@ struct ShardSpecBuffer {
     DeviceAddr num_pages() const;
 };
 
-struct BufferConfig {
+struct InterleavedBufferConfig {
     IDevice* device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
 };
-
-using InterleavedBufferConfig = BufferConfig;
 
 // copied from above instead of using inheritance such that we can use
 // designator constructor
@@ -326,17 +324,6 @@ private:
     size_t unique_id_ = 0;
     static std::atomic<size_t> next_unique_id;
 };
-
-UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
-
-using HostDataType = std::variant<
-    const std::shared_ptr<std::vector<uint8_t>>,
-    const std::shared_ptr<std::vector<uint16_t>>,
-    const std::shared_ptr<std::vector<int32_t>>,
-    const std::shared_ptr<std::vector<uint32_t>>,
-    const std::shared_ptr<std::vector<float>>,
-    const std::shared_ptr<std::vector<bfloat16>>,
-    const void*>;
 
 }  // namespace tt::tt_metal
 
