@@ -201,7 +201,9 @@ jobs:
     steps:
       - name: Run image
         timeout-minutes: 30
-        run: docker image inspect ${{ matrix.bh-config.image-name }}
+        run: |
+          docker pull ${{ matrix.bh-config.image-name }}
+          docker image inspect ${{ matrix.bh-config.image-name }}
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -216,7 +218,9 @@ jobs:
     steps:
       - name: Run image
         timeout-minutes: 60
-        run: docker image inspect ${{ matrix.bh-config.image-name }}
+        run: |
+          docker pull ${{ matrix.bh-config.image-name }}
+          docker image inspect ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
