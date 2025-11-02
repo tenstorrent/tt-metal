@@ -33,41 +33,16 @@ class ImageCNN(nn.Module):
         self.normalize = normalize
         self.features = timm.create_model(architecture, pretrained=False)
         self.features.fc = None
-        # Delete parts of the networks we don't want
-        if architecture.startswith("regnet"):  # Rename modules so we can use the same code
-            self.features.conv1 = self.features.stem.conv
-            self.features.bn1 = self.features.stem.bn
-            self.features.act1 = nn.Sequential()  # The Relu is part of the batch norm here.
-            self.features.maxpool = nn.Sequential()
-            self.features.layer1 = self.features.s1
-            self.features.layer2 = self.features.s2
-            self.features.layer3 = self.features.s3
-            self.features.layer4 = self.features.s4
-            self.features.global_pool = nn.AdaptiveAvgPool2d(output_size=1)
-            self.features.head = nn.Sequential()
-
-        elif architecture.startswith("convnext"):
-            self.features.conv1 = self.features.stem._modules["0"]
-            self.features.bn1 = self.features.stem._modules["1"]
-            self.features.act1 = nn.Sequential()  # Don't see any activatin function after the stem. Need to verify
-            self.features.maxpool = nn.Sequential()
-            self.features.layer1 = self.features.stages._modules["0"]
-            self.features.layer2 = self.features.stages._modules["1"]
-            self.features.layer3 = self.features.stages._modules["2"]
-            self.features.layer4 = self.features.stages._modules["3"]
-            self.features.global_pool = self.features.head
-            self.features.global_pool.flatten = nn.Sequential()
-            self.features.global_pool.fc = nn.Sequential()
-            self.features.head = nn.Sequential()
-            # ConvNext don't have the 0th entry that res nets use.
-            self.features.feature_info.append(self.features.feature_info[3])
-            self.features.feature_info[3] = self.features.feature_info[2]
-            self.features.feature_info[2] = self.features.feature_info[1]
-            self.features.feature_info[1] = self.features.feature_info[0]
-
-            # This layer norm is not pretrained anymore but that shouldn't matter since it is the last layer in the network.
-            _tmp = self.features.global_pool.norm
-            self.features.global_pool.norm = nn.LayerNorm((out_features, 1, 1), _tmp.eps, _tmp.elementwise_affine)
+        self.features.conv1 = self.features.stem.conv
+        self.features.bn1 = self.features.stem.bn
+        self.features.act1 = nn.Sequential()
+        self.features.maxpool = nn.Sequential()
+        self.features.layer1 = self.features.s1
+        self.features.layer2 = self.features.s2
+        self.features.layer3 = self.features.s3
+        self.features.layer4 = self.features.s4
+        self.features.global_pool = nn.AdaptiveAvgPool2d(output_size=1)
+        self.features.head = nn.Sequential()
 
 
 class LidarEncoder(nn.Module):
@@ -84,33 +59,16 @@ class LidarEncoder(nn.Module):
         self._model = timm.create_model(architecture, pretrained=False)
         self._model.fc = None
 
-        if architecture.startswith("regnet"):  # Rename modules so we can use the same code
-            self._model.conv1 = self._model.stem.conv
-            self._model.bn1 = self._model.stem.bn
-            self._model.act1 = nn.Sequential()
-            self._model.maxpool = nn.Sequential()
-            self._model.layer1 = self._model.s1
-            self._model.layer2 = self._model.s2
-            self._model.layer3 = self._model.s3
-            self._model.layer4 = self._model.s4
-            self._model.global_pool = nn.AdaptiveAvgPool2d(output_size=1)
-            self._model.head = nn.Sequential()
-
-        elif architecture.startswith("convnext"):
-            self._model.conv1 = self._model.stem._modules["0"]
-            self._model.bn1 = self._model.stem._modules["1"]
-            self._model.act1 = nn.Sequential()
-            self._model.maxpool = nn.Sequential()
-            self._model.layer1 = self._model.stages._modules["0"]
-            self._model.layer2 = self._model.stages._modules["1"]
-            self._model.layer3 = self._model.stages._modules["2"]
-            self._model.layer4 = self._model.stages._modules["3"]
-            self._model.global_pool = self._model.head
-            self._model.global_pool.flatten = nn.Sequential()
-            self._model.global_pool.fc = nn.Sequential()
-            self._model.head = nn.Sequential()
-            _tmp = self._model.global_pool.norm
-            self._model.global_pool.norm = nn.LayerNorm((out_features, 1, 1), _tmp.eps, _tmp.elementwise_affine)
+        self._model.conv1 = self._model.stem.conv
+        self._model.bn1 = self._model.stem.bn
+        self._model.act1 = nn.Sequential()
+        self._model.maxpool = nn.Sequential()
+        self._model.layer1 = self._model.s1
+        self._model.layer2 = self._model.s2
+        self._model.layer3 = self._model.s3
+        self._model.layer4 = self._model.s4
+        self._model.global_pool = nn.AdaptiveAvgPool2d(output_size=1)
+        self._model.head = nn.Sequential()
 
         # Change the first conv layer so that it matches the amount of channels in the LiDAR
         # Timm might be able to do this automatically
@@ -125,10 +83,7 @@ class LidarEncoder(nn.Module):
             bias=use_bias,
         )
         # Need to delete the old conv_layer to avoid unused parameters
-        if architecture.startswith("convnext"):
-            del self._model.stem._modules["0"]
-        elif architecture.startswith("regnet"):
-            del self._model.stem.conv
+        del self._model.stem.conv
         torch.cuda.empty_cache()
         if use_bias:
             self._model.conv1.bias = _tmp.bias
