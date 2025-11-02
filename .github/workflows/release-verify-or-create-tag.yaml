@@ -28,7 +28,7 @@ jobs:
   verify-create-new-tag:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get-tag-version.outputs.version }}
+      version: ${{ steps.calculate-version.outputs.final_version }}
     env:
       GITHUB_TOKEN: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
     steps:
@@ -36,31 +36,15 @@ jobs:
         with:
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true
-      - uses: paulhatch/semantic-version@v5.4.0
-        id: get-next-semantic-base-version
-        with:
-          tag_prefix: "v"
-          branch: ${{ github.ref_name }}
-          version_format: "v${major}.${minor}.${patch}"
-          bump_each_commit: ${{ inputs.bump_each_commit }}
+          ref: stable
 
-      - name: Get tag version
-        id: get-tag-version
-        run: |
-            baseVersion=${{ steps.get-next-semantic-base-version.outputs.version }}
-            tagType="${{ inputs.tag-type }}"
-            if [ "$tagType" = "rc" ]; then
-              currentNumberRCs=$(git tag | grep "$baseVersion"-rc | wc -l)
-              newNumber=$(($currentNumberRCs+1))
-              version="$baseVersion-rc$newNumber"
-            elif [ "$tagType" = "dev" ]; then
-              dateInt=$(date +%Y%m%d)
-              version="$baseVersion-dev$dateInt"
-            else
-              version="$baseVersion"
-            fi
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "$version"
+      - name: Calculate version
+        id: calculate-version
+        uses: tenstorrent/tt-metal/.github/actions/calculate-version@main
+        with:
+          tag-type: ${{ inputs.tag-type }}
+
+
 
       - name: Create tag
         if: ${{ !inputs.dry-run }}
@@ -70,7 +54,7 @@ jobs:
           script: |
             const owner = "${{ github.repository_owner }}";
             const repo = "${{ github.repository }}".split('/')[1];
-            const version = "${{ steps.get-tag-version.outputs.version }}";
+            const version = "${{ steps.calculate-version.outputs.final_version }}";
             const sha = "${{ github.sha }}";
 
             console.log(`Checking for existing tag ${version} in ${owner}/${repo} at sha ${sha}...`);

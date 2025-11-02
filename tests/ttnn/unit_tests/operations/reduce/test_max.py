@@ -8,20 +8,21 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import torch_random, is_grayskull
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64, 41, 37])
 @pytest.mark.parametrize("w", [32, 64, 31, 63])
 @pytest.mark.parametrize("dim", [-1, -2])
-def test_max(device, batch_size, h, w, dim):
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_max(device, batch_size, h, w, dim, dtype):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -100, 100, dtype=torch.bfloat16)
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=dim)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
     output_tensor = ttnn.max(input_tensor, dim=dim)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
@@ -115,11 +116,6 @@ def test_max_global(device, batch_size, h, w):
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_max_dim(device, input_shape_and_dim, keepdim):
     input_shape, max_dim = input_shape_and_dim
-    if is_grayskull() and (
-        input_shape[-1] % 32 != 0 or input_shape[-2] % 32 != 0 or input_shape[max_dim] % 32 != 0 or max_dim <= -2
-    ):
-        pytest.skip("May fail on GS if run all the tests in this file. #17084")
-
     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=max_dim, keepdim=keepdim)
 

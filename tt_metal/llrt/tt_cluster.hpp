@@ -372,6 +372,8 @@ private:
 
     bool supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const;
 
+    void verify_eth_fw_capability() const;
+
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};
 
@@ -405,7 +407,7 @@ private:
     void release_ethernet_cores_for_fabric_routers();
 
     // Tunnels setup in cluster
-    std::map<ChipId, std::vector<std::vector<ChipId>>> tunnels_from_mmio_device = {};
+    std::map<ChipId, std::vector<std::vector<ChipId>>> tunnels_from_mmio_device;
 
     // Currently, each device is mapped to its own channel in host memory to enable fast dispatch
     // Channels are unique within a group of devices all controlled by a particular MMIO device

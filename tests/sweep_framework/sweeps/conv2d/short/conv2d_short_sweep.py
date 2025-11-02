@@ -18,6 +18,9 @@ from tests.sweep_framework.sweep_utils.conv2d_common import (
     mesh_device_fixture,
 )
 
+# Override the default timeout in seconds for hang detection.
+TIMEOUT = 60
+
 parameters = {
     "short_sweep_suite_conv2d": {
         "input_specs": [

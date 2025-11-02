@@ -21,7 +21,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 480
+        default: 720
   workflow_call:
     inputs:
       mirrored_branch:
@@ -42,7 +42,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 480
+        default: 720
     outputs:
       all-post-commit-result:
         description: 'Result of All post-commit tests (status:url format)'
@@ -61,7 +61,7 @@ concurrency:
 env:
   PARENT_BRANCH_NAME: test-llk-${{ inputs.mirrored_branch }}-${{ github.run_id }}
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 480 }}
+  WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 720 }}
   METAL_REPO: tenstorrent/tt-metal
   LLK_REPO: tenstorrent/tt-llk
   GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
@@ -78,7 +78,7 @@ permissions:
 jobs:
   setup-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 720
     outputs:
       branch-exists: ${{ steps.check-branch.outputs.branch-exists }}
       test-branch-name: ${{ steps.check-branch.outputs.test-branch-name }}

@@ -27,10 +27,25 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology) {
+    // If cluster_axis is None, but mesh shape is not 1xM or Mx1, then we call reduce-scatter on cluster_axis=1, then
+    // reduce-scatter on cluster_axis=0
+    if (cluster_axis == std::nullopt) {
+        auto mesh_shape = input_tensor.device()->get_view().shape();
+        if (!mesh_shape.is_line_topology()) {
+            Tensor tensor = input_tensor;
+            for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+                tensor = ttnn::reduce_scatter(
+                    tensor, dim, i, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
+            }
+            return tensor;
+        }
+    }
     auto mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);
     tt::tt_fabric::Topology topology_ = topology.value_or(
         ::ttnn::ccl::get_usable_topology(input_tensor, tt::tt_fabric::get_fabric_topology(), cluster_axis));
+    topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
+
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
     // TODO: until #27196 is resolved, the fabric API does not subtract out the one link correctly for dispatch used
     // when not all devices are mmio capable. Manually doing it requires the use of "is_mmio_capable" counting, but as

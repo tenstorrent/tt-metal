@@ -24,11 +24,8 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
 
     logger.info(f"Running fast dispatch tests for {model_weights_path}")
 
-    ci_v2_tests = [
+    functional_tests = [
         "models/demos/gemma3/tests/test_mmp.py",
-    ]
-    ci_v1_tests = [
-        "models/demos/gemma3/tests/test_benchmark_vision_cross_attention_transformer.py",
         "models/demos/siglip/tests/test_attention.py",
         "models/demos/gemma3/tests/test_patch_embedding.py",
         "models/demos/gemma3/tests/test_vision_attention.py",
@@ -43,21 +40,24 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
         "models/tt_transformers/tests/test_embedding.py",
         "models/tt_transformers/tests/test_rms_norm.py",
         "models/tt_transformers/tests/test_mlp.py",
-        # "models/tt_transformers/tests/test_attention.py",
-        # "models/tt_transformers/tests/test_attention_prefill.py",
+        "models/tt_transformers/tests/test_attention.py",
+        "models/tt_transformers/tests/test_attention_prefill.py",
         "models/tt_transformers/tests/test_decoder.py",
         "models/tt_transformers/tests/test_decoder_prefill.py",
     ]
+    performance_tests = [
+        "models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py",
+    ]
 
     if is_ci_v2_env:
-        tests = ci_v2_tests
+        tests = functional_tests
     else:
-        tests = ci_v1_tests
+        tests = performance_tests
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(tests + ["-x"])
-    if exit_code == pytest.ExitCode.TESTS_FAILED:
+    if exit_code != pytest.ExitCode.OK:
         pytest.fail(
-            f"One or more CI dispatch tests failed for {hf_model_name}. Please check the log above for more info",
+            f"Pytest failed with exit code {exit_code} for {hf_model_name}. " "Check logs above for details.",
             pytrace=False,
         )

@@ -105,9 +105,9 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<CQSharedState>& cq_shared_state,
     std::function<std::lock_guard<std::mutex>()> lock_api_function) :
     MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, std::move(lock_api_function)),
-    reader_thread_pool_(reader_thread_pool),
     cq_shared_state_(cq_shared_state),
     dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
+    reader_thread_pool_(reader_thread_pool),
     prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(MetalContext::instance().dispatch_mem_map(this->dispatch_core_type_).ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),

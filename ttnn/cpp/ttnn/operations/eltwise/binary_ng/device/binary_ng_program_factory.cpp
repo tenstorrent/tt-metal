@@ -60,40 +60,6 @@ std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
     }
 }
 
-struct AllShardSpecs {
-    ShardSpec a_shard_spec;
-    ShardSpec b_shard_spec;
-    ShardSpec c_shard_spec;
-};
-
-ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
-    auto ret = shard_spec;
-
-    // Calculate volume of all dimensions EXCEPT the last (width)
-    // This is the "collapsed height" for sharding purposes
-    uint32_t from_volume_except_width = 1;
-    uint32_t to_volume_except_width = 1;
-
-    const int rank = std::max(from_shape.rank(), to_shape.rank());
-
-    // Accumulate all dimensions except the last
-    for (int i = 0; i < rank - 1; ++i) {
-        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
-        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
-        from_volume_except_width *= from_dim;
-        to_volume_except_width *= to_dim;
-    }
-
-    // Get width dimensions
-    uint32_t from_width = from_shape[-1];
-    uint32_t to_width = to_shape[-1];
-
-    // Adjust shard shape based on full volume ratios
-    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
-    return ret;
-}
-
 TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
     if (!b.has_value()) {
         return TensorMemoryLayout::INTERLEAVED;
@@ -148,8 +114,14 @@ bool is_native_L1_sharding(const Tensor& a, const std::optional<Tensor>& b, cons
     }
 
     // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && (a.logical_shape() == b->logical_shape())) {
+    if (b.has_value() && (a.logical_shape() == b->logical_shape()) &&
+        (a.memory_config().memory_layout() == b->memory_config().memory_layout())) {
         if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
+            return false;
+        }
+        if (a.memory_config().buffer_type() == BufferType::DRAM ||
+            b->memory_config().buffer_type() == BufferType::DRAM ||
+            c.memory_config().buffer_type() == BufferType::DRAM) {
             return false;
         }
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
@@ -184,18 +156,11 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
     const auto& c_shape = c.padded_shape();
 
-    ShardSpec c_shard_spec = c_sharded   ? *c.shard_spec()
-                             : a_sharded ? adjust_to_shape(*a.shard_spec(), a_shape, c_shape)
-                                         : adjust_to_shape(*b->shard_spec(), b_shape, c_shape);
-    if (!c_sharded && !a_sharded && b_sharded) {
-        // TODO: later when fully support row_col_mixed broadcast
-        // TT_FATAL(c_shape == b_shape, "If input B is sharded and input A is not, output shape must match input B
-        // shape");
-    }
+    TT_FATAL(c.shard_spec().has_value(), "C must have a shard spec");
     return AllShardSpecs{
-        a_sharded ? *a.shard_spec() : adjust_to_shape(c_shard_spec, c_shape, a_shape),
-        b_sharded ? *b->shard_spec() : adjust_to_shape(c_shard_spec, c_shape, b_shape),
-        c_shard_spec};
+        a_sharded ? *a.shard_spec() : adjust_to_shape(*c.shard_spec(), c_shape, a_shape),
+        b_sharded ? *b->shard_spec() : adjust_to_shape(*c.shard_spec(), c_shape, b_shape),
+        *c.shard_spec()};
 }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
@@ -775,8 +740,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         compute_kernel = kernel_config.compute_kernel;
     }
 
-    // to maintain backward compatibility, old writer kernel only needs b_dtype
-    auto writer_defines = make_dataflow_defines(b_dtype, a_dtype);
+    auto writer_defines = make_dataflow_defines(b_dtype);
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = (c_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(
                                                       tensor_args.input_tensor_a, tensor_args.input_tensor_b, c))

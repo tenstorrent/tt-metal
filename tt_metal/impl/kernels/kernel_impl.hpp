@@ -156,10 +156,10 @@ private:
 
 class KernelImpl : public Kernel, public JitBuildSettings {
 public:
-    const std::vector<const ll_api::memory*>& binaries(uint32_t build_key) const;
+    const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
     uint32_t get_binary_packed_size(IDevice* device, int index) const override;
     uint32_t get_binary_text_size(IDevice* device, int index) const;
-    void set_binaries(uint32_t build_key, std::vector<const ll_api::memory*>&& binaries);
+    void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
 
     const std::string& get_full_kernel_name() const override;
     void process_defines(std::function<void(const std::string& define, const std::string& value)>) const override;
@@ -203,10 +203,8 @@ protected:
             compile_args,
             defines,
             named_compile_args) {}
-    // DataMovement kernels have one binary each and Compute kernels have three binaries
-    // Different set of binaries per device because kernel compilation is device dependent
-    // TODO: break this dependency by https://github.com/tenstorrent/tt-metal/issues/3381
-    std::unordered_map<ChipId, std::vector<const ll_api::memory*>> binaries_;
+    // Build key -> binaries
+    std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
 
     std::vector<std::string> file_paths(IDevice& device) const;
 };

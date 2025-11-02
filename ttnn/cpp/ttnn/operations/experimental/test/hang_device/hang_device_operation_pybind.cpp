@@ -14,8 +14,6 @@ namespace py = pybind11;
 void bind_test_hang_device_operation(py::module& module) {
     auto doc =
         R"doc(
-            hang_device_operation(input_tensor: ttnn.Tensor) -> ttnn.Tensor
-
             Hangs the device, use for testing graph capture.
             Used for debugging purposes, please avoid to use in any production code
             Args:

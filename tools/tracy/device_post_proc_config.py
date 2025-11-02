@@ -21,21 +21,21 @@ class default_setup(metaclass=MergeMetaclass):
         "NCRISC",
         "TRISC",
         "ERISC",
-        "CORE_AGG",
+        "TENSIX_RISC_AGG",
     ]
 
     timerAnalysis = {
         "trace_fw_duration": {
             "across": "ops",
             "type": "op_first_last",
-            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
-            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+            "start": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-FW"},
         },
         "trace_kernel_duration": {
             "across": "ops",
             "type": "op_first_last",
-            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
-            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+            "start": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "TENSIX_RISC_AGG", "zone_name": "TRACE-KERNEL"},
         },
         "trace2trace - FW": {
             "across": "device",

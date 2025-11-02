@@ -42,7 +42,7 @@ def run_device_perf_tests(
         ),
         (
             "pytest models/experimental/oft/tests/pcc/test_encoder.py::test_decode",
-            4_764_102,
+            4_539_775,
             "oft_decoder",
             "oft_decoder",
             1,

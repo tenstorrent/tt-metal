@@ -108,8 +108,6 @@ private:
 
     size_t num_links;
     size_t buffer_size_bytes;
-    size_t firmware_context_switch_interval =
-        tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
 };
 
 }  // namespace tt::tt_fabric

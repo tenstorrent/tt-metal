@@ -91,7 +91,7 @@ void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
 }
 
 void Inspector::program_compile_started(
-    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -107,7 +107,7 @@ void Inspector::program_compile_started(
 }
 
 void Inspector::program_compile_already_exists(
-    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -147,7 +147,7 @@ void Inspector::program_kernel_compile_finished(
 }
 
 void Inspector::program_compile_finished(
-    const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept {
+    const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept {
     if (!is_enabled()) {
         return;
     }

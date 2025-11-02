@@ -86,7 +86,6 @@ public:
 
 private:
     ChipId device_id = 0;
-    uint8_t num_hw_cqs = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;

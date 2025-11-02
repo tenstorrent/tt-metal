@@ -20,8 +20,7 @@ namespace ttnn::operations::experimental::ccl {
 
 void py_bind_llama_reduce_scatter(py::module& module) {
     auto doc =
-        R"doc(llama_reduce_scatter(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt) -> ttnn.Tensor
-
+        R"doc(
             Reduce_scatter after FF1/3 for Llama70B.
 
             Args:

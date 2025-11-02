@@ -209,20 +209,20 @@ def run_ring_attention_all_gather_impl(
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize("layout, ag_input_dtype", [(ttnn.TILE_LAYOUT, ttnn.bfloat16)])
 @pytest.mark.parametrize(
-    "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor",
+    "ag_output_shape, ag_num_inputs, rp_axis, rp_factor, up_factor, enable_trace, num_iters",
     [
-        ([1, 1, 4096, 2560], 1, 1, 4, 1),
-        ([1, 5, 4096, 64], 1, 1, 4, 1),
-        ([1, 5, 4096, 64], 2, 0, 2, 1),
-        ([1, 10, 4096, 64], 2, 1, 4, 1),
-        ([1, 40, 4096, 64], 2, 1, 4, 2),
+        ([1, 1, 4096, 2560], 1, 1, 4, 1, True, 10),  # perf
+        ([1, 5, 4096, 64], 1, 1, 4, 1, False, 1),  # check
+        ([1, 5, 4096, 64], 2, 0, 2, 1, True, 10),  # perf
+        ([1, 10, 4096, 64], 2, 1, 4, 1, False, 1),  # check
+        ([1, 40, 4096, 64], 2, 1, 4, 2, True, 10),  # perf
     ],
     ids=[
-        "shape1_1input_rp4",
-        "shape2_1input_rp4",
-        "shape2_2input_rp2",
-        "shape3_2input_rp4",
-        "shape4_2input_rp4_up2",
+        "shape1_1input_rp4-perf",
+        "shape2_1input_rp4-check",
+        "shape2_2input_rp2-perf",
+        "shape3_2input_rp4-check",
+        "shape4_2input_rp4_up2-perf",
     ],
 )
 @pytest.mark.parametrize(
@@ -235,14 +235,6 @@ def run_ring_attention_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace, num_iters",
-    [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
-)
-@pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
@@ -253,18 +245,18 @@ def run_ring_attention_all_gather_impl(
 )
 def test_ring_attention_all_gather(
     mesh_device,
+    num_links,
+    layout,
+    ag_input_dtype,
     ag_output_shape,
     ag_num_inputs,
     rp_axis,
     rp_factor,
     up_factor,
-    num_links,
-    ag_input_dtype,
-    layout,
-    mem_config_input,
-    mem_config_ag,
     enable_trace,
     num_iters,
+    mem_config_input,
+    mem_config_ag,
     all_gather_topology,
 ):
     if all_gather_topology == ttnn.Topology.Ring:

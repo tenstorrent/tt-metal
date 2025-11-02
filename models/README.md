@@ -49,8 +49,8 @@
 ## Diffusion Models
 | Model                                                                       | Batch | Hardware                                                 | Sec/Image     | Target Sec/Image | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
-| [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/stable_diffusion)               | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 6.25   | 3        |           |
-| [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/stable_diffusion)              | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)      | 3.50   |          |           |
+| [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/stable_diffusion)               | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 4.83   | 3        |           |
+| [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/blackhole/stable_diffusion)              | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)      | 3.15   |          |           |
 | [Stable Diffusion 3.5 Medium (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/stable_diffusion_35_large) | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 16     | 10       |           |
 
 **Notes:**
@@ -134,7 +134,8 @@
 
 | Release | Release Date |
 |---------|--------------|
-| 0.64.0  | ETA Oct 15, 2025 |
+| 0.65.0  | ETA Nov 19, 2025  |
+| [0.64.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.64.0) | Oct 29, 2025 |
 | [0.63.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.63.0) | Sep 22, 2025 |
 | [0.62.2](https://github.com/tenstorrent/tt-metal/releases/tag/v0.62.2) | Aug 20, 2025 |
 | 0.61.0  | Skipped |

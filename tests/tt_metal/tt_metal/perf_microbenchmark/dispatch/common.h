@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <unordered_map>
 #include <tt-metalium/core_coord.hpp>
@@ -45,7 +46,6 @@ struct one_core_data_t {
 
 class DeviceData {
 private:
-    bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
     uint64_t base_data_addr[static_cast<size_t>(tt::CoreType::COUNT)]{};
@@ -115,7 +115,7 @@ inline DeviceData::DeviceData(
     void* pcie_data_addr,
     bool is_banked,
     uint32_t dram_data_size_words) :
-    banked(is_banked), amt_written(0) {
+    amt_written(0) {
     this->base_data_addr[static_cast<int>(tt::CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(tt::CoreType::DRAM)] = dram_data_addr;
@@ -308,9 +308,7 @@ inline void DeviceData::relevel(CoreRange range) {
     for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
         for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
             CoreCoord core = {x, y};
-            if (this->all_data[core][bank].data.size() > max) {
-                max = this->all_data[core][bank].data.size();
-            }
+            max = std::max(this->all_data[core][bank].data.size(), max);
         }
     }
 
@@ -1051,12 +1049,8 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
     if (perf_test_g) {
         TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
-        if (xfer_size_bytes > max_xfer_size_bytes_g) {
-            xfer_size_bytes = max_xfer_size_bytes_g;
-        }
-        if (xfer_size_bytes < min_xfer_size_bytes_g) {
-            xfer_size_bytes = min_xfer_size_bytes_g;
-        }
+        xfer_size_bytes = std::min(xfer_size_bytes, max_xfer_size_bytes_g);
+        xfer_size_bytes = std::max(xfer_size_bytes, min_xfer_size_bytes_g);
     }
 
     std::vector<CoreCoord> gets_data;
@@ -1106,12 +1100,8 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         uint32_t xfer_size_bytes = xfer_size_words * sizeof(uint32_t);
         if (perf_test_g) {
             TT_ASSERT(max_xfer_size_bytes_g <= dispatch_buffer_page_size_g);
-            if (xfer_size_bytes > max_xfer_size_bytes_g) {
-                xfer_size_bytes = max_xfer_size_bytes_g;
-            }
-            if (xfer_size_bytes < min_xfer_size_bytes_g) {
-                xfer_size_bytes = min_xfer_size_bytes_g;
-            }
+            xfer_size_bytes = std::min(xfer_size_bytes, max_xfer_size_bytes_g);
+            xfer_size_bytes = std::max(xfer_size_bytes, min_xfer_size_bytes_g);
         }
 
         if (xfer_size_bytes > space_available) {

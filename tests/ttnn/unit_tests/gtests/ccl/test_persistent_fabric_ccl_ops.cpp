@@ -28,16 +28,15 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include <umd/device/types/arch.hpp>
+#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 
 TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     const size_t dim = 3;
-    const size_t num_links = 1;
     constexpr auto layout = Layout::TILE;
     // DEVICES setup
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -72,53 +71,11 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
                 .mesh_shape_override = MeshShape{1, num_devices}}),
         *test_fixture.mesh_device_);
 
-    GlobalSemaphore from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
-        test_fixture.mesh_device_.get(),
-        test_fixture.mesh_device_->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                            // initial value
-        tt::tt_metal::BufferType::L1  // buffer type
-    );
-
-    GlobalSemaphore to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(
-        test_fixture.mesh_device_.get(),
-        test_fixture.mesh_device_->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                            // initial value
-        tt::tt_metal::BufferType::L1  // buffer type
-    );
-
-    auto output_tensor = ttnn::operations::experimental::ccl::reduce_scatter(
-        input_mesh_tensor,
-        dim,
-        from_remote_multi_device_global_semaphore,
-        to_remote_multi_device_global_semaphore,
-        ttnn::operations::reduction::ReduceType::Sum,
-        tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-        ttnn::ccl::Topology::Linear,
-        num_links,
-        SubDeviceId{0});
+    auto output_tensor = ttnn::reduce_scatter(input_mesh_tensor, dim);
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
     tt_metal::distributed::Finish(test_fixture.mesh_device_->mesh_command_queue(), {{SubDeviceId(0)}});
 
     log_info(tt::LogTest, "Finished");
-}
-
-TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
-    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));
-}
-TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
-    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 8192}));
-}
-// Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
-TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_128) {
-    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape({1, 1, 32, 128}));
-}
-// Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
-TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_8192) {
-    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape({1, 1, 32, 8192}));
-}
-
-TEST(CclAsyncOp, RingAllGather_PersistentFabric_Dim3_Links1_Shape1_256_32_8192) {
-    run_ring_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 256, 32, 8192}));
 }

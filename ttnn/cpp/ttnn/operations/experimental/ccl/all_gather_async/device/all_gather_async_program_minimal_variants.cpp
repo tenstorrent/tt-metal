@@ -9,6 +9,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -412,54 +413,64 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
+
+    auto map_nd_to_4d = [&]() {
+        // Here we do a couple of tricks so that the kernels can handle ND tensors
+        // implicitly reshape lower dims so it is treated as 4D
+        uint32_t batch_head_size =
+            std::accumulate(input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
+
+        auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, input_tensor_shape.rank());
+
+        // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
+        // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
+        uint32_t c_includes_dim;
+        if (rank_diff >= 1 && dim <= rank_diff) {
+            // gather dim to rank-3 accumulated into C
+            c_includes_dim = dim;
+            normalized_dim = 1;
+        } else {
+            // C will be 4D normalized dim 1
+            c_includes_dim = 1 + rank_diff;
+        }
+
+        uint32_t input_tensor_C = std::accumulate(
+            input_tensor_shape.view().rbegin() + 2,
+            input_tensor_shape.view().rend() - c_includes_dim,
+            1,
+            std::multiplies<uint32_t>());
+
+        uint32_t output_tensor_C = std::accumulate(
+            output_tensor_shape.view().rbegin() + 2,
+            output_tensor_shape.view().rend() - c_includes_dim,
+            1,
+            std::multiplies<uint32_t>());
+
+        return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
+    };
+
+    auto map_2d_to_4d = [&]() {
+        const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, input_tensor_shape.rank()));
+        constexpr uint32_t input_tensor_C = 1, output_tensor_C = 1, batch_head_size = 1;
+
+        return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
+    };
+
+    const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] =
+        (input_tensor_shape.rank() == 2) ? map_2d_to_4d() : map_nd_to_4d();
+
+    uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+    TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+    TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
+    uint32_t TILE_WIDTH = 32;
+
+    uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
+    uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
+
+    uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
+    uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
+
     for (uint32_t link = 0; link < num_links; link++) {
-        auto map_nd_to_4d = [&]() {
-            // Here we do a couple of tricks so that the kernels can handle ND tensors
-            // implicitly reshape lower dims so it is treated as 4D
-            uint32_t batch_head_size = std::accumulate(
-                input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
-            auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
-            uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
-            // if the gather dim is 4D normalized to 0,2,3 we can proceed as if nothing has changed
-            // if not we have to roll up the lower dims from the gather dim up to 1 into C and gather on 1.
-            uint32_t c_includes_dim;
-            if (dim_normalization >= 1 && dim <= dim_normalization) {
-                // gather dim to rank-3 accumulated into C
-                c_includes_dim = dim;
-                normalized_dim = 1;
-            } else {
-                // C will be 4D normalized dim 1
-                c_includes_dim = 1 + dim_normalization;
-            }
-
-            uint32_t input_tensor_C = std::accumulate(
-                input_tensor_shape.view().rbegin() + 2,
-                input_tensor_shape.view().rend() - c_includes_dim,
-                1,
-                std::multiplies<uint32_t>());
-
-            uint32_t output_tensor_C = std::accumulate(
-                output_tensor_shape.view().rbegin() + 2,
-                output_tensor_shape.view().rend() - c_includes_dim,
-                1,
-                std::multiplies<uint32_t>());
-
-            return std::make_tuple(normalized_dim, batch_head_size, input_tensor_C, output_tensor_C);
-        };
-
-        const auto [normalized_dim, batch_head_size, input_tensor_C, output_tensor_C] = map_nd_to_4d();
-
-        uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-        TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-        TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
-        uint32_t TILE_WIDTH = 32;
-
-        uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
-        uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
-
-        uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
-        uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
-
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
             uint32_t mux_core_offset = (link * num_cores_per_link) +

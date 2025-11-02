@@ -46,6 +46,9 @@ class OldParallelConfig(NamedTuple):
 def vae_all_gather(
     ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 3, reshape: bool = True
 ) -> ttnn.Tensor:
+    if x.device().shape[cluster_axis] == 1:
+        return x
+
     global_semaphores = ccl_manager.get_ag_ping_pong_semaphore(cluster_axis)
     barrier_semaphore = ccl_manager.get_barrier_semaphore(cluster_axis)
 

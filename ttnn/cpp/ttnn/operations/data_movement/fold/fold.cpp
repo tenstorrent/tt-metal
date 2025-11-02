@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include <tt-metalium/constants.hpp>
@@ -452,6 +453,10 @@ Tensor FoldOperation::invoke(
                 ttnn::pad(processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
         }
 
+        // Convert to row-major if tiled since fold supports only row-major layout
+        if (processed_tensor.layout() == Layout::TILE) {
+            processed_tensor = ttnn::untilize(processed_tensor, std::nullopt, true, true);
+        }
         // Reshard if needed for optimal fold computation
         processed_tensor = reshard_if_needed(processed_tensor, stride_h, stride_w);
 

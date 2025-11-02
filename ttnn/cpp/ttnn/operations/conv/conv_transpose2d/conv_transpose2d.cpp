@@ -128,6 +128,7 @@ Result conv_transpose2d(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
+            stride,
             dilation,
             sliding_window::get_pair_n4_padding(padding),
             groups,
@@ -191,7 +192,7 @@ Result conv_transpose2d(
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor.layout(),
-        input_tensor.memory_config().buffer_type(),
+        false,
         mm_conv,
         input_tensor_post_tm.memory_config());
     uint32_t in_channels_padded = tt::round_up(

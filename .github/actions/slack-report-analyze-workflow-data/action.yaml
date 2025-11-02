@@ -48,6 +48,12 @@ runs:
               " (error owner unclear. original owners: " + (item.original_owner_names_for_generic_exit | join(", ")) + ")"
             else "" end;
 
+          def failingJobsNote(item):
+            # If we have failing job names, include them in parentheses
+            if (item.failing_jobs | type) == "array" and (item.failing_jobs | length) > 0 then
+              " (failed " + (item.failing_jobs | join(", ")) + ")"
+            else "" end;
+
           if (type=="array" and length==0) then
             "✅ No new regressions."
           elif (type=="array") then
@@ -56,7 +62,7 @@ runs:
               + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
               + (if .run_url then " — <" + .run_url + "|run>" else "" end)
               + (if .commit_url and .commit_short then " — <" + .commit_url + "|" + .commit_short + ">" else "" end)
-              + " " + mentionOwners(.owners) + origOwnerNote(.)
+              + " " + mentionOwners(.owners) + origOwnerNote(.) + failingJobsNote(.)
             ) | join("\n"))
           else
             "Malformed regressions payload"

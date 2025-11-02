@@ -5,7 +5,6 @@
 #include "all_gather_async.hpp"
 #include <utility>
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_broadcast_async/device/all_broadcast_async_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -29,6 +28,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     bool all_gather_async_llama_sharded_case =
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        log_debug(tt::LogOp, "Using composite_all_gather");
         return composite_common::composite_all_gather(
             input_tensor,
             dim,
@@ -37,6 +37,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             subdevice_id,
             /*cluster_axis*/ std::nullopt);
     } else {
+        log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensor,
             dim,
@@ -72,9 +73,11 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     bool all_gather_async_llama_sharded_case =
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        log_debug(tt::LogOp, "Using composite_all_gather");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
+        log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensor,
             persistent_output_buffer,
@@ -115,9 +118,11 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     bool all_gather_async_llama_sharded_case = composite_common::use_all_gather_async_llama_sharded(
         input_tensors.at(0), memory_config.value_or(input_tensors.at(0).memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        log_debug(tt::LogOp, "Using composite_all_gather");
         return composite_common::composite_all_gather(
             input_tensors, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
+        log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensors,
             persistent_output_buffer,
@@ -155,9 +160,11 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     bool all_gather_async_llama_sharded_case =
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        log_debug(tt::LogOp, "Using composite_all_gather");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
+        log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensor,
             dim,
@@ -192,6 +199,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     bool all_gather_async_llama_sharded_case =
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        log_debug(tt::LogOp, "Using composite_all_gather");
         return composite_common::composite_all_gather(
             input_tensor,
             dim,
@@ -200,6 +208,7 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
             subdevice_id,
             /*cluster_axis*/ std::nullopt);
     } else {
+        log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensor,
             dim,
@@ -235,8 +244,10 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     bool all_gather_async_llama_sharded_case =
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        log_debug(tt::LogOp, "Using composite_all_gather");
         return composite_common::composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
+        log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensor,
             persistent_output_buffer,
@@ -275,9 +286,11 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
     bool all_gather_async_llama_sharded_case =
         composite_common::use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
+        log_debug(tt::LogOp, "Using composite_all_gather");
         return composite_common::composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
+        log_debug(tt::LogOp, "Using minimal_all_gather_async");
         return ttnn::operations::experimental::ccl::all_gather_async(
             input_tensor,
             dim,

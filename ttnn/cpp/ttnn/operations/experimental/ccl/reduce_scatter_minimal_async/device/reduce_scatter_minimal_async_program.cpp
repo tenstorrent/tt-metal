@@ -9,6 +9,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
@@ -129,6 +130,45 @@ uint32_t default_chunks_per_sync(
     uint32_t total_chunks = std::max((tiles_to_read - tiles_read) / tile_granularity / 2, (uint32_t)1);
     return std::min(default_value, total_chunks);
 }
+
+auto map_nd_to_4d(const ttnn::Shape& shape, const uint32_t dim) {
+    // Here we do a couple of tricks so that the kernels can handle ND tensors
+    // implicitly reshape lower dims so it is treated as 4D
+
+    TT_FATAL(shape.rank() > 2, "Expected rank 3 or greater");
+
+    auto [normalized_dim, rank_diff] = composite_common::normalize_dim_4d(dim, shape.rank());
+
+    const uint32_t c_dims_end = shape.rank() - 2;
+    uint32_t b_dims_end;
+    if (rank_diff >= 1 && dim <= rank_diff) {
+        // gather dim to rank-3 accumulated into C
+        b_dims_end = dim;
+        normalized_dim = 1;
+    } else {
+        // C will be 4D normalized dim 1
+        b_dims_end = shape.rank() - 3;
+    }
+
+    const uint32_t input_tensor_B =
+        std::accumulate(shape.cbegin(), shape.cbegin() + b_dims_end, 1, std::multiplies<uint32_t>());
+
+    const uint32_t input_tensor_C =
+        std::accumulate(shape.cbegin() + b_dims_end, shape.cbegin() + c_dims_end, 1, std::multiplies<uint32_t>());
+
+    return std::make_tuple(normalized_dim, input_tensor_C, input_tensor_B);
+};
+
+auto map_2d_to_4d(const uint32_t dim) {
+    constexpr auto RANK_2D = 2;
+    TT_FATAL(dim == 0 || dim == 1, "Expected dim 0 or 1");
+
+    const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, RANK_2D));
+    const uint32_t input_tensor_C = 1, input_tensor_B = 1;
+
+    return std::make_tuple(normalized_dim, input_tensor_C, input_tensor_B);
+};
+
 }  // namespace operations::experimental::ccl::detail
 
 using namespace ccl;
@@ -391,29 +431,30 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
     TT_FATAL(
-        !(input_tensor_shape[2] % tt::constants::TILE_HEIGHT),
+        !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
         "Input tensor height ({}) must be divisible by tile height ({}).",
-        input_tensor_shape[2],
+        input_tensor_shape[-2],
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
-        !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
+        !(input_tensor_shape[-1] % tt::constants::TILE_WIDTH),
         "Input tensor width ({}) must be divisible by tile width ({}).",
-        input_tensor_shape[3],
+        input_tensor_shape[-1],
         tt::constants::TILE_WIDTH);
 
-    const uint32_t input_tensor_B = input_tensor_shape[0];
-    const uint32_t input_tensor_C = input_tensor_shape[1];
-    const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
-    const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (input_tensor_shape.rank() == 2) ? operations::experimental::ccl::detail::map_2d_to_4d(dim)
+                                         : operations::experimental::ccl::detail::map_nd_to_4d(input_tensor_shape, dim);
+    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
     uint32_t slice_C = input_tensor_C;
     uint32_t slice_Ht = input_tensor_Ht;
     uint32_t slice_Wt = input_tensor_Wt;
-    if (dim == 1) {
+    if (normalized_dim == 1) {
         slice_C /= ring_size;
-    } else if (dim == 2) {
+    } else if (normalized_dim == 2) {
         slice_Ht /= ring_size;
-    } else if (dim == 3) {
+    } else if (normalized_dim == 3) {
         slice_Wt /= ring_size;
     } else {
         TT_FATAL(false, "reduce_scatter_minimal_async ring implementation only supports scattering on dim 1, 2, or 3");
@@ -576,7 +617,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     fuse_op,                  // fused op
                     dir,                      // direction
                     chunks_per_sync_val,      // chunks_per_sync
-                    dim,                      // dim
+                    normalized_dim,           // dim normalized to 4D
                     start_pages_read_in_row,  // start_pages_read_in_row
                     start_row_offset,         // start_row_offset
                     start_tiles_read,         // start_tiles_read
@@ -641,7 +682,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     slice_Wt,                       // slice_Wt
                     dir,                            // direction
                     chunks_per_sync_val,            // chunks_per_sync
-                    dim,                            // dim
+                    normalized_dim,                 // dim normalized to 4D
                     start_pages_read_in_row,        // start_pages_read_in_row
                     start_row_offset,               // start_row_offset
                     start_tiles_read,               // start_tiles_read
@@ -1066,29 +1107,30 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
     TT_FATAL(
-        !(input_tensor_shape[2] % tt::constants::TILE_HEIGHT),
+        !(input_tensor_shape[-2] % tt::constants::TILE_HEIGHT),
         "Input tensor height ({}) must be divisible by tile height ({}).",
-        input_tensor_shape[2],
+        input_tensor_shape[-2],
         tt::constants::TILE_HEIGHT);
     TT_FATAL(
-        !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
+        !(input_tensor_shape[-1] % tt::constants::TILE_WIDTH),
         "Input tensor width ({}) must be divisible by tile width ({}).",
-        input_tensor_shape[3],
+        input_tensor_shape[-1],
         tt::constants::TILE_WIDTH);
 
-    const uint32_t input_tensor_B = input_tensor_shape[0];
-    const uint32_t input_tensor_C = input_tensor_shape[1];
-    const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
-    const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    const auto [normalized_dim, input_tensor_C, input_tensor_B] =
+        (input_tensor_shape.rank() == 2) ? operations::experimental::ccl::detail::map_2d_to_4d(dim)
+                                         : operations::experimental::ccl::detail::map_nd_to_4d(input_tensor_shape, dim);
+    const uint32_t input_tensor_Ht = input_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t input_tensor_Wt = input_tensor_shape[-1] / tt::constants::TILE_WIDTH;
 
     uint32_t slice_C = input_tensor_C;
     uint32_t slice_Ht = input_tensor_Ht;
     uint32_t slice_Wt = input_tensor_Wt;
-    if (dim == 1) {
+    if (normalized_dim == 1) {
         slice_C /= ring_size;
-    } else if (dim == 2) {
+    } else if (normalized_dim == 2) {
         slice_Ht /= ring_size;
-    } else if (dim == 3) {
+    } else if (normalized_dim == 3) {
         slice_Wt /= ring_size;
     } else {
         TT_FATAL(false, "reduce_scatter_minimal_async line implementation only supports scattering on dim 1, 2, or 3");
@@ -1252,7 +1294,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     do_final_reduction,            // do_final_reduction
                     sync_with_other_direction,     // sync_with_other_direction
                     chunks_per_sync_val,           // chunks_per_sync
-                    dim,                           // dim
+                    normalized_dim,                // dim
                     start_pages_read_in_row,       // start_pages_read_in_row
                     start_row_offset,              // start_row_offset
                     start_tiles_read,              // start_tiles_read
@@ -1327,7 +1369,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     do_final_reduction,            // do_final_reduction
                     sync_with_other_direction,     // sync_with_other_direction
                     chunks_per_sync_val,           // chunks_per_sync
-                    dim,                           // dim
+                    normalized_dim,                // dim
                     start_pages_read_in_row,       // start_pages_read_in_row
                     start_row_offset,              // start_row_offset
                     start_tiles_read,              // start_tiles_read

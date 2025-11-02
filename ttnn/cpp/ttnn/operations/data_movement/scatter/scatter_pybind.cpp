@@ -15,41 +15,35 @@ namespace ttnn::operations::data_movement::detail {
 void bind_scatter(py::module& module) {
     auto doc =
         R"doc(
-            Scatters the source tensor's values along a given dimension according
-            to the index tensor.
+        Scatters the source tensor's values along a given dimension according to the index tensor.
 
-            Parameters:
-                * `input` (Tensor): The input tensor to scatter values onto.
-                * `dim` (int): The dimension to scatter along.
-                * `index` (Tensor): The tensor specifying indices where values from the source tensor must go to.
-                * `src` (Tensor): The tensor containing the source values to be scattered onto input.
+        Args:
+            input (ttnn.Tensor): the input tensor to scatter values onto.
+            dim (int): the dimension to scatter along.
+            index (ttnn.Tensor): the tensor specifying indices where values from the source tensor must go to.
+            src (ttnn.Tensor): the tensor containing the source values to be scattered onto input.
 
-            Keyword Arguments:
-                * `reduce` (ScatterReductionType, optional): currently not supported - this is the option to reduce numbers going to the same destination in output with a function like `amax`, `amin`, `sum`, etc.
-                * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
+            reduce (ttnn.ScatterReductionType, optional): reduction operation to apply when multiple values are scattered to the same location (e.g., amax, amin, sum). Currently not supported. Defaults to `None`.
 
-            Additional info:
-                * Up until this time, no reductions have been implemented.
+        Returns:
+            ttnn.Tensor: the output tensor with scattered values.
 
-            Example:
+        Note:
+            * Input tensors must be interleaved, tiled and on device.
+            * No reduction operations have been implemented yet.
 
-            .. code-block:: python
-
-                import ttnn
-                import torch
-
-                input_torch = torch.randn([10,20,30,20,10], dtype=torch.float32)
-                index_torch = torch.randint(0, 10, [10,20,30,20,5], dtype=torch.int64)
-                source_torch = torch.randn([10,20,30,20,10], dtype=input_torch.dtype)
-
-                device = ttnn.open_device(device_id=0)
-                # input tensors must be interleaved, tiled and on device
-                input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
-                index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.Layout.TILE)
-                source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
-                dim = -1
-
-                output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
+        Example:
+            >>> input_torch = torch.randn([10, 20, 30, 20, 10], dtype=torch.float32)
+            >>> index_torch = torch.randint(0, 10, [10, 20, 30, 20, 5], dtype=torch.int64)
+            >>> source_torch = torch.randn([10, 20, 30, 20, 10], dtype=input_torch.dtype)
+            >>> device = ttnn.open_device(device_id=0)
+            >>> input_ttnn = ttnn.from_torch(input_torch, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
+            >>> index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT)
+            >>> source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT)
+            >>> dim = -1
+            >>> output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
         )doc";
 
     using OperationType = decltype(ttnn::scatter);

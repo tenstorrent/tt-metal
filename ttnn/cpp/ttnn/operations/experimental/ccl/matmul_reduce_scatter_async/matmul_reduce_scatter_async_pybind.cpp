@@ -105,8 +105,7 @@ void py_bind_matmul_reduce_scatter_async(pybind11::module& module) {
     detail::bind_matmul_reduce_scatter_async(
         module,
         ttnn::experimental::matmul_reduce_scatter_async,
-        R"doc(matmul_reduce_scatter_async(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> (ttnn.Tensor, ttnn.Tensor)
-
+        R"doc(
         Performs an reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:

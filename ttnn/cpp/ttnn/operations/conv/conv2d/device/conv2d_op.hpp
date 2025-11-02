@@ -13,12 +13,14 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 
 namespace ttnn {
 
 namespace operations::conv {
 namespace conv2d {
 
+using Conv2dSliceConfig = op_slicing::Op2DSliceConfig;
 struct Conv2dConfig {
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.
@@ -164,25 +166,6 @@ struct Conv2dConfig {
     }
 };
 
-struct Conv2dSliceConfig {
-    // Determines the dimension along which the input & output tensors are sliced.
-    // Slices based on [N, H, W, C] shape.
-    // Using width slicing is more efficient as it reduces memory usage. This is because the overlap of data between
-    // cores is minimized in width slicing, reducing the size of the Halo output. If the Height & Width dimensions are
-    // similar, then use Width slicing. Use Height slicing if the Height dimension is significantly larger than the
-    // Width dimension.
-    enum class SliceType : uint8_t {
-        DRAM_HEIGHT,
-        DRAM_WIDTH,
-        L1_FULL  // This option can be used to force conv2d with a DRAM Input to move it to L1, and output will be in
-                 // L1.
-    };
-    SliceType slice_type = SliceType::DRAM_WIDTH;
-
-    // Number of slices that the output tensor should be divided into.
-    uint32_t num_slices = 0;
-};
-
 // TODO: Accept parallelization
 enum class Conv2dOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
@@ -293,14 +276,14 @@ struct Conv2d {
         bool enable_activation_reuse,
         bool config_tensors_in_dram,
         std::optional<bool> force_split_reader) :
+        parallelization_config(p_config),
+        block_config(b_config),
+        sliding_window_config(sliding_window_config),
         output_channels(output_channels),
         groups(groups),
-        sliding_window_config(sliding_window_config),
         untilize_out(untile_out),
         has_bias(has_bias),
         activation(std::move(activation)),
-        parallelization_config(p_config),
-        block_config(b_config),
         memory_config(std::move(memory_config)),
         dtype(dtype),
         input_tensor_shape(input_tensor_shape),

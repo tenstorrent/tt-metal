@@ -9,6 +9,9 @@
 
 #include <cstdint>
 #include <vector>
+#include <ostream>
+#include <sstream>
+#include <fmt/format.h>
 
 namespace tt::tt_fabric {
 
@@ -61,6 +64,19 @@ public:
         return memory_regions_[index];
     }
 
+    /**
+     * Virtual method to format allocator state to an output stream.
+     * Derived classes should override this to provide specific formatting.
+     * @param os Output stream
+     */
+    virtual void print(std::ostream& os) const = 0;
+
+    // Stream output operator for logging
+    friend std::ostream& operator<<(std::ostream& os, const FabricChannelAllocator& allocator) {
+        allocator.print(os);
+        return os;
+    }
+
 protected:
     tt::tt_fabric::Topology topology_;
     tt::tt_fabric::FabricEriscDatamoverOptions options_;
@@ -95,6 +111,18 @@ public:
         );
 
     void emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const override;
+
+    void print(std::ostream& os) const override { os << "ElasticChannelsAllocator (not yet fully implemented)"; }
 };
 
 }  // namespace tt::tt_fabric
+
+// fmt formatter specialization for FabricChannelAllocator
+template <>
+struct fmt::formatter<tt::tt_fabric::FabricChannelAllocator> : fmt::formatter<std::string> {
+    auto format(const tt::tt_fabric::FabricChannelAllocator& allocator, fmt::format_context& ctx) const {
+        std::ostringstream stream;
+        stream << allocator;
+        return formatter<std::string>::format(stream.str(), ctx);
+    }
+};

@@ -389,7 +389,6 @@ target_link_libraries(
         xtensor-blas
         xtl
         tokenizers_cpp
-        wandbcpp
         Boost::core
         Boost::container
         tt-logger
@@ -416,12 +415,10 @@ if(ENABLE_LIBCXX)
     target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
 
     target_link_libraries(
-        wandbcpp
         PUBLIC
             ${LIBC++}
             ${LIBC++ABI}
     )
-    target_compile_options(wandbcpp PUBLIC -stdlib=libc++)
 endif()
 
 add_definitions(-DTOKENIZERS_DATA_PATH="${CMAKE_SOURCE_DIR}/data")
@@ -462,7 +459,6 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_bfloat16.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp

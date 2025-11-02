@@ -79,7 +79,7 @@ private:
     int device_core_frequency{};
 
     // Thread pool used for processing data when dumping results
-    std::shared_ptr<ThreadPool> thread_pool{};
+    std::shared_ptr<ThreadPool> thread_pool;
 
     // Last fast dispatch read performed flag
     bool is_last_fd_read_done{};
@@ -88,7 +88,7 @@ private:
     uint64_t smallest_timestamp = (1lu << 63);
 
     // Output directory for device profiler logs
-    std::filesystem::path output_dir;
+    std::filesystem::path device_logs_output_dir;
 
     // Hash to zone source locations
     std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;

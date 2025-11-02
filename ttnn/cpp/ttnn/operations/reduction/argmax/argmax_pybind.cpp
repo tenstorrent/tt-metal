@@ -15,8 +15,6 @@ namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(
-            ``ttnn.argmax(input_tensor: ttnn.Tensor, dim: Optional[int] = None, keepdim: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
-
             Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
@@ -41,9 +39,9 @@ void bind_reduction_argmax_operation(py::module& module) {
                     * - dtype
                       - layout
                     * - FLOAT32
-                      - ROW_MAJOR
+                      - ROW_MAJOR, TILE
                     * - BFLOAT16
-                      - ROW_MAJOR
+                      - ROW_MAJOR, TILE
                     * - UINT32
                       - ROW_MAJOR
                     * - INT32
@@ -68,6 +66,8 @@ void bind_reduction_argmax_operation(py::module& module) {
                 - All input tensors must be on-device.
                 - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
                 - Sharding is not supported for this operation
+                - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
+                - The (optional) preallocated output tensor must have ROW_MAJOR layout
 
             Example:
               .. code-block:: python

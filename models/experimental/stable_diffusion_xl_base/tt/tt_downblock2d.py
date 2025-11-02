@@ -9,7 +9,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDo
 
 
 class TtDownBlock2D(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config):
+    def __init__(self, device, state_dict, module_path, model_config, debug_mode=False):
         super().__init__()
 
         num_layers = 2
@@ -17,7 +17,9 @@ class TtDownBlock2D(LightweightModule):
 
         for i in range(num_layers):
             self.resnets.append(
-                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config)
+                TtResnetBlock2D(
+                    device, state_dict, f"{module_path}.resnets.{i}", model_config=model_config, debug_mode=debug_mode
+                )
             )
 
         self.downsamplers = TtDownsample2D(
@@ -29,6 +31,7 @@ class TtDownBlock2D(LightweightModule):
             (1, 1),
             1,
             model_config=model_config,
+            debug_mode=debug_mode,
         )
 
     def forward(self, hidden_states, input_shape, temb):

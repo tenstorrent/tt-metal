@@ -19,8 +19,7 @@ void py_bind_rotary_embedding_llama(pybind11::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::rotary_embedding_llama,
-        R"doc(rotary_embedding_llama(input_tensor: ttnn.Tensor, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, trans_mat: ttnn.Tensor, is_decode_mode: bool, memory_config: MemoryConfig, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
-
+        R"doc(
             Applies the rotary embedding to the input_tensor tensor using the cos_cache and sin_cache tensors.
 
             When token_idx is passed, this assumes input is transposed to [seq_len, 1, B, head_dim], and seq_len is 1.

@@ -222,8 +222,7 @@ void py_module(py::module& module) {
     bind_registered_operation(
         module,
         ttnn::to_dtype,
-        R"doc(to_dtype(tensor: ttnn.Tensor, dtype: DataType = None) -> ttnn.Tensor
-
+        R"doc(
             Converts a tensor to the desired dtype
 
 

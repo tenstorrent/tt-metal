@@ -95,7 +95,6 @@ def test_model_inference(
     request,
     device_params,
 ):
-    mesh_device.disable_and_clear_program_cache()
     test_id = request.node.callspec.id
     num_layers = num_layers
     if is_ci_env:

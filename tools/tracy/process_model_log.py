@@ -16,7 +16,7 @@ def get_profiler_folder(output_logs_subdir):
     return PROFILER_ARTIFACTS_DIR / output_logs_subdir
 
 
-def get_latest_ops_log_filename(output_logs_subdir):
+def get_latest_ops_log_filename(output_logs_subdir=""):
     output_report_dir = generate_reports_folder(get_profiler_folder(output_logs_subdir))
     runDate = sorted(os.listdir(output_report_dir))[-1]
     filename = output_report_dir / runDate / f"ops_perf_results_{runDate}.csv"
@@ -52,10 +52,15 @@ def post_process_ops_log(output_logs_subdir, columns=None, sum_vals=True, op_nam
     return results
 
 
-def run_device_profiler(command, output_logs_subdir, check_test_return_code=True, device_analysis_types=[]):
+def run_device_profiler(
+    command, output_logs_subdir, check_test_return_code=True, device_analysis_types=[], cpp_post_process=False
+):
     output_profiler_dir = get_profiler_folder(output_logs_subdir)
     check_return_code = ""
     device_analysis_opt = ""
+    cpp_post_process_opt = ""
+    if cpp_post_process:
+        cpp_post_process_opt = "--cpp-post-process"
     if check_test_return_code:
         check_return_code = "--check-exit-code"
     if device_analysis_types:
@@ -64,7 +69,7 @@ def run_device_profiler(command, output_logs_subdir, check_test_return_code=True
         device_analysis_opt = "".join(device_analysis_opt_list)
     # Quote the embedded command so that arguments like `-k "expr with spaces"` survive through the outer shell
     quoted_command = shlex.quote(command)
-    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} -t 5000 -m {quoted_command}"
+    profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} {cpp_post_process_opt} -t 5000 -m {quoted_command}"
     logger.info(profiler_cmd)
     subprocess.run([profiler_cmd], shell=True, check=True)
 

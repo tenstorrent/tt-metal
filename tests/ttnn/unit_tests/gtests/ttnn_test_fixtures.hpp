@@ -59,7 +59,7 @@ protected:
 
     void TearDown() override { device_->close(); }
 
-    TTNNFixtureWithDevice() : TTNNFixtureBase() {}
+    TTNNFixtureWithDevice() = default;
 
     TTNNFixtureWithDevice(int trace_region_size, int l1_small_size) :
         TTNNFixtureBase(trace_region_size, l1_small_size) {}

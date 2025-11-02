@@ -55,7 +55,13 @@ void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) co
             "Output tensor must have the same memory layout as input tensor");
         for (uint32_t i = 0; i < input_tensor_a.padded_shape().rank(); i++) {
             if (i != input_shape.rank() - 2) {
-                TT_FATAL(input_shape[i] == this->output_padded_shape[i], "Error");
+                TT_FATAL(
+                    input_shape[i] == this->output_padded_shape[i],
+                    "Input shape[{}] ({}) must equal output padded shape[{}] ({})",
+                    i,
+                    input_shape[i],
+                    i,
+                    this->output_padded_shape[i]);
             }
         }
     }

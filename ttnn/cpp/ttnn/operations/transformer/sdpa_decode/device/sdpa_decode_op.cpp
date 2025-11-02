@@ -63,17 +63,30 @@ void ScaledDotProductAttentionDecode::validate(
     // Input 0 must be sharded by height or DRAM interleaved. All other inputs must be in DRAM.
     const auto Q_memcfg = input_tensors.at(0).memory_config();
     if (input_tensors.at(0).is_sharded()) {
-        TT_FATAL(Q_memcfg.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(
+            Q_memcfg.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Q tensor memory layout must be HEIGHT_SHARDED when sharded but got {}",
+            Q_memcfg.memory_layout());
     } else {
-        TT_FATAL(Q_memcfg.buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
+        TT_FATAL(
+            Q_memcfg.buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Q tensor buffer type must be DRAM when not sharded but got {}",
+            Q_memcfg.buffer_type());
     }
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
-        TT_FATAL(input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Error");
+        TT_FATAL(
+            input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Input tensor {} buffer type must be DRAM but got {}",
+            i,
+            input_tensors.at(i).buffer()->buffer_type());
     }
     // Output memconfig must be height sharded or DRAM
     if (this->output_mem_config.is_sharded()) {
-        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+            "Output memory config layout must be HEIGHT_SHARDED when sharded but got {}",
+            this->output_mem_config.memory_layout());
     }
 
     if (!this->is_causal) {
@@ -162,7 +175,10 @@ void ScaledDotProductAttentionDecode::validate(
                 page_table_tensor.dtype() == DataType::INT32, "Error: SDPA currently only supports INT32 datatype");
         }
 
-        TT_FATAL(page_table_tensor.layout() == Layout::ROW_MAJOR, "Error");
+        TT_FATAL(
+            page_table_tensor.layout() == Layout::ROW_MAJOR,
+            "Page table tensor layout must be ROW_MAJOR but got {}",
+            page_table_tensor.layout());
 
         const auto page_table_shape = page_table_tensor.padded_shape();
 
@@ -205,16 +221,20 @@ void ScaledDotProductAttentionDecode::validate(
             TT_FATAL(k_shape[0] == 1, "Share cache expects K to have batch size of 1, but got {}", k_shape[0]);
             TT_FATAL(v_shape[0] == 1, "Share cache expects V to have batch size of 1, but got {}", v_shape[0]);
         } else {
-            TT_FATAL(k_shape[0] == B, "Error");
-            TT_FATAL(v_shape[0] == B, "Error");
+            TT_FATAL(k_shape[0] == B, "K tensor batch size ({}) must equal B ({})", k_shape[0], B);
+            TT_FATAL(v_shape[0] == B, "V tensor batch size ({}) must equal B ({})", v_shape[0], B);
         }
         // TT_FATAL(Q_memcfg.shard_spec.value().grid.num_cores() == B, "Q must be height sharded by batch ");
 
         // Q seqlen must be 1 if we are running decode mode
-        TT_FATAL(q_shape[0] == 1, "Error");
+        TT_FATAL(q_shape[0] == 1, "Q tensor batch size must be 1 for decode mode but got {}", q_shape[0]);
 
         // Check sequence lengths
-        TT_FATAL(k_shape[-2] == v_shape[-2], "Error");
+        TT_FATAL(
+            k_shape[-2] == v_shape[-2],
+            "K and V tensors must have the same sequence length. K: {}, V: {}",
+            k_shape[-2],
+            v_shape[-2]);
 
         // Validate chunk size for unpaged version
         TT_FATAL(k_chunk_size > 0, "Must provide k_chunk_size if non-causal!");
@@ -227,8 +247,16 @@ void ScaledDotProductAttentionDecode::validate(
 
         // Check hidden size
         const auto D = q_shape[-1];
-        TT_FATAL(k_shape[-1] == D, "Error");
-        TT_FATAL(v_shape[-1] == D, "Error");
+        TT_FATAL(
+            k_shape[-1] == D,
+            "K tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
+            k_shape[-1],
+            D);
+        TT_FATAL(
+            v_shape[-1] == D,
+            "V tensor hidden dimension ({}) must equal Q tensor hidden dimension ({})",
+            v_shape[-1],
+            D);
 
         // Check valid seqlen
         for (int i = 0; i < this->cur_pos.size(); i++) {

@@ -38,6 +38,12 @@ def pytest_addoption(parser):
         default=10,
         help="Number of iterations of denoising loop (default: 10)",
     )
+    parser.addoption(
+        "--debug-mode",
+        action="store_true",
+        default=False,
+        help="Run SDXL in debug mode (default: False)",
+    )
 
 
 @pytest.fixture
@@ -89,6 +95,11 @@ def get_device_name():
 @pytest.fixture
 def loop_iter_num(request):
     return int(request.config.getoption("--loop-iter-num"))
+
+
+@pytest.fixture
+def debug_mode(request):
+    return request.config.getoption("--debug-mode")
 
 
 @pytest.fixture(scope="function")

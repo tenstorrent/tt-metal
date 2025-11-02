@@ -839,7 +839,7 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     auto ring_buf_data = mbox_data_.watcher().debug_ring_buf();
-    string out = "";
+    string out;
     if (ring_buf_data.current_ptr() != DEBUG_RING_BUFFER_STARTING_INDEX) {
         // Latest written idx is one less than the index read out of L1.
         out += "\n\tdebug_ring_buffer=\n\t[";

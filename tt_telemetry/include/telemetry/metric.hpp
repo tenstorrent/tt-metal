@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 
+#include <fmt/ranges.h>
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 enum class MetricUnit : uint16_t {
@@ -48,6 +49,9 @@ public:
     virtual const std::vector<std::string> telemetry_path() const {
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
+
+    // Get telemetry path as a slash-separated string
+    std::string telemetry_path_string() const { return fmt::format("{}", fmt::join(telemetry_path(), "/")); }
 
     virtual void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {

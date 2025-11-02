@@ -93,7 +93,7 @@ jobs:
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
 
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -116,7 +116,7 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
-      upload-coverage: true
+      upload-coverage: false
 
   ttnn-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -140,7 +140,7 @@ jobs:
       package-artifact-name: ${{ needs.asan-build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-nn
-      upload-coverage: true
+      upload-coverage: false
 
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -236,6 +236,26 @@ jobs:
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
+
+  ttnn-examples:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+        ]
+    uses: ./.github/workflows/sdk-examples.yaml
+    with:
+      docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      runner: ${{ matrix.platform }}
+      product: tt-nn
 
   ttsim-integration-tests:
     needs: [ build ]

@@ -58,7 +58,7 @@ MeshDevice is a virtual device abstraction that bundles together multiple physic
 
 To optimize performance, MeshDevice implements several key optimizations:
 - **Kernel Compilation Broadcasting**: When kernels are compiled for execution on a MeshDevice, the compilation artifacts are automatically broadcasted to all devices in the mesh where applicable, avoiding redundant per-device compilation.
-- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), MeshDevice leverages the mesh topology to efficiently broadcast data across devices rather than performing individual writes to each device.
+- **Data Broadcasting**: For replicated tensors (where the same data needs to exist on multiple devices), the runtime leverages the replicated topology to minimize any host-side processing and efficiently broadcast data across devices.
 - **Unified Command Dispatch**: Operations are dispatched through mesh-aware command queues that coordinate execution across all devices, ensuring lock-step parallel execution.
 
 While MeshDevice provides these performance optimizations, it maintains explicit control over data distribution and communication patterns. MeshDevice does not hide the distributed nature of the computation - users must explicitly specify:
@@ -147,6 +147,7 @@ In multi-device systems, the set of *PCIe*-visible devices can be narrowed using
 Set `TT_VISIBLE_DEVICES` to a comma-separated list of device IDs (matching `/dev/tenstorrent/<id>`) to restrict which devices are visible to your process. If unset, all devices are visible; if set, only the listed devices are available. This is useful for:
 
 - Partitioning devices to run independent jobs so that they do not collide.
+- **Running concurrent processes across different devices**, so each process uses its own card(s) without overlap.
 - Prototyping a smaller mesh inside a larger topology (for example, emulating an N300 within a T3000).
 - Emulating a multi-host configuration by simultaneously launching multiple processes working on independent parts of the available system mesh.
 
@@ -162,6 +163,64 @@ TT_VISIBLE_DEVICES="0" python your_script.py
 TT_VISIBLE_DEVICES="0,1" ./your_cpp_program
 ```
 
+#### Running Concurrent Processes On A Single Host
+
+On a single host with multiple cards, you can run multiple independent processes concurrently, with each process having exclusive access to a different card. This enables running parallel workloads or independent experiments across different cards on the same host.
+
+**Important**:
+- `TT_VISIBLE_DEVICES` uses PCIe device IDs (matching `/dev/tenstorrent/<id>`). For example, a WH T3000 with 4 N300 boards has 8 total devices but only 4 PCIe-accessible devices (IDs 0-3).
+- When running concurrent processes, you must also set `TT_METAL_CACHE` to a unique path for each process to avoid kernel compilation conflicts.
+
+**Example: Running Two Concurrent Processes**
+
+```python
+import os
+import multiprocessing
+from pathlib import Path
+import torch
+import ttnn
+
+def run_on_device(process_name, pcie_device_id):
+    os.environ["TT_VISIBLE_DEVICES"] = str(pcie_device_id)
+    # Use separate cache directories to avoid compilation conflicts
+    os.environ["TT_METAL_CACHE"] = f"{Path.home()}/.cache/tt_metal_{pcie_device_id}"
+
+    # Your workload here
+    torch_a = torch.rand((32 * 32, 64), dtype=torch.bfloat16)
+    torch_b = torch.rand((32 * 32, 64), dtype=torch.bfloat16)
+
+    # Device ID is always 0 from this process's perspective since only one PCIe device is visible
+    device = ttnn.open_device(device_id=0)
+
+    a = ttnn.from_torch(
+        torch_a, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    b = ttnn.from_torch(
+        torch_b, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+
+    output = ttnn.add(a, b)
+    print(f"{process_name}: {output}")
+
+    ttnn.close_device(device)
+
+if __name__ == "__main__":
+    # Run two processes concurrently, each on a different PCIe device
+    # For WH T3000: PCIe device IDs range from 0-3
+    processes = [
+        ("Process 1", "0"),
+        ("Process 2", "1"),
+    ]
+
+    jobs = []
+    for process_name, pcie_device_id in processes:
+        p = multiprocessing.Process(target=run_on_device, args=(process_name, pcie_device_id))
+        jobs.append(p)
+        p.start()
+
+    for job in jobs:
+        job.join()
+```
 
 For more examples, please see `tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh`.
 

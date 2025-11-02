@@ -108,8 +108,7 @@ void py_bind_all_gather_matmul_async(pybind11::module& module) {
     detail::bind_all_gather_matmul_async(
         module,
         ttnn::experimental::all_gather_matmul_async,
-        R"doc(all_gather_matmul_async(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, *, num_links: int = 1, memory_config: Optional[ttnn.MemoryConfig] = None) -> (ttnn.Tensor, ttnn.Tensor)
-
+        R"doc(
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:

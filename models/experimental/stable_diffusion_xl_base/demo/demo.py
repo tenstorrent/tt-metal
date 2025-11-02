@@ -13,16 +13,15 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
+    MAX_SEQUENCE_LENGTH,
+    TEXT_ENCODER_2_PROJECTION_DIM,
+    CONCATENATED_TEXT_EMBEDINGS_SIZE,
 )
 import os
 from models.common.utility_functions import profiler
 from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
-
-MAX_SEQUENCE_LENGTH = 77
-TEXT_ENCODER_2_PROJECTION_DIM = 1280
-CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
 
 
 @torch.no_grad()
@@ -76,6 +75,7 @@ def run_demo_inference(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
+        local_files_only=is_ci_env,
     )
     profiler.end("diffusion_pipeline_from_pretrained")
 

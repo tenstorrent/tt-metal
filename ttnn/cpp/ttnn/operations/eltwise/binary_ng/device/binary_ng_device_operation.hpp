@@ -96,6 +96,7 @@ struct BinaryNgDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor,
+        const std::optional<bool>& fast_and_approximate_mode,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations);
@@ -108,6 +109,7 @@ struct BinaryNgDeviceOperation {
         const std::optional<const DataType>& output_dtype,
         const std::optional<MemoryConfig>& memory_config,
         const std::optional<Tensor>& optional_output_tensor,
+        const std::optional<bool>& fast_and_approximate_mode,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
         tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations);

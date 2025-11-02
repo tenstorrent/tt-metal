@@ -20,42 +20,52 @@ TIMEOUT = 45
 # Get the number of available devices to dynamically generate mesh shapes
 NUM_DEVICES = ttnn.get_num_devices()
 
-FABRIC_CONFIGS = [
+FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
+]
+
+FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
     ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
+FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
+
+
+GENERALITY_PARAMETERS = {
+    "mesh_shape": list(mesh_shape_iterator(NUM_DEVICES)),
+    "fabric_config": FABRIC_CONFIGS,
+    "num_links": [1],
+    "cluster_axis": [
+        0,
+        1,
+    ],
+    "input_shape": [
+        [1, 1, 32, 32],
+        [1, 1, 32, 1280],
+        [1, 1, 32, 31],
+        [1, 1, 1, 32, 32],
+        [2, 32, 32],
+        [1, 1, 32, 16384],
+        [1, 1, 1, 2048],
+        [1, 1, 1, 4096],
+    ],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "input_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b, ttnn.uint32],
+    "mem_config": [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+    "num_iters": [1],
+}
+
 # Define the parameter space for the sweep test
 parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
-        "cluster_axis": [
-            0,
-            1,
-        ],
-        "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 1280],
-            [1, 1, 32, 31],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
-            [1, 1, 32, 16384],
-            [1, 1, 1, 2048],
-            [1, 1, 1, 4096],
-        ],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],  # , ttnn.bfloat8_b, ttnn.uint32],
-        "mem_config": [
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
-        ],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
+    "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
+    "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
+    "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
 }
 
 
@@ -155,13 +165,13 @@ def run(
 
             for i in range(num_iters):
                 start_time = start_measuring_time()
-                tt_out_tensor = ttnn.experimental.all_broadcast_async(
+                tt_out_tensor = ttnn.all_broadcast(
                     tt_input,
-                    num_links=num_links,
-                    memory_config=mem_config,
-                    topology=topology,
-                    subdevice_id=worker_sub_device_id,
                     cluster_axis=cluster_axis,
+                    subdevice_id=worker_sub_device_id,
+                    memory_config=mem_config,
+                    num_links=num_links,
+                    topology=topology,
                 )
                 e2e_perf = stop_measuring_time(start_time)
                 logger.info(f"Done iteration {i}")
