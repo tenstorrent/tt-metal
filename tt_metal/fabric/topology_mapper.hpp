@@ -24,6 +24,9 @@ namespace tt::tt_fabric {
 
 struct LocalMeshBinding;
 
+// Concise alias for ASIC physical position (tray, location)
+using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>;
+
 /**
  * @brief TopologyMapper creates and manages mappings between fabric node IDs and physical ASIC IDs
  *
@@ -52,6 +55,14 @@ public:
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding);
+
+    // Construct a TopologyMapper with fixed ASIC-position pinnings (tray, location).
+    // These pins must reference devices on the current host; if infeasible, construction will throw with details.
+    TopologyMapper(
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
 
     /**
      * @brief Get logical mesh graph connectivity
@@ -267,6 +278,7 @@ private:
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
+    const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
 
     // Bidirectional mapping between FabricNodeId and AsicID
     std::unordered_map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_id_to_asic_id_;
