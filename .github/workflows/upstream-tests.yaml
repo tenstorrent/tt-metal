@@ -24,16 +24,6 @@ env:
   BLACKHOLE_QB_GE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-qb-ge
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-      build-umd-tests: true
-      tracy: true
   get-image-tags:
     runs-on: ubuntu-latest
     outputs:
@@ -69,8 +59,6 @@ jobs:
           echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
-      - build-artifact
-      - build-artifact
       - get-image-tags
     permissions:
       packages: write
@@ -84,60 +72,42 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: wh_6u
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
             hw-topology: wh_6u
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
             test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
             hw-topology: blackhole
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_llmbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_deskbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_loudbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_p300
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_qb_ge
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -147,14 +117,18 @@ jobs:
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
-          name: ${{ matrix.image-config.build-artifact-name }}
+          name: TTMetal_build_any_22.04_amd64_x86_64-linux-clang-17-libstdcpp_profiler_e216dd6fdfb415f28fe25b545050d7e9306ba6ae_19017889835
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 19017889835
       - run: mkdir -p _tt-metal
       - run: tar --zstd -xvf ttm_any.tar.zst -C _tt-metal/
       - run: ls -hal _tt-metal
       - name: 🧪 Download Python Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: ${{ matrix.image-config.wheel-artifact-name }}
+          name: eager-dist-cp310-ubuntu-22.04-any-profiler-e216dd6fdfb415f28fe25b545050d7e9306ba6ae-19017889835
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 19017889835
       - name: 💿 Verify Wheel exists
         shell: bash
         run: |
