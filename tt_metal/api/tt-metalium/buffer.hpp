@@ -194,11 +194,6 @@ public:
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
-    // Creates a view of the region of the buffer.
-    // The view is a new buffer (unless the region is the entire buffer) that shares the same underlying device memory.
-    // The view keeps the underlying buffer alive as long as the view is alive.
-    std::shared_ptr<Buffer> view(const BufferRegion& region);
-
     Buffer(const Buffer& other) = delete;
     Buffer& operator=(const Buffer& other) = delete;
     Buffer(Buffer&& other) = delete;
@@ -206,6 +201,7 @@ public:
     ~Buffer();
 
     IDevice* device() const;
+    // Single usage by reports.cpp
     Allocator* allocator() const;
     DeviceAddr size() const;
 

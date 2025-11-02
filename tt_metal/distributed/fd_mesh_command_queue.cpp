@@ -539,7 +539,7 @@ void FDMeshCommandQueue::write_shard_to_device(
     }
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto shard_view = device_buffer->impl()->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     buffer_dispatch::write_to_device_buffer(
@@ -565,7 +565,7 @@ void FDMeshCommandQueue::read_shard_from_device(
     }
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto shard_view = device_buffer->impl()->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);

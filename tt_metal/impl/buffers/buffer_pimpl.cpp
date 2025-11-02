@@ -33,9 +33,6 @@ std::shared_ptr<Buffer> Buffer::create(
     return BufferImpl::create(device, address, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id);
 }
 
-// View method
-std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) { return pimpl_->view(region); }
-
 // Destructor
 Buffer::~Buffer() = default;
 
