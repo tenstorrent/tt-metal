@@ -611,7 +611,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                     chunks_per_sync_val =
                         chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                            topology, start_tiles_to_read, start_tiles_read, tile_granularity));
+                            topology, start_tiles_to_read * slice_B, start_tiles_read * slice_B, tile_granularity));
                 } else {
                     start_tiles_read = worker_id * output_channel_num_pages / num_workers;
                     start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
