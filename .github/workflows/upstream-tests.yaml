@@ -44,7 +44,7 @@ jobs:
           fetch-tags: true
       - name: Get tag to use everywhere
         id: set-image-tag-suffix
-        run: echo "image-tag-suffix=$(git describe)" >> "$GITHUB_OUTPUT"
+        run: echo "image-tag-suffix=v0.64.0-dev20251102-8-g4b64346122" >> "$GITHUB_OUTPUT"
       - name: Set image tags
         id: set-image-tags
         run: |
@@ -112,58 +112,6 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - uses: actions/checkout@v4
-      - name: Download artifacts from metal
-        id: download-artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        with:
-          # 22.04 artifact... we'll probably need to key on that in the original action in metal
-          name: TTMetal_build_any_22.04_amd64_x86_64-linux-clang-17-libstdcpp_profiler_e216dd6fdfb415f28fe25b545050d7e9306ba6ae_19017889835
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: 19017889835
-      - run: mkdir -p _tt-metal
-      - run: tar --zstd -xvf ttm_any.tar.zst -C _tt-metal/
-      - run: ls -hal _tt-metal
-      - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        with:
-          name: eager-dist-cp310-ubuntu-22.04-any-profiler-e216dd6fdfb415f28fe25b545050d7e9306ba6ae-19017889835
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          run-id: 19017889835
-      - name: 💿 Verify Wheel exists
-        shell: bash
-        run: |
-          echo "📂 In directory: $(pwd)"
-          echo "📄 Files:"
-          ls -la .
-      # Do not set up docker buildx because of https://github.com/docker/setup-buildx-action/issues/57
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Generate Dockerfile
-        shell: bash
-        run: |
-          sudo apt update
-          sudo apt install -y gettext
-          export TEST_COMMAND=${{ matrix.image-config.test-command }}
-          export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
-          export TT_METAL_DEV_VERSION=latest
-          export TT_METAL_COMMIT_SHA=${{ github.sha }}
-          envsubst < dockerfile/upstream_test_images/Dockerfile.template > dockerfile/upstream_test_images/Dockerfile-generated
-          cat dockerfile/upstream_test_images/Dockerfile-generated
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          file: dockerfile/upstream_test_images/Dockerfile-generated
-          platforms: linux/amd64
-          pull: true
-          push: true
-          tags: ${{ matrix.image-config.image-tag }}
-          context: ${{ github.workspace }}
-          build-args: |
-            TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
   test-wh-6u-image:
     needs:
       - get-image-tags
