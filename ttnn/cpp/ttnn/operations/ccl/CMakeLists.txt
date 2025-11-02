@@ -26,11 +26,16 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
+            all_gather/all_gather.hpp
+            all_reduce/all_reduce.hpp
+            reduce_scatter/reduce_scatter.hpp
+            all_broadcast/device/all_broadcast_op.hpp # seems odd to have some of this file, but it's needed for tt-train to consume
             ccl_common.hpp
             ccl_host_datastructures.hpp
             ccl_host_types.hpp
             ccl_op_fusion.hpp
             common/host/ccl_command_stream_builders.hpp
+            common/host/moe_utils.hpp
             common/types/ccl_types.hpp
             common/uops/ccl_command.hpp
             mesh_partition/mesh_partition.hpp
@@ -68,6 +73,9 @@ target_sources(
         common/host/ccl_command_stream_builders.cpp
         common/host/moe_utils.cpp
         # Ops
+        all_broadcast/all_broadcast.cpp
+        all_broadcast/device/all_broadcast_op.cpp
+        all_broadcast/device/all_broadcast_program.cpp
         all_gather/all_gather.cpp
         all_gather/device/all_gather_device_operation.cpp
         all_gather/device/all_gather_program_factory.cpp

@@ -26,7 +26,7 @@ public:
     }
 
     bool operator==(const Alignment& other) const;
-    bool operator==(const tt::stl::SmallVector<uint32_t>& other) const;
+    bool operator==(const ttsl::SmallVector<uint32_t>& other) const;
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");

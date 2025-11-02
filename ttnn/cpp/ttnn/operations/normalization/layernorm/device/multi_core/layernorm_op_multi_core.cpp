@@ -1280,6 +1280,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         block_wt_resharded * out_single_tile_size);  // out_reshard_tensor_stride_w_bytes: how many bytes to skip to get
                                                      // to the next data chunk
     writer_mcast_receiver_compile_time_args.push_back(block_ht);  // height in tiles
+    writer_mcast_receiver_compile_time_args.push_back(use_welford);
 
     // writer kernel
     bool use_row_major_kernel = (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) or

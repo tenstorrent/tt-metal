@@ -166,10 +166,36 @@ run_tg_gpt_oss_tests() {
   fi
 }
 
+run_tg_mochi_demo_tests() {
+  fail=0
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_transformer_mochi.py::test_mochi_transformer_model_caching -k "4x8sp1tp0"
+  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500 ; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_mochi_demo_tests failed"
+    exit 1
+  fi
+}
+
 run_tg_sentence_bert_tests() {
 
   pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500 ; fail+=$?
 
+}
+
+run_tg_wan22_demo_tests() {
+  fail=0
+
+  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+  pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_transformer_wan.py::test_wan_transformer_model_caching -k "wh_4x8sp1tp0"
+  TT_MM_THROTTLE_PERF=5 pytest -n auto models/experimental/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500; fail+=$?
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_wan22_demo_tests failed"
+    exit 1
+  fi
 }
 
 run_tg_demo_tests() {
@@ -188,12 +214,16 @@ run_tg_demo_tests() {
     run_tg_llama3_70b_dp_tests
   elif [[ "$1" == "sd35" ]]; then
     run_tg_sd35_demo_tests
+  elif [[ "$1" == "mochi" ]]; then
+    run_tg_mochi_demo_tests
   elif [[ "$1" == "flux1" ]]; then
     run_tg_flux1_tests
   elif [[ "$1" == "sentence_bert" ]]; then
     run_tg_sentence_bert_tests
   elif [[ "$1" == "gpt-oss" ]]; then
     run_tg_gpt_oss_tests
+  elif [[ "$1" == "wan22" ]]; then
+    run_tg_wan22_demo_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
