@@ -181,14 +181,14 @@ ethernet_connections_to_remote_devices:
       chan: 6
   -
     - chip: 3
-      chan: 1
+      chan: 7
     - remote_chip_id: 10226819150
-      chan: 1
+      chan: 7
   -
     - chip: 3
-      chan: 0
+      chan: 6
     - remote_chip_id: 10226819150
-      chan: 0
+      chan: 6
 chips_with_mmio:
   - 0: 2
   - 1: 1
