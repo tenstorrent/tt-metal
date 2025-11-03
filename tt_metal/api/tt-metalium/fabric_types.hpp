@@ -31,7 +31,7 @@ enum class FabricTensixConfig : uint32_t {
     MUX = 1,       // using mux kernel as tensix extension
 };
 
-// Unidfied Datamovement knob for configuring fabric with different parameters
+// Unified Datamovement knob for configuring fabric with different parameters
 enum class FabricUDMMode : uint32_t {
     DISABLED = 0,
     ENABLED = 1,
