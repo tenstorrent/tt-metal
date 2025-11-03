@@ -34,17 +34,8 @@ import tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM as base
         (1, 512 // 4, 512, 512, 32 // 4, 8, 8, 8),
         (1, 256 // 4, 512, 512, 32 // 4, 4, 8, 8),
         (1, 256 // 4, 1024, 1024, 32 // 4, 16, 8, 8),
-        # PCC drops to 0.9565977077851433 of welford_normal and welford_reciprocal
-        (
-            1,
-            128 // 4,
-            1024,
-            1024,
-            32 // 4,
-            8,
-            8,
-            8,
-        ),
+        # for test below, PCC drops to 0.9565977077851433 of welford_normal and welford_reciprocal
+        (1, 128 // 4, 1024, 1024, 32 // 4, 8, 8, 8),
         # mochi
         # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
     ],
