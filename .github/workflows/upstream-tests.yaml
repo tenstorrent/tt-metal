@@ -314,7 +314,7 @@ jobs:
             echo "Valid JSON array is provided"
 
             # Process each requested requested_hw_topology
-            while IFS= read -r requested_requested_hw_topology; do
+            while IFS= read -r requested_hw_topology; do
               echo "Processing requested hw_topology: $requested_hw_topology"
 
               # Validate requested_hw_topology exists in config
