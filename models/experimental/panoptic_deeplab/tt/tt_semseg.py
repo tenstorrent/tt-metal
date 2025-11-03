@@ -269,6 +269,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
             ttnn.deallocate(y_upsampled)
             # Use single conv versions - slicing handled by config, ReLU is fused
             logger.info(f"🔷 Executing conv: decoder.{f_key}.fuse_conv.0")
+            y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
             y_conv0 = stage["fuse_conv_0"](y)
             ttnn.deallocate(y)
 

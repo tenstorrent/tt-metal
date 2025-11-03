@@ -395,13 +395,10 @@ class ModelOptimisations:
         path = f"decoder.{stage}.fuse_conv.0"
 
         if iteration_index == 0 and stage in ["res3", "res2"]:
-            num_slices = 2 if stage == "res3" else 4
-            act_block_h = 32 if stage == "res3" else 64
-
             self.register_layer_override(
                 path,
-                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=num_slices),
-                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=act_block_h),
+                slice_strategy=None,
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=0),
                 deallocate_activation=False,
                 activation=None,
             )
