@@ -16,6 +16,25 @@ namespace binary {
 
 namespace detail {
 
+// Common broadcasting and performance documentation for all binary operations
+constexpr const char* BINARY_OP_DETAILED_DOC = R"doc(
+**Binary Elementwise Operations:**
+
+Binary elementwise operations, C=op(A,B), support input tensors A and B in row major and tile layout, in interleaved or sharded format (height, width or block sharded), in DRAM or L1. A and B are completely independent, and can have different tensor specs.
+
+**Broadcasting:**
+
+Broadcast of A and B operands is supported up to dimension 5 (DNCHW). Any dimensions of size 1 in either A or B will be expanded to match the other input, and data will be duplicated along that dimension. For example, if the shape of A is [2,1,1,32] and B is [1,16,8,1], the output shape will be [2,16,8,32]. The size of dimensions higher than 5 must match between A and B.
+
+The output C also supports row major and tile layout, interleaved or sharded format (height, width or block sharded), in DRAM or L1. The tensor spec of C is independent of A and B, and can be explicitly set using the optional output tensor input; if not provided, the operation will attempt a best decision at an appropriate tensor spec. The dimensions of C, or equivalently the optional output tensor, must match the broadcast-matched size of A and B.
+
+**Performance Considerations:**
+
+Elementwise operations operate natively in tile format, tiled tensors are preferred as an input, and row-major tensors are tilized and untilized during the operation.
+
+L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.
+)doc";
+
 template <typename binary_operation_t>
 void bind_primitive_binary_operation(
     py::module& module, const binary_operation_t& operation, const std::string& description) {
@@ -96,21 +115,21 @@ void bind_binary_operation(
         .. math::
             {3}
 
+        {7}
+
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
+            * **input_tensor_a** (ttnn.Tensor): the input tensor.
+            * **input_tensor_b** (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            * **dtype** (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **activations** (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
 
 
         Returns:
-            ttnn.Tensor: the output tensor.
-
-        Supports broadcasting.
+            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -138,7 +157,8 @@ void bind_binary_operation(
         math,
         info,
         supported_dtype,
-        note);
+        note,
+        BINARY_OP_DETAILED_DOC);
 
     bind_registered_operation(
         module,

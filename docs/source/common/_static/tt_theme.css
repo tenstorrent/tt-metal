@@ -469,3 +469,276 @@ https://github.com/readthedocs/sphinx_rtd_theme/issues/1301
 .py.property {
   display: block !important;
 }
+
+/* ====================================================================
+   PyTorch-Style Documentation Enhancements
+   ==================================================================== */
+
+/* Style field lists (Args, Keyword Args, Returns) as full-width sections */
+.rst-content dl.field-list {
+  display: block !important;
+  width: 100%;
+  border: none;
+}
+
+/* CCL ops field lists - blue gradient style - ONLY for specific CCL ops */
+.rst-content dl.field-list.ccl-op > dt {
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-dark-purple) 100%);
+  color: white;
+  font-weight: bold;
+  font-family: var(--font-main);
+  font-size: 1.1rem;
+  padding: 0.75rem 1rem !important;
+  margin-top: 1.5rem;
+  margin-bottom: 0;
+  border: none !important;
+  width: 100% !important;
+  display: block;
+  border-radius: 4px 4px 0 0;
+}
+
+.rst-content dl.field-list.ccl-op > dd {
+  background: var(--color-background-20);
+  padding: 1rem !important;
+  margin: 0;
+  border: 2px solid var(--color-accent);
+  border-top: none;
+  border-radius: 0 0 4px 4px;
+  margin-bottom: 1rem;
+}
+
+/* ALL other field lists - grey header style (unary, binary, etc.) */
+.rst-content dl.field-list > dt {
+  background: #f5f5f5 !important;
+  background-color: #f5f5f5 !important;
+  background-image: none !important;
+  color: #333 !important;
+  font-weight: 600 !important;
+  font-family: var(--font-main) !important;
+  font-size: 1rem !important;
+  padding: 0.5rem 0.75rem !important;
+  margin-top: 1rem !important;
+  margin-bottom: 0 !important;
+  border: 1px solid #ddd !important;
+  border-left: 1px solid #ddd !important;
+  border-right: 1px solid #ddd !important;
+  border-top: 1px solid #ddd !important;
+  border-bottom: 1px solid #ddd !important;
+  width: 100% !important;
+  display: block !important;
+  border-radius: 4px 4px 0 0 !important;
+}
+
+.rst-content dl.field-list > dd {
+  background: white !important;
+  background-color: white !important;
+  background-image: none !important;
+  padding: 1rem !important;
+  margin: 0 !important;
+  border: 1px solid #ddd !important;
+  border-left: 1px solid #ddd !important;
+  border-right: 1px solid #ddd !important;
+  border-bottom: 1px solid #ddd !important;
+  border-top: none !important;
+  border-radius: 0 0 4px 4px !important;
+  margin-bottom: 1rem !important;
+}
+
+/* Style binary ops docstrings (Args, Keyword args, Returns) - in blockquote dl */
+/* Remove blue/purple styling from Args, Keyword args, Returns sections */
+/* Target ALL dt elements in blockquote regardless of nesting - MAXIMUM SPECIFICITY */
+html body .rst-content blockquote dt,
+html body .rst-content div.document blockquote div dl > dt,
+html body .rst-content div.document blockquote > div > dl > dt,
+html body .rst-content blockquote div dl > dt,
+html body .rst-content blockquote > div > dl > dt,
+html body .rst-content blockquote dl > dt,
+body .rst-content blockquote dl > dt,
+html body .rst-content blockquote dt {
+  background: #f5f5f5 !important;
+  background-color: #f5f5f5 !important;
+  background-image: none !important;
+  color: #333 !important;
+  font-weight: 600 !important;
+  font-family: var(--font-main) !important;
+  font-size: 1rem !important;
+  padding: 0.5rem 0.75rem !important;
+  margin-top: 1rem !important;
+  margin-bottom: 0 !important;
+  border: 1px solid #ddd !important;
+  border-left: 1px solid #ddd !important;
+  border-right: 1px solid #ddd !important;
+  border-top: 1px solid #ddd !important;
+  border-bottom: 1px solid #ddd !important;
+  width: 100% !important;
+  display: block !important;
+  border-radius: 4px 4px 0 0 !important;
+}
+
+/* Target ALL dd elements in blockquote regardless of nesting - MAXIMUM SPECIFICITY */
+html body .rst-content blockquote dd,
+html body .rst-content div.document blockquote div dl > dd,
+html body .rst-content div.document blockquote > div > dl > dd,
+html body .rst-content blockquote div dl > dd,
+html body .rst-content blockquote > div > dl > dd,
+html body .rst-content blockquote dl > dd,
+body .rst-content blockquote dl > dd,
+html body .rst-content blockquote dd {
+  background: white !important;
+  background-color: white !important;
+  background-image: none !important;
+  padding: 1rem !important;
+  margin: 0 !important;
+  border: 1px solid #ddd !important;
+  border-left: 1px solid #ddd !important;
+  border-right: 1px solid #ddd !important;
+  border-bottom: 1px solid #ddd !important;
+  border-top: none !important;
+  border-radius: 0 0 4px 4px !important;
+  margin-bottom: 1rem !important;
+}
+
+/* Style lists within parameter sections */
+.rst-content blockquote dl > dd ul {
+  margin: 0.5rem 0 !important;
+  padding-left: 1.5rem !important;
+}
+
+.rst-content blockquote dl > dd ul li {
+  margin-bottom: 0.5rem !important;
+}
+
+/* Style parameter lists within field lists */
+.rst-content dl.field-list dd > dl {
+  margin: 0;
+  padding: 0;
+}
+
+.rst-content dl.field-list dd > dl > dt {
+  background: transparent;
+  color: var(--color-foreground);
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.5rem 0 0.25rem 0 !important;
+  margin: 0;
+  border: none !important;
+  border-top: none !important;
+  font-family: var(--font-mono);
+}
+
+.rst-content dl.field-list dd > dl > dt code {
+  background: var(--color-background-40);
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.9rem;
+}
+
+.rst-content dl.field-list dd > dl > dd {
+  background: transparent;
+  padding: 0 0 1rem 1.5rem !important;
+  margin: 0;
+  border: none;
+  color: var(--color-foreground);
+}
+
+/* Style function/method signatures */
+.rst-content dl.function > dt,
+.rst-content dl.method > dt,
+.rst-content dl.py.function > dt,
+.rst-content dl.py.method > dt {
+  background: var(--color-background-alt);
+  border-left: 4px solid var(--color-accent);
+  padding: 1rem !important;
+  font-size: 1rem;
+  border-top: none;
+}
+
+/* Note/Warning/Admonition boxes - make them full width and styled */
+.rst-content .note,
+.rst-content .warning,
+.rst-content .admonition {
+  background: var(--color-background-20);
+  border-left: 4px solid var(--color-accent);
+  padding: 1rem;
+  margin: 1.5rem 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.rst-content .note .admonition-title,
+.rst-content .warning .admonition-title,
+.rst-content .admonition .admonition-title {
+  background: transparent;
+  color: var(--color-accent);
+  font-weight: bold;
+  font-size: 1.1rem;
+  margin: 0 0 0.5rem 0;
+  padding: 0;
+  border: none;
+}
+
+/* Style code examples */
+.rst-content .highlight pre {
+  background: var(--color-background-alt);
+  border-left: 4px solid var(--color-green);
+  padding: 1rem;
+  border-radius: 0 4px 4px 0;
+  overflow-x: auto;
+}
+
+/* Table styling for parameters */
+.rst-content table.docutils {
+  border: 2px solid var(--color-accent);
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.rst-content table.docutils thead {
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-dark-purple) 100%);
+  color: white;
+}
+
+.rst-content table.docutils thead th {
+  padding: 0.75rem;
+  font-weight: bold;
+  border: none;
+}
+
+.rst-content table.docutils tbody tr {
+  background: var(--color-background-20);
+  border-bottom: 1px solid var(--color-background-alt);
+}
+
+.rst-content table.docutils tbody tr:hover {
+  background: var(--color-background-40);
+  transition: var(--transition-background);
+}
+
+.rst-content table.docutils tbody td {
+  padding: 0.75rem;
+  border: none;
+}
+
+/* Make docstring sections stand out */
+.rst-content dl.py > dt {
+  background: var(--color-background-alt) !important;
+  border-left: 4px solid var(--color-accent) !important;
+  border-top: none !important;
+  padding: 1rem !important;
+}
+
+.rst-content dl.py > dd {
+  padding: 1rem;
+  margin-left: 0;
+}
+
+/* Section headers in docstrings */
+.rst-content dl.py .rubric {
+  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-dark-purple) 100%);
+  color: white;
+  padding: 0.5rem 1rem;
+  margin: 1.5rem 0 0 0;
+  border-radius: 4px 4px 0 0;
+  font-size: 1.1rem;
+  font-weight: bold;
+}

@@ -25,8 +25,11 @@ class Param:
 
     param_pattern: ClassVar[re.Pattern] = re.compile(
         r"""
-        ^[ ]{4}                  # Match exactly 4 spaces at the start
+        ^\s*                     # Match any amount of leading whitespace (including zero)
+        (?:\*\s+)?               # Optional bullet point (asterisk) followed by whitespace
+        (?:\*\*)?                # Optional bold opening (**) for rst formatting
         (\w+)                    # Capture the parameter name
+        (?:\*\*)?                # Optional bold closing (**) for rst formatting
         \s*                      # Optional whitespace
         (?:\(                    # Start of optional type group (non-capturing)
             (                    # Capture group for the type
@@ -87,6 +90,8 @@ class Return:
 
     @staticmethod
     def from_return_line(line: str) -> "Return | None":
+        # Remove bullet point and bold formatting: "* **type**: description" -> "type: description"
+        line = re.sub(r"^\s*\*\s+\*\*(.+?)\*\*\s*:", r"\1:", line)
         type = line.split(":", 1)[0].strip()
         if not type:
             return None
@@ -101,7 +106,7 @@ class Return:
 class DocstringParser:
     docstring: str
     sections: dict[str, list[str]] = field(default_factory=dict, init=False)
-    section_pattern: ClassVar[re.Pattern] = re.compile(r"^(\w[\w ]*):\s*$")
+    section_pattern: ClassVar[re.Pattern] = re.compile(r"^\s*(\w[\w ]*):\s*$")  # Allow leading whitespace
 
     args: list[Param] = field(default_factory=list, init=False)
     kwargs: list[Param] = field(default_factory=list, init=False)
@@ -127,6 +132,9 @@ class DocstringParser:
     def parse_args_section(self, content: list[str]) -> list[Param]:
         args = []
         for line in content:
+            # Skip empty lines
+            if not line.strip():
+                continue
             param = Param.from_param_line(line)
             if param:
                 args.append(param)
@@ -163,17 +171,28 @@ class FastOperationDocumenter(FunctionDocumenter):
 
     def format_signature(self, **kwargs: Any) -> str:
         docstrings = self.get_doc()
-        if len(docstrings) == 0 or "Overloaded function" in self.object.__doc__:
-            return "(*args, ***kwargs)"
+        if len(docstrings) == 0:
+            return "(*args, **kwargs)"
 
-        if len(docstrings) > 1:
-            raise ValueError("Multiple docstrings found for FastOperation")
+        # get_doc() returns list of lists, join the first one
+        doc_to_parse = "\n".join(docstrings[0])
 
-        lines = inspect.cleandoc(self.object.__doc__)
-        parser = DocstringParser(lines)
-        parser.parse()
+        if not doc_to_parse:
+            return "(*args, **kwargs)"
 
-        return parser.construct_signature()
+        try:
+            lines = inspect.cleandoc(doc_to_parse)
+            parser = DocstringParser(lines)
+            parser.parse()
+
+            # If we have args or returns, construct the signature
+            if parser.args or parser.kwargs or parser.returns:
+                return parser.construct_signature()
+        except Exception as e:
+            # If parsing fails, fall back to generic signature
+            pass
+
+        return "(*args, **kwargs)"
 
     @classmethod
     def can_document_member(cls, member, membername, isattr, parent):
@@ -187,21 +206,32 @@ class OperationDocumenter(FunctionDocumenter):
 
     def format_signature(self, **kwargs: Any) -> str:
         docstrings = self.get_doc()
-        if len(docstrings) == 0 or "Overloaded function" in self.object.__doc__:
-            return "(*args, ***kwargs)"
+        if len(docstrings) == 0:
+            return "(*args, **kwargs)"
 
-        if len(docstrings) > 1:
-            raise ValueError("Multiple docstrings found for Operation")
+        # get_doc() returns list of lists, join the first one
+        doc_to_parse = "\n".join(docstrings[0])
 
-        lines = inspect.cleandoc(self.object.__doc__)
-        parser = DocstringParser(lines)
-        parser.parse()
+        if not doc_to_parse:
+            return "(*args, **kwargs)"
 
-        return parser.construct_signature()
+        try:
+            lines = inspect.cleandoc(doc_to_parse)
+            parser = DocstringParser(lines)
+            parser.parse()
+
+            # If we have args or returns, construct the signature
+            if parser.args or parser.kwargs or parser.returns:
+                return parser.construct_signature()
+        except Exception as e:
+            # If parsing fails, fall back to generic signature
+            pass
+
+        return "(*args, **kwargs)"
 
     @classmethod
     def can_document_member(cls, member, membername, isattr, parent):
-        return isinstance(member, ttnn.decorators.Operation)
+        return isinstance(member, (ttnn.decorators.Operation, ttnn.decorators.FastOperation))
 
 
 class OperationDataDocumenter(DataDocumenter):
