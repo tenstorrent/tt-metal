@@ -62,7 +62,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
         sfpi::vConst0,
         val);
 
-    // The limits of the polynomai approximation is +inf.
+    // The limits of the polynomial approximation is +inf.
     // Since tanh(x) -> +inf, we clamp output to 1.0
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
@@ -129,7 +129,7 @@ inline void tanh_init() {
         _sfpu_load_imm16_(2, imm2);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
-            // Continue fraction
+            // Continued fraction
             ckernel::sfpu::_init_reciprocal_<false, false>();
         } else {
             // Polynomial approximation
