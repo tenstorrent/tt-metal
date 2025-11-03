@@ -15,8 +15,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
-from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_ulp import setup_ccl_semaphores
-
 
 def get_rot_transformation_mat():
     # ROPE op uses a single tile
@@ -41,13 +39,23 @@ def apply_rotary_emb(
     return out.type_as(hidden_states)
 
 
+def chunk_and_shard_tensor(tensor, num_simulated_devices, device, dim, dtype):
+    chunked = torch.chunk(tensor, num_simulated_devices, dim)
+    result = [
+        ttnn.from_torch(
+            chunk, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        for chunk in chunked
+    ]
+    return result
+
+
 def run_distributed_fused_rmsnorm(
-    mesh_device,
-    tp_mesh_axis,
+    device,
+    num_simulated_devices,
     inp_shape,
     dtype,
     stats_dtype,
-    topology,
     num_heads_per_device=1,
     use_weight=True,
     use_rope=False,
@@ -59,14 +67,9 @@ def run_distributed_fused_rmsnorm(
         packer_l1_acc=False,
     )
 
-    prog_cfg = ttnn.LayerNormDistributedDefaultProgramConfig(
-        legacy_reduction=False,
-        legacy_rsqrt=False,
-    )
-
     torch.manual_seed(1234)
 
-    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    num_heads = num_heads_per_device * num_simulated_devices
 
     torch_input = torch.randn(inp_shape) * 4 - 1
 
@@ -86,96 +89,64 @@ def run_distributed_fused_rmsnorm(
 
         transformation_mat = get_rot_transformation_mat()
 
-        rope_shard_dims = [None, None]
-        rope_shard_dims[tp_mesh_axis - 1] = 2  # Sharding on sequence dimension
         tt_rope_cos = ttnn.from_torch(
-            rope_cos,
-            dtype=dtype,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=rope_shard_dims, mesh_shape=list(mesh_device.shape)),
+            rope_cos, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         tt_rope_sin = ttnn.from_torch(
-            rope_sin,
-            dtype=dtype,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=rope_shard_dims, mesh_shape=list(mesh_device.shape)),
+            rope_sin, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         tt_transformation_mat = ttnn.from_torch(
             transformation_mat,
             dtype=dtype,
-            device=mesh_device,
+            device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     epsilon = 1e-5
 
-    tensor_shard_dims = [None, None]
-    tensor_shard_dims[tp_mesh_axis] = -1
-    tensor_shard_dims[1 - tp_mesh_axis] = -2
-    tt_inp = ttnn.from_torch(
-        torch_input,
-        dtype=dtype,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=tensor_shard_dims, mesh_shape=list(mesh_device.shape)),
-    )
+    tt_inp = chunk_and_shard_tensor(torch_input, num_simulated_devices, device, -1, dtype)
 
     tt_weight = None
     if use_weight:
-        weight_shard_dims = [None, None]
-        weight_shard_dims[tp_mesh_axis] = -1
-        tt_weight = ttnn.from_torch(
-            torch_weight,
-            dtype=dtype,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=weight_shard_dims, mesh_shape=list(mesh_device.shape)),
+        tt_weight = chunk_and_shard_tensor(torch_weight, num_simulated_devices, device, -1, dtype)
+
+    tt_stats = []
+    for tt_inp_chunk in tt_inp:
+        tt_stats.append(
+            ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
+                tt_inp_chunk, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
+            )
         )
 
-    ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
-    ttnn.synchronize_device(mesh_device)
-    tt_stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
-        tt_inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
-    )
+    # Pretend we're running on multi-device by concatenating the stats
+    tt_stats_gathered = ttnn.concat(tt_stats, -1)
 
-    ttnn.synchronize_device(tt_inp.device())
-    tt_stats_gathered = ttnn.experimental.all_gather_async(
-        tt_stats,
-        dim=3,
-        multi_device_global_semaphore=ccl_semaphore_handles,
-        num_links=1,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_device=tt_inp.device(),
-        topology=topology,
-        cluster_axis=tp_mesh_axis,
-    )
+    tt_out = []
+    for idx in range(len(tt_inp)):
+        tt_out.append(
+            ttnn.experimental.wan_fused_rmsnorm_post_allgather(
+                tt_inp[idx],
+                tt_stats_gathered,
+                epsilon=epsilon,
+                num_heads_per_device=num_heads_per_device,
+                weight=tt_weight[idx] if tt_weight is not None else None,
+                transformation_mat=tt_transformation_mat,
+                rope_cos=tt_rope_cos,
+                rope_sin=tt_rope_sin,
+                compute_kernel_config=compute_kernel_config,
+            )
+        )
 
-    tt_out = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
-        tt_inp,
-        tt_stats_gathered,
-        epsilon=epsilon,
-        num_heads_per_device=num_heads_per_device,
-        weight=tt_weight,
-        transformation_mat=tt_transformation_mat,
-        rope_cos=tt_rope_cos,
-        rope_sin=tt_rope_sin,
-        compute_kernel_config=compute_kernel_config,
-    )
+    # Concat the output on the "sharded" dimension
+    if num_heads > 1:
+        tt_out = ttnn.concat(tt_out, -3)
+    else:
+        tt_out = ttnn.concat(tt_out, -1)
 
-    tensor_cat_dims = [None, None]
-    tensor_cat_dims[tp_mesh_axis] = -3 if num_heads > 1 else -1
-    tensor_cat_dims[1 - tp_mesh_axis] = -2
     tt_out = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tensor_cat_dims, mesh_shape=list(mesh_device.shape)),
     )
 
     # reference impl
@@ -205,41 +176,25 @@ def run_distributed_fused_rmsnorm(
 @pytest.mark.parametrize("num_heads_per_device", [1, 2], ids=["num_heads1", "num_heads2"])
 @pytest.mark.parametrize("use_weight", [True, False], ids=["has_weight", "no_weight"])
 @pytest.mark.parametrize("use_rope", [True, False], ids=["has_rope", "no_rope"])
-@pytest.mark.parametrize(
-    "mesh_device, tp_mesh_axis",
-    [
-        [(1, 8), 1],
-    ],
-    ids=["1x8_tp1"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params, topology",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
-    ],
-    ids=["fabric_linear"],
-    indirect=["device_params"],
-)
+@pytest.mark.parametrize("num_simulated_devices", [8], ids=["num_simulated_devices8"])
 def test_distributed_fused_rmsnorm_sweep_fusions(
-    mesh_device,
-    tp_mesh_axis,
+    device,
+    num_simulated_devices,
     seqlen,
     hidden_dim,
     dtype,
     stats_dtype,
-    topology,
     num_heads_per_device,
     use_weight,
     use_rope,
     reset_seeds,
 ):
-    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    num_heads = num_heads_per_device * num_simulated_devices
     if hidden_dim // 32 % num_heads != 0:
         pytest.skip("hidden_dim must be divisible by 32 * num_heads")
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
-        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight, use_rope
+        device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
     )
 
 
@@ -254,41 +209,25 @@ def test_distributed_fused_rmsnorm_sweep_fusions(
 @pytest.mark.parametrize("num_heads_per_device", [1, 2], ids=["num_heads1", "num_heads2"])
 @pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
 @pytest.mark.parametrize("use_rope", [True], ids=["has_rope"])
-@pytest.mark.parametrize(
-    "mesh_device, tp_mesh_axis",
-    [
-        [(1, 8), 1],
-    ],
-    ids=["1x8_tp1"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params, topology",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
-    ],
-    ids=["fabric_linear"],
-    indirect=["device_params"],
-)
+@pytest.mark.parametrize("num_simulated_devices", [8], ids=["num_simulated_devices8"])
 def test_distributed_fused_rmsnorm_sweep_shapes(
-    mesh_device,
-    tp_mesh_axis,
+    device,
+    num_simulated_devices,
     seqlen,
     hidden_dim,
     dtype,
     stats_dtype,
-    topology,
     num_heads_per_device,
     use_weight,
     use_rope,
     reset_seeds,
 ):
-    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    num_heads = num_heads_per_device * num_simulated_devices
     if hidden_dim // 32 % num_heads != 0:
         pytest.skip("hidden_dim must be divisible by 32 * num_heads")
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
-        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight, use_rope
+        device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
     )
 
 
@@ -302,43 +241,25 @@ def test_distributed_fused_rmsnorm_sweep_shapes(
 @pytest.mark.parametrize("hidden_dim", [5120], ids=["hidden_dim5120"])
 @pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
 @pytest.mark.parametrize("use_rope", [True], ids=["has_rope"])
-@pytest.mark.parametrize(
-    "mesh_device, tp_mesh_axis",
-    [
-        [(1, 8), 1],
-        [(2, 4), 1],
-        [(2, 4), 0],
-    ],
-    ids=["1x8_tp1", "2x4_tp1", "2x4_tp0"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params, topology",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
-    ],
-    ids=["fabric_linear"],
-    indirect=["device_params"],
-)
+@pytest.mark.parametrize("num_simulated_devices", [2, 4], ids=["num_simulated_devices2", "num_simulated_devices4"])
 def test_distributed_fused_rmsnorm_wan_configs(
-    mesh_device,
-    tp_mesh_axis,
+    device,
+    num_simulated_devices,
     seqlen,
     hidden_dim,
     dtype,
     stats_dtype,
-    topology,
     use_weight,
     use_rope,
     reset_seeds,
 ):
-    num_heads_per_device = 40 // mesh_device.shape[tp_mesh_axis]
-    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    num_heads_per_device = 40 // num_simulated_devices
+    num_heads = num_heads_per_device * num_simulated_devices
     if hidden_dim // 32 % num_heads != 0:
         pytest.skip("hidden_dim must be divisible by 32 * num_heads")
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
-        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight, use_rope
+        device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
     )
 
 
@@ -349,48 +270,31 @@ def test_distributed_fused_rmsnorm_wan_configs(
 @pytest.mark.parametrize("num_heads_per_device", [1], ids=["num_heads1"])
 @pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
 @pytest.mark.parametrize("use_rope", [True], ids=["has_rope"])
-@pytest.mark.parametrize(
-    "mesh_device, tp_mesh_axis",
-    [
-        [(1, 8), 1],
-    ],
-    ids=["1x8_tp1"],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params, topology",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
-    ],
-    ids=["fabric_linear"],
-    indirect=["device_params"],
-)
+@pytest.mark.parametrize("num_simulated_devices", [8], ids=["num_simulated_devices8"])
 def test_distributed_fused_rmsnorm_program_cache(
-    mesh_device,
-    tp_mesh_axis,
+    device,
+    num_simulated_devices,
     seqlen,
     hidden_dim,
     dtype,
     stats_dtype,
-    topology,
     num_heads_per_device,
     use_weight,
     use_rope,
     reset_seeds,
 ):
-    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    num_heads = num_heads_per_device * num_simulated_devices
     if hidden_dim // 32 % num_heads != 0:
         pytest.skip("hidden_dim must be divisible by 32 * num_heads")
     inp_shape = (1, 1, seqlen, hidden_dim)
     dummy_tensors = []
     for i in range(2):
         run_distributed_fused_rmsnorm(
-            mesh_device,
-            tp_mesh_axis,
+            device,
+            num_simulated_devices,
             inp_shape,
             dtype,
             stats_dtype,
-            topology,
             num_heads_per_device,
             use_weight,
             use_rope,
@@ -399,7 +303,7 @@ def test_distributed_fused_rmsnorm_program_cache(
             ttnn.from_torch(
                 torch.zeros(32, 32),
                 dtype=dtype,
-                device=mesh_device,
+                device=device,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
