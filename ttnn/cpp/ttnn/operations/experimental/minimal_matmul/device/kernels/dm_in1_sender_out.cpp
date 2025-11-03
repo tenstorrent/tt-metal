@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -26,6 +27,7 @@ void kernel_main() {
     uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(19);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -44,7 +46,7 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<19>();
+    constexpr auto in1_args = TensorAccessorArgs<20>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, out_tile_size);
@@ -65,6 +67,12 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_4;
 #endif
+
+    // Receiver for ccl fusing
+    MinimalMatmulOpReceiver fused_op_receiver;
+    if constexpr (fuse_op) {
+        fused_op_receiver = MinimalMatmulOpReceiver(false, argidx, K_num_blocks);
+    }
 
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
@@ -129,6 +137,10 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
+                    if constexpr (fuse_op) {
+                        // TODO update this function call
+                        fused_op_receiver.compute_actual_k_block_iter(k_block_iter);
+                    }
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,

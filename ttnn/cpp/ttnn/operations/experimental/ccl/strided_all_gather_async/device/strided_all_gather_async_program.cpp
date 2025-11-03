@@ -144,7 +144,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
@@ -168,7 +167,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
         topology,
         semaphore,
         barrier_semaphore,
-        using_persistent_buffers,
         sub_device_id,
         empty_fused_op_signaler,
         tiles_per_chunk,
@@ -194,7 +192,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> tiles_per_chunk,
@@ -411,13 +408,11 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
 
                 uint32_t tiles_per_chunk_val = tiles_per_chunk.value_or(0);
                 uint32_t mm_cores_y_val = mm_cores_y.value_or(0);
-                uint32_t mm_block_ht_val = mm_block_h.value_or(0) / TILE_WIDTH;
-                uint32_t mm_block_wt_val = mm_block_w.value_or(0) / TILE_WIDTH;
+                uint32_t mm_block_ht_val = mm_block_h.value_or(0);
+                uint32_t mm_block_wt_val = mm_block_w.value_or(0);
                 log_trace(tt::LogOp, "DEBUG: tiles_per_chunk__val: {}", tiles_per_chunk_val);
 
-                uint32_t self_write_done_semaphore;
                 if (fuse_op) {
-                    self_write_done_semaphore = CreateSemaphore(program, {core}, 0);
                     uint32_t tiles_per_chunk_across_cores = mm_cores_y_val * mm_block_ht_val * mm_block_wt_val;
                     tiles_per_chunk_val =
                         (tiles_per_chunk_across_cores + global_worker_count - 1) / global_worker_count;
@@ -463,7 +458,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     mm_block_ht_val,
                     mm_cores_y_val};
                 if (fuse_op) {
-                    reader_rt_args.push_back(self_write_done_semaphore);
                     if (dir) {
                         fused_op_signaler_forward->push_all_gather_fused_op_rt_args(
                             reader_rt_args,
@@ -533,20 +527,20 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),                           // output_tensor_address
-                    input_tensor_Wt,                                             // width in tiles of the input shard
-                    input_tensor_Ht,                                             // height in tiles of the input shard
-                    output_tensor_Wt,                                            // width in tiles of entire output
-                    output_tensor_Ht,                                            // height in tiles of entire output
-                    batch_head_size,                                             // product of the first two dims
-                    global_worker_id,                                            //
-                    tiles_per_core,                                              //
-                    virtual_core.x,                                              // out_ready_sem_noc0_x
-                    virtual_core.y,                                              // out_ready_sem_noc0_y
-                    ring_size,                                                   // ring_size
-                    semaphore.at(dir).address(),                                 // out_ready_semaphore_forward
-                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
+                    output_tensor.buffer()->address(),  // output_tensor_address
+                    input_tensor_Wt,                    // width in tiles of the input shard
+                    input_tensor_Ht,                    // height in tiles of the input shard
+                    output_tensor_Wt,                   // width in tiles of entire output
+                    output_tensor_Ht,                   // height in tiles of entire output
+                    batch_head_size,                    // product of the first two dims
+                    global_worker_id,                   //
+                    tiles_per_core,                     //
+                    virtual_core.x,                     // out_ready_sem_noc0_x
+                    virtual_core.y,                     // out_ready_sem_noc0_y
+                    ring_size,                          // ring_size
+                    semaphore.at(dir).address(),        // out_ready_semaphore_forward
+                    barrier_semaphore.has_value(),      // use synchronize barrier semaphore
+                    barrier_semaphore.has_value()       // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
                         : 0,
                     opposite_core_coord.x,
@@ -562,7 +556,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                     num_workers_per_direction,
                     writer_rt_args);
                 if (fuse_op) {
-                    writer_rt_args.push_back(self_write_done_semaphore);
                     fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
                         writer_rt_args,
                         num_workers_per_direction * num_links,
