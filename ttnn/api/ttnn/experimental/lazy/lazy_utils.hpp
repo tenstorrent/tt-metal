@@ -5,7 +5,6 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include <boost/pfr.hpp>
 #include <optional>
 #include <functional>
 #include <tuple>
