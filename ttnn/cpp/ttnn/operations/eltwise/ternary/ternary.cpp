@@ -13,7 +13,6 @@
 #include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ternary_composite_op.hpp"
-#include "ttnn/run_operation.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -29,7 +28,7 @@ Tensor where_impl(
     const auto& value_false,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Where Legacy");
+    log_info(tt::LogOp, "Where Legacy");
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
@@ -116,7 +115,7 @@ Tensor invoke_impl(
     }
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
 
-    log_debug(tt::LogOp, "Where LLK - TTT");
+    log_info(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
         std::move(condition),
@@ -153,7 +152,7 @@ Tensor invoke_impl(
     }
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-    log_debug(tt::LogOp, "Where LLK - TTS");
+    log_info(tt::LogOp, "Where LLK - TTS");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
         std::move(condition),
@@ -189,7 +188,7 @@ Tensor invoke_impl(
     }
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
-    log_debug(tt::LogOp, "Where LLK - TST");
+    log_info(tt::LogOp, "Where LLK - TST");
     return ttnn::prim::ternary(
         TernaryOpType::WHERE,
         std::move(condition),
@@ -207,7 +206,7 @@ Tensor invoke_impl(
     float t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Where LLK - TSS");
+    log_info(tt::LogOp, "Where LLK - TSS");
     unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
     return ttnn::operations::unary::Unary_chain::invoke(
         condition,
@@ -239,7 +238,7 @@ Tensor AddcmulOperation::invoke(
     float value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    log_debug(tt::LogOp, "Addcmul LLK - TTT");
+    log_info(tt::LogOp, "Addcmul LLK - TTT");
 
     TT_FATAL(
         input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
@@ -251,8 +250,8 @@ Tensor AddcmulOperation::invoke(
         input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
 
     if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
-        is_sharded(output) || is_invalid_bcast(broadcast_type)) {
-        // Fall back to composite implementation for unsupported cases
+        is_sharded(output) || broadcast_type != ttnn::operations::ternary::TernaryBroadcastType::NONE) {
+        // Fall back to composite implementation for all broadcast cases
         return _addcmul(input_a, input_b, input_c, value, memory_config);
     }
 

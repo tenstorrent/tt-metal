@@ -7,7 +7,6 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "../ternary.hpp"
 
 namespace ttnn::operations::ternary {
 
