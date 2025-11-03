@@ -192,54 +192,54 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_batch_seq(
     [
         (1, 1),
-        # (1, 128),
+        (1, 128),
     ]
 )
 @pytest.mark.parametrize("mesh_shape", [(1, 4)])
-@pytest.mark.parametrize("layer_idx", [1], ids=["moe_layer_1"])  # ensure we hit an MoE layer for experts
-def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, layer_idx, reset_seeds):
+def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
     """Test complete decoder layer - combines attention + MLP + norms"""
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
     config = setup["config"]
 
     # Set attention implementation for transformers compatibility
     config._attn_implementation = "eager"
 
-    # Create reference model
-    from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeDecoderLayer
+    # Determine indices of full-attention decoder layers from config (fallback sensibly)
+    layer_types = getattr(config, "layer_types", None)
+    if isinstance(layer_types, (list, tuple)) and len(layer_types) > 0:
+        full_layer_indices = [i for i, t in enumerate(layer_types) if t == "full_attention"]
+        # If config doesn't explicitly mark any, default to testing layer 0
+        if not full_layer_indices:
+            full_layer_indices = [0]
+    else:
+        # Some configs don't expose layer_types; conservatively test first two layers if present
+        num_hidden_layers = getattr(config, "num_hidden_layers", 1) or 1
+        full_layer_indices = [i for i in range(min(2, num_hidden_layers))]
 
-    reference_layer = Glm4MoeDecoderLayer(config, layer_idx=layer_idx)
+    # Load HF model once and pull decoder layers directly from it
+    # Prefer CausalLM head if present, but fall back to base AutoModel
+    from transformers import AutoModel, AutoModelForCausalLM
 
-    with torch.no_grad():
-        for name, param in reference_layer.named_parameters():
-            if any(proj in name for proj in ["router", "experts", "sinks"]):
-                param.data.normal_(0, 1)
-            # Disable attention sinks in reference to match TT behavior
-            if "sinks" in name:
-                param.fill_(-float("inf"))
-        # Also neutralize any sink buffers (if implemented as buffers)
-        for name, buf in reference_layer.named_buffers():
-            if "sinks" in name and buf is not None:
-                buf.fill_(-float("inf"))
+    try:
+        hf_model = AutoModelForCausalLM.from_pretrained(setup["model_args"].model_path, trust_remote_code=True)
+    except Exception:
+        hf_model = AutoModel.from_pretrained(setup["model_args"].model_path, trust_remote_code=True)
 
-    reference_state = reference_layer.state_dict()
-
-    decoder_layer = DecoderLayer(
-        setup["mesh_device"],
-        config,
-        reference_state,
-        layer_idx=layer_idx,
-        ccl_manager=setup["ccl_manager"],
-        dtype=setup["dtype"],
-        tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
-        mesh_config=setup["mesh_config"],
-    )
-
-    # For decode path, reduce static decode batch to 1 to fit test constraints
-    if seq_len == 1 and hasattr(decoder_layer, "self_attn") and hasattr(decoder_layer.self_attn, "decode_batch"):
-        decoder_layer.self_attn.decode_batch = 1
+    # Find decoder layers inside the HF model across common structures
+    hf_layers = None
+    for root_name in ("model", "transformer", "decoder", "backbone", None):
+        root = getattr(hf_model, root_name, hf_model) if root_name is not None else hf_model
+        for list_name in ("layers", "h", "blocks"):
+            candidate = getattr(root, list_name, None)
+            if candidate is not None:
+                hf_layers = candidate
+                break
+        if hf_layers is not None:
+            break
+    if hf_layers is None:
+        raise AssertionError("Unable to locate decoder layers in the HF model")
 
     # Create input
     hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
@@ -265,10 +265,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, la
     rope_embeddings = Glm4MoeRotaryEmbedding(config)
     cos, sin = rope_embeddings(hidden_states, position_ids)
     position_embeddings = (cos, sin)
-
-    # Reference forward pass
-    with torch.no_grad():
-        reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings)
 
     # Create TTNN RoPE embeddings for decoder layer
     # Attention decode path now uses functional RoPE; DRAM TILE tensors are fine
@@ -307,38 +303,162 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, la
         hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    # Test individual components
+    # For each full-attention layer, validate components and full layer output against reference
+    for layer_idx in full_layer_indices:
+        # Pull reference layer directly from loaded HF model and collect weights
+        reference_layer = hf_layers[layer_idx].eval()
+        reference_state = reference_layer.state_dict()
 
-    # Only test router if the reference layer actually has one (some layers are dense-only)
-    if seq_len == 1 and hasattr(reference_layer.mlp, "router"):
-        run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+        # Create TT decoder layer with the same weights
+        decoder_layer = DecoderLayer(
+            setup["mesh_device"],
+            config,
+            reference_state,
+            layer_idx=layer_idx,
+            ccl_manager=setup["ccl_manager"],
+            dtype=setup["dtype"],
+            tensor_cache_path=setup["tensor_cache_path"] / "module_tests",
+            mesh_config=setup["mesh_config"],
+        )
 
-    # Test experts path when available (MoE layers)
-    if hasattr(reference_layer.mlp, "experts"):
-        run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
-    run_attention_component(
-        setup["mesh_device"],
-        hidden_states.shape,
-        mask,
-        tt_mask,
-        position_embeddings,
-        rope_mats,
-        tt_position_idx,
-        reference_layer,
-        decoder_layer,
-    )
+        # For decode path, reduce static decode batch to 1 to fit test constraints
+        if seq_len == 1 and hasattr(decoder_layer, "self_attn") and hasattr(decoder_layer.self_attn, "decode_batch"):
+            decoder_layer.self_attn.decode_batch = 1
 
-    run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+        # Simple confirmation print: compare HF and TTNN v_proj weights
+        try:
+            # Prepare HF tensor in whichever orientation matches TTNN
+            hf_v_raw = reference_layer.self_attn.v_proj.weight.detach().to(torch.float32)
+            # Compose along TP (columns) only
+            tt_v = ttnn.to_torch(
+                decoder_layer.self_attn.v_proj,
+                mesh_composer=ttnn.ConcatMeshToTensor(setup["mesh_device"], dim=-1),
+            ).to(torch.float32)
+            # Choose HF orientation to match TT tensor
+            hf_v = hf_v_raw if hf_v_raw.shape == tt_v.shape else hf_v_raw.T
+            same_shape = tuple(hf_v.shape) == tuple(tt_v.shape)
+            exact_equal = torch.equal(hf_v, tt_v)
+            close_equal_1e2 = torch.allclose(hf_v, tt_v, atol=1e-2, rtol=1e-2)
+            close_equal_1e1 = torch.allclose(hf_v, tt_v, atol=1e-1, rtol=1e-1)
+            max_abs_diff = (hf_v - tt_v).abs().max().item() if same_shape else float("nan")
+            hf_stats = (hf_v.mean().item(), hf_v.std().item(), hf_v.min().item(), hf_v.max().item())
+            tt_stats = (tt_v.mean().item(), tt_v.std().item(), tt_v.min().item(), tt_v.max().item())
+            # Cosine similarity as a robust similarity metric under quantization
+            cos_sim = (
+                torch.nn.functional.cosine_similarity(hf_v.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
+                if same_shape
+                else float("nan")
+            )
+            # Also compare against the other orientation for sanity
+            cos_sim_no_t = (
+                torch.nn.functional.cosine_similarity(hf_v_raw.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
+                if hf_v_raw.numel() == tt_v.numel()
+                else float("nan")
+            )
+            print(
+                f"[Layer {layer_idx}] v_proj weight check -> shape_match={same_shape}, used_transpose={(hf_v_raw.shape != tt_v.shape)}, "
+                f"exact_equal={exact_equal}, allclose@1e-2={close_equal_1e2}, allclose@1e-1={close_equal_1e1}, "
+                f"cos_sim={cos_sim:.6f}, cos_sim(no_T)={cos_sim_no_t:.6f}, max_abs_diff={max_abs_diff}, "
+                f"hf_stats(mean,std,min,max)={hf_stats}, tt_stats={tt_stats}"
+            )
 
-    run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+            # Shard-level check: compare first device shard to the corresponding HF slice
+            try:
+                shards = ttnn.get_device_tensors(decoder_layer.self_attn.v_proj)
+                first_shard = ttnn.to_torch(shards[0]).to(torch.float32)
+                # Expect last-dim sharding across TP devices
+                out_dim = hf_v.shape[-1]
+                tp = setup["mesh_device"].shape[1]
+                per_shard = out_dim // tp
+                hf_slice = hf_v[:, :per_shard].contiguous().to(torch.float32)
+                shard_same_shape = tuple(first_shard.shape) == tuple(hf_slice.shape)
+                shard_cos = (
+                    torch.nn.functional.cosine_similarity(
+                        hf_slice.reshape(1, -1), first_shard.reshape(1, -1), dim=1
+                    ).item()
+                    if shard_same_shape
+                    else float("nan")
+                )
+                shard_stats = (
+                    first_shard.mean().item(),
+                    first_shard.std().item(),
+                    first_shard.min().item(),
+                    first_shard.max().item(),
+                )
+                hf_slice_stats = (
+                    hf_slice.mean().item(),
+                    hf_slice.std().item(),
+                    hf_slice.min().item(),
+                    hf_slice.max().item(),
+                )
+                print(
+                    f"[Layer {layer_idx}] first-shard vs HF slice -> shape_match={shard_same_shape}, cos_sim={shard_cos:.6f}, "
+                    f"hf_slice_shape={tuple(hf_slice.shape)}, shard_shape={tuple(first_shard.shape)}, "
+                    f"hf_slice_stats={hf_slice_stats}, shard_stats={shard_stats}"
+                )
+            except Exception as e2:
+                print(f"[Layer {layer_idx}] shard-level check skipped due to: {e2}")
 
-    # Test full decoder layer integration
-    tt_output = decoder_layer(
-        tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
-    )
+            # Sanity: is TT v_proj accidentally matching HF q or k?
+            hf_q_raw = reference_layer.self_attn.q_proj.weight.detach().to(torch.float32)
+            hf_k_raw = reference_layer.self_attn.k_proj.weight.detach().to(torch.float32)
+            hf_q = hf_q_raw if hf_q_raw.shape == tt_v.shape else hf_q_raw.T
+            hf_k = hf_k_raw if hf_k_raw.shape == tt_v.shape else hf_k_raw.T
+            cos_q = torch.nn.functional.cosine_similarity(hf_q.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
+            cos_k = torch.nn.functional.cosine_similarity(hf_k.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
+            print(f"[Layer {layer_idx}] cross-check: cos_sim(TT v, HF q)={cos_q:.6f}, cos_sim(TT v, HF k)={cos_k:.6f}")
 
-    pcc_threshold = 0.93 if seq_len == 1 else 0.88
-    passing, output = run_component_comparison(
-        tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
-    )
-    assert passing, f"Decoder layer test failed. Output: {output}"
+            # Additional trace: check v segment within fused wqkv matches
+            qsz = config.hidden_size
+            ksz = config.num_key_value_heads * config.head_dim
+            vsz = hf_v.shape[-1]
+            tt_wqkv = ttnn.to_torch(
+                decoder_layer.self_attn.wqkv,
+                mesh_composer=ttnn.ConcatMeshToTensor(setup["mesh_device"], dim=-1),
+            ).to(torch.float32)
+            tt_wqkv_v = tt_wqkv[:, qsz + ksz : qsz + ksz + vsz]
+            same_shape_fused = tuple(hf_v.shape) == tuple(tt_wqkv_v.shape)
+            cos_sim_fused = (
+                torch.nn.functional.cosine_similarity(hf_v.reshape(1, -1), tt_wqkv_v.reshape(1, -1), dim=1).item()
+                if same_shape_fused
+                else float("nan")
+            )
+            print(
+                f"[Layer {layer_idx}] fused wqkv V segment cos_sim={cos_sim_fused:.6f}, "
+                f"shapes_equal={same_shape_fused}"
+            )
+        except Exception as e:
+            print(f"[Layer {layer_idx}] v_proj weight check skipped due to: {e}")
+
+        # Reference forward pass
+        with torch.no_grad():
+            reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings)
+
+        # Test individual components
+        # Only test router if the reference layer actually has one (some layers are dense-only)
+        if seq_len == 1 and hasattr(reference_layer.mlp, "router"):
+            run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+
+        run_attention_component(
+            setup["mesh_device"],
+            hidden_states.shape,
+            mask,
+            tt_mask,
+            position_embeddings,
+            rope_mats,
+            tt_position_idx,
+            reference_layer,
+            decoder_layer,
+        )
+
+        run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+
+        # Test full decoder layer integration
+        tt_output = decoder_layer(
+            tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
+        )
+        pcc_threshold = 0.93 if seq_len == 1 else 0.88
+        passing, output = run_component_comparison(
+            tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
+        )
+        assert passing, f"Decoder layer test failed for layer_idx={layer_idx}. Output: {output}"

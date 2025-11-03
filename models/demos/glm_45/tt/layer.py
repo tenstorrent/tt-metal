@@ -24,18 +24,21 @@ class DecoderLayer:
         mesh_config=None,
         create_kv_cache=True,
     ):
+        # Use per-layer cache subdirectory to avoid collisions across layers
+        layer_cache = get_cache_file_name(tensor_cache_path, f"layer_{layer_idx}")
+
         self.input_layernorm = RMSNorm(
             mesh_device,
             hf_config,
             substate(state_dict, "input_layernorm"),
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "input_layernorm"),
+            tensor_cache_path=get_cache_file_name(layer_cache, "input_layernorm"),
             mesh_config=mesh_config,
         )
         self.post_attention_layernorm = RMSNorm(
             mesh_device,
             hf_config,
             substate(state_dict, "post_attention_layernorm"),
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "post_attention_layernorm"),
+            tensor_cache_path=get_cache_file_name(layer_cache, "post_attention_layernorm"),
             mesh_config=mesh_config,
         )
         self.mlp = MLP(
@@ -44,7 +47,7 @@ class DecoderLayer:
             substate(state_dict, "mlp"),
             ccl_manager,
             dtype=dtype,
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
+            tensor_cache_path=get_cache_file_name(layer_cache, "mlp"),
             mesh_config=mesh_config,
         )
 
@@ -62,7 +65,7 @@ class DecoderLayer:
             substate(state_dict, "self_attn"),
             layer_idx,
             ccl_manager,
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
+            tensor_cache_path=get_cache_file_name(layer_cache, "self_attn"),
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
