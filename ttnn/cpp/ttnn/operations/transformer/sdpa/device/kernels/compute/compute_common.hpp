@@ -113,19 +113,20 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
     for (uint32_t i = 0; i < rows; i++) {
         acquire_dst();
         // reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
-        _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
+        PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
         sfpu_reduce_max_sdpa_init();
         for (uint32_t j = 0; j < cols; j++) {
             // reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
             copy_tile_to_dst_init_short(in0_cb);
             copy_tile(in0_cb, i * cols + j, reduce_dst_idx);
 
-            _llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>();
-            _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
+            // Wrap inside of PACK()
+            PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
+            PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0)));
 
             sfpu_reduce_max_sdpa(reduce_dst_idx, static_cast<int>(VectorMode::RC_custom));
 
-            _llk_math_eltwise_unary_sfpu_done_();
+            PACK((_llk_math_eltwise_unary_sfpu_done_()));
             // DPRINT << "FINISHED ONE REDUCE" << ENDL();
         }
         // reduce_uninit();
