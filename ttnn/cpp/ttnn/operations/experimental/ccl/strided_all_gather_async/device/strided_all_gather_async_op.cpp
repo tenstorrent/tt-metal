@@ -24,9 +24,8 @@ std::vector<ttnn::TensorSpec> StridedAllGatherAsync::compute_output_specs(
         shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
 }
 
-std::vector<Tensor> StridedAllGatherAsync::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
-    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
+std::vector<Tensor> StridedAllGatherAsync::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks StridedAllGatherAsync::create_mesh_workload(
@@ -63,7 +62,6 @@ tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherAsync::create_prog
         this->topology,
         this->semaphore,
         this->barrier_semaphore,
-        this->using_persistent_buffers,
         this->sub_device_id,
         this->tiles_per_chunk,
         this->num_workers_per_link,
@@ -93,7 +91,6 @@ tt::tt_metal::operation::Hash StridedAllGatherAsync::compute_program_hash(
                   tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->barrier_semaphore.has_value(),
-        this->using_persistent_buffers,
         this->tiles_per_chunk,
         this->num_workers_per_link,
         this->num_buffers_per_channel,
@@ -113,7 +110,6 @@ namespace ccl {
 namespace {
 Tensor strided_all_gather_async_impl(
     const Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -145,10 +141,6 @@ Tensor strided_all_gather_async_impl(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    bool using_persistent_buffers = persistent_output_buffer.has_value();
-
-    std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
-
     return tt::tt_metal::operation::run(
                ttnn::StridedAllGatherAsync(
                    devices,
@@ -161,7 +153,6 @@ Tensor strided_all_gather_async_impl(
                    sub_device_id,
                    cluster_axis,
                    barrier_semaphore,
-                   using_persistent_buffers,
                    tiles_per_chunk,
                    num_workers_per_link,
                    num_buffers_per_channel,
@@ -170,14 +161,13 @@ Tensor strided_all_gather_async_impl(
                    mm_block_w),
                {input_tensor},
                {},
-               optional_output_tensors)
+               {})
         .at(0);
 }
 }  // namespace
 
 Tensor strided_all_gather_async(
     const Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -194,7 +184,6 @@ Tensor strided_all_gather_async(
     std::optional<uint32_t> mm_block_w) {
     return strided_all_gather_async_impl(
         input_tensor,
-        persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
         num_links,

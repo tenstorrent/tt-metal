@@ -60,6 +60,11 @@ void kernel_main() {
     const auto output_tensor_addrgen =
         TensorAccessor(output_tensor_args, output_tensor_address, input_tensor_page_size);
 
+    OpSignaler op_signaler;
+    if constexpr (fuse_op) {
+        op_signaler = OpSignaler(arg_idx);
+    }
+
     uint32_t slices_expected = 0;
     uint32_t writes_expected = 0;
     if (topology == Topology::Linear) {
@@ -163,6 +168,10 @@ void kernel_main() {
                         fuse_op);
                 }
                 slices_received++;
+                if constexpr (fuse_op) {
+                    // Signal matmul to go
+                    op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
+                }
             }
             global_tile_index = chunk_start_tile_index;
             tiles_read += local_tiles_read;

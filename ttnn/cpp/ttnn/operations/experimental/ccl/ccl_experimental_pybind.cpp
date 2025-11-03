@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_pybind.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_pybind.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_pybind.hpp"
@@ -31,6 +32,7 @@ namespace ttnn::operations::experimental::ccl {
 void py_module(pybind11::module& module) {
     ccl::bind_fused_rms_1_1_32_8192(module);
     ccl::py_bind_all_gather_matmul_async(module);
+    ccl::py_bind_strided_all_gather_minimal_matmul_async(module);
     ccl::py_bind_llama_all_gather_matmul_async(module);
     ccl::py_bind_all_gather_async(module);
     ccl::py_bind_strided_all_gather_async(module);

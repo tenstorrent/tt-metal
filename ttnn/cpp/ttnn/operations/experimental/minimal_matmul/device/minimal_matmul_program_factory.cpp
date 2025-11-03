@@ -8,6 +8,8 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include <algorithm>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
@@ -103,7 +105,32 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+    return minimal_matmul_factory_helper(
+        program,
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        fused_activation,
+        config,
+        output_tensor,
+        compute_kernel_config,
+        empty_fused_op_signaler);
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<unary::UnaryWithParam>& fused_activation,
+    const std::optional<const MinimalMatmulConfig>& config,
+    const Tensor& output_tensor,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     auto* device = input_tensor.device();
+
+    bool fuse_op = fused_op_signaler.has_value();
 
     if (!config.has_value()) {
         log_debug(tt::LogOp, "No config provided, using default block sizes and core grid");
@@ -314,6 +341,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         defines["FUSE_BIAS"] = "1";
     }
 
+    if (fuse_op) {
+        // Create semaphores
+        fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
+    }
+
     uint32_t in0_addr = input_tensor.buffer()->address();
     uint32_t in1_addr = weight_tensor.buffer()->address();
     uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
@@ -345,7 +377,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        true  // is_injector_core
+        true,  // is_injector_core
+        fuse_op,
     };
     append_accessors(in0_sender_compile_time_args, input_tensor, output_tensor, bias_tensor);
 
@@ -375,7 +408,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        false  // is_injector_core
+        false,  // is_injector_core
+        false,  // fuse_op (unused for receiver)
     };
     append_accessors(in0_receiver_compile_time_args, input_tensor, output_tensor, bias_tensor);
 
@@ -405,7 +439,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true  // is_injector_core
+        true,  // is_injector_core
+        fuse_op,
     };
     append_accessors(in1_sender_compile_time_args, weight_tensor, output_tensor, bias_tensor);
     auto in1_sender_kernels_id = CreateKernel(
@@ -434,7 +469,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        false  // is_injector_core
+        false,  // is_injector_core
+        false,  // fuse_op (unused for receiver)
+        ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt),
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor, bias_tensor);
     auto in1_receiver_kernels_id = CreateKernel(
@@ -563,7 +600,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             N_end_tile,
             defer_write_k_block,
         };
-
+        if (fuse_op) {
+            fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, false);
+        }
         if (in1_idx == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
@@ -587,6 +626,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             N_end_tile,
             defer_write_k_block,
         };
+        if (fuse_op) {
+            fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, true);
+        }
         if (in0_idx == 0) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
