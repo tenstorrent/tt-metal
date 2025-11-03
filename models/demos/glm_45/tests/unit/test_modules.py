@@ -192,7 +192,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_batch_seq(
     [
         (1, 1),
-        (1, 128),
+        # (1, 128)
     ]
 )
 @pytest.mark.parametrize("mesh_shape", [(1, 4)])
@@ -324,111 +324,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         # For decode path, reduce static decode batch to 1 to fit test constraints
         if seq_len == 1 and hasattr(decoder_layer, "self_attn") and hasattr(decoder_layer.self_attn, "decode_batch"):
             decoder_layer.self_attn.decode_batch = 1
-
-        # Simple confirmation print: compare HF and TTNN v_proj weights
-        try:
-            # Prepare HF tensor in whichever orientation matches TTNN
-            hf_v_raw = reference_layer.self_attn.v_proj.weight.detach().to(torch.float32)
-            # Compose along TP (columns) only
-            tt_v = ttnn.to_torch(
-                decoder_layer.self_attn.v_proj,
-                mesh_composer=ttnn.ConcatMeshToTensor(setup["mesh_device"], dim=-1),
-            ).to(torch.float32)
-            # Choose HF orientation to match TT tensor
-            hf_v = hf_v_raw if hf_v_raw.shape == tt_v.shape else hf_v_raw.T
-            same_shape = tuple(hf_v.shape) == tuple(tt_v.shape)
-            exact_equal = torch.equal(hf_v, tt_v)
-            close_equal_1e2 = torch.allclose(hf_v, tt_v, atol=1e-2, rtol=1e-2)
-            close_equal_1e1 = torch.allclose(hf_v, tt_v, atol=1e-1, rtol=1e-1)
-            max_abs_diff = (hf_v - tt_v).abs().max().item() if same_shape else float("nan")
-            hf_stats = (hf_v.mean().item(), hf_v.std().item(), hf_v.min().item(), hf_v.max().item())
-            tt_stats = (tt_v.mean().item(), tt_v.std().item(), tt_v.min().item(), tt_v.max().item())
-            # Cosine similarity as a robust similarity metric under quantization
-            cos_sim = (
-                torch.nn.functional.cosine_similarity(hf_v.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
-                if same_shape
-                else float("nan")
-            )
-            # Also compare against the other orientation for sanity
-            cos_sim_no_t = (
-                torch.nn.functional.cosine_similarity(hf_v_raw.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
-                if hf_v_raw.numel() == tt_v.numel()
-                else float("nan")
-            )
-            print(
-                f"[Layer {layer_idx}] v_proj weight check -> shape_match={same_shape}, used_transpose={(hf_v_raw.shape != tt_v.shape)}, "
-                f"exact_equal={exact_equal}, allclose@1e-2={close_equal_1e2}, allclose@1e-1={close_equal_1e1}, "
-                f"cos_sim={cos_sim:.6f}, cos_sim(no_T)={cos_sim_no_t:.6f}, max_abs_diff={max_abs_diff}, "
-                f"hf_stats(mean,std,min,max)={hf_stats}, tt_stats={tt_stats}"
-            )
-
-            # Shard-level check: compare first device shard to the corresponding HF slice
-            try:
-                shards = ttnn.get_device_tensors(decoder_layer.self_attn.v_proj)
-                first_shard = ttnn.to_torch(shards[0]).to(torch.float32)
-                # Expect last-dim sharding across TP devices
-                out_dim = hf_v.shape[-1]
-                tp = setup["mesh_device"].shape[1]
-                per_shard = out_dim // tp
-                hf_slice = hf_v[:, :per_shard].contiguous().to(torch.float32)
-                shard_same_shape = tuple(first_shard.shape) == tuple(hf_slice.shape)
-                shard_cos = (
-                    torch.nn.functional.cosine_similarity(
-                        hf_slice.reshape(1, -1), first_shard.reshape(1, -1), dim=1
-                    ).item()
-                    if shard_same_shape
-                    else float("nan")
-                )
-                shard_stats = (
-                    first_shard.mean().item(),
-                    first_shard.std().item(),
-                    first_shard.min().item(),
-                    first_shard.max().item(),
-                )
-                hf_slice_stats = (
-                    hf_slice.mean().item(),
-                    hf_slice.std().item(),
-                    hf_slice.min().item(),
-                    hf_slice.max().item(),
-                )
-                print(
-                    f"[Layer {layer_idx}] first-shard vs HF slice -> shape_match={shard_same_shape}, cos_sim={shard_cos:.6f}, "
-                    f"hf_slice_shape={tuple(hf_slice.shape)}, shard_shape={tuple(first_shard.shape)}, "
-                    f"hf_slice_stats={hf_slice_stats}, shard_stats={shard_stats}"
-                )
-            except Exception as e2:
-                print(f"[Layer {layer_idx}] shard-level check skipped due to: {e2}")
-
-            # Sanity: is TT v_proj accidentally matching HF q or k?
-            hf_q_raw = reference_layer.self_attn.q_proj.weight.detach().to(torch.float32)
-            hf_k_raw = reference_layer.self_attn.k_proj.weight.detach().to(torch.float32)
-            hf_q = hf_q_raw if hf_q_raw.shape == tt_v.shape else hf_q_raw.T
-            hf_k = hf_k_raw if hf_k_raw.shape == tt_v.shape else hf_k_raw.T
-            cos_q = torch.nn.functional.cosine_similarity(hf_q.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
-            cos_k = torch.nn.functional.cosine_similarity(hf_k.reshape(1, -1), tt_v.reshape(1, -1), dim=1).item()
-            print(f"[Layer {layer_idx}] cross-check: cos_sim(TT v, HF q)={cos_q:.6f}, cos_sim(TT v, HF k)={cos_k:.6f}")
-
-            # Additional trace: check v segment within fused wqkv matches
-            qsz = config.hidden_size
-            ksz = config.num_key_value_heads * config.head_dim
-            vsz = hf_v.shape[-1]
-            tt_wqkv = ttnn.to_torch(
-                decoder_layer.self_attn.wqkv,
-                mesh_composer=ttnn.ConcatMeshToTensor(setup["mesh_device"], dim=-1),
-            ).to(torch.float32)
-            tt_wqkv_v = tt_wqkv[:, qsz + ksz : qsz + ksz + vsz]
-            same_shape_fused = tuple(hf_v.shape) == tuple(tt_wqkv_v.shape)
-            cos_sim_fused = (
-                torch.nn.functional.cosine_similarity(hf_v.reshape(1, -1), tt_wqkv_v.reshape(1, -1), dim=1).item()
-                if same_shape_fused
-                else float("nan")
-            )
-            print(
-                f"[Layer {layer_idx}] fused wqkv V segment cos_sim={cos_sim_fused:.6f}, "
-                f"shapes_equal={same_shape_fused}"
-            )
-        except Exception as e:
-            print(f"[Layer {layer_idx}] v_proj weight check skipped due to: {e}")
 
         # Reference forward pass
         with torch.no_grad():

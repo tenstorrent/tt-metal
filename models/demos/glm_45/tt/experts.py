@@ -39,16 +39,17 @@ class Experts:
 
         # Build aggregated tensors: gate_up_proj (packed gate/up interleaved), optional bias, and down_proj(+bias)
         if all(k in state_dict for k in ["gate_up_proj", "down_proj"]):
-            # Unpack packed tensors; GLM packs gate/up interleaved along last dim: [g0,u0,g1,u1,...]
-            packed = state_dict["gate_up_proj"]
-            gate_proj = packed[..., ::2].reshape(self.num_experts, self.hidden_size, self.expert_dim)
-            up_proj = packed[..., 1::2].reshape(self.num_experts, self.hidden_size, self.expert_dim)
+            # Unpack packed tensors; some GLM variants pack as contiguous halves: [gate | up]
+            packed = state_dict["gate_up_proj"]  # [E, H, 2*I] expected
+            I = self.expert_dim
+            gate_proj = packed[..., :I].reshape(self.num_experts, self.hidden_size, self.expert_dim)
+            up_proj = packed[..., I:].reshape(self.num_experts, self.hidden_size, self.expert_dim)
             gate_proj_bias = None
             up_proj_bias = None
             if "gate_up_proj_bias" in state_dict:
-                packed_b = state_dict["gate_up_proj_bias"]
-                gate_proj_bias = packed_b[..., ::2].reshape(self.num_experts, 1, self.expert_dim)
-                up_proj_bias = packed_b[..., 1::2].reshape(self.num_experts, 1, self.expert_dim)
+                packed_b = state_dict["gate_up_proj_bias"]  # [E, 2*I]
+                gate_proj_bias = packed_b[..., :I].reshape(self.num_experts, 1, self.expert_dim)
+                up_proj_bias = packed_b[..., I:].reshape(self.num_experts, 1, self.expert_dim)
             down_proj = state_dict["down_proj"].reshape(self.num_experts, self.expert_dim, self.hidden_size)
             down_proj_bias = state_dict.get("down_proj_bias")
             if down_proj_bias is not None:
@@ -276,14 +277,14 @@ class Experts:
         tokens_3d = ttnn.reshape(hidden_states, (tokens_total, 1, self.hidden_size))
         print("tokens_3d packed: ", tokens_3d.shape)
 
-        # Convert routing weights to ROW_MAJOR 3D sparsity tensor [1, S_total, E]
+        # Convert routing weights to ROW_MAJOR 3D tensor [1, S_total, E]
         rw_2d = (
             routing_weights if len(routing_weights.shape) == 2 else ttnn.reshape(routing_weights, (tokens_total, -1))
         )
         rw_rm = ttnn.to_layout(rw_2d, ttnn.ROW_MAJOR_LAYOUT)
-        sparsity = ttnn.reshape(rw_rm, (1, tokens_total, self.num_experts))
-        # Binary mask for expert selection (top-k), used in gate/up to avoid early weighting
-        mask = ttnn.gt(sparsity, 0.0)
+        weights_3d = ttnn.reshape(rw_rm, (1, tokens_total, self.num_experts))
+        # Binary mask for expert selection (top-k), used in sparse matmuls to compute only selected experts
+        mask = ttnn.gt(weights_3d, 0.0)
 
         # Program config: mirror smoke3 (1D multicast, in0 multicast)
         output_tile = ttnn.Tile([32, 32])
@@ -303,7 +304,7 @@ class Experts:
         )
 
         # Gate
-        print("going into gate: ", tokens_3d.shape, self.gate_proj.shape, sparsity.shape)
+        print("going into gate: ", tokens_3d.shape, self.gate_proj.shape, weights_3d.shape)
         gate = ttnn.sparse_matmul(
             tokens_3d,
             self.gate_proj,
@@ -332,7 +333,7 @@ class Experts:
         down = ttnn.sparse_matmul(
             down_in0,
             self.down_proj,
-            sparsity=sparsity,
+            sparsity=mask,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             output_tile=output_tile,
             is_input_a_sparse=True,
@@ -344,9 +345,11 @@ class Experts:
         # Bias and combine experts using routing weights
         # down currently shaped like [S_total, E, 1, H_per_tp]; reshape to [B, E, S, H]
         next_states = ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size))
-        # Omit expert biases to better match HF reference
-
-        # Combine experts: sparse matmuls already apply routing weights; just sum over experts
+        # Explicitly apply routing weights at combine time: [B,E,S,H] * [B,E,S,1]
+        w = ttnn.reshape(rw_rm, (batch_size, seq_len, self.num_experts))  # [B,S,E]
+        w = ttnn.transpose(w, 1, 2)  # [B,E,S]
+        w = ttnn.unsqueeze(w, -1)  # [B,E,S,1]
+        next_states = ttnn.mul(next_states, w, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         next_states = ttnn.sum(next_states, dim=1, keepdim=True)
 
         # Add shared experts dense path before allreduce (single combined allreduce)

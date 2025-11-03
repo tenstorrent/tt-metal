@@ -135,25 +135,39 @@ class TopKRouter:
         router_logits = ttnn.linear(
             hidden_states, self.weight, bias=self.bias, compute_kernel_config=self.compute_config
         )
-        # Scores are sigmoid of logits plus bias correction (broadcast)
+        # Use raw logits for robust group selection; use sigmoid scores for mixing weights
+        selection_scores = router_logits
         scores = ttnn.sigmoid(router_logits)
-        # Apply grouped top-k selection (with optional bias correction)
-        if self.e_score_correction_bias is not None:
-            bias = ttnn.reshape(self.e_score_correction_bias, (1, -1))
-            scores = ttnn.add(scores, bias)
-        topk_indices, topk_weights = _grouped_topk(scores, self.n_group, self.topk_group, self.top_k)
-        # Normalize across selected experts if requested
+
+        N, E = selection_scores.shape[-2], selection_scores.shape[-1]
+        if self.n_group <= 1 or self.topk_group >= self.n_group:
+            topk_weights, topk_indices = ttnn.topk(scores, k=self.top_k, dim=-1, sorted=False)
+        else:
+            assert E % self.n_group == 0, "Number of experts must be divisible by n_group"
+            e_per_group = E // self.n_group
+            sel_g = ttnn.reshape(selection_scores, (N, self.n_group, e_per_group))
+            top2_vals, _ = ttnn.topk(sel_g, k=2, dim=-1, sorted=False)
+            group_scores = ttnn.sum(top2_vals, dim=-1)
+            _, group_idx = ttnn.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)
+
+            group_mask = ttnn.zeros_like(group_scores)
+            one = ttnn.full_like(group_mask, 1)
+            group_mask = ttnn.scatter(group_mask, dim=-1, index=group_idx, src=one)
+            group_mask = ttnn.unsqueeze(group_mask, -1)
+            group_mask = ttnn.repeat(group_mask, (1, 1, e_per_group))
+            group_mask = ttnn.reshape(group_mask, (N, E))
+
+            masked_scores = ttnn.mul(scores, group_mask)
+            topk_weights, topk_indices = ttnn.topk(masked_scores, k=self.top_k, dim=-1, sorted=False)
         if self.norm_topk_prob:
             denom = ttnn.sum(topk_weights, dim=-1, keepdim=True)
-            # Avoid div by zero
             denom = ttnn.add(denom, ttnn.full_like(denom, 1e-20))
             topk_weights = ttnn.divide(topk_weights, denom)
-        # Scale routed weights
         if self.routed_scaling_factor != 1.0:
             scale = ttnn.full_like(topk_weights, self.routed_scaling_factor)
             topk_weights = ttnn.mul(topk_weights, scale)
 
-        # Scatter weights back to full expert dim
+        # Scatter weights back to full expert dimension
         zeros = ttnn.zeros_like(scores)
         router_scores = ttnn.scatter(zeros, dim=-1, index=topk_indices, src=topk_weights)
         return router_scores, topk_indices, router_logits
