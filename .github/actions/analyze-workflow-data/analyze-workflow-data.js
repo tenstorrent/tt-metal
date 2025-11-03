@@ -1059,9 +1059,26 @@ async function generateSummaryBox(grouped, context) {
   };
 
   for (const [name, runs] of grouped.entries()) {
-    const mainBranchRuns = runs
-      .filter(r => r.head_branch === 'main')
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // for each workflow, sort the main runs by date within the window
+    // First deduplicate by run ID, keeping highest attempt
+    const runsByID = new Map();
+    for (const run of runs.filter(r => r.head_branch === 'main')) {
+      const runId = run.id;
+      const currentAttempt = run.run_attempt || 1;
+      const existingRun = runsByID.get(runId);
+      const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+      if (!existingRun || currentAttempt > existingAttempt) {
+        runsByID.set(runId, run);
+      }
+    }
+    const mainBranchRuns = Array.from(runsByID.values())
+      .sort((a, b) => {
+        // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+        const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+        if (dateDiff !== 0) return dateDiff;
+        const attemptA = a.run_attempt || 1;
+        const attemptB = b.run_attempt || 1;
+        return attemptB - attemptA; // Prefer higher attempt number
+      });
 
     const stats = getWorkflowStats(runs); // get the workflow stats for the workflow
 
@@ -1316,9 +1333,26 @@ async function run() {
             filteredGrouped.set(name, filteredRuns); // set the filtered runs in the filtered grouped map
 
             // Check if latest run on main is failing
-            const mainBranchRuns = filteredRuns
-              .filter(r => r.head_branch === 'main')
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // sort the runs by date within the window
+            // First deduplicate by run ID, keeping highest attempt
+            const runsByID = new Map();
+            for (const run of filteredRuns.filter(r => r.head_branch === 'main')) {
+              const runId = run.id;
+              const currentAttempt = run.run_attempt || 1;
+              const existingRun = runsByID.get(runId);
+              const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+              if (!existingRun || currentAttempt > existingAttempt) {
+                runsByID.set(runId, run);
+              }
+            }
+            const mainBranchRuns = Array.from(runsByID.values())
+              .sort((a, b) => {
+                // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+                const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+                if (dateDiff !== 0) return dateDiff;
+                const attemptA = a.run_attempt || 1;
+                const attemptB = b.run_attempt || 1;
+                return attemptB - attemptA; // Prefer higher attempt number
+              });
             if (mainBranchRuns[0]?.conclusion !== 'success') {
               failedWorkflows.push(name); // if the latest run on main is failing, add the pipeline name to the failed workflows array
             }
@@ -1368,9 +1402,26 @@ async function run() {
       // create a list of all the failing workflows with their owner information for slack messaging
       const failingItems = [];
       for (const [name, runs] of filteredGrouped.entries()) { // for each pipeline run in the filtered grouped map
-        const mainRuns = runs
-          .filter(r => r.head_branch === 'main') // filter the runs by the main branch
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); //iterate through the runs and sort them by date within the window
+        // First deduplicate by run ID, keeping highest attempt
+        const runsByID = new Map();
+        for (const run of runs.filter(r => r.head_branch === 'main')) {
+          const runId = run.id;
+          const currentAttempt = run.run_attempt || 1;
+          const existingRun = runsByID.get(runId);
+          const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+          if (!existingRun || currentAttempt > existingAttempt) {
+            runsByID.set(runId, run);
+          }
+        }
+        const mainRuns = Array.from(runsByID.values())
+          .sort((a, b) => {
+            // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+            const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+            if (dateDiff !== 0) return dateDiff;
+            const attemptA = a.run_attempt || 1;
+            const attemptB = b.run_attempt || 1;
+            return attemptB - attemptA; // Prefer higher attempt number
+          });
         if (!mainRuns[0] || mainRuns[0].conclusion === 'success') continue; // if the latest run on main is not failing, continue
         // Try to attach owners from the first failing run's label via snippets; fallback to job name
         // Use the latest failing run for snippet-based owner detection
@@ -1462,17 +1513,51 @@ async function run() {
 
     // Compute status changes vs previous and write JSON
     const computeLatestConclusion = (runs) => {
-      const mainBranchRuns = runs
-        .filter(r => r.head_branch === 'main')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      // First deduplicate by run ID, keeping highest attempt
+      const runsByID = new Map();
+      for (const run of runs.filter(r => r.head_branch === 'main')) {
+        const runId = run.id;
+        const currentAttempt = run.run_attempt || 1;
+        const existingRun = runsByID.get(runId);
+        const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+        if (!existingRun || currentAttempt > existingAttempt) {
+          runsByID.set(runId, run);
+        }
+      }
+      const mainBranchRuns = Array.from(runsByID.values())
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0) return dateDiff;
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
       const latest = mainBranchRuns[0];
       if (!latest) return null;
       return latest.conclusion === 'success' ? 'success' : 'failure';
     }; // compute the latest conclusion of the pipeline run
     const computeLatestRunInfo = (runs) => {
-      const mainBranchRuns = runs
-        .filter(r => r.head_branch === 'main')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      // First deduplicate by run ID, keeping highest attempt
+      const runsByID = new Map();
+      for (const run of runs.filter(r => r.head_branch === 'main')) {
+        const runId = run.id;
+        const currentAttempt = run.run_attempt || 1;
+        const existingRun = runsByID.get(runId);
+        const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+        if (!existingRun || currentAttempt > existingAttempt) {
+          runsByID.set(runId, run);
+        }
+      }
+      const mainBranchRuns = Array.from(runsByID.values())
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0) return dateDiff;
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
       const latest = mainBranchRuns[0];
       if (!latest) return null;
       return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
@@ -1518,9 +1603,29 @@ async function run() {
     }
 
     // Helper to get main runs within the current window from a grouped collection
-    const getMainWindowRuns = (runs) => runs
-      .filter(r => r.head_branch === 'main')
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    // Deduplicates by run ID (keeping highest attempt) before sorting
+    const getMainWindowRuns = (runs) => {
+      // First deduplicate by run ID, keeping highest attempt
+      const runsByID = new Map();
+      for (const run of runs.filter(r => r.head_branch === 'main')) {
+        const runId = run.id;
+        const currentAttempt = run.run_attempt || 1;
+        const existingRun = runsByID.get(runId);
+        const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+        if (!existingRun || currentAttempt > existingAttempt) {
+          runsByID.set(runId, run);
+        }
+      }
+      return Array.from(runsByID.values())
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0) return dateDiff;
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
+    };
 
     // Enrich regressions with first failing run within the window
     for (const item of regressedDetails) {

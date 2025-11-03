@@ -709,55 +709,62 @@ async function run() {
     let mergedRuns = Array.from(seen.values());
     core.info(`[MERGE] After deduplication: ${mergedRuns.length} unique runs (by run id + attempt)`);
 
-    // Check for newer attempts on the latest run for each workflow
-    // Group runs by workflow name to find the latest run per workflow
-    const runsByWorkflow = new Map();
+    // Check for newer attempts on all unique run IDs
+    // Group runs by run ID to find the highest attempt we have for each run
+    const runsByRunId = new Map(); // runId -> { highestAttempt: number, runs: Array<run> }
     for (const run of mergedRuns) {
-      if (!runsByWorkflow.has(run.name)) {
-        runsByWorkflow.set(run.name, []);
+      const runId = run.id;
+      const attempt = run.run_attempt || 1;
+
+      if (!runsByRunId.has(runId)) {
+        runsByRunId.set(runId, { highestAttempt: attempt, runs: [run] });
+      } else {
+        const entry = runsByRunId.get(runId);
+        entry.runs.push(run);
+        if (attempt > entry.highestAttempt) {
+          entry.highestAttempt = attempt;
+        }
       }
-      runsByWorkflow.get(run.name).push(run);
     }
 
-    core.info(`[RECHECK] Checking for newer attempts on latest runs for ${runsByWorkflow.size} workflows...`);
+    core.info(`[RECHECK] Checking for newer attempts on ${runsByRunId.size} unique run IDs...`);
     const delayBetweenChecks = 100; // Small delay to avoid rate limits
     let updatedAttempts = 0;
     const newRunsToAdd = [];
 
-    for (const [workflowName, workflowRuns] of runsByWorkflow.entries()) {
-      // Find the latest run for this workflow (on target branch, within date window)
-      const latestRuns = workflowRuns
-        .filter(r => r.head_branch === branch && r.status === 'completed')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-      if (latestRuns.length === 0) continue;
-
-      const latestRun = latestRuns[0];
-      const latestRunId = latestRun.id;
-      const currentAttempt = latestRun.run_attempt || 1;
+    for (const [runId, entry] of runsByRunId.entries()) {
+      const currentAttempt = entry.highestAttempt;
+      const sampleRun = entry.runs[0]; // Use first run for workflow name and other metadata
 
       try {
         // Fetch the run details directly - GitHub API returns the latest attempt
         const { data: latestRunData } = await octokit.rest.actions.getWorkflowRun({
           owner: github.context.repo.owner,
           repo: github.context.repo.repo,
-          run_id: latestRunId
+          run_id: runId
         });
 
         const apiAttempt = latestRunData.run_attempt || 1;
 
         // If API has a higher attempt, add it to mergedRuns (don't replace the old one)
         if (apiAttempt > currentAttempt) {
-          core.info(`[RECHECK] Found newer attempt for workflow '${workflowName}' run ${latestRunId}: current=${currentAttempt}, API=${apiAttempt}, adding`);
+          core.info(`[RECHECK] Found newer attempt for workflow '${sampleRun.name}' run ${runId}: current=${currentAttempt}, API=${apiAttempt}, adding`);
           // Check if the run is still within our date window and meets other criteria
           const runDate = new Date(latestRunData.created_at);
           const cutoff = getCutoffDate(days);
           if (runDate >= cutoff && latestRunData.head_branch === branch && latestRunData.status === 'completed') {
-            // Add the new run to the list (don't replace the old one)
-            newRunsToAdd.push(latestRunData);
-            updatedAttempts++;
+            // Check if we already have this attempt (shouldn't happen, but be safe)
+            const attemptKey = `${runId}:${apiAttempt}`;
+            const alreadyHaveAttempt = mergedRuns.some(r => r.id === runId && (r.run_attempt || 1) === apiAttempt);
+            if (!alreadyHaveAttempt) {
+              // Add the new run to the list (don't replace the old one)
+              newRunsToAdd.push(latestRunData);
+              updatedAttempts++;
+            } else {
+              core.info(`[RECHECK] Run ${runId} attempt ${apiAttempt} already in mergedRuns, skipping`);
+            }
           } else {
-            core.info(`[RECHECK] Run ${latestRunId} attempt ${apiAttempt} is outside date window or doesn't meet criteria, skipping`);
+            core.info(`[RECHECK] Run ${runId} attempt ${apiAttempt} is outside date window or doesn't meet criteria, skipping`);
           }
         }
 
@@ -765,7 +772,7 @@ async function run() {
       } catch (e) {
         // Run might not exist anymore, or API error - log and continue
         if (e.status !== 404) {
-          core.warning(`[RECHECK] Failed to check workflow '${workflowName}' run ${latestRunId} for newer attempts: ${e.message}`);
+          core.warning(`[RECHECK] Failed to check run ${runId} for newer attempts: ${e.message}`);
         }
       }
     }
@@ -968,10 +975,29 @@ async function run() {
 
     for (const [name, runs] of grouped.entries()) {
       try {
-        // Consider only the target branch and sort newest first
-        const branchRuns = (runs || [])
-          .filter(r => r && r.head_branch === branch)
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        // First deduplicate by run ID, keeping highest attempt (for logs/annotations, we only want latest attempt)
+        const runsByRunId = new Map();
+        for (const run of (runs || []).filter(r => r && r.head_branch === branch)) {
+          const runId = run.id;
+          const attempt = run.run_attempt || 1;
+          const existingRun = runsByRunId.get(runId);
+          const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+          if (!existingRun || attempt > existingAttempt) {
+            runsByRunId.set(runId, run);
+          }
+        }
+
+        // Consider only deduplicated runs (latest attempt per run ID) and sort newest first
+        const branchRuns = Array.from(runsByRunId.values())
+          .sort((a, b) => {
+            // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+            const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+            if (dateDiff !== 0) return dateDiff;
+            const attemptA = a.run_attempt || 1;
+            const attemptB = b.run_attempt || 1;
+            return attemptB - attemptA; // Prefer higher attempt number
+          });
+
         // Scan newest→older, skipping skipped/cancelled runs until either:
         // A) we find a success (stop; no logs), or
         // B) we find a failing run (download logs), or
