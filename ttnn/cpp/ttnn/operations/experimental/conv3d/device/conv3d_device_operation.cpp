@@ -72,12 +72,6 @@ void Conv3dOp::validate(
     TT_FATAL(config.groups == 1, "Groups must be 1. got {}", config.groups);
     // assert padding on T is zero
     TT_FATAL(
-        config.padding[0] == 0,
-        "Padding must be (0,x,x). got ({}, {}, {})",
-        config.padding[0],
-        config.padding[1],
-        config.padding[2]);
-    TT_FATAL(
         config.padding_mode == "zeros" || config.padding_mode == "replicate",
         "Padding mode must be zeros or replicate. got {}",
         config.padding_mode);
