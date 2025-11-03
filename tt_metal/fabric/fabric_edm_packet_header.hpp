@@ -589,17 +589,6 @@ public:
     }
 };
 
-struct UDMLowLatencyPacketHeader : public LowLatencyPacketHeader {
-    UDMControlFields udm_control;
-    uint8_t padding[1];  // Padding to align to 48 bytes (32 base + 15 control + 1 padding = 48)
-
-    // Override to return correct size for UDMLowLatencyPacketHeader
-    size_t get_payload_size_including_header() volatile const {
-        return get_payload_size_excluding_header() + sizeof(UDMLowLatencyPacketHeader);
-    }
-} __attribute__((packed));
-static_assert(sizeof(UDMLowLatencyPacketHeader) == 48, "sizeof(UDMLowLatencyPacketHeader) is not equal to 48B");
-
 struct LowLatencyMeshRoutingFieldsV2 {
     static constexpr uint32_t FIELD_WIDTH = 8;
     static constexpr uint32_t FIELD_MASK = 0b1111;
@@ -759,13 +748,8 @@ static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not e
 #if (                                                                \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_LINE)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_1D | ROUTING_MODE_RING)) != 0))
-// 1D routing with UDM
-#if ((ROUTING_MODE & ROUTING_MODE_LOW_LATENCY)) != 0
-#define PACKET_HEADER_TYPE tt::tt_fabric::UDMLowLatencyPacketHeader
-#define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyRoutingFields
-#else
-static_assert(false, "UDM mode requires LOW_LATENCY routing for 1D fabric");
-#endif
+// 1D routing with UDM is not supported
+static_assert(false, "UDM mode does not support 1D routing - use 2D routing instead");
 
 #elif (                                                              \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \

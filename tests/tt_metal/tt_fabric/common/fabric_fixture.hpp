@@ -183,18 +183,6 @@ protected:
     }
 };
 
-class NightlyFabric1DUDMModeFixture : public BaseFabricFixture {
-protected:
-    static void SetUpTestSuite() {
-        BaseFabricFixture::DoSetUpTestSuite(
-            tt::tt_fabric::FabricConfig::FABRIC_1D,
-            std::nullopt,
-            tt_fabric::FabricTensixConfig::DISABLED,
-            tt_fabric::FabricUDMMode::ENABLED);
-    }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
-};
-
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }

@@ -79,11 +79,9 @@ size_t FabricContext::get_packet_header_size_bytes() const {
     bool udm_enabled =
         tt::tt_metal::MetalContext::instance().get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
     if (udm_enabled) {
-        if (this->is_2D_routing_enabled()) {
-            return sizeof(tt::tt_fabric::UDMHybridMeshPacketHeader);
-        } else {
-            return sizeof(tt::tt_fabric::UDMLowLatencyPacketHeader);
-        }
+        // UDM mode only supports 2D routing
+        TT_FATAL(this->is_2D_routing_enabled(), "UDM mode only supports 2D routing");
+        return sizeof(tt::tt_fabric::UDMHybridMeshPacketHeader);
     } else {
         if (this->is_2D_routing_enabled()) {
             return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)

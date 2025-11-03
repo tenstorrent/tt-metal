@@ -66,39 +66,6 @@ struct udm_read_fields {
 };
 
 /**
- * @brief Set unicast route for UDMLowLatencyPacketHeader with UDM fields
- *
- * Configures routing and UDM control fields for low latency packet headers.
- * This overload handles 1D routing with UDM-specific metadata.
- *
- * @param packet_header Pointer to the UDM low latency packet header
- * @param udm UDM fields containing source information (including posted flag)
- * @param dst_dev_id Destination device ID
- * @return true if route was successfully set, false otherwise
- */
-inline bool fabric_write_set_unicast_route_impl(
-    volatile tt_l1_ptr UDMLowLatencyPacketHeader* packet_header, udm_write_fields& udm, uint16_t dst_dev_id) {
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-
-    // First call the original API by casting to base type
-    // Use the template parameters to call the correct overload
-    bool result =
-        fabric_set_unicast_route(static_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(packet_header), dst_dev_id);
-
-    // Set UDM control fields for write operations using routing table info
-    packet_header->udm_control.write.src_chip_id = routing_table->my_device_id;
-    packet_header->udm_control.write.src_mesh_id = routing_table->my_mesh_id;
-    packet_header->udm_control.write.src_noc_x = udm.src_noc_x;
-    packet_header->udm_control.write.src_noc_y = udm.src_noc_y;
-    packet_header->udm_control.write.risc_id = udm.risc_id;
-    packet_header->udm_control.write.transaction_id = udm.trid;
-    packet_header->udm_control.write.posted = udm.posted;
-
-    return result;
-}
-
-/**
  * @brief Set unicast route for UDMHybridMeshPacketHeader with UDM fields
  *
  * Configures routing and UDM control fields for hybrid mesh packet headers.
@@ -153,48 +120,13 @@ FORCE_INLINE void fabric_write_set_unicast_route(
 
     if constexpr (std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
         fabric_write_set_unicast_route_impl(packet_header, udm, dst_dev_id, dst_mesh_id);
-    } else if constexpr (std::is_same_v<T, tt::tt_fabric::UDMLowLatencyPacketHeader>) {
-        fabric_write_set_unicast_route_impl(packet_header, udm, dst_dev_id);
     } else {
         // Compile error for unsupported types
         static_assert(
-            std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader> ||
-                std::is_same_v<T, tt::tt_fabric::UDMLowLatencyPacketHeader>,
-            "Unsupported packet header type for fabric_write_set_unicast_route");
+            std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>,
+            "Unsupported packet header type for fabric_write_set_unicast_route - only UDMHybridMeshPacketHeader is "
+            "supported");
     }
-}
-
-/**
- * @brief Set unicast route for UDMLowLatencyPacketHeader with UDM read fields
- *
- * Configures routing and UDM control fields for low latency packet headers for read operations.
- * This overload handles 1D routing with UDM-specific read metadata.
- *
- * @param packet_header Pointer to the UDM low latency packet header
- * @param udm UDM fields containing source information for read operation
- * @param dst_dev_id Destination device ID
- * @return true if route was successfully set, false otherwise
- */
-inline bool fabric_read_set_unicast_route_impl(
-    volatile tt_l1_ptr UDMLowLatencyPacketHeader* packet_header, udm_read_fields& udm, uint16_t dst_dev_id) {
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-
-    // First call the original API by casting to base type
-    bool result =
-        fabric_set_unicast_route(static_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(packet_header), dst_dev_id);
-
-    // Set UDM control fields for read operations using routing table info
-    packet_header->udm_control.read.src_chip_id = routing_table->my_device_id;
-    packet_header->udm_control.read.src_mesh_id = routing_table->my_mesh_id;
-    packet_header->udm_control.read.src_noc_x = udm.src_noc_x;
-    packet_header->udm_control.read.src_noc_y = udm.src_noc_y;
-    packet_header->udm_control.read.src_l1_address = udm.src_l1_address;
-    packet_header->udm_control.read.size_bytes = udm.size_bytes;
-    packet_header->udm_control.read.risc_id = udm.risc_id;
-    packet_header->udm_control.read.transaction_id = udm.trid;
-
-    return result;
 }
 
 /**
@@ -260,14 +192,12 @@ FORCE_INLINE void fabric_read_set_unicast_route(
 
     if constexpr (std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
         fabric_read_set_unicast_route_impl(packet_header, udm, dst_dev_id, dst_mesh_id);
-    } else if constexpr (std::is_same_v<T, tt::tt_fabric::UDMLowLatencyPacketHeader>) {
-        fabric_read_set_unicast_route_impl(packet_header, udm, dst_dev_id);
     } else {
         // Compile error for unsupported types
         static_assert(
-            std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader> ||
-                std::is_same_v<T, tt::tt_fabric::UDMLowLatencyPacketHeader>,
-            "Unsupported packet header type for fabric_read_set_unicast_route");
+            std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>,
+            "Unsupported packet header type for fabric_read_set_unicast_route - only UDMHybridMeshPacketHeader is "
+            "supported");
     }
 }
 
@@ -281,7 +211,7 @@ FORCE_INLINE void fabric_read_set_unicast_route(
  * @tparam Field The control field to set (from UDM_CONTROL_FIELD enum)
  * @tparam T The packet header type (auto-deduced)
  * @tparam V The value type (auto-deduced)
- * @param packet_header Pointer to the packet header (UDMLowLatencyPacketHeader or UDMHybridMeshPacketHeader)
+ * @param packet_header Pointer to the packet header (UDMHybridMeshPacketHeader)
  * @param value The value to set for the specified field
  *
  */
@@ -289,9 +219,8 @@ template <UDM_CONTROL_FIELD Field, typename T, typename V>
 FORCE_INLINE void fabric_write_set_unicast_route_control_field(volatile tt_l1_ptr T* packet_header, V value) {
     // Ensure the packet header type has UDM control fields
     static_assert(
-        std::is_same_v<T, UDMLowLatencyPacketHeader> || std::is_same_v<T, UDMHybridMeshPacketHeader> ||
-            std::is_same_v<T, PACKET_HEADER_TYPE>,
-        "Packet header must be a UDM packet header type");
+        std::is_same_v<T, UDMHybridMeshPacketHeader> || std::is_same_v<T, PACKET_HEADER_TYPE>,
+        "Packet header must be UDMHybridMeshPacketHeader");
 
     if constexpr (Field == UDM_CONTROL_FIELD::POSTED) {
         packet_header->udm_control.write.posted = static_cast<uint8_t>(value);

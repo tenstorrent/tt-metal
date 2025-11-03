@@ -3148,32 +3148,5 @@ TEST_F(Fabric1DTensixFixture, TestLinearFabricMulticastNocAtomicIncMux) {
     FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC, {std::make_tuple(RoutingDirection::E, 1, 2)});
 }
 
-// UDM Mode Tests - only test the packet header changes for 1D
-TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricUnicastNocUnicastWrite) {
-    FabricUnicastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1)});
-}
-
-TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricMulticastNocUnicastWrite) {
-    FabricMulticastCommon(this, NOC_UNICAST_WRITE, {std::make_tuple(RoutingDirection::E, 1, 2)});
-}
-
-// UDM Mode Tests - test udm api changes for 1D
-TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricUnicastEast) {
-    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
-}
-
-TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricUnicastWest) {
-    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 1));
-}
-
-// UDM Mode Read Tests - test udm read api for 1D
-TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricReadEast) {
-    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
-}
-
-TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricReadWest) {
-    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
-}
-
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
