@@ -38,9 +38,7 @@ class DeviceConfig:
         self.enable_ddp = device_config.get("enable_ddp", False)
 
         # we currently support only [1, N] mesh shapes
-        assert (
-            self.mesh_shape[0] == 1
-        ), f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
+        assert self.mesh_shape[0] == 1, f"Only [1, N] mesh shapes are supported, got {self.mesh_shape}"
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
@@ -101,9 +99,7 @@ class TransformerConfig:
             self.scaling_factor = self.rope.get("scaling_factor", None)
             self.high_freq_factor = self.rope.get("high_freq_factor", None)
             self.low_freq_factor = self.rope.get("low_freq_factor", None)
-            self.original_context_length = self.rope.get(
-                "original_context_length", None
-            )
+            self.original_context_length = self.rope.get("original_context_length", None)
 
 
 class PipelineParallelHostConfig:
@@ -114,9 +110,7 @@ class PipelineParallelHostConfig:
 
     def __init__(self, cfg: dict):
         self.num_blocks = int(cfg.get("num_blocks", 0))
-        self.blocks_per_rank = {
-            int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()
-        }
+        self.blocks_per_rank = {int(k): int(v) for k, v in dict(cfg.get("blocks_per_rank", {})).items()}
 
 
 class MultiHostConfig:
@@ -133,6 +127,4 @@ class MultiHostConfig:
         self.socket_type = str(mh.get("socket_type", "mpi")).strip().lower()
 
         pp_cfg = mh.get("pipeline_parallel_config")
-        self.pipeline_parallel_config = (
-            PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
-        )
+        self.pipeline_parallel_config = PipelineParallelHostConfig(pp_cfg) if isinstance(pp_cfg, dict) else None
