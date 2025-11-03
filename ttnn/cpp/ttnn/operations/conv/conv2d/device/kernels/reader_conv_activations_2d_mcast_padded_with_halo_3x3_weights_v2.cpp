@@ -128,7 +128,7 @@ void kernel_main() {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
-            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
+            cb_reserve_back(cb_id_act_row_major_bfloat16, 10 * act_block_num_tiles_read);
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
                 if constexpr (split_reader_cb_shared) {
