@@ -4,12 +4,10 @@
 
 #pragma once
 
-// Public API header for Fabric Heartbeat telemetry data structures
 #include <cstdint>
 #include <cstddef>
 #include "hostdevcommon/fabric_common.h"
 
-// Forward declaration to avoid including heavy host-only headers in common kernel/host API
 namespace tt {
 namespace tt_fabric {
 enum class FabricConfig : uint32_t;
@@ -17,6 +15,29 @@ enum class FabricConfig : uint32_t;
 }  // namespace tt
 
 enum RouterState : uint8_t { STANDBY = 0, ACTIVE = 1, PAUSED = 2, DRAINING = 3 };
+
+enum class FabricArch : uint8_t { WORMHOLE_B0 = 0, BLACKHOLE = 1, QUASAR = 2, STATIC_ONLY = 3 };
+
+template <FabricArch ARCH>
+struct EriscCount;
+
+template <>
+struct EriscCount<FabricArch::STATIC_ONLY> {
+    static constexpr size_t value = 0;
+};
+
+template <>
+struct EriscCount<FabricArch::WORMHOLE_B0> {
+    static constexpr size_t value = 1;
+};
+template <>
+struct EriscCount<FabricArch::BLACKHOLE> {
+    static constexpr size_t value = 2;
+};
+template <>
+struct EriscCount<FabricArch::QUASAR> {
+    static constexpr size_t value = 2;
+};
 
 // TODO: this V2 need to be deleted.
 //       just for avoiding conflicts
@@ -35,8 +56,9 @@ enum DynamicStatistics : uint8_t {
     NONE = 0x00,
     ROUTER_STATE = 0x01,
     BANDWIDTH = 0x02,
-    HEARTBEAT = 0x04,
-    STAT_COUNT = 3
+    HEARTBEAT_TX = 0x04,
+    HEARTBEAT_RX = 0x08,
+    STAT_COUNT = 4
 };
 
 // Bandwidth telemetry values intended for software delta sampling.
@@ -50,11 +72,22 @@ struct BandwidthTelemetry {
     uint64_t num_packets_sent;
 };
 
+template <size_t NUM_ERISCS>
 struct DynamicInfo {
-    RouterState router_state;
-    // Free-running heartbeat. Software can use deltas to detect liveness
-    RiscTimestampV2 heartbeat;
-    BandwidthTelemetry bandwidth;
+    struct EriscDynamicEntry {
+        RouterState router_state;
+        // TX heartbeat: incremented when all sender queues are empty, or a packet was sent over Ethernet
+        RiscTimestampV2 tx_heartbeat;
+        // RX heartbeat: incremented when receiver queues are empty, or a packet was forwarded from receiver to
+        // NoC/local
+        RiscTimestampV2 rx_heartbeat;
+    };
+
+    // Per-core shared bandwidth counters
+    BandwidthTelemetry bandwidth_tx;
+    BandwidthTelemetry bandwidth_rx;
+    // Per-ERISC dynamic entries
+    EriscDynamicEntry erisc[NUM_ERISCS];
 };
 
 struct StaticInfo {
@@ -65,8 +98,8 @@ struct StaticInfo {
     DynamicStatistics supported_stats;
 };
 
-template <size_t NUM_ERISCS>
+template <FabricArch ARCH>
 struct FabricTelemetry {
-    DynamicInfo dynamic_info[NUM_ERISCS];
     StaticInfo static_info;
+    DynamicInfo<EriscCount<ARCH>::value> dynamic_info;
 };

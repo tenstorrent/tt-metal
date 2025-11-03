@@ -1529,7 +1529,7 @@ template <
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
     typename ReceiverChannelT>
-FORCE_INLINE void run_sender_channel_step_impl(
+FORCE_INLINE bool run_sender_channel_step_impl(
     SenderChannelT& local_sender_channel,
     WorkerInterfaceT& local_sender_channel_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
@@ -1538,6 +1538,7 @@ FORCE_INLINE void run_sender_channel_step_impl(
     uint32_t sender_channel_free_slots_stream_id,
     SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
+    bool progress = false;
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
     //       when moving to stream regs to manage rd/wr ptrs
@@ -1551,6 +1552,7 @@ FORCE_INLINE void run_sender_channel_step_impl(
     }
     if (can_send) {
         did_something = true;
+        progress = true;
 
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
@@ -1604,6 +1606,7 @@ FORCE_INLINE void run_sender_channel_step_impl(
                 sender_channel_free_slots_stream_id);
         }
     }
+    return progress;
 };
 
 template <
@@ -1615,7 +1618,7 @@ template <
     typename RemoteEthReceiverChannels,
     typename ReceiverPointersT,
     size_t NUM_SENDER_CHANNELS>
-FORCE_INLINE void run_sender_channel_step(
+FORCE_INLINE bool run_sender_channel_step(
     EthSenderChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
@@ -1625,7 +1628,7 @@ FORCE_INLINE void run_sender_channel_step(
     std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
-        run_sender_channel_step_impl<
+        return run_sender_channel_step_impl<
             enable_packet_header_recording,
             sender_channel_index,
             to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
@@ -1639,6 +1642,7 @@ FORCE_INLINE void run_sender_channel_step(
             sender_channel_from_receiver_credits[sender_channel_index],
             perf_telemetry_recorder);
     }
+    return false;
 }
 
 template <
@@ -1649,7 +1653,7 @@ template <
     typename ReceiverChannelPointersT,
     typename DownstreamSenderVC0T,
     typename DownstreamSenderVC1T>
-FORCE_INLINE void run_receiver_channel_step_impl(
+FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelBufferT& local_receiver_channel,
     std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
@@ -1657,6 +1661,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
+    bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
 
@@ -1720,6 +1725,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
         }
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
+            progress = true;
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
                 receiver_buffer_index);
             if constexpr (is_2d_fabric) {
@@ -1808,6 +1814,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             completion_counter.increment();
         }
     }
+    return progress;
 };
 
 template <
@@ -1817,17 +1824,16 @@ template <
     typename EthReceiverChannels,
     typename WriteTridTracker,
     typename ReceiverChannelPointersT>
-FORCE_INLINE void run_receiver_channel_step(
+FORCE_INLINE bool run_receiver_channel_step(
     EthReceiverChannels& local_receiver_channels,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
-        run_receiver_channel_step_impl<
+        return run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_packets_sent_streams[receiver_channel],
             WriteTridTracker,
@@ -1843,6 +1849,7 @@ FORCE_INLINE void run_receiver_channel_step(
             port_direction_table,
             receiver_channel_response_credit_senders[receiver_channel]);
     }
+    return false;
 }
 
 bool any_sender_channels_active(
@@ -1854,6 +1861,33 @@ bool any_sender_channels_active(
         }
     }
     return false;
+}
+
+template <FabricArch ARCH>
+FORCE_INLINE void update_telemetry(
+    const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
+    bool tx_progress,
+    bool rx_progress,
+    FabricTelemetry<ARCH>& local_fabric_telemetry,
+    volatile FabricTelemetry<ARCH>* fabric_telemetry) {
+    bool sender_idle = !any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered);
+    bool receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+    if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
+        receiver_idle = receiver_idle && (get_ptr_val<to_receiver_packets_sent_streams[1]>() == 0);
+    }
+
+    {  // heartbeat update
+        volatile RiscTimestampV2* tx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat;
+        volatile RiscTimestampV2* rx_heartbeat_addr = &fabric_telemetry->dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat;
+        if (sender_idle || tx_progress) {
+            local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full++;
+            tx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].tx_heartbeat.full;
+        }
+        if (receiver_idle || rx_progress) {
+            local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full++;
+            rx_heartbeat_addr->full = local_fabric_telemetry.dynamic_info.erisc[MY_ERISC_ID].rx_heartbeat.full;
+        }
+    }
 }
 
 /*
@@ -1887,10 +1921,13 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     size_t did_nothing_count = 0;
-    RiscTimestampV2 local_heartbeat_counter = {.full = 0};
+    using FabricTelemetryT = std::conditional_t<
+        (NUM_ACTIVE_ERISCS == 2),
+        FabricTelemetry<FabricArch::BLACKHOLE>,
+        FabricTelemetry<FabricArch::WORMHOLE_B0>>;
+    FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry =
-        reinterpret_cast<volatile FabricTelemetry<1>*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
-    auto* heartbeat_addr = &fabric_telemetry->dynamic_info[0].heartbeat;
+        reinterpret_cast<volatile FabricTelemetryT*>(eth_l1_mem::address_map::AERISC_FABRIC_TELEMETRY_ADDR);
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
@@ -1938,12 +1975,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         open_perf_recording_window(inner_loop_perf_telemetry_collector);
 
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
+            bool tx_progress_in_iteration = false;
+            bool rx_progress_in_iteration = false;
             invalidate_l1_cache();
             // Capture these to see if we made progress
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
-            run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 0>(
+            tx_progress_in_iteration |=
+                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
                 outbound_to_receiver_channel_pointer_ch0,
@@ -1953,7 +1993,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 sender_channel_from_receiver_credits,
                 inner_loop_perf_telemetry_collector);
             if constexpr (!dateline_connection) {
-                run_receiver_channel_step<0, DownstreamSenderVC0T, DownstreamSenderVC1T>(
+                rx_progress_in_iteration |= run_receiver_channel_step<0, DownstreamSenderVC0T, DownstreamSenderVC1T>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces_vc0,
                     downstream_edm_noc_interface_vc1,
@@ -1963,7 +2003,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     receiver_channel_response_credit_senders);
             }
             if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
-                run_receiver_channel_step<1, DownstreamSenderVC0T, DownstreamSenderVC1T>(
+                rx_progress_in_iteration |= run_receiver_channel_step<1, DownstreamSenderVC0T, DownstreamSenderVC1T>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces_vc0,
                     downstream_edm_noc_interface_vc1,
@@ -1974,26 +2014,28 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
 
             if constexpr (is_sender_channel_serviced[1] && !skip_sender_channel_1_connection) {
-                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 1>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids_ordered,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector);
+                tx_progress_in_iteration |=
+                    run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 1>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch0,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids_ordered,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector);
             }
             if constexpr (is_2d_fabric) {
-                run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
-                    local_sender_channels,
-                    local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
-                    remote_receiver_channels,
-                    channel_connection_established,
-                    local_sender_channel_free_slots_stream_ids_ordered,
-                    sender_channel_from_receiver_credits,
-                    inner_loop_perf_telemetry_collector);
+                tx_progress_in_iteration |=
+                    run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
+                        local_sender_channels,
+                        local_sender_channel_worker_interfaces,
+                        outbound_to_receiver_channel_pointer_ch0,
+                        remote_receiver_channels,
+                        channel_connection_established,
+                        local_sender_channel_free_slots_stream_ids_ordered,
+                        sender_channel_from_receiver_credits,
+                        inner_loop_perf_telemetry_collector);
                 run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 3>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -2005,7 +2047,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     inner_loop_perf_telemetry_collector);
             }
             if constexpr (enable_deadlock_avoidance && !dateline_connection && !skip_sender_vc1_channel_connection) {
-                run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
+                tx_progress_in_iteration |= run_sender_channel_step<
+                    enable_packet_header_recording,
+                    VC1_RECEIVER_CHANNEL,
+                    NUM_SENDER_CHANNELS - 1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
                     outbound_to_receiver_channel_pointer_ch1,
@@ -2015,6 +2060,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     sender_channel_from_receiver_credits,
                     inner_loop_perf_telemetry_collector);
             }
+
+            // Compute idle conditions and update heartbeats in one helper
+            update_telemetry(
+                local_sender_channel_free_slots_stream_ids_ordered,
+                tx_progress_in_iteration,
+                rx_progress_in_iteration,
+                local_fabric_telemetry,
+                fabric_telemetry);
         }
 
         if constexpr (enable_context_switch) {
@@ -2043,9 +2096,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 write_perf_recording_window_results(inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
             }
         }
-
-        local_heartbeat_counter.full++;
-        heartbeat_addr->full = local_heartbeat_counter.full;
     }
 }
 
