@@ -172,13 +172,15 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
 @pytest.mark.parametrize("k_size", [1024])
 @pytest.mark.parametrize("n_size", [1024])
 @pytest.mark.parametrize(
-    "activation", [None, "relu", "relu6", "silu", "gelu", "gelu_approx", "sigmoid", "sigmoid_approx"]
+    "activation",
+    [None, "relu", "relu6", "silu", "gelu", "gelu_approx", "sigmoid", "sigmoid_approx", "hardsigmoid", "mish"],
 )
 def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_size, activation):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
     if activation == "relu":
         torch_output_tensor = torch.relu(torch_output_tensor)
@@ -190,6 +192,10 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
         torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
     elif activation in ["sigmoid", "sigmoid_approx"]:
         torch_output_tensor = torch.nn.functional.sigmoid(torch_output_tensor)
+    elif activation == "hardsigmoid":
+        torch_output_tensor = torch.nn.functional.hardsigmoid(torch_output_tensor)
+    elif activation == "mish":
+        torch_output_tensor = torch.nn.functional.mish(torch_output_tensor)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
