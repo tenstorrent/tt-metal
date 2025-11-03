@@ -520,14 +520,15 @@ TEST(MultiHost, TestBHQB4x4Fabric1DSanity) {
     }
 }
 
-TEST(MultiHost, TestClosetBoxTTSwitchControlPlaneInit) {
-    auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+TEST(MultiHost, TestClosetBox3PodTTSwitchControlPlaneInit) {
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
+    auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
 
-    // Just try physical system descriptor for now
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-        driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 }  // namespace multi_host_tests

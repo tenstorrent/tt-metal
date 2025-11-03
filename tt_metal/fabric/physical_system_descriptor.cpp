@@ -346,9 +346,6 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     if (my_rank == controller_rank) {
         this->remove_unresolved_nodes();
         this->generate_cross_host_connections();
-        for (const auto& [host, adjacent_hosts] : system_graph_.host_connectivity_graph) {
-            log_critical(tt::LogAlways, "Host {} Connectivity Graph: {}", host, adjacent_hosts);
-        }
         this->validate_graphs();
     }
     this->exchange_metadata(false);

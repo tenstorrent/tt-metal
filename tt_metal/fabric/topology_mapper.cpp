@@ -217,6 +217,9 @@ void TopologyMapper::build_mapping() {
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        // Validate that all meshes in the mesh graph descriptor have rank bindings
+        validate_mesh_id_host_names(mesh_id_host_names);
+
         // Build logical and physical adjacency maps
         auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
         auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
@@ -305,6 +308,41 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_h
     return mesh_id_to_hosts;
 }
 
+void TopologyMapper::validate_mesh_id_host_names(const HostMeshMapping& mesh_id_host_names) const {
+    // Get all mesh IDs from the mesh graph descriptor
+    const auto mesh_graph_mesh_ids = mesh_graph_.get_mesh_ids();
+
+    // Collect mesh IDs that have hosts bound to them from rank bindings
+    std::unordered_set<MeshId> bound_mesh_ids;
+    for (const auto& [mesh_id, _] : mesh_id_host_names) {
+        bound_mesh_ids.insert(mesh_id);
+    }
+
+    // Find meshes that are in the mesh graph but not bound to any host
+    std::vector<MeshId> unbound_mesh_ids;
+    for (const auto& mesh_id : mesh_graph_mesh_ids) {
+        if (bound_mesh_ids.find(mesh_id) == bound_mesh_ids.end()) {
+            unbound_mesh_ids.push_back(mesh_id);
+        }
+    }
+
+    // Throw error if any meshes are missing bindings
+    if (!unbound_mesh_ids.empty()) {
+        std::string unbound_list;
+        for (size_t i = 0; i < unbound_mesh_ids.size(); ++i) {
+            if (i > 0) {
+                unbound_list += ", ";
+            }
+            unbound_list += std::to_string(*unbound_mesh_ids[i]);
+        }
+        TT_THROW(
+            "The following mesh IDs are defined in the mesh graph descriptor but have no hosts bound to them in "
+            "rank_bindings.yaml: {}. Please add rank bindings for these mesh IDs or remove them from the mesh graph "
+            "descriptor.",
+            unbound_list);
+    }
+}
+
 std::unordered_map<MeshId, LogicalAdjacencyMap> TopologyMapper::build_adjacency_map_logical(
     HostMeshMapping& mesh_id_to_host_names) const {
     std::unordered_map<MeshId, LogicalAdjacencyMap> adjacency_map;
@@ -364,7 +402,14 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
     const std::unordered_map<MeshId, PhysicalAdjacencyMap>& adjacency_map_physical,
     const std::unordered_map<MeshId, LogicalAdjacencyMap>& adjacency_map_logical) {
     for (const auto& [mesh_id, log_adj] : adjacency_map_logical) {
-        auto& phys_adj = adjacency_map_physical.at(mesh_id);
+        auto it = adjacency_map_physical.find(mesh_id);
+        if (it == adjacency_map_physical.end()) {
+            TT_THROW(
+                "Mesh ID {} is defined in the mesh graph descriptor but has no hosts bound to it. Please check your "
+                "rank_bindings.yaml",
+                mesh_id.get());
+        }
+        auto& phys_adj = it->second;
 
         std::vector<FabricNodeId> log_nodes;
         for (const auto& p : log_adj) {

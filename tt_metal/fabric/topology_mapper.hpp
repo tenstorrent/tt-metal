@@ -195,6 +195,17 @@ private:
     HostMeshMapping build_host_mesh_mapping();
 
     /**
+     * @brief Validate that all meshes in the mesh graph descriptor have rank bindings
+     *
+     * Compares the mesh IDs from the mesh graph descriptor with the mesh IDs that have
+     * hosts bound to them in rank_bindings.yaml. Throws an error if any meshes are missing
+     * bindings, listing all unbound mesh IDs.
+     *
+     * @param mesh_id_host_names Mapping of mesh IDs to the set of host names participating in each mesh
+     */
+    void validate_mesh_id_host_names(const HostMeshMapping& mesh_id_host_names) const;
+
+    /**
      * @brief Build logical adjacency maps from mesh graph connectivity
      *
      * Creates adjacency maps for each mesh based on the logical connectivity defined in the mesh graph.
