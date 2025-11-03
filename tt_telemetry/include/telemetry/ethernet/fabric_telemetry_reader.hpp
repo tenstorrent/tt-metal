@@ -5,9 +5,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * telemetry/ethernet/fabric_bandwidth_telemetry_reader.hpp
+ * telemetry/ethernet/fabric_telemetry_reader.hpp
  *
- * Helper class to read fabric bandwidth telemetry data from device.
+ * Helper class to read fabric telemetry data from device.
  * Caches the data per update cycle to avoid redundant device reads.
  */
 
@@ -37,9 +37,9 @@ struct LowResolutionBandwidthTelemetryResult {
     uint64_t num_packets_sent{};
 };
 
-class FabricBandwidthTelemetryReader {
+class FabricTelemetryReader {
 public:
-    FabricBandwidthTelemetryReader(
+    FabricTelemetryReader(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         tt::ChipId chip_id,

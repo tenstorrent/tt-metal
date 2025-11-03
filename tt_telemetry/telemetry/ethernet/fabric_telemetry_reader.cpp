@@ -6,9 +6,9 @@
 #include <bit>
 #include <array>
 
-#include <telemetry/ethernet/fabric_bandwidth_telemetry_reader.hpp>
+#include <telemetry/ethernet/fabric_telemetry_reader.hpp>
 
-FabricBandwidthTelemetryReader::FabricBandwidthTelemetryReader(
+FabricTelemetryReader::FabricTelemetryReader(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
     tt::ChipId chip_id,
@@ -25,7 +25,7 @@ FabricBandwidthTelemetryReader::FabricBandwidthTelemetryReader(
     bw_telemetry_addr_ = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 }
 
-const LowResolutionBandwidthTelemetryResult& FabricBandwidthTelemetryReader::get_telemetry(
+const LowResolutionBandwidthTelemetryResult& FabricTelemetryReader::get_telemetry(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     std::chrono::steady_clock::time_point start_of_update_cycle) {
     
@@ -38,7 +38,7 @@ const LowResolutionBandwidthTelemetryResult& FabricBandwidthTelemetryReader::get
     return cached_telemetry_;
 }
 
-void FabricBandwidthTelemetryReader::read_from_device(const std::unique_ptr<tt::umd::Cluster>& cluster) {
+void FabricTelemetryReader::read_from_device(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     // Read telemetry structure from device
     constexpr size_t telemetry_size = sizeof(LowResolutionBandwidthTelemetryResult);
     std::array<std::byte, telemetry_size> buffer{};

@@ -21,7 +21,7 @@
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 
 #include <telemetry/metric.hpp>
-#include <telemetry/ethernet/fabric_bandwidth_telemetry_reader.hpp>
+#include <telemetry/ethernet/fabric_telemetry_reader.hpp>
 
 namespace tt::scaleout_tools::fsd::proto {
 class FactorySystemDescriptor;
@@ -156,7 +156,7 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         tt::ChipId chip_id,
         uint32_t channel,
-        std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader);
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -168,7 +168,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     tt::ChipId chip_id_;
     uint32_t channel_;
-    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
 class FabricWordsSentMetric: public UIntMetric {
@@ -178,7 +178,7 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         tt::ChipId chip_id,
         uint32_t channel,
-        std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader);
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -190,7 +190,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     tt::ChipId chip_id_;
     uint32_t channel_;
-    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
 class FabricPacketsSentMetric: public UIntMetric {
@@ -200,7 +200,7 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         tt::ChipId chip_id,
         uint32_t channel,
-        std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader);
+        std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
     void update(
@@ -212,7 +212,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     tt::ChipId chip_id_;
     uint32_t channel_;
-    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader_;
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
 class FabricHeartbeatMetric: public UIntMetric {

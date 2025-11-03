@@ -11,7 +11,7 @@
 
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
-#include <telemetry/ethernet/fabric_bandwidth_telemetry_reader.hpp>
+#include <telemetry/ethernet/fabric_telemetry_reader.hpp>
 #include <topology/topology.hpp>
 
 /**************************************************************************************************
@@ -88,7 +88,7 @@ void create_ethernet_metrics(
             std::make_unique<EthernetEndpointUpMetric>(tray_id, asic_location, chip_id, channel, hal));
         uint_metrics.push_back(
             std::make_unique<EthernetRetrainCountMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
-        auto bandwidth_reader = std::make_shared<FabricBandwidthTelemetryReader>(
+        auto bandwidth_reader = std::make_shared<FabricTelemetryReader>(
             tray_id, asic_location, chip_id, channel, cluster, hal);
         // TODO: does not work as expected, disable for now
         // double_metrics.push_back(
@@ -327,7 +327,7 @@ FabricBandwidthMetric::FabricBandwidthMetric(
     tt::tt_metal::ASICLocation asic_location,
     tt::ChipId chip_id,
     uint32_t channel,
-    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader) :
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
     DoubleMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
@@ -378,7 +378,7 @@ FabricWordsSentMetric::FabricWordsSentMetric(
     tt::tt_metal::ASICLocation asic_location,
     tt::ChipId chip_id,
     uint32_t channel,
-    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader) :
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
     UIntMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
@@ -418,7 +418,7 @@ FabricPacketsSentMetric::FabricPacketsSentMetric(
     tt::tt_metal::ASICLocation asic_location,
     tt::ChipId chip_id,
     uint32_t channel,
-    std::shared_ptr<FabricBandwidthTelemetryReader> telemetry_reader) :
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
     UIntMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
@@ -464,7 +464,7 @@ FabricHeartbeatMetric::FabricHeartbeatMetric(
     value_ = 0;
     ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     heartbeat_addr_ = hal->get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_HEARTBEAT);
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY);
 }
 
 const std::vector<std::string> FabricHeartbeatMetric::telemetry_path() const {
