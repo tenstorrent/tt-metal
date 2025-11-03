@@ -2,14 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+import os
+from pathlib import Path
+
+# Set up Python path to find ttnn and tracy modules
+_repo_root = Path(__file__).parent
+_ttnn_path = str(_repo_root / "ttnn")
+_tools_path = str(_repo_root / "tools")
+if _ttnn_path not in sys.path:
+    sys.path.insert(0, _ttnn_path)
+if _tools_path not in sys.path:
+    sys.path.insert(0, _tools_path)
+
 import pytest
 import torch
 import random
-import os
 import numpy as np
 from functools import partial
 from operator import contains, eq, getitem
-from pathlib import Path
 import json
 import multiprocess
 import signal

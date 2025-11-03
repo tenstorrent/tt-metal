@@ -346,6 +346,7 @@ if(NOT TARGET TT::Metalium)
                     INTERFACE_INCLUDE_DIRECTORIES
                         "${METALIUM_INCLUDE_DIRS}"
             )
+            target_link_libraries(TTNN::TTNN INTERFACE TT::Metalium)
             message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
         else()
             message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")

@@ -73,12 +73,11 @@ def _initialize():
 
         if not lib_dir.exists():
             raise FileNotFoundError(
-                f"Library directory not found: {lib_dir}\n"
-                f"Make sure TT Metal libraries are built in {tt_metal_home}"
+                f"Library directory not found: {lib_dir}\n" f"Make sure TT Metal libraries are built in {tt_metal_home}"
             )
 
         # Load required libraries
-        required_libs = ["libtt_metal.so", "_ttnncpp.so", "_ttnn.so"]
+        required_libs = ["libtt_metal.so", "_ttnncpp.so"]
 
         for filename in required_libs:
             lib_path = lib_dir / filename
@@ -93,9 +92,7 @@ def _initialize():
             try:
                 ctypes.cdll.LoadLibrary(str(lib_path))
             except OSError as e:
-                raise RuntimeError(
-                    f"Failed to load library {filename}: {e}\n" f"Path: {lib_path}"
-                ) from e
+                raise RuntimeError(f"Failed to load library {filename}: {e}\n" f"Path: {lib_path}") from e
 
     if _is_editable_install(__name__):
         _preload_dev_tt_metal_libraries()
