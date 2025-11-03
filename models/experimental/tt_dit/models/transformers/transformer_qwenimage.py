@@ -184,6 +184,33 @@ class QwenImageTransformer(Module):
 
         return self.proj_out(spatial)
 
+    # Same implementation as in SD35Transformer2DModel.patchify
+    def pack_latents(self, latents: torch.Tensor) -> torch.Tensor:
+        # N, H, W, C -> 1, N, (H / P) * (W / P), P * P * C
+        batch_size, height, width, channels = latents.shape
+        patch = self.patch_size
+
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
+
+        latents = latents.reshape([batch_size, height // patch, patch, width // patch, patch, channels])
+        return latents.transpose(2, 3).flatten(3, 5).flatten(1, 2).unsqueeze(0)
+
+    # Same implementation as in SD35Transformer2DModel.unpatchify
+    def unpack_latents(self, spatial: torch.Tensor, *, height: int, width: int) -> torch.Tensor:
+        # 1, N, (H / P) * (W / P), P * P * C -> N, H, W, C
+        one, batch_size, _, _ = spatial.shape
+        assert one == 1
+        patch = self.patch_size
+
+        if height % patch != 0 or width % patch != 0:
+            msg = f"height ({height}) and width ({width}) must be divisible by patch_size ({patch})"
+            raise ValueError(msg)
+
+        spatial = spatial.reshape([batch_size, height // patch, width // patch, patch, patch, -1])
+        return spatial.transpose(2, 3).flatten(3, 4).flatten(1, 2)
+
 
 def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
     size = t.shape[-1] // count
