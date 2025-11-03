@@ -15,7 +15,7 @@ from ttnn.model_preprocessing import (
 )
 
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.reference.modules import Classifier
+from models.experimental.efficientdetd0.reference.modules import Regressor, Classifier
 from models.experimental.efficientdetd0.reference.modules import SeparableConvBlock
 
 
@@ -24,30 +24,31 @@ def preprocess_conv_parameter(parameter, *, dtype):
     return parameter
 
 
-def fold_batch_norm1d_into_conv1d(conv, bn):
-    if not bn.track_running_stats:
-        raise RuntimeError("BatchNorm1d must have track_running_stats=True to be folded into Conv1d")
+def _extract_seperable_conv(model, bn=None):
+    assert isinstance(model, SeparableConvBlock)
+    parameters = {}
+    parameters["depthwise_conv"] = {}
+    parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.conv.weight, dtype=ttnn.float32)
+    parameters["depthwise_conv"]["bias"] = None
+    if model.depthwise_conv.conv.bias is not None:
+        bias = model.depthwise_conv.conv.bias
+        bias = bias.reshape((1, 1, 1, -1))
+        parameters["depthwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
-    weight = conv.weight  # Shape: [out_channels, in_channels, kernel_size]
-    bias = conv.bias
-    running_mean = bn.running_mean
-    running_var = bn.running_var
-    eps = bn.eps
-    scale = bn.weight
-    shift = bn.bias
-
-    # For 1D: scale factor applied per output channel
-    weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None]
-
-    if bias is not None:
-        bias = (bias - running_mean) * (scale / torch.sqrt(running_var + eps)) + shift
+    parameters["pointwise_conv"] = {}
+    if bn is not None:
+        weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv.conv, bn)
+    elif hasattr(model, "bn"):
+        weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv.conv, model.bn)
     else:
-        bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
+        weight, bias = model.pointwise_conv.conv.weight, model.pointwise_conv.conv.bias
 
-    # For 1D convolutions, bias shape should be [1, 1, -1] instead of [1, 1, 1, -1]
-    bias = bias.reshape(1, 1, 1, -1)
+    parameters["pointwise_conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+    if bias is not None:
+        bias = bias.reshape((1, 1, 1, -1))
+        parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
-    return weight, bias
+    return parameters
 
 
 def custom_preprocessor(
@@ -71,139 +72,26 @@ def custom_preprocessor(
         parameters["running_var"] = ttnn.from_torch(running_var, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         parameters["eps"] = model.eps
     if isinstance(model, SeparableConvBlock):
-        parameters["depthwise_conv"] = {}
-        parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.conv.weight, dtype=ttnn.float32)
-        parameters["depthwise_conv"]["bias"] = None
-        if model.depthwise_conv.conv.bias is not None:
-            bias = model.depthwise_conv.conv.bias
-            bias = bias.reshape((1, 1, 1, -1))
-            parameters["depthwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-
-        if hasattr(model, "bn"):
-            weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv.conv, model.bn)
-            parameters["pointwise_conv"] = {}
-            parameters["pointwise_conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
-            bias = bias.reshape((1, 1, 1, -1))
-            parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        else:
-            parameters["pointwise_conv"] = {}
-            parameters["pointwise_conv"]["weight"] = ttnn.from_torch(
-                model.pointwise_conv.conv.weight, dtype=ttnn.float32
-            )
-            parameters["pointwise_conv"]["bias"] = None
-            if model.pointwise_conv.conv.bias is not None:
-                bias = model.pointwise_conv.conv.bias
-                bias = bias.reshape((1, 1, 1, -1))
-                parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-
-        # import pdb; pdb.set_trace()
-        # for child_name, child in model.named_children():
-        #     parameters[child_name] = convert_torch_model_to_ttnn_model(
-        #         child,
-        #         name=f"{name}.{child_name}",
-        #         custom_preprocessor=custom_preprocessor_func,
-        #         convert_to_ttnn=convert_to_ttnn,
-        #         ttnn_module_args=ttnn_module_args,
-        #     )
-
-        # mlp_layers = []
-        # for child_name, child in model.layers.named_children():
-        #     mlp_layers.append(child)
-        # parameters["layers"] = {}
-        # for layer_num, layer in enumerate(mlp_layers):
-        #     parameters["layers"][layer_num] = {}
-        #     if isinstance(layer, torch.nn.Conv1d):
-        #         if (layer_num + 1) < len(mlp_layers):
-        #             next_layer = mlp_layers[layer_num + 1]
-        #             if isinstance(next_layer, torch.nn.BatchNorm1d):
-        #                 weight, bias = fold_batch_norm1d_into_conv1d(layer, next_layer)
-        #                 parameters["layers"][layer_num]["weight"] = ttnn.from_torch(weight, mesh_mapper=mesh_mapper)
-        #                 parameters["layers"][layer_num]["bias"] = ttnn.from_torch(bias, mesh_mapper=mesh_mapper)
-        #                 continue
-        #         weight = layer.weight
-        #         if layer.bias is not None:
-        #             bias = layer.bias
-        #             if bias.dim() < 4:
-        #                 bias = bias.unsqueeze(0).unsqueeze(0).unsqueeze(0)
-        #             parameters["layers"][layer_num]["bias"] = ttnn.from_torch(bias, mesh_mapper=mesh_mapper)
-        #         parameters["layers"][layer_num]["weight"] = ttnn.from_torch(weight, mesh_mapper=mesh_mapper)
-        # parameters["conv_args"] = infer_module_args(model)
-
-    # elif isinstance(model, SharedMLP):
-    #     weight, bias = fold_batch_norm2d_into_conv2d(model.layer0.conv, model.layer0.bn.bn)
-    #     parameters["layer0"] = {}
-    #     parameters["layer0"]["conv"] = {}
-    #     parameters["layer0"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
-    #     bias = bias.reshape((1, 1, 1, -1))
-    #     parameters["layer0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-
-    #     weight, bias = fold_batch_norm2d_into_conv2d(model.layer1.conv, model.layer1.bn.bn)
-    #     parameters["layer1"] = {}
-    #     parameters["layer1"]["conv"] = {}
-    #     parameters["layer1"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
-    #     bias = bias.reshape((1, 1, 1, -1))
-    #     parameters["layer1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-
-    #     weight, bias = fold_batch_norm2d_into_conv2d(model.layer2.conv, model.layer2.bn.bn)
-    #     parameters["layer2"] = {}
-    #     parameters["layer2"]["conv"] = {}
-    #     parameters["layer2"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
-    #     bias = bias.reshape((1, 1, 1, -1))
-    #     parameters["layer2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-    #     parameters["conv_args"] = infer_module_args(model)
-
-    # elif isinstance(model, torch.nn.MultiheadAttention):
-    #     # Handle QKV weights for self-attention
-    #     if hasattr(model, "in_proj_weight"):
-    #         # Split combined QKV weight into separate Q, K, V
-    #         qkv_weight = model.in_proj_weight
-    #         q_weight, k_weight, v_weight = qkv_weight.chunk(3, dim=0)
-
-    #         parameters["q_weight"] = ttnn.from_torch(q_weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-    #         parameters["k_weight"] = ttnn.from_torch(k_weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-    #         parameters["v_weight"] = ttnn.from_torch(v_weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-
-    #     if hasattr(model, "in_proj_bias") and model.in_proj_bias is not None:
-    #         qkv_bias = model.in_proj_bias
-    #         q_bias, k_bias, v_bias = qkv_bias.chunk(3, dim=0)
-    #         parameters["q_bias"] = ttnn.from_torch(q_bias.reshape(1, -1), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-    #         parameters["k_bias"] = ttnn.from_torch(k_bias.reshape(1, -1), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-    #         parameters["v_bias"] = ttnn.from_torch(v_bias.reshape(1, -1), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-
-    #     if hasattr(model, "out_proj"):
-    #         parameters["out_weight"] = ttnn.from_torch(
-    #             model.out_proj.weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT
-    #         )
-    #         parameters["out_bias"] = None
-    #         if model.out_proj.bias is not None:
-    #             parameters["out_bias"] = ttnn.from_torch(
-    #                 model.out_proj.bias.reshape(1, -1),
-    #                 dtype=weight_dtype,
-    #                 layout=ttnn.TILE_LAYOUT,
-    #             )
-
-    # # Preprocess the position embedding params
-    # elif isinstance(model, PositionEmbeddingCoordsSine):
-    #     parameters["gauss_B"] = ttnn.from_torch(model.gauss_B, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-
-    # # Preprocess feedforward parameters
-    # elif isinstance(model, torch.nn.Linear):
-    #     parameters["weight"] = ttnn.from_torch(model.weight.T, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-    #     if hasattr(model, "bias") and model.bias is not None:
-    #         parameters["bias"] = ttnn.from_torch(model.bias.reshape(1, -1), dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-
-    # # Preprocess layer normalization parameters
-    # elif isinstance(model, torch.nn.LayerNorm):
-    #     parameters["weight"] = ttnn.from_torch(model.weight, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-    #     if hasattr(model, "bias") and model.bias is not None:
-    #         parameters["bias"] = ttnn.from_torch(model.bias, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT)
-
-    elif isinstance(
+        parameters = _extract_seperable_conv(model)
+    if isinstance(
         model,
         (
+            Regressor,
             Classifier,
-            EfficientDetBackbone,
         ),
+    ):
+        parameters["conv_list"] = {}
+        parameters["header_list"] = {}
+        # Creating batchnorm folded conv weights; multiple copies of conv, one for each pyramid layer
+        for layer_num, pyramid_layer_bn_list in enumerate(model.bn_list):
+            parameters["conv_list"][layer_num] = {}
+            for id, bn in enumerate(pyramid_layer_bn_list):
+                # parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id])
+                parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id], bn)
+            parameters["header_list"][layer_num] = _extract_seperable_conv(model.header)
+    elif isinstance(
+        model,
+        (EfficientDetBackbone,),
     ):
         # Let the sub-modules handle their own preprocessing
         for child_name, child in model.named_children():
@@ -289,8 +177,6 @@ def register_layer_hooks(model, layer_type):
             batch_size=input_shape[0],
             input_height=input_shape[-2],
             input_width=input_shape[-1],
-            # input_shape=input_shape,
-            # output_shape=output_shape,
         )
 
     hooks = []

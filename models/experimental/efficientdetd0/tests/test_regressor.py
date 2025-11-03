@@ -10,8 +10,8 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.common.utility_functions import comp_pcc, comp_allclose
 
-from models.experimental.efficientdetd0.reference.modules import Classifier
-from models.experimental.efficientdetd0.tt.classifier import Classifier as TTClassifier
+from models.experimental.efficientdetd0.reference.modules import Regressor
+from models.experimental.efficientdetd0.tt.regressor import Regressor as TTRegressor
 from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     create_custom_mesh_preprocessor,
     infer_torch_module_args,
@@ -27,21 +27,19 @@ from ttnn.model_preprocessing import ModuleArgs
 #     ],
 # )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_classifier(
+def test_regressor(
     device,
 ):
     compound_coef = 0
-    num_classes = 80
     fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
     box_class_repeats = [3, 3, 3, 4, 4, 4, 5, 5, 5]
     pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
     aspect_ratios = [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)]
     num_scales = len([2**0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
     num_anchors = len(aspect_ratios) * num_scales
-    torch_model = Classifier(
+    torch_model = Regressor(
         in_channels=fpn_num_filters[compound_coef],
         num_anchors=num_anchors,
-        num_classes=num_classes,
         num_layers=box_class_repeats[compound_coef],
         pyramid_levels=pyramid_levels[compound_coef],
     ).eval()
@@ -97,12 +95,11 @@ def test_classifier(
 
     conv_args = make_dot_access_dict(conv_args, ignore_types=(ModuleArgs,))
 
-    ttnn_model = TTClassifier(
+    ttnn_model = TTRegressor(
         device,
         parameters,
         conv_args,
         num_anchors=num_anchors,
-        num_classes=num_classes,
         num_layers=box_class_repeats[compound_coef],
         pyramid_levels=pyramid_levels[compound_coef],
     )
@@ -124,8 +121,8 @@ def test_classifier(
     logger.info(comp_allclose(torch_out, ttnn_out))
 
     if passing:
-        logger.info("Classifier Test Passed!")
+        logger.info("Regressor Test Passed!")
     else:
-        logger.warning("Classifier Test Failed!")
+        logger.warning("Regressor Test Failed!")
 
     assert passing, f"PCC value is lower than 0.999. Check implementation! {pcc_message}"

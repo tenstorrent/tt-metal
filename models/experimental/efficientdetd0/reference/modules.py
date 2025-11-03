@@ -420,7 +420,7 @@ class Classifier(nn.Module):
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
                 feat = conv(feat)
-                # feat = bn(feat)
+                feat = bn(feat)
                 feat = self.swish(feat)
             feat = self.header(feat)
 
@@ -433,7 +433,7 @@ class Classifier(nn.Module):
             feats.append(feat)
 
         feats = torch.cat(feats, dim=1)
-        # feats = feats.sigmoid()
+        feats = feats.sigmoid()
 
         return feats
 

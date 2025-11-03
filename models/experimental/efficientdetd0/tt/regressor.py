@@ -12,43 +12,47 @@ class Regressor:
         device,
         parameters,
         conv_params,
+        num_anchors,
         num_layers,
+        pyramid_levels=5,
     ):
         self.num_layers = num_layers
-
         self.conv_list = [
+            [
+                SeparableConvBlock(
+                    device=device,
+                    parameters=parameters.conv_list[j][i],
+                    shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                    conv_params=conv_params.conv_list[j][i],
+                    batch=1,
+                    deallocate_activation=True,
+                )
+                for i in range(num_layers)
+            ]
+            for j in range(pyramid_levels)
+        ]
+
+        self.header_list = [
             SeparableConvBlock(
                 device=device,
-                parameters=parameters.conv_list[i],
-                shard_layout=None,
-                conv_params=conv_params.conv_list[i],
+                parameters=parameters.header_list[j],
+                shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                conv_params=conv_params.header_list[j],
                 batch=1,
                 deallocate_activation=True,
             )
-            for i in range(num_layers)
+            for j in range(pyramid_levels)
         ]
-        self.header = SeparableConvBlock(
-            device=device,
-            parameters=parameters.header,
-            shard_layout=None,
-            conv_params=conv_params.header,
-            batch=1,
-            deallocate_activation=True,
-        )
 
     def __call__(self, inputs):
         feats = []
-        for feat in inputs:
-            for conv in self.conv_list:
+        for feat, conv_list, header in zip(inputs, self.conv_list, self.header_list):
+            for conv in conv_list:
                 feat = conv(feat)
                 feat = feat * ttnn.sigmoid_accurate(feat, True)
-            feat = self.header(feat)
-
-            feat = ttnn.permute(feat, (0, 2, 3, 1))
+            feat = header(feat)
+            feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
             feat = ttnn.reshape(feat, (feat.shape[0], -1, 4))
-
             feats.append(feat)
-
         feats = ttnn.concat(feats, dim=1)
-
         return feats
