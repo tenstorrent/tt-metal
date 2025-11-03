@@ -256,15 +256,13 @@ Tensor AddcmulOperation::invoke(
         return _addcmul(input_a, input_b, input_c, value, memory_config);
     }
 
-    // Set the thread-local value for the device operation
-    addcmul_value = value;
-
-    // Use LLK implementation for all values
+    // Use LLK implementation - pass value as additional_scalar parameter
     return ttnn::prim::ternary(
         TernaryOpType::ADDCMUL,
         input_a,
         input_b,
         input_c,
+        value,
         ternary_utils::determine_output_dtype(output, input_a.dtype()),
         ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
         output);

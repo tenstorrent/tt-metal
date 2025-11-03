@@ -343,7 +343,7 @@ TernaryDeviceOperation::invoke(
         .compute_kernel_config = std::nullopt,
         .scalar_input_a = std::nullopt,
         .scalar_input_b = std::nullopt,
-        .additional_scalar = (op_type == TernaryOpType::ADDCMUL) ? std::optional<float>(addcmul_value) : std::nullopt,
+        .additional_scalar = std::nullopt,
     };
 
     tensor_args_t args{

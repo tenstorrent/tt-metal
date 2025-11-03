@@ -121,4 +121,5 @@ struct TernaryDeviceOperation {
 namespace ttnn::prim {
 constexpr auto ternary =
     ttnn::register_operation<"ttnn::prim::ternary", ttnn::operations::ternary::TernaryDeviceOperation>();
+
 }  // namespace ttnn::prim
