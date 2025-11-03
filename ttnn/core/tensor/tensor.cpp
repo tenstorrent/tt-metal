@@ -38,7 +38,6 @@
 #include "ttnn/distributed/api.hpp"
 
 namespace tt::tt_metal {
-
 namespace {
 
 template <typename T>
