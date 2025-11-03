@@ -450,6 +450,7 @@ def infer_ttnn_module_args(*, model, run_model, device):
                         stride=operation.module.stride,
                         padding=operation.module.padding,
                         dilation=operation.module.dilation,
+                        input_channels=input_shape[1],
                         batch_size=input_shape[0],
                         input_height=input_shape[-2],
                         input_width=input_shape[-1],
