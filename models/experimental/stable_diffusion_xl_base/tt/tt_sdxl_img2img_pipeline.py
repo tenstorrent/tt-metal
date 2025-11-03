@@ -25,8 +25,8 @@ class TtSDXLImg2ImgPipelineConfig(TtSDXLPipelineConfig):
 
 
 class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
-    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLImg2ImgPipelineConfig):
-        super().__init__(ttnn_device, torch_pipeline, pipeline_config)
+    def __init__(self, ttnn_device, torch_pipeline, pipeline_config: TtSDXLImg2ImgPipelineConfig, tt_scheduler=None):
+        super().__init__(ttnn_device, torch_pipeline, pipeline_config, tt_scheduler)
 
         self.num_in_channels_unet = 4
         self.num_channels_image_latents = 4
@@ -68,7 +68,8 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         self,
         all_prompt_embeds_torch,
         torch_add_text_embeds,
-        torch_image,
+        torch_image=None,
+        input_latents=None,  # For refiner: use latents from base pipeline instead of encoding an image
         start_latent_seed=None,  # need this to generate noise tensors, and in the future if we want to support strength_max == 1.0
         fixed_seed_for_batch=False,
         timesteps=None,
@@ -79,6 +80,11 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
         # Validate timesteps/sigmas at the beginning if custom values are provided
         if timesteps is not None or sigmas is not None:
             self._validate_timesteps_sigmas(timesteps, sigmas)
+
+        # Validate that either torch_image or input_latents is provided, but not both
+        assert (torch_image is not None) != (
+            input_latents is not None
+        ), "Exactly one of torch_image or input_latents must be provided"
 
         logger.info("Generating input tensors...")
         profiler.start("prepare_latents")
@@ -95,27 +101,35 @@ class TtSDXLImg2ImgPipeline(TtSDXLPipeline):
             start_latent_seed, int
         ), "start_latent_seed must be an integer or None"
 
-        if start_latent_seed is not None:
-            torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
-
-        add_noise = True if denoising_start is None else False
-        img_latents = prepare_image_latents(
-            self.torch_pipeline,
-            self,
-            torch_image.shape[0],
-            num_channels_image_latents,
-            height,
-            width,
-            self.cpu_device,
-            all_prompt_embeds_torch.dtype,
-            torch_image,
-            False,  # No max strength path in ref img2img implementation
-            add_noise,
-            None,  # passed in latents
-        )
-        B, C, H, W = img_latents.shape  # 1, 4, 128, 128
-        img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
-        tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
+        if input_latents is not None:
+            # Use provided latents from base pipeline (refiner case)
+            # Latents are already in the correct format [batch_size, C, H, W]
+            img_latents = input_latents
+            B, C, H, W = img_latents.shape  # batch_size, 4, 128, 128
+            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [batch_size, H, W, C]
+            tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [batch_size, 1, H*W, C]
+        else:
+            # Encode image to latents (standard img2img case)
+            if start_latent_seed is not None:
+                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed)
+            add_noise = True if denoising_start is None else False
+            img_latents = prepare_image_latents(
+                self.torch_pipeline,
+                self,
+                torch_image.shape[0],
+                num_channels_image_latents,
+                height,
+                width,
+                self.cpu_device,
+                all_prompt_embeds_torch.dtype,
+                torch_image,
+                False,  # No max strength path in ref img2img implementation
+                add_noise,
+                None,  # passed in latents
+            )
+            B, C, H, W = img_latents.shape  # 1, 4, 128, 128
+            img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
+            tt_img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
