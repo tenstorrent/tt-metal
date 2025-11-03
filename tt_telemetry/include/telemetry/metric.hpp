@@ -134,3 +134,19 @@ public:
 protected:
     double value_ = 0.0;
 };
+
+class StringMetric : public Metric {
+public:
+    StringMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
+
+    std::string_view value() const { return value_; }
+
+    void set_value(std::string value) {
+        value_ = std::move(value);
+        changed_since_transmission_ = true;
+        set_timestamp_now();
+    }
+
+protected:
+    std::string value_;
+};

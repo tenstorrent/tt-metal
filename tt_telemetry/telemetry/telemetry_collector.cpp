@@ -55,6 +55,7 @@ static char hostname_[256];
 static std::vector<std::unique_ptr<BoolMetric>> bool_metrics_;
 static std::vector<std::unique_ptr<UIntMetric>> uint_metrics_;
 static std::vector<std::unique_ptr<DoubleMetric>> double_metrics_;
+static std::vector<std::unique_ptr<StringMetric>> string_metrics_;
 
 // Unbounded queue for storing received telemetry snapshots from aggregate endpoints
 static SimpleConcurrentQueue<std::pair<std::string, TelemetrySnapshot>> received_snapshots_;
@@ -180,6 +181,7 @@ static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     failed_metrics += update_metrics_with_exception_handling(bool_metrics_, cluster, start_of_update_cycle, "bool");
     failed_metrics += update_metrics_with_exception_handling(uint_metrics_, cluster, start_of_update_cycle, "uint");
     failed_metrics += update_metrics_with_exception_handling(double_metrics_, cluster, start_of_update_cycle, "double");
+    failed_metrics += update_metrics_with_exception_handling(string_metrics_, cluster, start_of_update_cycle, "string");
 
     if (failed_metrics > 0) {
         log_warning(
@@ -215,6 +217,12 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
         snapshot->double_metrics[path] = double_metrics_[i]->value();
         snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
         snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
+    }
+
+    for (size_t i = 0; i < string_metrics_.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*string_metrics_[i]);
+        snapshot->string_metrics[path] = string_metrics_[i]->value();
+        snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
     }
 
     // Populate unit label maps for initial snapshot
@@ -257,6 +265,16 @@ static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<Telemetry
         snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
         snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
         double_metrics_[i]->mark_transmitted();
+    }
+
+    for (size_t i = 0; i < string_metrics_.size(); i++) {
+        if (!string_metrics_[i]->changed_since_transmission()) {
+            continue;
+        }
+        std::string path = get_cluster_wide_telemetry_path(*string_metrics_[i]);
+        snapshot->string_metrics[path] = string_metrics_[i]->value();
+        snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
+        string_metrics_[i]->mark_transmitted();
     }
 
     // Add unit label maps to the snapshot (if not already present from remote aggregation)
@@ -313,7 +331,8 @@ static void telemetry_thread(
 
                 create_ethernet_metrics(
                     bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
-                create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
+                create_arc_metrics(
+                    bool_metrics_, uint_metrics_, double_metrics_, string_metrics_, cluster, topology_translation, hal);
                 log_info(tt::LogAlways, "Initialized metrics");
 
                 // Update TelemetryRunning metric to success state

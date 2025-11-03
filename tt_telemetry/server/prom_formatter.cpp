@@ -11,6 +11,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <unordered_set>
+#include <string_view>
 #include <ctime>
 
 namespace tt::telemetry {
@@ -87,6 +88,20 @@ ParsedMetric parse_metric_path(std::string_view path) {
     return result;
 }
 
+// Escape special characters in Prometheus label values
+// Prometheus requires backslashes, double-quotes, and newlines to be escaped
+std::string escape_label_value(std::string_view value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char c : value) {
+        if (c == '\\' || c == '"' || c == '\n') {
+            escaped += '\\';
+        }
+        escaped += c;
+    }
+    return escaped;
+}
+
 // Helper to format a single metric in Prometheus format with labels
 void format_metric(
     std::stringstream& output,
@@ -112,7 +127,7 @@ void format_metric(
         if (!first_label) {
             output << ",";
         }
-        output << label_name << "=\"" << label_value << "\"";
+        output << label_name << "=\"" << escape_label_value(label_value) << "\"";
         first_label = false;
     }
 
@@ -133,6 +148,7 @@ void format_metric(
 }
 
 // Template helper to process metrics with common logic
+// ValueConverter can optionally modify parsed.labels before value_str is used
 template <typename ValueType, typename ValueConverter>
 void process_metrics(
     std::stringstream& output,
@@ -148,7 +164,9 @@ void process_metrics(
         try {
             // Parse metric path to extract name and labels (including hostname)
             ParsedMetric parsed = parse_metric_path(path);
-            std::string value_str = value_converter(value);
+
+            // Convert value (converter may mutate parsed.labels for string metrics)
+            std::string value_str = value_converter(value, parsed);
 
             // Get timestamp
             uint64_t timestamp = 0;
@@ -207,7 +225,7 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         nullptr,  // No units for bool metrics
         snapshot.metric_unit_display_label_by_code,
         "Boolean metric from Tenstorrent Metal",
-        [](bool v) { return std::to_string(v ? 1 : 0); });
+        [](bool v, ParsedMetric&) { return std::to_string(v ? 1 : 0); });
 
     // Process unsigned integer metrics (with units)
     process_metrics(
@@ -217,7 +235,7 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         &snapshot.uint_metric_units,
         snapshot.metric_unit_display_label_by_code,
         "Unsigned integer metric from Tenstorrent Metal",
-        [](uint64_t v) { return std::to_string(v); });
+        [](uint64_t v, ParsedMetric&) { return std::to_string(v); });
 
     // Process floating-point metrics (with units)
     process_metrics(
@@ -227,7 +245,21 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         &snapshot.double_metric_units,
         snapshot.metric_unit_display_label_by_code,
         "Floating-point metric from Tenstorrent Metal",
-        [](double v) { return std::to_string(v); });
+        [](double v, ParsedMetric&) { return std::to_string(v); });
+
+    // Process string metrics (no units) - exported as info metrics with value "1"
+    // The string value is included as a label (Prometheus info pattern)
+    process_metrics(
+        output,
+        snapshot.string_metrics,
+        snapshot.string_metric_timestamps,
+        nullptr,  // No units for string metrics
+        snapshot.metric_unit_display_label_by_code,
+        "String metric from Tenstorrent Metal (value stored in label)",
+        [](const std::string& v, ParsedMetric& parsed) {
+            parsed.labels["value"] = v;
+            return "1";
+        });
 
     return output.str();
 }
