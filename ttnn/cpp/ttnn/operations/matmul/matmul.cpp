@@ -75,11 +75,15 @@ Tensor handle_zero_volume_matmul(
 
 }  // namespace detail
 
-std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std::string>& activation) {
+std::optional<UnaryWithParam> get_fused_activation(const std::optional<const Activation>& activation) {
     if (!activation.has_value()) {
         return std::nullopt;
     }
-    return ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
+    const auto& act = activation.value();
+    if (std::holds_alternative<std::string>(act)) {
+        return ttnn::operations::unary::utils::string_to_unary_with_param(std::get<std::string>(act));
+    }
+    return std::get<UnaryWithParam>(act);
 }
 
 static bool get_post_process_bias(
@@ -214,7 +218,7 @@ Tensor MatmulOperation::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
-    const std::optional<const std::string>& activation,
+    const std::optional<const Activation>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -262,7 +266,7 @@ Tensor LinearOperation::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
-    const std::optional<const std::string>& activation,
+    const std::optional<const Activation>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -306,7 +310,7 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
-    const std::optional<const std::string>& activation,
+    const std::optional<const Activation>& activation,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
