@@ -272,7 +272,6 @@ jobs:
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       per-test-timeout: 11
