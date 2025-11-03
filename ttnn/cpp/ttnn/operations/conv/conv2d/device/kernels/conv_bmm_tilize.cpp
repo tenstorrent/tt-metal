@@ -245,6 +245,7 @@ void MAIN {
     if constexpr (check_skip_compute) {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
     }
+    constexpr uint32_t act_second_src_cb_id = split_reader_cb_shared ? in0_pretilize_cb_id : in0_cb_second_reader_id;
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -284,7 +285,7 @@ void MAIN {
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
                         if constexpr (split_reader) {
                             tilize_in<false, true>(
-                                in0_pretilize_cb_id,
+                                act_second_src_cb_id,
                                 in0_block_w,
                                 in0_num_subblocks_read_last,
                                 tilized_cb_second_reader_id);
