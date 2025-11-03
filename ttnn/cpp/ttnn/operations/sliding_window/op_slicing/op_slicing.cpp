@@ -148,17 +148,10 @@ void run_sliced_op(
             {output_slice_height_start, output_slice_width_start},
             {output_slice_height_end, output_slice_width_end});
 
-        // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
-        // supported.
-        if (sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED &&
-            sliced_output_tensor.memory_config().memory_layout() != TensorMemoryLayout::BLOCK_SHARDED &&
-            output_tensor.layout() == Layout::ROW_MAJOR) {
-            sliced_output_tensor = ttnn::to_memory_config(
-                sliced_output_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
-        }
         if (sliced_output_tensor.layout() != Layout::ROW_MAJOR && output_layout == Layout::ROW_MAJOR) {
             sliced_output_tensor = ttnn::untilize(sliced_output_tensor);
         }
+
         if (sliced_output_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
             // slice_write expects the output tensor to be correctly shaped when its in interleaved memory layout.
             sliced_output_tensor = ttnn::reshape(

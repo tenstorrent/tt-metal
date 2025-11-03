@@ -215,6 +215,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
+    bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
@@ -313,6 +314,9 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
         if (is_block_sharded) {
             core_w_index = rm_orientation ? core.x : core.y;
             core_h_index = rm_orientation ? core.y : core.x;
+        } else if (is_width_sharded) {
+            core_w_index = core_index;
+            core_h_index = 0;
         }
         const uint32_t num_sticks_read = core_h_index * num_sticks_per_core;
         const uint32_t width_offset = core_w_index * input_row_size_bytes;
@@ -338,9 +342,11 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
         log_trace(
             tt::LogOp,
-            "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {}, this_input_row_size_bytes: {} "
+            "Start ID: {}, Write Addr : {}, Start ID per dim : {} , Size till end : {} Num Sticks: {}, "
+            "this_input_row_size_bytes: {} "
             "for Core: {}",
             start_id,
+            writer_kernel_args[0],
             id_per_dim,
             size_till_end,
             num_sticks_this_core,
@@ -373,10 +379,6 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     auto output_shape = output.logical_shape();
 
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
-    TT_FATAL(
-        input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
-            input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
-        "Input tensor should be height or block sharded");
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
