@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <utility>
 
+#include "ethernet/dataflow_api.h"
 #include "tt_metal/api/tt-metalium/hal_types.hpp"
 #include "noc_nonblocking_api.h"
 #include "dataflow_api.h"
@@ -175,26 +176,30 @@ inline void teardown(volatile lite_fabric::FabricLiteMemoryMap* mem_map) {
 }  // namespace lite_fabric
 
 int main() {
+    // This main function is called by base firmware multiple times on Wormhole
+    // We don't want to keep reinitializing each time.
+    auto structs = reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START);
+    ((volatile uint32_t*)(0x1a040))[0] = 0xbeefbeef;
+    internal_::eth_send_packet(0, 0x1a040, 0x1a050, 1);
+    if (structs->config.current_state == lite_fabric::InitState::READY) {
+        ((volatile uint32_t*)(0x40000))[0]++;
+        return 0;
+    }
     invalidate_l1_cache();
     configure_csr();
     noc_index = NOC_INDEX;
     lite_fabric::data_init();
-    risc_init();
-    noc_init(MEM_LITE_FABRIC_NOC_ATOMIC_RET_VAL_ADDR);
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
-        noc_local_state_init(n);
-    }
+    // risc_init();
+    // noc_init(MEM_LITE_FABRIC_NOC_ATOMIC_RET_VAL_ADDR);
+    // for (uint32_t n = 0; n < NUM_NOCS; n++) {
+    //     noc_local_state_init(n);
+    // }
 
-    auto structs = reinterpret_cast<volatile lite_fabric::FabricLiteMemoryMap*>(LITE_FABRIC_CONFIG_START);
     lite_fabric::object_init(structs);
     lite_fabric::routing_init(&structs->config);
 
     invalidate_l1_cache();
-    while (true) {
-        lite_fabric::service_lite_fabric();
-    }
-
-    lite_fabric::teardown(structs);
+    // lite_fabric::service_lite_fabric();
 
     return 0;
 }
