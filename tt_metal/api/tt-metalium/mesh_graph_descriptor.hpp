@@ -142,6 +142,9 @@ public:
         TT_FATAL(it != connections_by_type_.end(), "No connections found with type: {}", type);
         return it->second;
     }
+    bool has_connections_of_type(const std::string& type) const {
+        return connections_by_type_.find(type) != connections_by_type_.end();
+    }
     const std::vector<ConnectionId>& connections_by_source_device_id(const GlobalNodeId source_device_id) const {
         auto it = connections_by_source_device_id_.find(source_device_id);
         TT_FATAL(it != connections_by_source_device_id_.end(), "No connections found for source device id: {}", source_device_id);

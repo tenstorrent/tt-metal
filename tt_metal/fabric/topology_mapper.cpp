@@ -1034,8 +1034,8 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
 }
 
 HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
-    // Map switch_id to mesh_id and get hostname from mesh mapping
-    MeshId switch_mesh_id = mesh_graph_.get_mesh_id_for_switch(switch_id);
+    // Convert SwitchId to MeshId for internal lookup (internal representation uses MeshId)
+    MeshId switch_mesh_id(*switch_id);
 
     // Get all hosts for this mesh_id from the fabric node mapping
     // Switches are single host, so we can get it from any ASIC in the switch

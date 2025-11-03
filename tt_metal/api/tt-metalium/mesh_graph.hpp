@@ -138,10 +138,10 @@ public:
     // Otherwise, return the chip ids for the entire mesh
     MeshContainer<ChipId> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
-    // Switch query APIs
+    // Switch query APIs (internal representation uses MeshId, API uses SwitchId)
     std::vector<SwitchId> get_switch_ids() const;
     MeshId get_mesh_id_for_switch(SwitchId switch_id) const;
-    std::vector<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
+    std::unordered_set<MeshId> get_meshes_connected_to_switch(SwitchId switch_id) const;
     bool is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const;
     std::optional<SwitchId> get_switch_for_mesh(MeshId mesh_id) const;
 
@@ -197,12 +197,10 @@ private:
     RequestedIntermeshConnections requested_intermesh_connections_;
     RequestedIntermeshPorts requested_intermesh_ports_;
 
-    // Switch tracking
-    std::unordered_map<SwitchId, MeshId> switch_id_to_mesh_id_;
-    std::unordered_map<MeshId, SwitchId> mesh_id_to_switch_id_;
-    std::vector<SwitchId> switch_ids_;
-    std::map<SwitchId, MeshContainer<ChipId>> switch_to_chip_ids_;
-    std::unordered_map<SwitchId, std::vector<MeshId>> switch_to_meshes_;
+    // Switch tracking (switches use MeshId as their identifier)
+    std::vector<MeshId> switch_ids_;
+    std::map<MeshId, MeshContainer<ChipId>> switch_to_chip_ids_;
+    std::unordered_map<MeshId, std::vector<MeshId>> switch_to_meshes_;
 };
 
 }  // namespace tt::tt_fabric

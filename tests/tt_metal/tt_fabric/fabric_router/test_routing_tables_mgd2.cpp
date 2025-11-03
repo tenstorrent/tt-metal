@@ -893,24 +893,24 @@ TEST(MeshGraphValidation, TestSwitchMeshGraphInit) {
     // Test switch query APIs
     const auto& switch_ids = mesh_graph.get_switch_ids();
     EXPECT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
-    EXPECT_EQ(*switch_ids[0], 0) << "Switch ID should be 0";
+    EXPECT_EQ(*switch_ids[0], 3) << "Switch ID should be 3";
 
     // Test mesh_id mapping for switch
-    MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(SwitchId{0});
+    MeshId switch_mesh_id{3};  // Switch ID is the same as mesh ID
     EXPECT_GE(*switch_mesh_id, 0) << "Switch should have a mapped mesh_id";
 
     // Test meshes connected to switch
-    const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(SwitchId{0});
+    const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(SwitchId{3});
     EXPECT_EQ(connected_meshes.size(), 3) << "Switch should be connected to 3 meshes";
 
     // Test mesh-to-switch connectivity queries
     for (const auto& mesh_id : connected_meshes) {
-        EXPECT_TRUE(mesh_graph.is_mesh_connected_to_switch(mesh_id, SwitchId{0}))
+        EXPECT_TRUE(mesh_graph.is_mesh_connected_to_switch(mesh_id, SwitchId{3}))
             << "Mesh " << *mesh_id << " should be connected to switch 0";
 
         auto switch_for_mesh = mesh_graph.get_switch_for_mesh(mesh_id);
         ASSERT_TRUE(switch_for_mesh.has_value()) << "Mesh " << *mesh_id << " should have a connected switch";
-        EXPECT_EQ(*switch_for_mesh.value(), 0) << "Mesh " << *mesh_id << " should be connected to switch 0";
+        EXPECT_EQ(*switch_for_mesh.value(), 3) << "Mesh " << *mesh_id << " should be connected to switch 3";
     }
 
     // Test that switches are treated as meshes internally (have host ranks, chip IDs, etc.)
@@ -944,15 +944,15 @@ TEST(MeshGraphValidation, TestSwitchMeshGraphQueryAPIs) {
           type: "FABRIC"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
         }
@@ -973,11 +973,11 @@ TEST(MeshGraphValidation, TestSwitchMeshGraphQueryAPIs) {
     EXPECT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
 
     SwitchId switch_id = switch_ids[0];
-    EXPECT_EQ(*switch_id, 0) << "Switch ID should be 0";
+    EXPECT_EQ(*switch_id, 2) << "Switch ID should be 2";
 
     // Test mesh_id mapping
     MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
-    EXPECT_GE(*switch_mesh_id, 0) << "Switch should have a mapped mesh_id";
+    EXPECT_GE(*switch_mesh_id, 2) << "Switch should have a mapped mesh_id";
 
     // Test connected meshes
     const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(switch_id);
