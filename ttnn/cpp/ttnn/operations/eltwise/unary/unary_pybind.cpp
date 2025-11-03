@@ -30,16 +30,16 @@ void bind_unary_clamp(py::module& module, const unary_operation_t& operation) {
         Applies {0} to :attr:`input_tensor` element-wise.
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            min (ttnn.Tensor or number): Minimum value. Defaults to `None`.
-            max (ttnn.Tensor or number): Maximum value. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **min** (ttnn.Tensor or number): Minimum value. Defaults to `None`.
+            * **max** (ttnn.Tensor or number): Maximum value. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -123,15 +123,15 @@ void bind_unary_composite_optional_floats_with_default(
         {8}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float or ttnn.Tensor): {3}. Defaults to `None`.
-            {5} (float or ttnn.Tensor): {6}. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **{2}** (float or ttnn.Tensor): {3}. Defaults to `None`.
+            * **{5}** (float or ttnn.Tensor): {6}. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -219,14 +219,14 @@ void bind_unary_operation(
             {2}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor. {3}
+            * **input_tensor** (ttnn.Tensor): the input tensor. {3}
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -287,15 +287,15 @@ void bind_unary_operation_overload_complex(
             {2}
 
         Args:
-            input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor or ComplexTensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -362,15 +362,15 @@ void bind_unary_operation_overload_complex_return_complex(
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor or ComplexTensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -438,16 +438,16 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor. {2}
+            * **input_tensor** (ttnn.Tensor): the input tensor. {2}
 
         Keyword Args:
-            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **fast_and_approximate_mode** (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:

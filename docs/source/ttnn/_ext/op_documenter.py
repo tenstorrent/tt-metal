@@ -198,6 +198,67 @@ class FastOperationDocumenter(FunctionDocumenter):
     def can_document_member(cls, member, membername, isattr, parent):
         return isinstance(member, ttnn.decorators.FastOperation)
 
+    def get_doc(self):
+        """Override get_doc to transform bullet list format to Sphinx-compatible format."""
+        docstrings = super().get_doc()
+        if not docstrings:
+            return docstrings
+
+        # Sphinx-recognized field names that should be transformed
+        sphinx_fields = {"Parameters", "Args", "Keyword Arguments", "Keyword Args", "Returns", "Raises", "Yields"}
+
+        # Transform each docstring
+        transformed = []
+        for docstring_lines in docstrings:
+            new_lines = []
+            current_section = None
+
+            # Detect if this is a binary op by checking for distinctive content
+            is_binary_op = any(
+                "Binary Elementwise Operations" in line or "Broadcasting" in line for line in docstring_lines
+            )
+
+            for line in docstring_lines:
+                # Check if this is a section header
+                section_match = re.match(r"^\s*(\w[\w\s]*):\s*$", line)
+                if section_match:
+                    current_section = section_match.group(1).strip()
+                    new_lines.append(line)
+                    continue
+
+                # Only transform if we're in a Sphinx-recognized field
+                # For binary ops, skip Args and Keyword args to keep bullets
+                if current_section in sphinx_fields and not (
+                    is_binary_op and current_section in {"Args", "Keyword args"}
+                ):
+                    # Check for parameter format: "* **name** (type): description"
+                    match_param = re.match(r"^(\s*)\*\s+\*\*(\w+)\*\*\s+\(([^)]+)\):\s*(.*)$", line)
+                    if match_param:
+                        indent = match_param.group(1)
+                        param_name = match_param.group(2)
+                        param_type = match_param.group(3)
+                        description = match_param.group(4)
+                        # Remove bullet and bold for Sphinx field lists: "name (type): description"
+                        new_lines.append(f"{indent}{param_name} ({param_type}): {description}")
+                        continue
+
+                    # Check for return type format: "* **Type**: description"
+                    match_return = re.match(r"^(\s*)\*\s+\*\*([^*]+?)\*\*:\s*(.*)$", line)
+                    if match_return:
+                        indent = match_return.group(1)
+                        return_type = match_return.group(2).strip()
+                        description = match_return.group(3)
+                        # Remove bullet and bold for Sphinx field lists: "Type: description"
+                        new_lines.append(f"{indent}{return_type}: {description}")
+                        continue
+
+                # If not in a Sphinx field or no match, keep original
+                new_lines.append(line)
+
+            transformed.append(new_lines)
+
+        return transformed
+
 
 class OperationDocumenter(FunctionDocumenter):
     objtype = "operation"
@@ -232,6 +293,67 @@ class OperationDocumenter(FunctionDocumenter):
     @classmethod
     def can_document_member(cls, member, membername, isattr, parent):
         return isinstance(member, (ttnn.decorators.Operation, ttnn.decorators.FastOperation))
+
+    def get_doc(self):
+        """Override get_doc to transform bullet list format to Sphinx-compatible format."""
+        docstrings = super().get_doc()
+        if not docstrings:
+            return docstrings
+
+        # Sphinx-recognized field names that should be transformed
+        sphinx_fields = {"Parameters", "Args", "Keyword Arguments", "Keyword Args", "Returns", "Raises", "Yields"}
+
+        # Transform each docstring
+        transformed = []
+        for docstring_lines in docstrings:
+            new_lines = []
+            current_section = None
+
+            # Detect if this is a binary op by checking for distinctive content
+            is_binary_op = any(
+                "Binary Elementwise Operations" in line or "Broadcasting" in line for line in docstring_lines
+            )
+
+            for line in docstring_lines:
+                # Check if this is a section header
+                section_match = re.match(r"^\s*(\w[\w\s]*):\s*$", line)
+                if section_match:
+                    current_section = section_match.group(1).strip()
+                    new_lines.append(line)
+                    continue
+
+                # Only transform if we're in a Sphinx-recognized field
+                # For binary ops, skip Args and Keyword args to keep bullets
+                if current_section in sphinx_fields and not (
+                    is_binary_op and current_section in {"Args", "Keyword args"}
+                ):
+                    # Check for parameter format: "* **name** (type): description"
+                    match_param = re.match(r"^(\s*)\*\s+\*\*(\w+)\*\*\s+\(([^)]+)\):\s*(.*)$", line)
+                    if match_param:
+                        indent = match_param.group(1)
+                        param_name = match_param.group(2)
+                        param_type = match_param.group(3)
+                        description = match_param.group(4)
+                        # Remove bullet and bold for Sphinx field lists: "name (type): description"
+                        new_lines.append(f"{indent}{param_name} ({param_type}): {description}")
+                        continue
+
+                    # Check for return type format: "* **Type**: description"
+                    match_return = re.match(r"^(\s*)\*\s+\*\*([^*]+?)\*\*:\s*(.*)$", line)
+                    if match_return:
+                        indent = match_return.group(1)
+                        return_type = match_return.group(2).strip()
+                        description = match_return.group(3)
+                        # Remove bullet and bold for Sphinx field lists: "Type: description"
+                        new_lines.append(f"{indent}{return_type}: {description}")
+                        continue
+
+                # If not in a Sphinx field or no match, keep original
+                new_lines.append(line)
+
+            transformed.append(new_lines)
+
+        return transformed
 
 
 class OperationDataDocumenter(DataDocumenter):
