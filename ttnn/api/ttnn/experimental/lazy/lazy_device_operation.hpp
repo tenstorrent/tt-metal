@@ -21,7 +21,7 @@ constexpr tt::stl::hash::hash_t get_operation_type_id() {
     return tt::stl::hash::type_hash<operation_t>;
 }
 
-// Generic wrapper that adapts any device operation to IDeviceOperation
+// Generic wrapper that adapts any device operation to LazyOperation
 template <typename operation_t>
     requires ttnn::device_operation::DeviceOperationConcept<operation_t>
 class LazyDeviceOperation : public LazyOperation {

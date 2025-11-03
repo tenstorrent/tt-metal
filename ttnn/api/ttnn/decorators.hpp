@@ -11,7 +11,6 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/experimental/lazy/lazy_mode.hpp"
 #include "ttnn/experimental/lazy/lazy_device_operation.hpp"
-#include <boost/pfr/core.hpp>
 
 namespace ttnn {
 namespace decorators {
