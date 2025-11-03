@@ -1333,14 +1333,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         per_core_N,
         num_channels_per_group);
     TT_FATAL(num_channels_per_group != 0, "num_channels_per_group should not equal 0");
-    TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M: {} divides Tile Height", per_core_M_group_1);
-    if (per_core_M_group_2 > 0) {
-        TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M: {} divides Tile Height", per_core_M_group_2);
-    }
-    TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");
-    if (per_core_M_group_2 > 0) {
-        TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");
-    }
+    // TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M: {} divides Tile Height", per_core_M_group_1);
+    // if (per_core_M_group_2 > 0) {
+    //     TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M: {} divides Tile Height", per_core_M_group_2);
+    // }
+    // TT_FATAL(per_core_M_group_1 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");
+    // if (per_core_M_group_2 > 0) {
+    //     TT_FATAL(per_core_M_group_2 % TILE_HEIGHT == 0, "per_core_M must be divisible by TILE_HEIGHT");
+    // }
 
     TT_FATAL(W % num_groups == 0, "Tensor W ({}) must be divisible by num_groups ({})", W, num_groups);
     TT_FATAL(W % per_core_N == 0, "W dim ({}) must be divisible by per_core_N ({})", W, per_core_N);
@@ -1421,7 +1421,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
-    uint32_t in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
+    uint32_t in0_block_tiles_group_1 = ((block_ht_group_1 / num_out_blocks) + 1) * block_wt;
     uint32_t in0_block_tiles_group_2 = 0;
     uint32_t in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
     uint32_t in0_CB_size_group_2 = 0;
@@ -1464,7 +1464,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     if (!equal_batches_per_core) {
         // input buffers
-        in0_block_tiles_group_2 = block_ht_group_2 / num_out_blocks * block_wt;
+        in0_block_tiles_group_2 = ((block_ht_group_2 / num_out_blocks) + 1) * block_wt;
         in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
         in0_CB_size_group_2 = in0_block_tiles_group_2 * in_single_tile_size;
         in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
@@ -2094,7 +2094,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-    CreateKernel(
+    auto sender_compute_kernel_group1_id = CreateKernel(
         program,
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
@@ -2105,7 +2105,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_1,
             .defines = eltwise_binary_defines});
-    CreateKernel(
+    auto sender_compute_kernel_group2_id = CreateKernel(
         program,
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
@@ -2116,7 +2116,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_sender_compute_compile_time_args_group_2,
             .defines = eltwise_binary_defines});
-    CreateKernel(
+    auto reciever_compute_kernel_group1_id = CreateKernel(
         program,
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
@@ -2127,7 +2127,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .math_approx_mode = math_approx_mode,
             .compile_args = mcast_receiver_compute_compile_time_args_group_1,
             .defines = eltwise_binary_defines});
-    CreateKernel(
+    auto reciever_compute_kernel_group2_id = CreateKernel(
         program,
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp"),
@@ -2327,7 +2327,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .set_page_size(cb_ex2pe_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2pe_cb_config);
 
-    // reciprocal
     uint32_t cb_reciprocals = tt::CBIndex::c_18;
     CBHandle cb_reciprocals_handle = 0;
     if (reciprocals.has_value()) {
@@ -2338,10 +2337,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         cb_reciprocals_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores, reciprocal_cb_config);
     }
 
-    // Runtime Args
+    /*
+     *==============================================================================================
+     * runtime args section
+     *==============================================================================================
+     */
     std::vector<KernelHandle> writer_kernel_ids;
     std::vector<KernelHandle> reader_sender_kernel_ids;
     std::vector<KernelHandle> reader_receiver_kernel_ids;
+    std::vector<KernelHandle> compute_kernel_ids;
     float winv_group_1 =
         1.0f / std::sqrt(num_rows_per_batch_per_core_group_1 * num_channels_per_group);  // bcast-w scaler
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
@@ -2372,26 +2376,74 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     log_debug(tt::LogOp, "num_channels_per_group: {}", num_channels_per_group);
     log_debug(tt::LogOp, "num_cores_per_batch: {}", num_cores_per_batch);
     log_debug(tt::LogOp, "num_cores_per_group: {}", num_cores_per_group);
+    /*
+     *==============================================================================================
+     * compute runtime args
+     *==============================================================================================
+     */
+    for (int i = 0; i < mcast_groups.size(); ++i) {
+        auto group = mcast_groups[i];
+        const auto& virtual_group = mcast_virtual_groups[i];
+        for (int j = 0; j < group.size(); ++j) {
+            CoreCoord core = group[j];
+            CoreCoord virtual_core = virtual_group[j];
+            uint32_t spillover = Ht - (per_core_Mt_group_1 * num_virtual_rows);
+            std::vector<uint32_t> compute_args;
+            uint32_t bonus_ht_per_core = spillover > virtual_core.y ? 1 : 0;
+            compute_args.push_back(bonus_ht_per_core);
+            log_debug(tt::LogOp, "bonus_ht_per_core: {}", bonus_ht_per_core);
+            log_debug(tt::LogOp, "core: {}", core);
+            auto compute_kernel_group1_id =
+                j == 0 ? sender_compute_kernel_group1_id : reciever_compute_kernel_group1_id;
+            auto compute_kernel_group2_id =
+                j == 0 ? sender_compute_kernel_group2_id : reciever_compute_kernel_group2_id;
+            if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
+                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_group1_id, core, compute_args);
+            } else {
+                tt::tt_metal::SetRuntimeArgs(program, compute_kernel_group2_id, core, compute_args);
+            }
+        }
+    }
 
+    /*
+     *==============================================================================================
+     * reader runtime args
+     *==============================================================================================
+     */
     for (int i = 0; i < mcast_groups.size(); ++i) {
         auto group = mcast_groups[i];
         const auto& virtual_group = mcast_virtual_groups[i];
         bool rectangle_grid = is_rectangle_grid(group);
 
+        uint32_t spillover = Ht - (per_core_Mt_group_1 * num_virtual_rows);
         for (int j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord virtual_core = virtual_group[j];
             uint32_t in0_start_id, out_tile_start_id;
+            log_debug(tt::LogOp, "spillover: {}", spillover);
+            uint32_t bonus_ht_per_core = spillover >= virtual_core.y ? virtual_core.y : spillover;
             if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
-                in0_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
-                out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
+                in0_start_id =
+                    (((per_core_Mt_group_1)*Wt * virtual_core.y) + ((spillover * i) + bonus_ht_per_core * Wt)) +
+                    (per_core_Nt * virtual_core.x);
+                out_tile_start_id = in0_start_id;
             } else {
-                in0_start_id = per_core_Mt_group_1 * Wt * (last_row_with_extra_batch + 1) +
-                               per_core_Mt_group_2 * Wt * (virtual_core.y - last_row_with_extra_batch - 1) +
+                // TODO BROKEN Also the writer
+                in0_start_id = (((spillover * i) + per_core_Mt_group_1 + bonus_ht_per_core) * Wt *
+                                (last_row_with_extra_batch + 1)) +
+                               (((spillover * i) + per_core_Mt_group_1 + bonus_ht_per_core) * Wt *
+                                (virtual_core.y - last_row_with_extra_batch - 1)) +
                                per_core_Nt * virtual_core.x;
                 out_tile_start_id = in0_start_id;
             }
 
+            bonus_ht_per_core = spillover > virtual_core.y ? 1 : 0;
+            /*
+             *==============================================================================================
+             * reader runtime args
+             *     -mcast_sender core
+             *==============================================================================================
+             */
             if (j == 0) {  // mcast sender
                 // get the bounding box for the mcast
                 std::vector<CoreCoord> mcast_group_first;
@@ -2490,7 +2542,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                     CoreCoord coord = device->worker_core_from_logical_core(group[c]);
                     mcast_noc_xy.push_back(coord.y);
                 }
+                // inject the height element here
                 mcast_sender_args.insert(mcast_sender_args.end(), mcast_noc_xy.begin(), mcast_noc_xy.end());
+                mcast_sender_args.push_back(bonus_ht_per_core);
+                log_debug(tt::LogOp, "mcast_sender_args.size() {}", mcast_sender_args.size());
                 if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
                     tt::tt_metal::SetRuntimeArgs(
                         program, reader_mcast_sender_kernels_id_group_1, core, mcast_sender_args);
@@ -2500,7 +2555,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                         program, reader_mcast_sender_kernels_id_group_2, core, mcast_sender_args);
                     reader_sender_kernel_ids.push_back(reader_mcast_sender_kernels_id_group_2);
                 }
-            } else {  // mcast receiver
+            } else {
+                /*
+                 *==============================================================================================
+                 * reader runtime args
+                 *     -mcast_reciever core
+                 *==============================================================================================
+                 */
                 log_debug(tt::LogOp, "mcast receiver receive from coord: {} {}", group.front().x, group.front().y);
 
                 std::vector<uint32_t> mcast_receiver_args = {
@@ -2510,7 +2571,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
                     (std::uint32_t)out_tile_start_id,  // out_tensor_start_tile_id
                     (std::uint32_t)Wt,                 // num channel tiles
                     (std::uint32_t)(device->worker_core_from_logical_core(group.front()).x),
-                    (std::uint32_t)(device->worker_core_from_logical_core(group.front()).y)};
+                    (std::uint32_t)(device->worker_core_from_logical_core(group.front()).y),
+                    (std::uint32_t)bonus_ht_per_core};
                 if (equal_batches_per_core || (core.y <= last_row_with_extra_batch)) {
                     tt::tt_metal::SetRuntimeArgs(
                         program, reader_mcast_receiver_kernels_id_group_1, core, mcast_receiver_args);
@@ -2524,7 +2586,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         }
     }
 
-    // writer
+    /*
+     *==============================================================================================
+     * writer runtime args
+     *==============================================================================================
+     */
     uint32_t gamma_tile_start_id = 0;
     uint32_t beta_tile_start_id = 0;
     uint32_t input_mask_tile_start_id = 0;
@@ -2533,12 +2599,18 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         auto core = core_coords[i];
         auto virtual_core = virtual_core_coords[i];
         uint32_t out_tile_start_id;
+        uint32_t spillover = Ht - (per_core_Mt_group_1 * num_virtual_rows);
+        uint32_t bonus_ht_per_core = spillover >= virtual_core.y ? virtual_core.y : spillover;
         if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
-            out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
+            out_tile_start_id =
+                (((per_core_Mt_group_1)*Wt * virtual_core.y) + ((spillover * i) + bonus_ht_per_core * Wt)) +
+                (per_core_Nt * virtual_core.x);
         } else {
-            out_tile_start_id = per_core_Mt_group_1 * Wt * (last_row_with_extra_batch + 1) +
-                                per_core_Mt_group_2 * Wt * (virtual_core.y - last_row_with_extra_batch - 1) +
-                                per_core_Nt * virtual_core.x;
+            out_tile_start_id =
+                (((spillover * i) + per_core_Mt_group_1 + bonus_ht_per_core) * Wt * (last_row_with_extra_batch + 1)) +
+                (((spillover * i) + per_core_Mt_group_1 + bonus_ht_per_core) * Wt *
+                 (virtual_core.y - last_row_with_extra_batch - 1)) +
+                per_core_Nt * virtual_core.x;
         }
         if (virtual_core.x > curr_virtual_core_x) {
             curr_virtual_core_x++;
@@ -2573,6 +2645,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         writer_mcast_sender_args.push_back(beta_tile_start_id);
         writer_mcast_sender_args.push_back(input_mask_tile_start_id);
         writer_mcast_sender_args.push_back(Wt);
+        bonus_ht_per_core = spillover > virtual_core.y ? 1 : 0;
+        writer_mcast_sender_args.push_back(bonus_ht_per_core);
         if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
             tt::tt_metal::SetRuntimeArgs(program, writer_kernels_id_group_1, core, writer_mcast_sender_args);
             writer_kernel_ids.push_back(writer_kernels_id_group_1);
@@ -2581,6 +2655,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             writer_kernel_ids.push_back(writer_kernels_id_group_2);
         }
     }
+    /*
+     *==============================================================================================
+     * Override runtime args lamda func
+     *==============================================================================================
+     */
     auto override_runtime_args_callback = [writer_kernel_ids,
                                            reader_sender_kernel_ids,
                                            reader_receiver_kernel_ids,

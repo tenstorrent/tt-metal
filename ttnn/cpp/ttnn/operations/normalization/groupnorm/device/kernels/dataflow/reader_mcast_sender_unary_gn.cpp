@@ -68,10 +68,10 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(6);
     const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(7);
     constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(8);
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(9);
+    uint32_t per_core_M = get_compile_time_arg_val(9);
     constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(10);
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(11);
+    uint32_t block_h = get_compile_time_arg_val(11);
     constexpr uint32_t block_w = get_compile_time_arg_val(12);
     constexpr uint32_t block_hw = get_compile_time_arg_val(13);
 
@@ -99,6 +99,8 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
+    DPRINT << "start_id: " << start_id << ENDL();
+    DPRINT << "block_h: " << block_h << ENDL();
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
@@ -111,6 +113,11 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(9);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(10);
     const uint32_t num_mcast_cores_mid_group = get_arg_val<uint32_t>(11);
+    //some cores have extra rows either 1 or 0
+    const uint32_t bonus_ht = get_arg_val<uint32_t>(28);
+    DPRINT << "bonus_ht: " << bonus_ht << ENDL();
+    per_core_M += bonus_ht;
+    block_h += bonus_ht;
 
     // first mcast group
     uint32_t mcast_first_group_dest_noc_start_x;
@@ -137,6 +144,7 @@ void kernel_main() {
     uint64_t multicast_last_group_data_noc;
 
     if (has_mcast_first_group and has_mcast_last_group) {
+        DPRINT << "h1" << ENDL();
         mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
         mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
         mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
@@ -153,6 +161,7 @@ void kernel_main() {
         noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(22 + num_mcast_cores));
 
     } else if (has_mcast_first_group and not has_mcast_last_group) {
+        DPRINT << "h2" << ENDL();
         mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
         mcast_first_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
         mcast_first_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
@@ -163,6 +172,7 @@ void kernel_main() {
         noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(17 + num_mcast_cores));
 
     } else if (not has_mcast_first_group and has_mcast_last_group) {
+        DPRINT << "h3" << ENDL();
         mcast_last_group_dest_noc_start_x = get_arg_val<uint32_t>(12);
         mcast_last_group_dest_noc_start_y = get_arg_val<uint32_t>(13);
         mcast_last_group_dest_noc_end_x = get_arg_val<uint32_t>(14);
@@ -243,7 +253,7 @@ void kernel_main() {
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
     uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
+    for (uint32_t m = 0; m < per_core_M + ; ++m) {
         cb_reserve_back(cb_repack, per_core_N);
         uint32_t l1_write_addr_repack = get_write_ptr(cb_repack);
         for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
@@ -263,7 +273,7 @@ void kernel_main() {
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
     const uint32_t num_reads_of_input = 3;
-    if constexpr (block_h % num_out_blocks != 0) {
+    if (block_h % num_out_blocks != 0) {
         extra_out_block = true;
 	uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);
@@ -276,37 +286,45 @@ void kernel_main() {
     }
 
         index_b_offset = 0;
+                DPRINT << "start" << ENDL();
         for (uint32_t b = 0; b < num_batches; ++b) {
             index_g_offset = 0;
             row_offset = num_cols_per_group;
 
             for (uint32_t m = 0; m < num_groups; ++m) {
+                DPRINT << "group: "<< m << ENDL();
             //The following loop is for the 3 passes of input tensor required for GroupNorm
             //First Pass: Calculates average value
             //Second Pass: Calculates the Variance value
             //Third Pass: Calculates final value
             //Definition: num_read_of_input = 3
                 for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
+                DPRINT << "cur_read_iteration: "<<  cur_read_iteration<< ENDL();
                     uint32_t out_block_start_id_offset = 0;
                     uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
                     uint32_t cb_ex_external_bytes_written = 0;
+                        DPRINT << "pre_cb_external_reserve: " << ENDL();
                     cb_reserve_back(cb_ex_external, cb_ex_external_tiles_required);
+                        DPRINT << "post_cb_external_reserve: " << ENDL();
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                        uint32_t out_block_h_actual, out_block_hw_actual;
-                        if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                            out_block_h_actual = out_block_h_last;
-                            out_block_hw_actual = out_block_hw_last;
-                        } else {
-                            out_block_h_actual = out_block_h_normal;
-                            out_block_hw_actual = out_block_hw_normal;
-                        }
+                        DPRINT << "out_block_index: "<< out_block_index << ENDL();
+                            uint32_t out_block_h_actual, out_block_hw_actual;
+                            if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                                out_block_h_actual = out_block_h_last;
+                                out_block_hw_actual = out_block_hw_last;
+                            } else {
+                                out_block_h_actual = out_block_h_normal;
+                                out_block_hw_actual = out_block_hw_normal;
+                            }
 
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
                         const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
                         const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
                         uint32_t l1_write_addr;
                         l1_write_addr = get_write_ptr(cb_in0);
+                        DPRINT << "pre_ reserve_back " << ENDL();
                         cb_reserve_back(cb_in0, out_block_hw_normal);
+                        DPRINT << "post_ reserve_back " << ENDL();
                         for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                             for (uint32_t nt = 0; nt < block_w; nt++) {
                                 noc_async_read_tile(
@@ -320,13 +338,16 @@ void kernel_main() {
                         }
                         cb_push_back(cb_in0, out_block_hw_normal);
 #endif
+                        DPRINT << "cur_read_iteration: "<< cur_read_iteration << ENDL();
                         if (cur_read_iteration== 0 || cur_read_iteration== 1) {
                             // wait for local data ready
+                        DPRINT << "pre_wait_front_partial_ex: " << ENDL();
                             if (cur_read_iteration== 0) {
                                 cb_wait_front(cb_ex_partial, 1);
                             } else {
                                 cb_wait_front(cb_ex2_partial, 1);
                             }
+                        DPRINT << "post_wait_front_partial_ex: " << ENDL();
 
                             // read self Ex partial - on the first iteration, read a full tile for overwriting
                             // garbage in L1, on subsequent just treat it as another core
@@ -342,9 +363,12 @@ void kernel_main() {
                             cb_ex_external_bytes_written += 16;
                             noc_async_read_barrier();
 
+                        DPRINT << "pre_set_semaphore: " << ENDL();
                             if constexpr (num_mcast_cores > 1) {
                                 // wait for all other cores data ready
+                        DPRINT << "pre_wait_semaphore: " << ENDL();
                                 noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
+                        DPRINT << "post_wait_semaphore: " << ENDL();
                                 noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
                                 // read data from other cores
@@ -357,12 +381,14 @@ void kernel_main() {
                                     noc_async_read_barrier();
                                 }
                             }
+                        DPRINT << "post_set_semaphore: " << ENDL();
                             if (cur_read_iteration== 0) {
                                 cb_pop_front(cb_ex_partial, 1);
                             } else {
                                 cb_pop_front(cb_ex2_partial, 1);
                             }
 
+                        DPRINT << "pre_send_ex_results: " << ENDL();
                             if constexpr (num_mcast_cores > 1) {
                                 noc_semaphore_set_multicast(
                                     reduce_sender_semaphore_addr,
@@ -384,6 +410,7 @@ void kernel_main() {
                                         false);
                                 }
                             }
+                        DPRINT << "post_send_ex_results: " << ENDL();
                         } else if (cur_read_iteration == 2) {
                             const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
 

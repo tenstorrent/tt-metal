@@ -15,7 +15,7 @@ void kernel_main() {
 
     constexpr uint32_t num_cols_tile_gamma_beta = get_compile_time_arg_val(3);
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(4);
+    uint32_t per_core_M = get_compile_time_arg_val(4);
     constexpr uint32_t per_core_N = get_compile_time_arg_val(5);
     constexpr uint32_t per_core_N_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(7);
@@ -32,9 +32,9 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(15);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(16);
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(17);
+    uint32_t block_h = get_compile_time_arg_val(17);
     constexpr uint32_t block_w = get_compile_time_arg_val(18);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(19);
+    // constexpr uint32_t block_hw = get_compile_time_arg_val(19);
 
     constexpr uint32_t use_welford = get_compile_time_arg_val(20) > 0;
     constexpr uint32_t page_size = get_compile_time_arg_val(21);
@@ -61,6 +61,11 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(9);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(10);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(11);
+    const uint32_t bonus_ht = get_arg_val<uint32_t>(12);
+    per_core_M += bonus_ht;
+    block_h += bonus_ht;
+    const uint32_t block_hw = block_h * block_w;
+    DPRINT << "bonus_ht: " << bonus_ht << ENDL();
 
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
@@ -84,13 +89,13 @@ void kernel_main() {
     // input mask
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
 
-    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
+    uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    if constexpr (block_h % num_out_blocks != 0) {
+    if (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);

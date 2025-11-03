@@ -98,10 +98,14 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
+    DPRINT << "start_id: " << start_id << ENDL();
+    DPRINT << "block_h: " << block_h << ENDL();
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
+    const uint32_t bonus_ht = get_arg_val<uint32_t>(7);
+    DPRINT << "bonus_ht: " << bonus_ht << ENDL();
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
     constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;  // E[x] partial reduce
@@ -167,14 +171,17 @@ void kernel_main() {
 
         // Start Group Loop:
         for (uint32_t i = 0; i < num_groups; ++i) {
+            DPRINT << "group: " << i << ENDL();
             //The following loop is for the 3 passes of input tensor required for GroupNorm
             //First Pass: Calculates average value
             //Second Pass: Calculates the Variance value
             //Third Pass: Calculates final value
             //Definition: num_read_of_input = 3
             for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
+            DPRINT << "cur_read_iteration: " << cur_read_iteration << ENDL();
                 uint32_t out_block_start_id_offset = 0;
                 for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            DPRINT << "out_block_index: " << out_block_index << ENDL();
                     uint32_t out_block_h_actual, out_block_hw_actual;
                     if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                         out_block_h_actual = out_block_h_last;
@@ -188,7 +195,9 @@ void kernel_main() {
                     const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
                     uint32_t l1_write_addr;
                     l1_write_addr = get_write_ptr(cb_in0);
+            DPRINT << "pre_reserve_back_cb_in0: "  << ENDL();
                     cb_reserve_back(cb_in0, out_block_hw_normal);
+            DPRINT << "post_reserve_back_cb_in0: "  << ENDL();
                     for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                         for (uint32_t nt = 0; nt < block_w; nt++) {
                             noc_async_read_tile(
@@ -197,15 +206,19 @@ void kernel_main() {
                                 src_a,
                                 l1_write_addr);
                             l1_write_addr += src0_tile_bytes;
+                    DPRINT << "noc_async_read_barrier_in0" << ENDL();
                             noc_async_read_barrier();
                         }
                     }
                     cb_push_back(cb_in0, out_block_hw_normal);
+                    DPRINT << "finished pushing data" << ENDL();
 
 #endif
+            DPRINT << "pre_semaphore_set: "  << ENDL();
                     if (cur_read_iteration == 0 || cur_read_iteration == 1) {
                         //Section for wating for local reduce to be pushed to a cb_ex_partial
                         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+            DPRINT << "pre_cb_wait_fornt_ex_partial: "  << ENDL();
                         if (cur_read_iteration == 0) {
                             //Wait for local avg calculation
                             cb_wait_front(cb_ex_partial, 1);
@@ -213,7 +226,10 @@ void kernel_main() {
                             //Wait for local variance calculation
                             cb_wait_front(cb_ex2_partial, 1);
                         }
+            DPRINT << "post_cb_wait_fornt_ex_partial: "  << ENDL();
+            DPRINT << "pre_semaphore_inc: "  << ENDL();
                         noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+            DPRINT << "post_semaphore_inc: "  << ENDL();
 
                         noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
                         if (cur_read_iteration == 0) {
@@ -221,6 +237,8 @@ void kernel_main() {
                         } else {
                             cb_pop_front(cb_ex2_partial, 1);
                         }
+
+            DPRINT << "post_semaphore_set: "  << ENDL();
                     } else if (cur_read_iteration == 2) {
                         const auto dst_a = TensorAccessor(out_args, out_addr, single_tile_size_bytes);
 
@@ -249,15 +267,21 @@ void kernel_main() {
                 }
 
                 if (cur_read_iteration == 0 || cur_read_iteration == 1) {
+                    DPRINT << "pre_set_semaphore l268" << ENDL();
                     noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+                    DPRINT << "post_set_semaphore l268" << ENDL();
                     uint32_t cb_mcast_receive;
                     if (cur_read_iteration == 0) {
                         cb_mcast_receive = cb_ex_global;
                     } else if (cur_read_iteration == 1) {
                         cb_mcast_receive = cb_ex2_global;
                     }
+                    DPRINT << "pre_rb_278" << ENDL();
                     cb_reserve_back(cb_mcast_receive, 1);
+                    DPRINT << "post_rb_278" << ENDL();
+                    DPRINT << "pre_semaphore_wait_281" << ENDL();
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+                    DPRINT << "post_semaphore_wait_281" << ENDL();
                     cb_push_back(cb_mcast_receive, 1);
                 }
             }

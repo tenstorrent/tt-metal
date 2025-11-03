@@ -98,16 +98,15 @@ void MAIN {
     constexpr uint32_t batch = get_compile_time_arg_val(4);
     constexpr uint32_t group = get_compile_time_arg_val(5);
 
-    constexpr uint32_t block_h = get_compile_time_arg_val(6);
+    uint32_t block_h = get_compile_time_arg_val(6);
     constexpr uint32_t block_w = get_compile_time_arg_val(7);
-    constexpr uint32_t block_hw = get_compile_time_arg_val(8);
 
     constexpr uint32_t subblock_w = get_compile_time_arg_val(9);
     constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(10);
 
-    constexpr uint32_t per_core_M = get_compile_time_arg_val(11);
+    uint32_t per_core_M = get_compile_time_arg_val(11);
     constexpr uint32_t per_core_N = get_compile_time_arg_val(12);
-    constexpr uint32_t per_core_MN = get_compile_time_arg_val(13);
+    // constexpr uint32_t per_core_MN = get_compile_time_arg_val(13);
 
     constexpr uint32_t per_core_N_tile_bytes = get_compile_time_arg_val(14);
     constexpr uint32_t num_groups_per_reset = get_compile_time_arg_val(15);
@@ -123,6 +122,12 @@ void MAIN {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(24);
+    uint32_t bonus = get_arg_val<uint32_t>(0);
+    block_h += bonus;
+    const uint32_t block_hw = block_h * block_w;
+    per_core_M += bonus;
+    const uint32_t per_core_MN = per_core_N * per_core_M;
+    DPRINT << "bonus: " << bonus << ENDL();
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -232,13 +237,13 @@ void MAIN {
 #endif
 
     index_b_offset = 0;
-    constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
+    uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     uint32_t out_block_hw_last = out_block_hw_normal;
-    if constexpr (block_h % num_out_blocks != 0) {
+    if (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
         num_out_blocks_padded += (residual / out_block_h_normal + 1);
@@ -253,6 +258,7 @@ void MAIN {
 
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
+        DPRINT << "batch: " << b << ENDL();
         index_g_offset = 0;
 
         row_offset = num_cols_per_group;
@@ -264,6 +270,7 @@ void MAIN {
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
+            DPRINT << "group: " << g << ENDL();
             // Start Average Calc
             // Start Local Reduce
             cb_wait_front(cb_input_mask, block_w);
@@ -283,6 +290,7 @@ void MAIN {
                 // mask input
                 mul_tiles_init(cb_in0, cb_input_mask);
                 cb_reserve_back(cb_x, out_block_hw_normal);
+                DPRINT << "pre_mask : " << ENDL();
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
@@ -306,6 +314,7 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
+                DPRINT << "post_mask : " << ENDL();
 #ifdef TILIZE_IN
                 cb_pop_front(cb_in, out_block_hw_actual);
 #else
@@ -322,6 +331,7 @@ void MAIN {
                 cb_wait_front(cb_scaler, 1);
                 cb_wait_front(cb_x, out_block_hw_normal);
 
+                DPRINT << "pre_partial_reduce: " << ENDL();
                 for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
                         uint32_t index = index_h_offset + w;
@@ -338,9 +348,11 @@ void MAIN {
                 reduce_uninit();
 
                 cb_wait_front(cb_ex_partial, 1);
+                DPRINT << "post_partial_reduce: " << ENDL();
             }
             // End Local Redcue
             // Start Global Reduce
+            DPRINT << "pre_global_reduce_ex: " << ENDL();
             if constexpr (is_mcast_sender) {
                 reduce_init(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
@@ -364,6 +376,7 @@ void MAIN {
                     cb_push_back(cb_ex, 1);
                 }
             }
+            DPRINT << "post_global_reduce_ex: " << ENDL();
             // End Global Reduce
             // End Average Calc
 
@@ -379,7 +392,10 @@ void MAIN {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+                DPRINT << "pre_in0_wait_front: " << ENDL();
                 cb_wait_front(cb_in0, out_block_hw_normal);
+                DPRINT << "post_in0_wait_front: " << ENDL();
+                DPRINT << "pre_x-ex: " << ENDL();
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0, cb_ex_global);
 
@@ -407,12 +423,14 @@ void MAIN {
                     cb_pop_front(cb_in0, out_block_hw_normal - out_block_hw_last);
                 }
                 cb_push_back(cb_xmm, out_block_hw_normal);
+                DPRINT << "post_x-ex: " << ENDL();
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
                 mul_tiles_init(cb_xmm, cb_input_mask);
                 cb_reserve_back(cb_x, out_block_hw_normal);
                 cb_wait_front(cb_xmm, out_block_hw_normal);
+                DPRINT << "pre_xmm_mask: " << ENDL();
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
@@ -432,6 +450,7 @@ void MAIN {
                     }
                     cb_pop_front(cb_xmm, block_w);
                 }
+                DPRINT << "post_xmm_mask: " << ENDL();
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_pop_front(cb_xmm, out_block_hw_normal - out_block_hw_last);
                 }
@@ -443,6 +462,7 @@ void MAIN {
                 mul_tiles_init(cb_x, cb_x);
                 cb_reserve_back(cb_xmm, out_block_hw_normal);
                 cb_wait_front(cb_x, out_block_hw_normal);
+                DPRINT << "pre_xmm2: " << ENDL();
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -461,6 +481,7 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
+                DPRINT << "post_xmm2: " << ENDL();
                 cb_pop_front(cb_x, out_block_hw_normal);
                 cb_push_back(cb_xmm, out_block_hw_normal);
 
@@ -471,6 +492,7 @@ void MAIN {
                 tile_regs_acquire();
                 cb_wait_front(cb_xmm, out_block_hw_normal);
                 cb_wait_front(cb_scaler, 1);  // TODO DELETE THIS
+                DPRINT << "pre_reduce_ex2 " << ENDL();
                 for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
                         uint32_t index = index_h_offset + w;
@@ -478,6 +500,7 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
+                DPRINT << "post_reduce_ex2 " << ENDL();
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2_partial);
@@ -488,6 +511,7 @@ void MAIN {
             }
             // End Local Reduce
             // Start Global Reduce
+            DPRINT << "pre_global_reduce_ex2 " << ENDL();
             if constexpr (is_mcast_sender) {
                 reduce_init(cb_ex_external, cb_scaler_global, cb_ex2_global);
                 cb_reserve_back(cb_ex2_global, 1);
@@ -511,6 +535,7 @@ void MAIN {
                     cb_push_back(cb_ex2, 1);
                 }
             }
+            DPRINT << "post_global_reduce_ex2 " << ENDL();
             // End Global Reduce
 
             // Start Variance Calc
