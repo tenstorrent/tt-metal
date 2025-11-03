@@ -315,6 +315,7 @@ jobs:
 
             # Process each requested hw_topology
             while IFS= read -r hw_topology; do
+              echo $hw_topology
               hw_topology=$(echo ${hw_topology} | jq -r '.')
               echo "Processing requested hw_topology: $hw_topology"
 
