@@ -856,7 +856,7 @@ function getWorkflowStats(runs) {
       // First time seeing this run ID
       uniqueRuns.set(runId, {
         run,
-        attempts: 0,
+        attempts: 1, // Initialize to 1 since this is the first attempt
         isSuccessful: false,
         requiredRetry: false,
         succeededOnFirstTry: false,

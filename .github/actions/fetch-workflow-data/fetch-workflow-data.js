@@ -690,20 +690,21 @@ async function run() {
     // Note: Same run ID with different attempt numbers are different runs
     core.info(`[MERGE] Merging ${previousRuns.length} cached runs + ${newRuns.length} new runs`);
     const seen = new Map(); // key: `${run.id}:${run_attempt}`, value: run
-    [...previousRuns, ...newRuns].forEach(run => {
+    // Process newRuns first so they naturally take precedence over previousRuns
+    [...newRuns, ...previousRuns].forEach(run => {
       const runId = run.id;
       const attempt = run.run_attempt || 1;
       const key = `${runId}:${attempt}`;
-      // If we already have this exact (run id, attempt) combination, keep the newer one (prefer newRuns)
+      // If we already have this exact (run id, attempt) combination, keep the first one encountered.
+      // Since newRuns are processed first, they will naturally take precedence over previousRuns.
       const existingRun = seen.get(key);
       if (!existingRun) {
         seen.set(key, run);
       } else {
-        // Both have same run ID and attempt - prefer the one from newRuns if applicable
-        // For now, just keep the first one we encounter (newRuns come after previousRuns, so they take precedence)
-        if (newRuns.includes(run)) {
-          seen.set(key, run);
-        }
+        // An entry with this key already exists. Since newRuns are processed first,
+        // the existing entry is either a newRun (which we want to keep) or a previousRun
+        // that has no corresponding newRun (which we also want to keep).
+        // No action needed, the preferred run is already in 'seen'.
       }
     });
     let mergedRuns = Array.from(seen.values());
@@ -743,6 +744,9 @@ async function run() {
     const delayBetweenChecks = 100; // Small delay to avoid rate limits
     let updatedAttempts = 0;
     const newRunsToAdd = [];
+
+    // Pre-compute Set of existing (run ID, attempt) combinations for O(1) lookup
+    const existingAttemptsSet = new Set(mergedRuns.map(r => `${r.id}:${r.run_attempt || 1}`));
 
     for (const [workflowName, runs] of workflowsToRecheck) {
       // Find the latest run for this workflow (on target branch, completed)
@@ -792,7 +796,7 @@ async function run() {
           const cutoff = getCutoffDate(days);
           if (runDate >= cutoff && latestRunData.head_branch === branch && latestRunData.status === 'completed') {
             // Check if we already have this attempt (shouldn't happen, but be safe)
-            const alreadyHaveAttempt = mergedRuns.some(r => r.id === latestRunId && (r.run_attempt || 1) === apiAttempt);
+            const alreadyHaveAttempt = existingAttemptsSet.has(`${latestRunId}:${apiAttempt}`);
             if (!alreadyHaveAttempt) {
               // Add the new run to the list (don't replace the old one)
               newRunsToAdd.push(latestRunData);
