@@ -256,27 +256,21 @@ jobs:
       product: tt-nn
 
   ttnn-example-tests:
-    needs: [build]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+    needs: [build, find-changes]
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N300",
+        test-group: [
+          { arch: wormhole_b0, runner-label: N300 }
         ]
-    uses: ./.github/workflows/basic.yaml
+    uses: ./.github/workflows/ttnn-post-commit.yaml
+    secrets: inherit
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
-      per-test-timeout: 11
-      runner: ${{ matrix.platform }}
-      product: tt-nn
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
