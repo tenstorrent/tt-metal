@@ -5,7 +5,7 @@
 Helper functions for dimension-related calculations in matrix operations and Matmul test configurations for matmul test sweeping.
 """
 from dataclasses import dataclass
-from typing import List, NamedTuple, Tuple
+from typing import Iterable, List, NamedTuple, Tuple
 
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
 from helpers.llk_params import (
@@ -85,65 +85,32 @@ def validate_tile_dimensions(dimension: int, row_col_dim: int):
         )
 
 
-def generate_matmul_dimension_combinations(max_tiles: int) -> List[tuple]:
+def generate_matmul_dimension_combinations(
+    max_tiles: int, kt_dims: Iterable[int] = range(1, 5)
+) -> List[tuple]:
     """
-    Generate all valid matrix multiplication dimension combinations.
-
-    Creates all possible combinations of (inputA_dimensions, inputB_dimensions) where:
-    - The result matrix also has at most max_tiles tiles
-    - Matrix multiplication is valid: inputA[1] == inputB[0] (K dimensions match)
-    - Returns combinations that can be used for comprehensive matmul testing
+    Generate valid matmul dimension pairs where result matrix size <= max_tiles.
 
     Args:
-        max_tiles: Maximum number of tiles allowed per result matrix
+        max_tiles: Maximum size of result matrix in tiles (M×N tiles)
+        kt_dims: K dimension sizes to test (in tiles)
 
     Returns:
-        List of tuples: Each tuple contains (inputA_dimensions, inputB_dimensions)
-        where inputA_dimensions and inputB_dimensions are [rows, cols] lists
+        List[(A_dims, B_dims)] where A_dims=[M, K], B_dims=[K, N]
 
-    Note: When 16-bit datums in dest can fit max 8 tiles and 4 tiles for 32-bit datums
     Example:
-        For max_tiles=4:
-        Returns combinations like:
-        ([32, 32], [32, 32])    # 1×1 tiles each, result: 1×1 = 1 tile
-        ([32, 64], [64, 32])    # 1×2 and 2×1 tiles, result: 1×1 = 1 tile
-        ([64, 128], [128, 128])    # result: 2×4 = 8 tiles, works for 16-bit datums
-        ([32, 32], [32, 128])  # 1×1 and 1×4 tiles, result: 1×4 = 4 tiles, works for 16-bit and 32-bit datums
-
-        But NOT ([256, 32], [32, 256]) because result would be 8×8 = 64 tiles > 4 for 32-bit datums and >8 for 16-bit datums
+        max_tiles=4
+        - generates: ([32, 64], [64, 32]) → result 1×1 tiles
+        - excludes: ([128, 32], [32, 128]) → result 4×4 = 16 tiles
     """
 
-    valid_combinations = []
-    tile_rows = 32
-    tile_cols = 32
-
-    for m_tiles in range(1, max_tiles + 1):
-        for k_tiles in range(1, max_tiles + 1):
-            # Check if matrix A is valid: m_tiles * k_tiles <= max_tiles
-            if m_tiles * k_tiles > max_tiles:
-                break  # Early termination - larger k_tiles will also be invalid
-
-            # Calculate maximum valid n_tiles based on constraints
-            max_n_from_B = (
-                max_tiles // k_tiles
-            )  # From B constraint: k_tiles * n_tiles <= max_tiles
-            max_n_from_C = (
-                max_tiles // m_tiles
-            )  # From C constraint: m_tiles * n_tiles <= max_tiles
-            max_n_tiles = min(max_n_from_B, max_n_from_C)
-
-            # Generate all valid n_tiles values
-            for n_tiles in range(1, max_n_tiles + 1):
-                # Convert tile counts to actual dimensions
-                m_dim = m_tiles * tile_cols
-                k_dim = k_tiles * tile_cols
-                n_dim = n_tiles * tile_rows
-
-                inputA_dims = [m_dim, k_dim]
-                inputB_dims = [k_dim, n_dim]
-                valid_combinations.append((inputA_dims, inputB_dims))
-
-    return valid_combinations
+    TILE_DIM = 32  # Standard tile dimension for row and column
+    return [
+        ([mt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, nt_dim * TILE_DIM])
+        for mt_dim in range(1, max_tiles + 1)
+        for nt_dim in range(1, max_tiles // mt_dim + 1)
+        for kt_dim in kt_dims
+    ]
 
 
 def generate_matmul_tiny_tiles_combinations(max_tiles: int) -> List[tuple]:

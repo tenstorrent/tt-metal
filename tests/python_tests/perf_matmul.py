@@ -13,6 +13,9 @@ from helpers.matmul_sweep import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfRunType, perf_benchmark, update_report
 
+# Important K dimensions to test
+KT_DIMS = [1, 2, 3, 4, 8, 64]
+
 
 def matmul_combos(
     formats: List[FormatConfig],
@@ -27,7 +30,7 @@ def matmul_combos(
         _dest_bank_max_tiles(fmt, acc) for fmt in formats for acc in dest_acc
     )
     dimensions = {
-        max_tiles: generate_matmul_dimension_combinations(max_tiles)
+        max_tiles: generate_matmul_dimension_combinations(max_tiles, kt_dims=KT_DIMS)
         for max_tiles in unique_max_tiles
     }
 
