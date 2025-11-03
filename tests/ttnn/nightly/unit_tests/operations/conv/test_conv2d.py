@@ -15,7 +15,7 @@ from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
-from ttnn.operations.conv2d import get_torch_act_func_from_string
+from ttnn.operations.matmul_conv_common import get_golden_function_for_activation
 from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -213,7 +213,7 @@ def run_conv(
         groups=groups,
     )
     # Handle UnaryWithParam activation type with direct enum mapping
-    act_func = get_torch_act_func_from_string(activation)
+    act_func = get_golden_function_for_activation(activation)
     if act_func:
         ref = act_func(ref)
 
