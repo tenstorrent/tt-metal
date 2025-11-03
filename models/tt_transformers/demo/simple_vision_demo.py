@@ -533,8 +533,8 @@ def test_multimodal_demo_text(
         }
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (17, None),  # None to default to tolerance percentage (1.15)
-            # 1.55 to override default tolerance percentage (1.15); observing variance across different CI machines
-            ("T3K", "Llama-3.2-90B", 1): (8, 1.55),
+            # 1.76 to override default tolerance percentage (1.15); observing variance across different CI machines
+            ("T3K", "Llama-3.2-90B", 1): (12.5, 1.76),
         }
 
         perf_targets = {}
