@@ -28,15 +28,19 @@ inputs:
 runs:
   using: composite
   steps:
-    # ---- DEVICE PERF branch ----
-    - name: Run device perf commands (tee to log)
-      if: ${{ inputs.device_perf_model_name != '' }}
+    - name: Run perf commands (tee to log) + merge
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
       run: |
         set -euo pipefail
         cd docker-job
+
+        # E2E perf tests need git config
+        if [[ -z "${{ inputs.device_perf_model_name }}" ]]; then
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        fi
+
         : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
         mkdir -p "$(dirname "$CI_LOG_FILE")"
 
@@ -47,36 +51,18 @@ runs:
         echo "$status" > .command_status
         set -e
 
-        # do your merge (as before)
-        export DEVICE_PERF_REPORT_FILENAME="Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv"
-        python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT || true
-        cat "Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv" > "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
-        cat "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
-        echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-
-        # propagate original test exit code for this step
-        exit "$(cat .command_status)"
-
-    # ---- E2E PERF branch ----
-    - name: Run e2e perf commands (tee to log) + merge
-      if: ${{ inputs.device_perf_model_name == '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        cd docker-job
-        git config --global --add safe.directory "$GITHUB_WORKSPACE"
-        : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
-        mkdir -p "$(dirname "$CI_LOG_FILE")"
-
-        # run tests; keep exit code but do not stop subsequent steps
-        set +e
-        bash -eo pipefail -c '${{ inputs.commands }}' 2>&1 | tee -a "$CI_LOG_FILE"
-        status=${PIPESTATUS[0]}
-        echo "$status" > .command_status
-        set -e
-
-        # your existing merge (as before)
-        env python3 models/perf/merge_perf_results.py REPORT || true
+        # Conditional report merging based on test type
+        if [[ -n "${{ inputs.device_perf_model_name }}" ]]; then
+          # Device perf branch
+          export DEVICE_PERF_REPORT_FILENAME="Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv"
+          python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT || true
+          cat "Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv" > "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
+          cat "Models_Device_Perf_$(date +%Y_%m_%d).csv" || true
+          echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+        else
+          # E2E perf branch
+          env python3 models/perf/merge_perf_results.py REPORT || true
+        fi
 
         # propagate original test exit code for this step
         exit "$(cat .command_status)"
@@ -110,18 +96,6 @@ runs:
         # Main compact summary:
         grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
           | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
-
-        echo "Log file:"
-        cat "$CI_LOG_FILE"
-        echo "########################################################"
-
-        echo "Failed logs:"
-        cat fail-first.txt || true
-        echo "########################################################"
-
-        echo "Compact summary logs:"
-        cat compact-summary.txt || true
-        echo "########################################################"
 
         {
           echo "### Compact test summary"
