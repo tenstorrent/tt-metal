@@ -79,7 +79,7 @@ def fold_torch(input_tensor, stride_h, stride_w, padding=None):
 @pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])
 @pytest.mark.parametrize("channels", [3, 32, 320])
 @pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
-@pytest.mark.parametrize("padding", [(0, 0), (8, 8), (4, 12, 2, 6)])
+@pytest.mark.parametrize("padding", [(0, 0), (8, 8), (20, 12, 15, 17)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, padding, input_layout, input_dtype):
