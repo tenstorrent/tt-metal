@@ -709,82 +709,6 @@ async function run() {
     let mergedRuns = Array.from(seen.values());
     core.info(`[MERGE] After deduplication: ${mergedRuns.length} unique runs (by run id + attempt)`);
 
-    // Check for newer attempts on all unique run IDs
-    // Group runs by run ID to find the highest attempt we have for each run
-    const runsByRunId = new Map(); // runId -> { highestAttempt: number, runs: Array<run> }
-    for (const run of mergedRuns) {
-      const runId = run.id;
-      const attempt = run.run_attempt || 1;
-
-      if (!runsByRunId.has(runId)) {
-        runsByRunId.set(runId, { highestAttempt: attempt, runs: [run] });
-      } else {
-        const entry = runsByRunId.get(runId);
-        entry.runs.push(run);
-        if (attempt > entry.highestAttempt) {
-          entry.highestAttempt = attempt;
-        }
-      }
-    }
-
-    core.info(`[RECHECK] Checking for newer attempts on ${runsByRunId.size} unique run IDs...`);
-    const delayBetweenChecks = 100; // Small delay to avoid rate limits
-    let updatedAttempts = 0;
-    const newRunsToAdd = [];
-
-    for (const [runId, entry] of runsByRunId.entries()) {
-      const currentAttempt = entry.highestAttempt;
-      const sampleRun = entry.runs[0]; // Use first run for workflow name and other metadata
-
-      try {
-        // Fetch the run details directly - GitHub API returns the latest attempt
-        const { data: latestRunData } = await octokit.rest.actions.getWorkflowRun({
-          owner: github.context.repo.owner,
-          repo: github.context.repo.repo,
-          run_id: runId
-        });
-
-        const apiAttempt = latestRunData.run_attempt || 1;
-
-        // If API has a higher attempt, add it to mergedRuns (don't replace the old one)
-        if (apiAttempt > currentAttempt) {
-          core.info(`[RECHECK] Found newer attempt for workflow '${sampleRun.name}' run ${runId}: current=${currentAttempt}, API=${apiAttempt}, adding`);
-          // Check if the run is still within our date window and meets other criteria
-          const runDate = new Date(latestRunData.created_at);
-          const cutoff = getCutoffDate(days);
-          if (runDate >= cutoff && latestRunData.head_branch === branch && latestRunData.status === 'completed') {
-            // Check if we already have this attempt (shouldn't happen, but be safe)
-            const attemptKey = `${runId}:${apiAttempt}`;
-            const alreadyHaveAttempt = mergedRuns.some(r => r.id === runId && (r.run_attempt || 1) === apiAttempt);
-            if (!alreadyHaveAttempt) {
-              // Add the new run to the list (don't replace the old one)
-              newRunsToAdd.push(latestRunData);
-              updatedAttempts++;
-            } else {
-              core.info(`[RECHECK] Run ${runId} attempt ${apiAttempt} already in mergedRuns, skipping`);
-            }
-          } else {
-            core.info(`[RECHECK] Run ${runId} attempt ${apiAttempt} is outside date window or doesn't meet criteria, skipping`);
-          }
-        }
-
-        await delay(delayBetweenChecks); // Small delay to avoid rate limits
-      } catch (e) {
-        // Run might not exist anymore, or API error - log and continue
-        if (e.status !== 404) {
-          core.warning(`[RECHECK] Failed to check run ${runId} for newer attempts: ${e.message}`);
-        }
-      }
-    }
-
-    // Add the new runs to mergedRuns (both old and new attempts will be present)
-    if (newRunsToAdd.length > 0) {
-      mergedRuns.push(...newRunsToAdd);
-      core.info(`[RECHECK] Added ${updatedAttempts} runs with newer attempts to mergedRuns`);
-    } else {
-      core.info(`[RECHECK] No newer attempts found`);
-    }
-
     // Only keep runs on main branch, completed, and within the last N days
     const cutoff = getCutoffDate(days);
     const beforeFilter = mergedRuns.length;
@@ -798,6 +722,113 @@ async function run() {
     // Group runs by workflow name
     const grouped = groupRunsByName(mergedRuns);
     core.info(`[MERGE] Grouped into ${grouped.size} workflows`);
+
+    // Check for newer attempts on the latest run ID for each workflow we care about
+    // Filter workflows to only those matching the configuration (if provided)
+    const workflowsToRecheck = [];
+    if (workflowConfigs.length > 0) {
+      for (const [name, runs] of grouped.entries()) {
+        if (workflowMatchesConfig(name, workflowConfigs)) {
+          workflowsToRecheck.push([name, runs]);
+        }
+      }
+      core.info(`[RECHECK] Filtered to ${workflowsToRecheck.length} workflows matching config (out of ${grouped.size} total)`);
+    } else {
+      // If no configs provided, check all workflows (backward compatibility)
+      workflowsToRecheck.push(...grouped.entries());
+      core.info(`[RECHECK] No workflow_configs provided, checking all ${workflowsToRecheck.length} workflows`);
+    }
+
+    // For each workflow, find the latest run ID (by date, then by attempt) and check for newer attempts
+    const delayBetweenChecks = 100; // Small delay to avoid rate limits
+    let updatedAttempts = 0;
+    const newRunsToAdd = [];
+
+    for (const [workflowName, runs] of workflowsToRecheck) {
+      // Find the latest run for this workflow (on target branch, completed)
+      const latestRuns = runs
+        .filter(r => r.head_branch === branch && r.status === 'completed')
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0) return dateDiff;
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
+
+      if (latestRuns.length === 0) continue;
+
+      const latestRun = latestRuns[0];
+      const latestRunId = latestRun.id;
+      const currentAttempt = latestRun.run_attempt || 1;
+
+      // Find the highest attempt we have for this run ID (in case there are multiple attempts in the array)
+      let highestAttempt = currentAttempt;
+      for (const run of runs) {
+        if (run.id === latestRunId) {
+          const attempt = run.run_attempt || 1;
+          if (attempt > highestAttempt) {
+            highestAttempt = attempt;
+          }
+        }
+      }
+
+      try {
+        // Fetch the run details directly - GitHub API returns the latest attempt
+        const { data: latestRunData } = await octokit.rest.actions.getWorkflowRun({
+          owner: github.context.repo.owner,
+          repo: github.context.repo.repo,
+          run_id: latestRunId
+        });
+
+        const apiAttempt = latestRunData.run_attempt || 1;
+
+        // If API has a higher attempt, add it to mergedRuns (don't replace the old one)
+        if (apiAttempt > highestAttempt) {
+          core.info(`[RECHECK] Found newer attempt for workflow '${workflowName}' run ${latestRunId}: current=${highestAttempt}, API=${apiAttempt}, adding`);
+          // Check if the run is still within our date window and meets other criteria
+          const runDate = new Date(latestRunData.created_at);
+          const cutoff = getCutoffDate(days);
+          if (runDate >= cutoff && latestRunData.head_branch === branch && latestRunData.status === 'completed') {
+            // Check if we already have this attempt (shouldn't happen, but be safe)
+            const alreadyHaveAttempt = mergedRuns.some(r => r.id === latestRunId && (r.run_attempt || 1) === apiAttempt);
+            if (!alreadyHaveAttempt) {
+              // Add the new run to the list (don't replace the old one)
+              newRunsToAdd.push(latestRunData);
+              updatedAttempts++;
+            } else {
+              core.info(`[RECHECK] Run ${latestRunId} attempt ${apiAttempt} already in mergedRuns, skipping`);
+            }
+          } else {
+            core.info(`[RECHECK] Run ${latestRunId} attempt ${apiAttempt} is outside date window or doesn't meet criteria, skipping`);
+          }
+        }
+
+        await delay(delayBetweenChecks); // Small delay to avoid rate limits
+      } catch (e) {
+        // Run might not exist anymore, or API error - log and continue
+        if (e.status !== 404) {
+          core.warning(`[RECHECK] Failed to check workflow '${workflowName}' run ${latestRunId} for newer attempts: ${e.message}`);
+        }
+      }
+    }
+
+    // Add the new runs to mergedRuns (both old and new attempts will be present)
+    if (newRunsToAdd.length > 0) {
+      mergedRuns.push(...newRunsToAdd);
+      core.info(`[RECHECK] Added ${updatedAttempts} runs with newer attempts to mergedRuns`);
+      // Re-group after adding new runs
+      const updatedGrouped = groupRunsByName(mergedRuns);
+      grouped.clear();
+      for (const [name, runs] of updatedGrouped.entries()) {
+        grouped.set(name, runs);
+      }
+      core.info(`[RECHECK] Re-grouped after adding new attempts: ${grouped.size} workflows`);
+    } else {
+      core.info(`[RECHECK] No newer attempts found`);
+    }
+
     // Ensure output directory exists
     const outputDir = path.dirname(outputPath);
     if (!fs.existsSync(outputDir)) {
