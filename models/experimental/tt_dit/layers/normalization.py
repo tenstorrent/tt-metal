@@ -172,7 +172,16 @@ class DistributedRMSNorm(Module):
         if "weight" in state:
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
-    def forward(self, x: ttnn.Tensor, num_heads_per_device=1, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        num_heads_per_device=1,
+        compute_kernel_config=None,
+        rope_cos=None,
+        rope_sin=None,
+        trans_mat=None,
+    ) -> ttnn.Tensor:
+        
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
@@ -180,8 +189,8 @@ class DistributedRMSNorm(Module):
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
             raise ValueError(msg)
-
-        stats = ttnn.experimental.fused_rmsnorm_pre_allgather(
+        
+        stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
             x, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
         )
 
@@ -199,13 +208,16 @@ class DistributedRMSNorm(Module):
                 num_links=self.ccl_manager.num_links,
             )
 
-        x = ttnn.experimental.fused_rmsnorm_post_allgather(
+        x = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
             x,
             stats,
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
             weight=self.weight.data if self.weight is not None else None,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            transformation_mat=trans_mat,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
         )
         return x
 
