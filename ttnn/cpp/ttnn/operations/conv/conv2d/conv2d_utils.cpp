@@ -1317,6 +1317,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             input_slice_height_start = std::max<int>(0, input_slice_height_start);
             input_slice_height_end = std::min<int>(params.input_height, input_slice_height_end);
             if (input_slice_height_start >= input_slice_height_end) {
+                slice_index++;
                 continue;
             }
         } else {
@@ -1339,6 +1340,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
             input_slice_width_start = std::max<int>(0, input_slice_width_start);
             input_slice_width_end = std::min<int>(params.input_width, input_slice_width_end);
             if (input_slice_width_start >= input_slice_width_end) {
+                slice_index++;
                 continue;
             }
         }

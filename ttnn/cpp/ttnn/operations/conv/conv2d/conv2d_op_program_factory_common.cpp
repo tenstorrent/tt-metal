@@ -168,6 +168,7 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t partial_tile_size = tt::tile_size(partial_df);
 
     const bool is_1d_conv = input_shape[0] != 1 && input_shape[1] == 1;
+    const bool is_dilated_conv = dilation[0] > 1 || dilation[1] > 1;
 
     {
         // Weights CB
@@ -291,7 +292,7 @@ std::vector<CBInfo> get_cb_info(
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::READER_INDICES,
         .num_pages = 1,
-        .page_size = is_1d_conv && conv_config.config_tensors_in_dram
+        .page_size = (is_1d_conv || is_dilated_conv) && conv_config.config_tensors_in_dram
                          ? pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT *
                                6  // 3 indices per output, 2B per index
                          : pconfig.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT * 2,  // 2B per index

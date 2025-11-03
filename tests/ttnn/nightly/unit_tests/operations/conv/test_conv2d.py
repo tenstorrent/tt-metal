@@ -4454,9 +4454,9 @@ def test_conv_dram_panoptic(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, split_input_channels_factor, split_output_channels_factor, act_db, w_db, frequency_in_model",
     # fmt: off
     (
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (12, 12), (12, 12), BS, 32 * 4, 1, False, ttnn.MathFidelity.LoFi, False, False, 4, 1, True, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1), (18, 18), (18, 18), BS, 32 * 2, 1, False, ttnn.MathFidelity.LoFi, False, False, 4, 1, True, True, 2),  # Panoptic
-        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (3, 3), (1, 1),  (6, 6),  (6, 6),   BS, 32 * 4, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, True, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (12, 12), (12, 12), WS, 32 * 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 4, 1, True, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (18, 18), (18, 18), WS, 32 * 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 4, 1, True, True, 2),  # Panoptic
+        (1, 2048, 256, 32, 64, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1),  (6, 6),  (6, 6),   WS, 32 * 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 2, 1, True, True, 2),  # Panoptic
     ),
     # fmt: on
 )
@@ -4500,38 +4500,38 @@ def test_conv2d_ch_split_dram_panoptic(
         header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_x_{input_channels}_{output_channels}_{input_height}_{input_width}; frequency_in_model={frequency_in_model}"
     )
 
-    if split_input_channels_factor > 1 or split_output_channels_factor > 1:
-        run_conv_with_split(
-            device,
-            torch_tensor_map,
-            math_fidelity,
-            output_dtype,
-            weights_dtype,
-            batch,
-            output_channels,
-            input_channels,
-            input_height,
-            input_width,
-            kernel[0],
-            kernel[1],
-            stride[0],
-            stride[1],
-            padding,
-            dilation,
-            config_override,
-            shard_layout=shard_layout,
-            split_input_channels_factor=split_input_channels_factor,
-            split_output_channels_factor=split_output_channels_factor,
-            fp32_accum=fp32_accum,
-            packer_l1_acc=packer_l1_acc,
-            auto_shard=True if shard_layout is None else False,
-            input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
-            enable_act_double_buffer=act_db,
-            enable_weights_double_buffer=w_db,
-            config_tensors_in_dram=True,
-        )
-    else:
-        pytest.skip("Not a split conv test, skipping.")
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        output_dtype,
+        weights_dtype,
+        batch,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        kernel[0],
+        kernel[1],
+        stride[0],
+        stride[1],
+        padding,
+        config_override,
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        groups=groups,
+        has_bias=True,
+        fp32_accum=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+        input_dtype=output_dtype,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        shard_layout=shard_layout,
+        use_dram_slicing=True,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=True if shard_layout == BS else False,
+        config_tensors_in_dram=True,
+    )
     signpost(header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_end.")
 
 
