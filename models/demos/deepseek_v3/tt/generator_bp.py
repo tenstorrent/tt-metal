@@ -384,7 +384,6 @@ class DeepseekGenerator:
         }
 
         # Create TTNN position tensor as INT32 with the same sharding pattern used in tests
-        mesh_shape = list(self.mesh_device.shape)
         tt_positions = ttnn.from_torch(
             positions.to(torch.int32),
             device=self.mesh_device,
