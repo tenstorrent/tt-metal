@@ -287,21 +287,15 @@ void MAIN {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        // tilize_in<true, !split_reader || split_reader_cb_shared>(
-                        //     in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-
-                        // if constexpr (split_reader && !split_reader_cb_shared) {
-                        //     tilize_in<false, true>(
-                        //         in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last,
-                        //         tilized_in0_cb_id);
-                        // }
-                        tilize_in<true, false>(
+                        tilize_in<true, !split_reader>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-
-                        // TODO SECOND tilized_in0_cb
-                        tilize_in<false, true>(
-                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read_last, tilized_cb_second_reader_id);
-
+                        if constexpr (split_reader) {
+                            tilize_in<false, true>(
+                                in0_pretilize_cb_id,
+                                in0_block_w,
+                                in0_num_subblocks_read_last,
+                                tilized_cb_second_reader_id);
+                        }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
                             in1_cb_id,
