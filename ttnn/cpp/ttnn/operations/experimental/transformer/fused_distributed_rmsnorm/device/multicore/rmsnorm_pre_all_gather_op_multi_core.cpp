@@ -59,10 +59,10 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
 
     const uint32_t num_tile_cols = W / TILE_WIDTH;
     const uint32_t num_tile_rows = folded_H / TILE_HEIGHT;
-    log_info(tt::LogOp, "W: {}", W);
-    log_info(tt::LogOp, "folded_H: {}", folded_H);
-    log_info(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
-    log_info(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
+    log_debug(tt::LogOp, "W: {}", W);
+    log_debug(tt::LogOp, "folded_H: {}", folded_H);
+    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    log_debug(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -91,13 +91,13 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
     uint32_t intermediate_tile_size = tt::tile_size(intermediate_data_format);
     uint32_t reduce_scalar_tile_size = tt::tile_size(reduce_scalar_data_format);
 
-    log_info(tt::LogOp, "input_data_format: {}", input_data_format);
-    log_info(tt::LogOp, "output_data_format: {}", output_data_format);
-    log_info(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
-    log_info(tt::LogOp, "math_fidelity: {}", math_fidelity);
-    log_info(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
-    log_info(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
-    log_info(tt::LogOp, "dst_reg_count: {}", dst_reg_count);
+    log_debug(tt::LogOp, "input_data_format: {}", input_data_format);
+    log_debug(tt::LogOp, "output_data_format: {}", output_data_format);
+    log_debug(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
+    log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_debug(tt::LogOp, "dst_reg_count: {}", dst_reg_count);
 
     auto input_addr = input_tensor.buffer()->address();
     auto output_addr = output_tensor.buffer()->address();
@@ -122,10 +122,10 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
 
     const uint32_t num_tile_rows_per_core = tt::div_up(num_tile_rows, num_cores);
 
-    log_info(tt::LogOp, "num_cores: {}", num_cores);
-    log_info(tt::LogOp, "grid_size: {}", grid_size);
-    log_info(tt::LogOp, "core_grid: {}", core_grid);
-    log_info(tt::LogOp, "num_tile_rows_per_core: {}", num_tile_rows_per_core);
+    log_debug(tt::LogOp, "num_cores: {}", num_cores);
+    log_debug(tt::LogOp, "grid_size: {}", grid_size);
+    log_debug(tt::LogOp, "core_grid: {}", core_grid);
+    log_debug(tt::LogOp, "num_tile_rows_per_core: {}", num_tile_rows_per_core);
 
     const uint32_t input_cb_id = tt::CBIndex::c_0;
     const uint32_t reduce_scalar_cb_id = tt::CBIndex::c_1;

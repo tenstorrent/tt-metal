@@ -17,7 +17,6 @@ file(
     all_gather_concat_heads_fused/device/kernels/*
     all_reduce_async/device/kernels/*
     all_to_all_async/device/kernels/*
-    fused_distributed_rmsnorm/device/kernels/*
     llama_all_gather_matmul_async/device/kernels/*
     llama_reduce_scatter/device/kernels/*
     llama_reduce_scatter_create_heads/device/kernels/*

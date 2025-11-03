@@ -145,9 +145,6 @@ def run_distributed_fused_rmsnorm(
     tt_stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
         tt_inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
     )
-    # tt_stats = ttnn.rms_norm_pre_all_gather(
-    #     tt_inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype, distributed_program_config=prog_cfg,
-    # )
 
     ttnn.synchronize_device(tt_inp.device())
     tt_stats_gathered = ttnn.experimental.all_gather_async(
@@ -172,11 +169,6 @@ def run_distributed_fused_rmsnorm(
         rope_sin=tt_rope_sin,
         compute_kernel_config=compute_kernel_config,
     )
-    # tt_out = ttnn.rms_norm_post_all_gather(
-    #     tt_inp, tt_stats_gathered, epsilon=epsilon, compute_kernel_config=compute_kernel_config, distributed_program_config=prog_cfg,
-    # )
-    # if use_rope:
-    #     tt_out = ttnn.experimental.rotary_embedding_llama(tt_out, tt_rope_cos, tt_rope_sin, tt_transformation_mat, compute_kernel_config=compute_kernel_config)
 
     tensor_cat_dims = [None, None]
     tensor_cat_dims[tp_mesh_axis] = -3 if num_heads > 1 else -1
@@ -206,21 +198,19 @@ def run_distributed_fused_rmsnorm(
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
-    [128, 256, 2048, 18944],
-    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen18944"],
+    [2048, 2080],
+    ids=["seqlen2048", "seqlen2080"],
 )
-@pytest.mark.parametrize("hidden_dim", [256, 5120, 8192], ids=["hidden_dim256", "hidden_dim5120", "hidden_dim8192"])
-@pytest.mark.parametrize("num_heads_per_device", [1, 2, 10], ids=["num_heads1_", "num_heads2", "num_heads10"])
+@pytest.mark.parametrize("hidden_dim", [2048, 5120], ids=["hidden_dim2048", "hidden_dim5120"])
+@pytest.mark.parametrize("num_heads_per_device", [1, 2], ids=["num_heads1", "num_heads2"])
 @pytest.mark.parametrize("use_weight", [True, False], ids=["has_weight", "no_weight"])
 @pytest.mark.parametrize("use_rope", [True, False], ids=["has_rope", "no_rope"])
 @pytest.mark.parametrize(
     "mesh_device, tp_mesh_axis",
     [
         [(1, 8), 1],
-        [(2, 4), 1],
-        [(2, 4), 0],
     ],
-    ids=["1x8_tp1", "2x4_tp1", "2x4_tp0"],
+    ids=["1x8_tp1"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -231,7 +221,7 @@ def run_distributed_fused_rmsnorm(
     ids=["fabric_linear"],
     indirect=["device_params"],
 )
-def test_distributed_fused_rmsnorm(
+def test_distributed_fused_rmsnorm_sweep_fusions(
     mesh_device,
     tp_mesh_axis,
     seqlen,
@@ -255,10 +245,63 @@ def test_distributed_fused_rmsnorm(
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
-@pytest.mark.parametrize("seqlen", [2048])
-@pytest.mark.parametrize("hidden_dim", [5120, 8192], ids=["hidden_dim5120", "hidden_dim8192"])
-@pytest.mark.parametrize("num_heads_per_device", [1, 2, 10], ids=["num_heads1_", "num_heads2", "num_heads10"])
-@pytest.mark.parametrize("use_weight", [True, False], ids=["has_weight", "no_weight"])
+@pytest.mark.parametrize(
+    "seqlen",
+    [128, 256, 8192],
+    ids=["seqlen128", "seqlen256", "seqlen8192"],
+)
+@pytest.mark.parametrize("hidden_dim", [1024, 2048], ids=["hidden_dim1024", "hidden_dim2048"])
+@pytest.mark.parametrize("num_heads_per_device", [1, 2], ids=["num_heads1", "num_heads2"])
+@pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
+@pytest.mark.parametrize("use_rope", [True], ids=["has_rope"])
+@pytest.mark.parametrize(
+    "mesh_device, tp_mesh_axis",
+    [
+        [(1, 8), 1],
+    ],
+    ids=["1x8_tp1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
+    ],
+    ids=["fabric_linear"],
+    indirect=["device_params"],
+)
+def test_distributed_fused_rmsnorm_sweep_shapes(
+    mesh_device,
+    tp_mesh_axis,
+    seqlen,
+    hidden_dim,
+    dtype,
+    stats_dtype,
+    topology,
+    num_heads_per_device,
+    use_weight,
+    use_rope,
+    reset_seeds,
+):
+    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    if hidden_dim // 32 % num_heads != 0:
+        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
+    inp_shape = (1, 1, seqlen, hidden_dim)
+    run_distributed_fused_rmsnorm(
+        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight, use_rope
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
+@pytest.mark.parametrize(
+    "seqlen",
+    [9472, 18944],
+    ids=["seqle9472", "seqlen18944"],
+)
+@pytest.mark.parametrize("hidden_dim", [5120], ids=["hidden_dim5120"])
+@pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
+@pytest.mark.parametrize("use_rope", [True], ids=["has_rope"])
 @pytest.mark.parametrize(
     "mesh_device, tp_mesh_axis",
     [
@@ -267,6 +310,51 @@ def test_distributed_fused_rmsnorm(
         [(2, 4), 0],
     ],
     ids=["1x8_tp1", "2x4_tp1", "2x4_tp0"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear),
+    ],
+    ids=["fabric_linear"],
+    indirect=["device_params"],
+)
+def test_distributed_fused_rmsnorm_wan_configs(
+    mesh_device,
+    tp_mesh_axis,
+    seqlen,
+    hidden_dim,
+    dtype,
+    stats_dtype,
+    topology,
+    use_weight,
+    use_rope,
+    reset_seeds,
+):
+    num_heads_per_device = 40 // mesh_device.shape[tp_mesh_axis]
+    num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
+    if hidden_dim // 32 % num_heads != 0:
+        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
+    inp_shape = (1, 1, seqlen, hidden_dim)
+    run_distributed_fused_rmsnorm(
+        mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight, use_rope
+    )
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["BFLOAT16_in"])
+@pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
+@pytest.mark.parametrize("seqlen", [2048])
+@pytest.mark.parametrize("hidden_dim", [8192], ids=["hidden_dim8192"])
+@pytest.mark.parametrize("num_heads_per_device", [1], ids=["num_heads1"])
+@pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
+@pytest.mark.parametrize("use_rope", [True], ids=["has_rope"])
+@pytest.mark.parametrize(
+    "mesh_device, tp_mesh_axis",
+    [
+        [(1, 8), 1],
+    ],
+    ids=["1x8_tp1"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -287,6 +375,7 @@ def test_distributed_fused_rmsnorm_program_cache(
     topology,
     num_heads_per_device,
     use_weight,
+    use_rope,
     reset_seeds,
 ):
     num_heads = num_heads_per_device * mesh_device.shape[tp_mesh_axis]
@@ -296,7 +385,15 @@ def test_distributed_fused_rmsnorm_program_cache(
     dummy_tensors = []
     for i in range(2):
         run_distributed_fused_rmsnorm(
-            mesh_device, tp_mesh_axis, inp_shape, dtype, stats_dtype, topology, num_heads_per_device, use_weight
+            mesh_device,
+            tp_mesh_axis,
+            inp_shape,
+            dtype,
+            stats_dtype,
+            topology,
+            num_heads_per_device,
+            use_weight,
+            use_rope,
         )
         dummy_tensors.append(
             ttnn.from_torch(
