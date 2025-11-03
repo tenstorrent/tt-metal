@@ -43,6 +43,8 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
     guidance_rescale = 0.0
     denoising_start = 0.8
 
+    pcc = UNET_LOOP_PCC.get(str(num_inference_steps), 0)
+
     # 0. Set up default height and width for unet
     height = 1024
     width = 1024
@@ -340,7 +342,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, UNET_LOOP_PCC.get(str(num_inference_steps), 0))
+    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, pcc)
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
