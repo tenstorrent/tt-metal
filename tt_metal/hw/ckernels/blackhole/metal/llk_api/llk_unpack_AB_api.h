@@ -178,6 +178,7 @@ inline void llk_unpack_AB_reduce_block_max_row_init() {
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
 
+    // Unpack the operand (full tile) and scaler (single face)
     _llk_unpack_AB_reduce_block_max_row_init_();
     _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim>();  // Unpack operand and scaler
 }

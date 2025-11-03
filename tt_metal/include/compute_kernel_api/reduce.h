@@ -249,7 +249,8 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
 
 // clang-format off
 /**
- * Uninitializes the reduce_max_row operation. Needs to be called after the last call to `reduce_block_max_row` before initializing another operation.
+ * Uninitializes the block-based reduce_max_row operation. Needs to be called after the last call to `reduce_block_max_row` before initializing another operation.
+ * This version is for block-based reduction across multiple tiles processed together.
  *
  * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
  * and should NOT be used as a substitute for the native reduce_uninit API.
@@ -261,7 +262,7 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  */
 // clang-format on
 template <bool clear_fp32_accumulation = false>
-ALWI void reduce_max_row_uninit() {
+ALWI void reduce_block_max_row_uninit() {
     if constexpr (clear_fp32_accumulation) {
         // CAN BE OMITTED FOR SOME REASON?
         MATH((tensix_sync()));
@@ -270,4 +271,20 @@ ALWI void reduce_max_row_uninit() {
     PACK((llk_pack_reduce_mask_clear()));
     UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
 }
+
+// clang-format off
+/**
+ * Uninitializes the tile-by-tile reduce_max_row operation. Needs to be called after the last call to `reduce_tile_max_row` before initializing another operation.
+ * This version is for tile-by-tile reduction where each tile is processed individually.
+ *
+ * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
+ * and should NOT be used as a substitute for the native reduce_uninit API.
+ * Use the standard reduce_uninit() for general-purpose reduction cleanup.
+ *
+ * | Param Type | Name | Description                                      | Type | Valid Range | Required |
+ * |------------|------|--------------------------------------------------|------|-------------|----------|
+ * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
+ */
+// clang-format on
+ALWI void reduce_max_row_uninit() { reduce_uninit<false>(); }
 }  // namespace ckernel
