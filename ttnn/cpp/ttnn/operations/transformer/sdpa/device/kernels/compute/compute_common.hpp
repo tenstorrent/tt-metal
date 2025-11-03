@@ -105,40 +105,41 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
     cb_reserve_back(out_cb, rows);
 
     max_tile_init();
-    constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t dst_base = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
-    // DPRINT << rows << "x" << cols << ENDL();
+    uint32_t dst_stride = cols == 1 ? 1 : 2;
 
-    for (uint32_t i = 0; i < rows; i++) {
+    UNPACK((DPRINT << cols << " cols x " << rows << " rows" << ENDL()));
+
+    for (uint32_t i = 0; i < cols; i++) {
         acquire_dst();
-        // reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, out_cb);
-        PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
-        sfpu_reduce_max_sdpa_init();
-        for (uint32_t j = 0; j < cols; j++) {
-            // reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
-            copy_tile_to_dst_init_short(in0_cb);
-            copy_tile(in0_cb, i * cols + j, reduce_dst_idx);
-
-            // Wrap inside of PACK()
-            PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
-            PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0)));
-
-            sfpu_reduce_max_sdpa(reduce_dst_idx, static_cast<int>(VectorMode::RC_custom));
-
-            PACK((_llk_math_eltwise_unary_sfpu_done_()));
-            // DPRINT << "FINISHED ONE REDUCE" << ENDL();
+        // Load this row's tiles into a bounded DST window starting at dst_base
+        copy_tile_to_dst_init_short(in0_cb);
+        for (uint32_t j = 0; j < rows; j++) {
+            uint32_t src_idx = j * cols + i;     // row-major index
+            uint32_t dst_idx = j * 2 + (i & 1);  // interleave in DST: 0,2,4,6 then 1,3,5,7
+            copy_tile(in0_cb, src_idx, dst_idx);
+            UNPACK((DPRINT << "Copied tile " << src_idx << " to " << dst_idx << ENDL()));
         }
-        // reduce_uninit();
+
+        // Run SFPU reduce over the loaded tiles
+        sfpu_reduce_max_sdpa_init();
+        PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
+        PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i & 1)));
+        sfpu_reduce_max_sdpa((i & 1), rows, static_cast<int>(VectorMode::RC_custom));
+        PACK((_llk_math_eltwise_unary_sfpu_done_()));
+
+        // Optional elementwise max against previous max
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
-            max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::R));
+            max_tile(dst_base, prev_max_dst_idx, static_cast<int>(VectorMode::R));
         }
 
-        pack_tile(reduce_dst_idx, out_cb);
+        // Pack the reduced result from dst_base
+        pack_tile(i, out_cb);
         release_dst();
-        // DPRINT << "FINISHED ONE I LOOP ITERATION" << ENDL();
     }
 
     cb_push_back(out_cb, rows);
