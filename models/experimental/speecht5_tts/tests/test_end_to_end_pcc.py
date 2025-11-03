@@ -125,7 +125,7 @@ def test_end_to_end_pcc():
         reduction_factor=2,
         speech_decoder_prenet_units=256,
         speech_decoder_prenet_layers=2,
-        speech_decoder_prenet_dropout=0.0,
+        speech_decoder_prenet_dropout=0.5,
     )
     decoder_params = preprocess_decoder_parameters(hf_model.speecht5.decoder, ttnn_decoder_config, device)
     ttnn_decoder = TTNNSpeechT5Decoder(device=device, parameters=decoder_params, config=ttnn_decoder_config)

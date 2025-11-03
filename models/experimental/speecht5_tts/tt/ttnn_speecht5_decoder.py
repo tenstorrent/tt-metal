@@ -154,7 +154,21 @@ class TTNNSpeechDecoderPrenet:
         For now, disable dropout to isolate numerical precision issues.
         """
         # Temporarily disable dropout for PCC debugging
-        return inputs_embeds
+        # Create probability tensor from first element in batch
+        prob_tensor = ttnn.full(
+            inputs_embeds[0].shape, p, dtype=ttnn.bfloat16, device=inputs_embeds.device(), layout=ttnn.TILE_LAYOUT
+        )
+
+        # Generate Bernoulli mask (0s and 1s)
+        mask = ttnn.bernoulli(prob_tensor, 0, dtype=ttnn.bfloat16)
+
+        # Repeat mask across batch dimension
+        batch_size = inputs_embeds.shape[0]
+        all_masks = ttnn.repeat(ttnn.unsqueeze(mask, 0), [batch_size, 1, 1])
+
+        # Apply mask and scale
+        scale = 1.0 / (1.0 - p)
+        return ttnn.multiply(ttnn.where(all_masks == 1, inputs_embeds, 0), scale)
 
     def __call__(
         self,
@@ -215,10 +229,6 @@ class TTNNSpeechDecoderPrenet:
 
         # Add positional encoding (L1 output)
         hidden_states = ttnn.add(hidden_states, pe_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ensure_l1_memory(hidden_states)
-
-        # Apply dropout after positional encoding (L1 output)
-        hidden_states = self._consistent_dropout(hidden_states, self.config.dropout)
         hidden_states = ensure_l1_memory(hidden_states)
 
         # PHASE 5: Add speaker embeddings if provided
