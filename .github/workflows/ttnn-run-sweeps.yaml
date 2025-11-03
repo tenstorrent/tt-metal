@@ -609,11 +609,11 @@ concurrency:
 
 jobs:
   display-workflow-options:
-    name: 📋 Display Workflow Options
+    name: 📋 Display workflow options
     runs-on: ubuntu-22.04
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - name: Display Selected Workflow Options
+      - name: Display selected workflow options
         run: |
           echo "::group::🔧 Workflow Configuration Options"
           echo "┌─────────────────────────────────────────────────────────────┐"
@@ -688,7 +688,7 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: 📋 Display Workflow Configuration
+      - name: 📋 Display workflow configuration
         if: github.event_name == 'workflow_dispatch'
         run: |
           echo "::group::🔧 TTNN Run Sweeps - Workflow Configuration"
@@ -837,7 +837,7 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: 📋 Display Single Sweep Configuration
+      - name: 📋 Display single sweep configuration
         run: |
           echo "::group::🔧 Single Sweep Execution - Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
@@ -944,7 +944,7 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: 📋 Display Parallel Sweep Configuration
+      - name: 📋 Display parallel sweep configuration
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
