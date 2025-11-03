@@ -11,17 +11,15 @@
 namespace NAMESPACE {
 
 void MAIN {
-#if defined(TRISC0) || defined(UCK_CHLKC_UNPACK)
     {
-        TTSIM_TENSIX_DUMP();
+        UNPACK(TTSIM_TENSIX_DUMP());
         UNPACK((llk_unpack_untilize_init(0)));
     }
 
     {
-        TTSIM_TENSIX_DUMP();
+        UNPACK(TTSIM_TENSIX_DUMP());
         UNPACK((llk_unpack_untilize_uninit(0)));
     }
-#endif
 }
 
 }  // namespace NAMESPACE
