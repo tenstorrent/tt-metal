@@ -61,10 +61,10 @@ def custom_preprocessor(
         bias = model.bias
         running_mean = model.running_mean
         running_var = model.running_var
-        weight = weight.reshape((1, 1, 1, -1))
-        bias = bias.reshape((1, 1, 1, -1))
-        running_mean = running_mean.reshape((1, 1, 1, -1))
-        running_var = running_var.reshape((1, 1, 1, -1))
+        weight = weight[None, :, None, None]
+        bias = bias[None, :, None, None]
+        running_mean = running_mean[None, :, None, None]
+        running_var = running_var[None, :, None, None]
         parameters["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
         parameters["running_mean"] = ttnn.from_torch(running_mean, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
@@ -72,25 +72,27 @@ def custom_preprocessor(
         parameters["eps"] = model.eps
     if isinstance(model, SeparableConvBlock):
         parameters["depthwise_conv"] = {}
-        parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.weight, dtype=ttnn.float32)
+        parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.conv.weight, dtype=ttnn.float32)
         parameters["depthwise_conv"]["bias"] = None
-        if model.depthwise_conv.bias is not None:
-            bias = model.depthwise_conv.bias
+        if model.depthwise_conv.conv.bias is not None:
+            bias = model.depthwise_conv.conv.bias
             bias = bias.reshape((1, 1, 1, -1))
             parameters["depthwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
         if hasattr(model, "bn"):
-            weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv, model.bn)
+            weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv.conv, model.bn)
             parameters["pointwise_conv"] = {}
             parameters["pointwise_conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
             bias = bias.reshape((1, 1, 1, -1))
             parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
         else:
             parameters["pointwise_conv"] = {}
-            parameters["pointwise_conv"]["weight"] = ttnn.from_torch(model.pointwise_conv.weight, dtype=ttnn.float32)
+            parameters["pointwise_conv"]["weight"] = ttnn.from_torch(
+                model.pointwise_conv.conv.weight, dtype=ttnn.float32
+            )
             parameters["pointwise_conv"]["bias"] = None
-            if model.pointwise_conv.bias is not None:
-                bias = model.pointwise_conv.bias
+            if model.pointwise_conv.conv.bias is not None:
+                bias = model.pointwise_conv.conv.bias
                 bias = bias.reshape((1, 1, 1, -1))
                 parameters["pointwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 

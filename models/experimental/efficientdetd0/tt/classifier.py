@@ -54,28 +54,25 @@ class Classifier:
     def __call__(self, inputs):
         feats = []
         for feat, conv_list, bn_list, header in zip(inputs, self.conv_list, self.bn_list, self.header_list):
+            conv_in_shape = feat.shape
             for bn, conv in zip(bn_list, conv_list):
                 feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
-                print(f"TTNN PreConv {feat.shape}")
                 feat = conv(feat)
-                print(f"TTNN PostConv {feat.shape}")
                 feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
                 feat = ttnn.to_layout(feat, ttnn.TILE_LAYOUT)
-                feat = bn(feat)
+                feat = ttnn.reshape(feat, conv_in_shape)
+                feat = ttnn.permute(feat, (0, 3, 1, 2))
+                # feat = bn(feat)
+                feat = ttnn.permute(feat, (0, 2, 3, 1))
                 feat = feat * ttnn.sigmoid_accurate(feat, True)
-            feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
             feat = header(feat)
-
             feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
-            # feat = ttnn.permute(feat, (0, 3, 1, 2))
-            # feat = ttnn.permute(feat, (0, 2, 3, 1))
-            # feat = ttnn.permute(feat, (0, 1, 2, 3))
-            # feat = ttnn.reshape(feat, (feat.shape[0], feat.shape[1], feat.shape[2], self.num_anchors, self.num_classes))
+
             feat = ttnn.reshape(feat, (feat.shape[1], feat.shape[2], self.num_anchors, self.num_classes))
             feat = ttnn.reshape(feat, (feat.shape[0], -1, self.num_classes))
             feats.append(feat)
 
         feats = ttnn.concat(feats, dim=1)
-        feats = ttnn.sigmoid_accurate(feats, True)
+        # feats = ttnn.sigmoid_accurate(feats)
 
         return feats

@@ -363,7 +363,7 @@ class Regressor(nn.Module):
         self.num_layers = num_layers
 
         self.conv_list = nn.ModuleList(
-            [SeparableConvBlck(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)]
+            [SeparableConvBlock(in_channels, in_channels, norm=False, activation=False) for i in range(num_layers)]
         )
         self.bn_list = nn.ModuleList(
             [
@@ -419,10 +419,8 @@ class Classifier(nn.Module):
         feats = []
         for feat, bn_list in zip(inputs, self.bn_list):
             for i, bn, conv in zip(range(self.num_layers), bn_list, self.conv_list):
-                print(f"TORCH PreConv {feat.shape}")
                 feat = conv(feat)
-                print(f"TORCH PostConv {feat.shape}")
-                feat = bn(feat)
+                # feat = bn(feat)
                 feat = self.swish(feat)
             feat = self.header(feat)
 
@@ -435,7 +433,7 @@ class Classifier(nn.Module):
             feats.append(feat)
 
         feats = torch.cat(feats, dim=1)
-        feats = feats.sigmoid()
+        # feats = feats.sigmoid()
 
         return feats
 

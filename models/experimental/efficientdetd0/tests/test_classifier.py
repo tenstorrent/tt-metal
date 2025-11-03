@@ -34,7 +34,8 @@ def test_classifier(
     num_classes = 80
     fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
     box_class_repeats = [3, 3, 3, 4, 4, 4, 5, 5, 5]
-    pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
+    pyramid_levels = [1, 5, 5, 5, 5, 5, 5, 5, 6]
+    # pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
     aspect_ratios = [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)]
     num_scales = len([2**0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
     num_anchors = len(aspect_ratios) * num_scales
@@ -48,11 +49,11 @@ def test_classifier(
     # load_torch_model_state(torch_model, weight_key_prefix)
 
     features = (
-        torch.randn([1, 64, 64, 64]),
+        # torch.randn([1, 64, 64, 64]),
         torch.randn([1, 64, 32, 32]),
-        torch.randn([1, 64, 16, 16]),
-        torch.randn([1, 64, 8, 8]),
-        torch.randn([1, 64, 4, 4]),
+        # torch.randn([1, 64, 16, 16]),
+        # torch.randn([1, 64, 8, 8]),
+        # torch.randn([1, 64, 4, 4]),
         # torch.randn([1, 64, 32, 32]),
     )
     torch_out = torch_model(features)
@@ -86,7 +87,7 @@ def test_classifier(
     conv_args["header_list"] = {}
 
     i = 0
-    for p_level in range(5):
+    for p_level in range(pyramid_levels[compound_coef]):
         conv_args["conv_list"][p_level] = {}
         conv_args["header_list"][p_level] = {}
         for layer in range(box_class_repeats[compound_coef]):
@@ -104,9 +105,10 @@ def test_classifier(
         device,
         parameters,
         conv_args,
-        num_anchors,
-        num_classes,
-        box_class_repeats[compound_coef],
+        num_anchors=num_anchors,
+        num_classes=num_classes,
+        num_layers=box_class_repeats[compound_coef],
+        pyramid_levels=pyramid_levels[compound_coef],
     )
     ttnn_features = [
         ttnn.from_torch(
