@@ -87,18 +87,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
         grid_cb_data_format,
         is_sharded ? grid_tensor.buffer() : nullptr);
 
-    const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
-    const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
-    const auto [input_cb_index_0, input_cb_handle_0] = tt::tt_metal::create_cb(
-        cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
-
-    uint32_t input_cb_index_1 = DUMMY_CB_ID;
-    tt::tt_metal::CBHandle input_cb_handle_1 = 0;
-    if (is_sharded && enable_split_reader) {
-        std::tie(input_cb_index_1, input_cb_handle_1) = tt::tt_metal::create_cb(
-            cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
-    }
-
     const uint32_t out_ntiles_c = 1;
     const uint32_t output_cb_page_size = (float)output_shape[-1];
     const uint32_t output_cb_pages =
@@ -136,21 +124,20 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
     } else {
         // Writer for nearest mode with sharded grid - performs the computation
         std::vector<uint32_t> writer_compile_time_args = {
-            input_cb_index_0,                            // ct_arg[0]: input_cb_index
-            grid_cb_index,                               // ct_arg[1]: grid_cb_index
-            output_cb_index,                             // ct_arg[2]: output_cb_index
-            input_stick_size,                            // ct_arg[3]: input_stick_size
-            grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
-            input_height,                                // ct_arg[5]: input_height
-            input_width,                                 // ct_arg[6]: input_width
-            grid_batching_factor,                        // ct_arg[7]: grid_batching_factor
-            static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[8]: grid_dtype
-            grid_hw,                                     // ct_arg[9]: grid_hw
-            use_precomputed_grid ? 1U : 0U,              // ct_arg[10]: use_precomputed_grid
-            align_corners ? 1U : 0U,                     // ct_arg[11]: align_corners
-            enable_split_reader ? 1U : 0U,               // ct_arg[12]: split_reader
-            0U,                                          // ct_arg[13]: reader_id (will be set per core)
-            grid_nsticks_per_core                        // ct_arg[14]: grid_nsticks_per_core
+            grid_cb_index,                               // ct_arg[0]: grid_cb_index
+            output_cb_index,                             // ct_arg[1]: output_cb_index
+            input_stick_size,                            // ct_arg[2]: input_stick_size
+            grid_stick_size_arg,                         // ct_arg[3]: grid_stick_size
+            input_height,                                // ct_arg[4]: input_height
+            input_width,                                 // ct_arg[5]: input_width
+            grid_batching_factor,                        // ct_arg[6]: grid_batching_factor
+            static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[7]: grid_dtype
+            grid_hw,                                     // ct_arg[8]: grid_hw
+            use_precomputed_grid ? 1U : 0U,              // ct_arg[9]: use_precomputed_grid
+            align_corners ? 1U : 0U,                     // ct_arg[10]: align_corners
+            enable_split_reader ? 1U : 0U,               // ct_arg[11]: split_reader
+            0U,                                          // ct_arg[12]: reader_id (will be set per core)
+            grid_nsticks_per_core                        // ct_arg[13]: grid_nsticks_per_core
         };
 
         // Add tensor accessor args for input tensor
@@ -171,8 +158,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
 
         if (enable_split_reader) {
             auto writer1_compile_time_args = writer_compile_time_args;
-            writer1_compile_time_args[0] = input_cb_index_1;  // ct_arg[0]: input_cb_index_1
-            writer1_compile_time_args[13] = 1;                // ct_arg[13]: reader_id = 1
+            writer1_compile_time_args[12] = 1;  // ct_arg[12]: reader_id = 1
 
             writer1_kernel_id = tt::tt_metal::CreateKernel(
                 program,

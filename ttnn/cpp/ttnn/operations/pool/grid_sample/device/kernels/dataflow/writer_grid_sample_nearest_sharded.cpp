@@ -130,25 +130,24 @@ void kernel_main() {
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t global_grid_stick_start = get_arg_val<uint32_t>(1);
 
-    // Compile time arguments - same as sharded reader
-    constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t grid_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);  // output instead of scalar
-    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
-    constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
-    constexpr uint32_t input_height = get_compile_time_arg_val(5);
-    constexpr uint32_t input_width = get_compile_time_arg_val(6);
-    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(7);
-    constexpr uint32_t grid_dtype = get_compile_time_arg_val(8);
-    constexpr uint32_t grid_hw = get_compile_time_arg_val(9);
-    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(10);
-    constexpr uint32_t align_corners = get_compile_time_arg_val(11);
-    constexpr uint32_t split_reader = get_compile_time_arg_val(12);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(13);
-    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(14);
+    // Compile time arguments
+    constexpr uint32_t grid_cb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t output_cb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(2);
+    constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(3);
+    constexpr uint32_t input_height = get_compile_time_arg_val(4);
+    constexpr uint32_t input_width = get_compile_time_arg_val(5);
+    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(6);
+    constexpr uint32_t grid_dtype = get_compile_time_arg_val(7);
+    constexpr uint32_t grid_hw = get_compile_time_arg_val(8);
+    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(9);
+    constexpr uint32_t align_corners = get_compile_time_arg_val(10);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(11);
+    constexpr uint32_t reader_id = get_compile_time_arg_val(12);
+    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(13);
 
-    // Input tensor accessor for remote NOC reads - same as sharded reader
-    constexpr auto input_tensor_args = TensorAccessorArgs<15>();
+    // Input tensor accessor for remote NOC reads
+    constexpr auto input_tensor_args = TensorAccessorArgs<14>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
 
     // Calculate starting batch from global grid stick position
@@ -188,8 +187,6 @@ void kernel_main() {
 
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
-        // Reserve CB space for output
-        // cb_reserve_back(output_cb_index, 1);
         uint32_t l1_write_output_addr = l1_write_output_base_addr + grid_stick_idx * input_stick_nbytes;
 
         // Process nearest neighbor sampling and write directly to output
@@ -202,9 +199,6 @@ void kernel_main() {
             input_stick_nbytes,
             output_cb_index>(
             grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset, l1_write_output_addr);
-
-        // Push output to CB
-        // cb_push_back(output_cb_index, 1);
 
         // Always advance once after processing
         advance_grid_index(
