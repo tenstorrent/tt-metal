@@ -272,8 +272,9 @@ void MeshGraphDescriptor::populate_top_level_instance() {
 }
 
 void MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors) {
-    if (proto.mesh_descriptors_size() == 0) {
-        errors.push_back("There must be at least one mesh descriptor");
+    // Allow either mesh descriptors or switch descriptors (switches can exist without meshes)
+    if (proto.mesh_descriptors_size() == 0 && proto.switch_descriptors_size() == 0) {
+        errors.push_back("There must be at least one mesh descriptor or switch descriptor");
     }
     if (!proto.has_top_level_instance()) {
         errors.push_back("Top level instance is required");
@@ -1240,11 +1241,20 @@ void MeshGraphDescriptor::populate_inter_mesh_manual_connections(GlobalNodeId gr
             GlobalNodeId ref_instance_id = find_instance_by_ref(graph_id, node);
             auto & ref_instance = instances_.at(ref_instance_id);
 
-            // Check that the referenced instances have the same type
+            // Check that the referenced instances have compatible types
+            // Allow: MESH-MESH, SWITCH-SWITCH, and MESH-SWITCH connections
             if (type.empty()) {
                 type = ref_instance.type;
             } else {
-                TT_FATAL(type == ref_instance.type, "Graph descriptor {} connections must reference instances within same type", instance.name);
+                // Allow connections between meshes and switches (via FABRIC connections)
+                bool is_compatible =
+                    (type == ref_instance.type) || ((type == "MESH" || type == "SWITCH") &&
+                                                    (ref_instance.type == "MESH" || ref_instance.type == "SWITCH"));
+                TT_FATAL(
+                    is_compatible,
+                    "Graph descriptor {} connections must reference instances within same type or compatible types "
+                    "(MESH/SWITCH)",
+                    instance.name);
             }
 
             nodes.push_back(ref_instance_id);

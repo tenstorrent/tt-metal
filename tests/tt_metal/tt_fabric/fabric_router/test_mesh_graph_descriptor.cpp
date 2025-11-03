@@ -1162,10 +1162,10 @@ TEST(MeshGraphDescriptorTests, ParsesSwitchDescriptor) {
           name: "G0"
           type: "FABRIC"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
           connections: {
             nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 device_id: 2 } }
             channels: { count: 2 }
           }
         }
@@ -1198,15 +1198,15 @@ TEST(MeshGraphDescriptorTests, SwitchInstanceCreation) {
           type: "FABRIC"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
         }
@@ -1225,7 +1225,7 @@ TEST(MeshGraphDescriptorTests, SwitchInstanceCreation) {
     EXPECT_TRUE(desc.is_switch(switch_instance)) << "Instance should be a switch";
     EXPECT_EQ(std::string(switch_instance.name), "SW0") << "Switch should have name SW0";
     EXPECT_EQ(switch_instance.type, "SWITCH") << "Switch type should be SWITCH";
-    EXPECT_EQ(switch_instance.local_id, 0) << "Switch should have local_id 0";
+    EXPECT_EQ(switch_instance.local_id, 2) << "Switch should have local_id 2 (as specified in switch_id: 2)";
 
     // Check that switch has devices
     EXPECT_EQ(switch_instance.sub_instances.size(), 8) << "Switch should have 2*4=8 devices";
@@ -1264,15 +1264,15 @@ TEST(MeshGraphDescriptorTests, SwitchConnections) {
           type: "FABRIC"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 3 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
         }
@@ -1392,15 +1392,15 @@ TEST(MeshGraphDescriptorTests, SwitchMixedWithMeshesInGraph) {
           type: "FABRIC"
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
           instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
-          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
           connections: {
-            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
-            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 2 } }
             channels: { count: 2 }
           }
         }
