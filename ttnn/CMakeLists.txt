@@ -82,7 +82,8 @@ target_sources(
         core/tensor/experimental/lazy/lazy_tensor.cpp
         core/tensor/experimental/lazy/graph_utils.cpp
         core/tensor/experimental/lazy/evaluation_manager.cpp
-        core/tensor/experimental/lazy/passes.cpp
+        core/tensor/experimental/lazy/compile/passes/passes.cpp
+        core/tensor/experimental/lazy/compile/passes/unary_operation_fusion.cpp
         core/tensor/flatbuffer/tensor_flatbuffer.cpp
         core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
         core/tensor/host_buffer/functions.cpp

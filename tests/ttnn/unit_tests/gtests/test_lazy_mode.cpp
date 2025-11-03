@@ -5,19 +5,16 @@
 #include <gtest/gtest.h>
 #include <cstdlib>
 
-#include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/conv/conv2d/conv2d.hpp"
-#include "ttnn/operations/data_movement/permute/permute.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/experimental/lazy/lazy_mode.hpp"
 #include "ttnn/experimental/lazy/evaluation_manager.hpp"
-#include "ttnn/experimental/lazy/passes.hpp"
+#include "ttnn/experimental/lazy/compile/passes/passes.hpp"
+#include "ttnn/experimental/lazy/compile/passes/unary_operation_fusion.hpp"
 #include "ttnn/experimental/lazy/graph_utils.hpp"
 #include "ttnn/experimental/lazy/lazy_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"

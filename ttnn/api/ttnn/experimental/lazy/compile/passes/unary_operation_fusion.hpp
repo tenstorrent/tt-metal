@@ -1,6 +1,10 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #pragma once
 
-#include "ttnn/experimental/lazy/evaluation_manager.hpp"
+#include "ttnn/experimental/lazy/compile/passes/passes.hpp"
 
 namespace ttnn::experimental::lazy {
 

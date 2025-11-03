@@ -73,13 +73,4 @@ void evaluate(const std::shared_ptr<LazyTensor>& lazy_tensor) {
     }
 }
 
-namespace compile {
-void PassManager::add_pass(std::unique_ptr<Pass>&& pass) { passes_.push_back(std::move(pass)); }
-
-void PassManager::run(const ttnn::Tensor& lazy_tensor) {
-    for (auto& pass : passes_) {
-        pass->run(lazy_tensor);
-    }
-}
-}  // namespace compile
 }  // namespace ttnn::experimental::lazy

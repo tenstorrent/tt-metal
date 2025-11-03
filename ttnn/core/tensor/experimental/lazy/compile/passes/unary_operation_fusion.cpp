@@ -1,4 +1,4 @@
-#include "ttnn/experimental/lazy/passes.hpp"
+#include "ttnn/experimental/lazy/compile/passes/unary_operation_fusion.hpp"
 #include "ttnn/experimental/lazy/lazy_device_operation.hpp"
 #include "ttnn/experimental/lazy/lazy_tensor.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
