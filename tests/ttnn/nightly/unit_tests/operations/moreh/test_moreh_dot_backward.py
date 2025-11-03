@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose_and_pcc, is_watcher_enabled
+from models.common.utility_functions import comp_allclose_and_pcc
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -81,13 +81,6 @@ def get_tensors(
 
 
 def run_moreh_dot_backward(input_shape, requires_grad, device, dtype=ttnn.bfloat16, use_randint=True):
-    # Test failing with watcher enabled, github issue #29547
-    if (
-        is_watcher_enabled()
-        and requires_grad == [False, True]
-        and (input_shape == [1, 1, 1, 352] or input_shape == [1, 1, 1, 323])
-    ):
-        pytest.skip("Test is not passing with watcher enabled")
     torch.manual_seed(3072)
     require_input_grad, require_other_grad = requires_grad
     output_shape = [1, 1, 1, 1]
