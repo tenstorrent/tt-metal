@@ -13,6 +13,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ....utils.check import assert_quality
 from ....models.transformers.transformer_mochi import MochiTransformerBlock, MochiTransformer3DModel
 from ....parallel.manager import CCLManager
+from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.cache import get_cache_path, get_and_create_cache_path, save_cache_dict, load_cache_dict
 from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
@@ -119,18 +120,11 @@ def test_mochi_transformer_block(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create a simple parallel config mock for the transformer module
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
 
     # Create TT model
     tt_model = MochiTransformerBlock(
@@ -320,18 +314,11 @@ def test_mochi_transformer_model(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create a simple parallel config mock for the transformer module
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
 
     torch.manual_seed(0)
     # Create input tensors
@@ -474,18 +461,11 @@ def test_mochi_transformer_model_caching(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create a simple parallel config mock for the transformer module
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
 
     cache_path = get_and_create_cache_path(
         model_name="mochi-1-preview",
