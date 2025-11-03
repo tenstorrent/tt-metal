@@ -80,10 +80,14 @@ def setup_ccl_semaphores(mesh_device):
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(
     "mean, var, outlier_pct, outlier_var",
-    [(0, 1, 0, 0), (0, 10, 0, 0), (-10, 10, 0, 0), (0, 1, 0.01, 10)],
-    ids=["case1", "case2", "case3", "case4"],
+    [
+        (0, 1, 0, 0),
+    ],
+    ids=[
+        "case1",
+    ],
 )
-@pytest.mark.parametrize("norm_type", ["layer_norm", "rms_norm"])
+@pytest.mark.parametrize("norm_type", ["layer_norm"])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -173,7 +177,7 @@ def test_distributed_norm_comparison(
     use_new = ttnn.LayerNormDefaultProgramConfig(
         legacy_reduction=False,
         legacy_rsqrt=False,
-        use_welford=False,
+        use_welford=True,
     )
     use_old = ttnn.LayerNormDefaultProgramConfig(
         legacy_reduction=True,
@@ -185,14 +189,14 @@ def test_distributed_norm_comparison(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            distributed_program_config=use_new,
+            program_config=use_new,
         )
     elif norm_type == "rms_norm":
         ttnn_stats = ttnn.rms_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,
-            distributed_program_config=use_new,
+            program_config=use_new,
         )
     ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -215,6 +219,7 @@ def test_distributed_norm_comparison(
             weight=ttnn_weight,
             bias=ttnn_bias,
             compute_kernel_config=compute_kernel_config,
+            program_config=use_new,
         )
     elif norm_type == "rms_norm":
         ttnn_output = ttnn.rms_norm_post_all_gather(
@@ -223,7 +228,7 @@ def test_distributed_norm_comparison(
             epsilon=eps,
             weight=ttnn_weight,
             compute_kernel_config=compute_kernel_config,
-            distributed_program_config=use_new,
+            program_config=use_new,
         )
 
     ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))

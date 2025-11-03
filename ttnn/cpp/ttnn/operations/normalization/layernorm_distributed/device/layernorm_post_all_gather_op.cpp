@@ -177,17 +177,34 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
         [&](const auto& program_config) -> tt::tt_metal::operation::ProgramWithCallbacks {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
-                return layernorm_post_allgather_multi_core(
-                    a,
-                    stats,
-                    gamma,
-                    beta,
-                    output_tensor,
-                    this->norm_type,
-                    this->eps,
-                    this->compute_kernel_config,
-                    this->use_2d_core_grid,
-                    program_config);
+                if (program_config.use_welford == true) {
+                    TT_FATAL(
+                        this->norm_type == ttnn::operations::normalization::LayerNormDistributedType::RMSNORM,
+                        "Welford is not compatable with RMSNORM ");
+                    return layernorm_post_allgather_welford_multi_core(
+                        a,
+                        stats,
+                        gamma,
+                        beta,
+                        output_tensor,
+                        this->norm_type,
+                        this->eps,
+                        this->compute_kernel_config,
+                        this->use_2d_core_grid,
+                        program_config);
+                } else {
+                    return layernorm_post_allgather_multi_core(
+                        a,
+                        stats,
+                        gamma,
+                        beta,
+                        output_tensor,
+                        this->norm_type,
+                        this->eps,
+                        this->compute_kernel_config,
+                        this->use_2d_core_grid,
+                        program_config);
+                }
             } else {
                 TT_THROW("Unsupported program config");
             }
