@@ -22,11 +22,21 @@ please update this part.
 """
 LOCAL_SOURCE_PATH_KEY = "local"
 EXTERNAL_SOURCE_PATH_KEY = "external"
+ENVIRONMENT_VARIABLE_MODEL = "model_env"
 EXTERNAL_SERVER_BASE_URL = "http://large-file-cache.large-file-cache.svc.cluster.local//tutorials_data"
 LOCAL_BASE_DIRECTORY = "tutorials_data"
 
 TUTORIALS_DATA_PATHS = {
-    "ttnn_simplecnn_inference": {LOCAL_SOURCE_PATH_KEY: "./data", EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference"},
+    "ttnn_simplecnn_inference": {
+        LOCAL_SOURCE_PATH_KEY: "./data",
+        EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference",
+        ENVIRONMENT_VARIABLE_MODEL: None,
+    },
+    "ttnn_clip_zero_shot_image_classification": {
+        LOCAL_SOURCE_PATH_KEY: "./ttnn_clip_zero_shot_image_classification",
+        EXTERNAL_SOURCE_PATH_KEY: "ttnn_clip_zero_shot_image_classification",
+        ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_CLIP_PATH",  # Send model path as environment variable (avoids hard-coding values in notebook)
+    }
     # NOTE: Add entries here for new tutorials that require external data
 }
 
@@ -67,6 +77,7 @@ def setup_once(model_location_generator):
         # Download data from external server
         local_path = TUTORIALS_DATA_PATHS[tutorial_id][LOCAL_SOURCE_PATH_KEY]
         external_path = TUTORIALS_DATA_PATHS[tutorial_id][EXTERNAL_SOURCE_PATH_KEY]
+        environment_variable_model = TUTORIALS_DATA_PATHS[tutorial_id].get(ENVIRONMENT_VARIABLE_MODEL, None)
 
         # Skip if local path exists and has content
         local_path_obj = Path(tt_metal_path) / Path(local_path)
@@ -89,6 +100,10 @@ def setup_once(model_location_generator):
             if local_path_obj.exists():
                 local_path_obj.unlink()  # Remove existing symlink/file
             local_path_obj.symlink_to(data_placement.parent)
+
+            # Set environment variable if set
+            if environment_variable_model is not None:
+                os.environ[environment_variable_model] = local_path
         except Exception as e:
             logger.warning(
                 f"Could not set up data for tutorial {tutorial_id}. Error: {e}. Data will be downloaded at runtime from original source."
