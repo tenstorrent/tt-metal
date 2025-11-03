@@ -107,31 +107,32 @@ void MAIN {
         }
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
-        ACQ();
+        tile_regs_acquire();
 
         uint32_t start_N = 0;
         transpose_wh_init_short(cb_x);
         welford_init();
+        welford_clear_previous_mean_and_m2();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
                 // Welford's needs transposed input tile
                 transpose_wh_tile(cb_x, wt + j, dst0);
-                welford_tile<dst0, dst1, dst2, true, W>(start_N, W, 0, *p_reciprocals);
+                welford_tile<W>(dst0, start_N, *p_reciprocals);
                 start_N += tile_width;
             }
         }
+        welford_store_mean_var_to_dst_col<W>(dst1, start_N - 1, *p_reciprocals);
+        tile_regs_commit();
 
         // Transpose dst1 and dst2 back to columns
         cb_reserve_back(cb_ex, onetile);
         cb_reserve_back(cb_ex2, onetile);
-
+        tile_regs_wait();
         pack_reconfig_data_format(cb_ex);
         pack_tile(dst1, cb_ex);
         pack_reconfig_data_format(cb_ex2);
         pack_tile(dst2, cb_ex2);
-
-        tile_regs_commit();
         tile_regs_release();
 
         cb_push_back(cb_ex, onetile);
@@ -162,7 +163,6 @@ void MAIN {
 
         cb_push_back(cb_ex, onetile);
         cb_push_back(cb_ex2, onetile);
-        REL();
 
         // x - E[x]
         // Reuse cb_x since we didn't pop anything from it

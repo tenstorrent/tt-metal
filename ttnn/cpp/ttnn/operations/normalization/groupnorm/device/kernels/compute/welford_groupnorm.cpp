@@ -50,6 +50,9 @@ void MAIN {
 
     // dst regs
     constexpr uint32_t dst0 = 0;
+    constexpr uint32_t input_dst = 0;
+    constexpr uint32_t mean_dst = 1;
+    constexpr uint32_t var_dst = 2;
 
     // input cbs
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
@@ -172,6 +175,11 @@ void MAIN {
         uint32_t block_xy_coord = 0;
         uint32_t block_xy_limit = num_channels_per_group;
 
+        // welford_clear_previous_mean_and_m2();
+        // for (uint32_t g = 0; g < num_groups; ++g) {
+        //     welford_store_mean_m2_to_dst(mean_dst, g);
+        // }
+
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual, out_block_hw_actual;
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -213,9 +221,9 @@ void MAIN {
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         // Start Welford's Calculation
-                        welford_tile<dst0, 1, 2, false, reciprocal_size>(
-                            curr_xy_coord, block_xy_limit, group_offset, g, *p_reciprocal);
-
+                        // welford_load_mean_m2_from_dst(mean_dst, g);
+                        // welford_tile<reciprocal_size>(input_dst, curr_xy_coord, *p_reciprocal);
+                        // welford_store_mean_m2_to_dst(mean_dst, g);
                         uint32_t cols_available = TILE_WIDTH - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
                         channels_left -= cols_consumed;
@@ -251,7 +259,8 @@ void MAIN {
 
         for (uint32_t g = 0; g < num_groups; ++g) {
             // Convert M2 to variance
-            welford_M2_to_var<1, 2, reciprocal_size>(block_xy_coord, g, *p_reciprocal);
+            // welford_load_mean_m2_from_dst(mean_dst, g);
+            // welford_store_mean_var_to_dst_raw(mean_dst, block_xy_coord - 1, *p_reciprocal, g);
         }
 
         tile_regs_commit();
