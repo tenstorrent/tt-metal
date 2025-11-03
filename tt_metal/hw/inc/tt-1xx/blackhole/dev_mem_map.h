@@ -120,7 +120,8 @@
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
-#define MEM_ROUTING_TABLE_SIZE 2096  //(484 + 64 + 512 + 1024 + 12)
+#define MEM_ROUTING_TABLE_SIZE \
+    2096  // struct layout: base(484) + 1d_path(64) + 2d_path(512) + exit_table(1024) + padding(12)
 #define MEM_OFFSET_OF_ROUTING_PATHS 484
 #define MEM_ROUTING_TABLE_PADDING 12
 
