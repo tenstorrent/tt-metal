@@ -65,63 +65,13 @@ concept HasInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
-namespace detail {
 // Concept to check if return type is supported for lazy execution
 template <typename operation_t>
 concept HasSupportedLazyReturnType = std::same_as<typename operation_t::tensor_return_value_t, Tensor> ||
                                      std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>;
 
-// Check if a single field type is supported for lazy execution
-template <typename FieldType>
-struct is_supported_lazy_field_type {
-    using BareType = std::remove_cv_t<std::remove_reference_t<FieldType>>;
-
-    static constexpr bool value =
-        // const Tensor&
-        // Tensor&
-        (std::is_reference_v<FieldType> && std::is_same_v<BareType, Tensor>) ||
-        // Tensor
-        (!std::is_reference_v<FieldType> && std::is_same_v<BareType, Tensor>) ||
-        // std::optional<Tensor>
-        std::is_same_v<BareType, std::optional<Tensor>> ||
-        // std::optional<std::reference_wrapper<Tensor>>
-        std::is_same_v<BareType, std::optional<std::reference_wrapper<Tensor>>> ||
-        // std::optional<std::reference_wrapper<const Tensor>>
-        std::is_same_v<BareType, std::optional<std::reference_wrapper<const Tensor>>> ||
-        // std::vector<Tensor>
-        std::is_same_v<BareType, std::vector<Tensor>> ||
-        // std::vector<std::optional<Tensor>>
-        std::is_same_v<BareType, std::vector<std::optional<Tensor>>> ||
-        // std::vector<std::optional<const Tensor>> <- needed for OldInfraDeviceOperation
-        std::is_same_v<BareType, std::vector<std::optional<const Tensor>>>;
-};
-
-// Helper to check all fields in a struct using index sequence
-template <typename S, std::size_t... Indices>
-constexpr bool all_fields_supported_impl(std::index_sequence<Indices...>) {
-    // For each field index, get its type and check if it's supported
-    return (... && is_supported_lazy_field_type<decltype(boost::pfr::get<Indices>(std::declval<S&>()))>::value);
-}
-
-// Check if all fields in tensor_args_t are supported types
-template <typename tensor_args_t>
-concept AllFieldsSupported = requires {
-    requires all_fields_supported_impl<tensor_args_t>(
-        std::make_index_sequence<boost::pfr::tuple_size_v<tensor_args_t>>{});
-};
-
-// Main concept: can this operation be made lazy?
-// Requirements:
-// 1. Must be a primitive operation
-// 2. Must have supported return type (Tensor or vector<Tensor>)
-// 3. All fields in tensor_args_t must be supported types
 template <typename operation_t>
-concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t> &&
-                        AllFieldsSupported<typename operation_t::tensor_args_t>;
-// template <typename operation_t>
-// concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
-
-}  // namespace detail
+concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
 
 // Forward declaration of lazy operation key (defined later)
 template <typename operation_t>
@@ -178,9 +128,16 @@ private:
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        // if (ttnn::experimental::lazy::is_lazy_enabled()) {
-        //     return invoke_lazy(operation_attributes, tensors_args);
-        // }
+        if (ttnn::experimental::lazy::is_lazy_enabled()) {
+            if constexpr (CanBeMadeLazy<operation_t>) {
+                return invoke_lazy(operation_attributes, tensors_args);
+            } else {
+                TT_THROW(
+                    "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
+                    std::string{cpp_fully_qualified_name},
+                    tt::stl::get_type_name<typename operation_t::tensor_return_value_t>());
+            }
+        }
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
     }
 
@@ -195,85 +152,9 @@ private:
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
 
-    // template <typename operation_attributes_t, typename tensor_args_t>
-    // auto invoke_lazy(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
-    //     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
-
-    //     // if constexpr (detail::CanBeMadeLazy<operation_t>) {
-    //     if constexpr (detail::HasSupportedLazyReturnType<operation_t>) {
-    //         // Create lazy operation wrapper
-    //         auto lazy_op = ttnn::experimental::lazy::make_lazy_device_operation<operation_t>(
-    //             operation_attributes,
-    //             tensor_args,
-    //             std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
-
-    //         // Get output specs to create placeholder tensors
-    //         auto output_specs = lazy_op->compute_output_specs();
-    //         // auto output_specs = operation_t::compute_output_specs(operation_attributes, tensor_args);
-
-    //         // TODO: Move this if constexprs to a separate function.
-    //         // TODO: Add support for all kinds of returns
-    //         // Extract input tensors from tensor_args
-    //         std::vector<Tensor> input_tensors =
-    //             ttnn::experimental::lazy::object_to_vector<tensor_args_t, Tensor>(tensor_args);
-
-    //         if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
-    //             // TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
-    //             // Single tensor output
-    //             return Tensor::make_lazy_tensor(input_tensors, lazy_op, output_specs[0]);
-    //             // return Tensor::make_lazy_tensor(input_tensors, nullptr, output_specs);
-    //         } else if constexpr (std::same_as<tensor_return_value_t, std::vector<Tensor>>) {
-    //             // Multiple tensor outputs (vector)
-    //             return Tensor::make_lazy_tensors(input_tensors, lazy_op, output_specs);
-    //             // return Tensor::make_lazy_tensors(input_tensors, nullptr, output_specs);
-    //         }
-    //     } else {
-    //         // TODO: Should fail
-    //         log_warning(
-    //             tt::LogOp,
-    //             "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
-    //             std::string{cpp_fully_qualified_name},
-    //             tt::stl::get_type_name<tensor_return_value_t>());
-    //         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensor_args);
-    //     }
-    // }
-};
-
-// Lazy operation wrapper that creates lazy tensors instead of executing eagerly
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
-struct registered_lazy_operation_t {
-    static_assert(PrimitiveOperationConcept<operation_t>, "Lazy operations must be primitive operations");
-
-    using operation_attributes_t = typename operation_t::operation_attributes_t;
-    using tensor_args_t = typename operation_t::tensor_args_t;
-    using tensor_return_value_t = typename operation_t::tensor_return_value_t;
-
-    // Get "add" from "ttnn::add"
-    std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
-
-    // Convert "ttnn::add" to "add_t"
-    std::string class_name() const { return detail::class_name(std::string{cpp_fully_qualified_name}); }
-
-    // Convert "ttnn::add" to "ttnn.add"
-    std::string python_fully_qualified_name() const {
-        return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
-    }
-
-    template <typename... Args>
-        requires(HasInvoke<operation_t, Args && ...>)
-    auto operator()(Args&&... args) const {
-        return invoke(std::forward<Args>(args)...);
-    }
-
-private:
-    template <typename... args_t>
-    auto invoke(args_t&&... args) const {
-        static_assert(
-            requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
-            "Primitive Operation must implement invoke() method to be invoked.");
-
-        // Call the operation's invoke to get attributes and tensor_args
-        auto [operation_attributes, tensor_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
+    template <typename operation_attributes_t, typename tensor_args_t>
+    auto invoke_lazy(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
+        using tensor_return_value_t = typename operation_t::tensor_return_value_t;
 
         // Extract input tensors from tensor_args
         std::vector<Tensor> input_tensors =
@@ -312,22 +193,10 @@ struct operation_key_t {
     friend consteval auto get(operation_key_t<operation_t>);
 };
 
-// Key to look up lazy operation for a given operation type
-template <typename operation_t>
-struct lazy_operation_key_t {
-    friend consteval auto get(lazy_operation_key_t<operation_t>);
-};
-
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, auto operation>
 struct set_operation_t : std::true_type {
     friend consteval auto get(operation_key_t<operation_t>) { return operation; }
     friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>) { return operation; }
-};
-
-// Set the lazy operation for a given operation type
-template <typename operation_t, auto lazy_op>
-struct set_lazy_operation_t : std::true_type {
-    friend consteval auto get(lazy_operation_key_t<operation_t>) { return lazy_op; }
 };
 
 constexpr reflect::fixed_string prim_namespace = "ttnn::prim";
@@ -378,18 +247,8 @@ constexpr auto register_operation() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
-constexpr auto register_lazy_operation() {
-    assert_operation_in_correct_namespace<cpp_fully_qualified_name, operation_t>();
-    constexpr auto operation = registered_lazy_operation_t<cpp_fully_qualified_name, operation_t>{};
-    // Register this as the lazy version for operation_t so regular operations can find it
-    static_assert(set_lazy_operation_t<operation_t, operation>::value);
-    return operation;
-}
-
 }  // namespace decorators
 
-using ttnn::decorators::register_lazy_operation;
 using ttnn::decorators::register_operation;
 
 }  // namespace ttnn

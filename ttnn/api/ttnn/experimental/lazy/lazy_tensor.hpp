@@ -94,6 +94,7 @@ private:
     TensorMetadata tensor_metadata_;
 
     // Links to dependencies and information required to materialize the tensor.
+    // TODO: Should we still keep op and inputs in eager mode?
     LazyOperationPtr op_;
     std::vector<std::shared_ptr<LazyTensor>> op_inputs_;
     std::vector<std::shared_ptr<LazyTensor>> siblings_;

@@ -61,7 +61,8 @@ void evaluate(const std::shared_ptr<LazyTensor>& lazy_tensor) {
             } else {
                 log_info(
                     tt::LogTest,
-                    "[Evaluate] Unknown operation[id={}, type_id={}]",
+                    "[Evaluate] {} operation[id={}, type_id={}]",
+                    tensor->op()->name(),
                     tensor->id(),
                     tensor->op()->operation_type_id());
             }

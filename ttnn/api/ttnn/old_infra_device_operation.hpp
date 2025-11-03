@@ -122,14 +122,8 @@ namespace ttnn::prim {
 constexpr auto old_infra_device_operation = ttnn::register_operation<
     "ttnn::prim::old_infra_device_operation",
     tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::Tensors>>();
-constexpr auto lazy_old_infra_device_operation = ttnn::register_lazy_operation<
-    "ttnn::prim::lazy_old_infra_device_operation",
-    tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::Tensors>>();
 constexpr auto old_infra_device_operation_with_optional_output_tensors = ttnn::register_operation<
     "ttnn::prim::old_infra_device_operation_with_optional_output_tensors",
     tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::OptionalTensors>>();
-// constexpr auto lazy_old_infra_device_operation_with_optional_output_tensors = ttnn::register_lazy_operation<
-//     "ttnn::prim::lazy_old_infra_device_operation_with_optional_output_tensors",
-//     tt::tt_metal::operation::OldInfraDeviceOperation<tt::tt_metal::operation::OptionalTensors>>();
 
 }  // namespace ttnn::prim

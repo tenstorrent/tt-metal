@@ -205,7 +205,7 @@ public:
         const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
         const std::vector<TensorSpec>& tensor_specs);
 
-    void materialize();
+    void evaluate();
 
 private:
     Tensor(std::shared_ptr<ttnn::experimental::lazy::LazyTensor> lazy_tensor);
