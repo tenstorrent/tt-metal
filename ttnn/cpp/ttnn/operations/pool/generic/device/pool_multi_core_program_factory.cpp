@@ -812,6 +812,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
          .raw_in_cb = raw_in_cb,
          .out_cb = out_cb,
          .out_idx_cb = out_idx_cb,
+         .in_idx_cb = in_idx_cb_id,
+         .pack_tmp_cb = pack_tmp_cb_id,
+         .pack_idx_tmp_cb = pack_idx_tmp_cb_id,
+         .right_inc_cb = right_inc_cb_id,
+         .down_left_wrap_inc_cb = down_left_wrap_inc_cb_id,
+         .up_left_wrap_inc_cb = up_left_wrap_inc_cb_id,
          .ncores = ncores,
          .reader_indices_storage = reader_indices_storage,
          .scalar_config_storage = scalar_config_storage}};
@@ -942,7 +948,7 @@ void Pool2D::MultiCore::override_runtime_arguments(
     }
 
     if (operation_attributes.return_indices_) {
-        auto& out_idx_cb = cached_program.shared_variables.out_cb;
+        auto& out_idx_cb = cached_program.shared_variables.out_idx_cb;
         auto dst_idx_buffer = output_tensors.size() > 1 ? output_tensors[1].buffer() : nullptr;
         if (out_sharded && dst_idx_buffer) {
             UpdateDynamicCircularBufferAddress(program, out_idx_cb, *dst_idx_buffer);
