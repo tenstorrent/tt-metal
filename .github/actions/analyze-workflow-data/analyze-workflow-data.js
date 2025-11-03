@@ -1074,7 +1074,9 @@ async function generateSummaryBox(grouped, context) {
       .sort((a, b) => {
         // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
         const dateDiff = new Date(b.created_at) - new Date(a.created_at);
-        if (dateDiff !== 0) return dateDiff;
+        if (dateDiff !== 0) {
+          return dateDiff;
+        }
         const attemptA = a.run_attempt || 1;
         const attemptB = b.run_attempt || 1;
         return attemptB - attemptA; // Prefer higher attempt number
