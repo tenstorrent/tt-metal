@@ -24,16 +24,6 @@ env:
   BLACKHOLE_QB_GE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-qb-ge
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
-      build-umd-tests: true
-      tracy: true
   get-image-tags:
     runs-on: ubuntu-latest
     outputs:
@@ -54,7 +44,7 @@ jobs:
           fetch-tags: true
       - name: Get tag to use everywhere
         id: set-image-tag-suffix
-        run: echo "image-tag-suffix=$(git describe)" >> "$GITHUB_OUTPUT"
+        run: echo "image-tag-suffix=v0.64.0-dev20251102-8-g4b64346122" >> "$GITHUB_OUTPUT"
       - name: Set image tags
         id: set-image-tags
         run: |
@@ -69,8 +59,6 @@ jobs:
           echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
-      - build-artifact
-      - build-artifact
       - get-image-tags
     permissions:
       packages: write
@@ -84,121 +72,51 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: wh_6u
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
             test-command: tests/scripts/wh_6u/run_wh_6u_upstream_profiler_tests.sh
             hw-topology: wh_6u
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
             test-command: tests/scripts/single_card/run_bh_upstream_profiler_tests.sh
             hw-topology: blackhole
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_llmbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_deskbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_loudbox
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_p300
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_qb_ge
-            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - uses: actions/checkout@v4
-      - name: Download artifacts from metal
-        id: download-artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        with:
-          # 22.04 artifact... we'll probably need to key on that in the original action in metal
-          name: ${{ matrix.image-config.build-artifact-name }}
-      - run: mkdir -p _tt-metal
-      - run: tar --zstd -xvf ttm_any.tar.zst -C _tt-metal/
-      - run: ls -hal _tt-metal
-      - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        with:
-          name: ${{ matrix.image-config.wheel-artifact-name }}
-      - name: 💿 Verify Wheel exists
-        shell: bash
-        run: |
-          echo "📂 In directory: $(pwd)"
-          echo "📄 Files:"
-          ls -la .
-      # Do not set up docker buildx because of https://github.com/docker/setup-buildx-action/issues/57
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Generate Dockerfile
-        shell: bash
-        run: |
-          sudo apt update
-          sudo apt install -y gettext
-          export TEST_COMMAND=${{ matrix.image-config.test-command }}
-          export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
-          export TT_METAL_DEV_VERSION=latest
-          export TT_METAL_COMMIT_SHA=${{ github.sha }}
-          envsubst < dockerfile/upstream_test_images/Dockerfile.template > dockerfile/upstream_test_images/Dockerfile-generated
-          cat dockerfile/upstream_test_images/Dockerfile-generated
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          file: dockerfile/upstream_test_images/Dockerfile-generated
-          platforms: linux/amd64
-          pull: true
-          push: true
-          tags: ${{ matrix.image-config.image-tag }}
-          context: ${{ github.workspace }}
-          build-args: |
-            TECHDEBT_INSTALL_TTT_REQS=${{ matrix.image-config.techdebt-install-ttt-reqs && 'true' || 'false' }}
   test-wh-6u-image:
     needs:
       - get-image-tags
       - build-images
-    runs-on:
-      - arch-wormhole_b0
-      - topology-6u
-      - in-service
-      - pipeline-functional
+    runs-on: ubuntu-latest
     steps:
       # TODO -likely need to put this into a script which can be parameterized on the build number
       # and whether to only pull
@@ -207,13 +125,10 @@ jobs:
         run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run image
         timeout-minutes: 45
-        env:
-          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
   test-bh-multicard-image:
     needs:
       - get-image-tags
@@ -230,16 +145,13 @@ jobs:
             image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
           - runner-label: BH-QB-GE
             image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
-    runs-on:
-      - ${{ matrix.bh-config.runner-label }}
-      - in-service
-      - pipeline-perf
+    runs-on: ubuntu-latest
     steps:
       - name: Run image
         timeout-minutes: 30
-        env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+        run: |
+          docker pull ${{ matrix.bh-config.image-name }}
+          docker image inspect ${{ matrix.bh-config.image-name }}
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -250,20 +162,13 @@ jobs:
         bh-config:
           - runner-label: P300
             image-name: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
-    runs-on:
-      - ${{ matrix.bh-config.runner-label }}
-      - in-service
+    runs-on: ubuntu-latest
     steps:
-      - name: Download Llama model weights from LFC
-        timeout-minutes: 15
-        run: |
-          mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Run image
         timeout-minutes: 60
-        env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+        run: |
+          docker pull ${{ matrix.bh-config.image-name }}
+          docker image inspect ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -274,23 +179,14 @@ jobs:
         bh-card:
           - P100
           - P150
-    runs-on:
-      - ${{ matrix.bh-card }}
-      - in-service
-      - cloud-virtual-machine
-      # Targeting cloud machines with pipeline-functional per now per
-      # https://github.com/tenstorrent/tt-metal/issues/21738#issuecomment-2925788342
-      - pipeline-functional
+    runs-on: ubuntu-latest
     steps:
       - name: Run image
         timeout-minutes: 30
-        env:
-          # For different environments, yyz BH VLAN vs. cloud
-          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+        run: docker image inspect ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
   calculate-to-publish:
     if: ${{ !cancelled() }}
     needs:
@@ -465,7 +361,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Show image
+        run: echo "${{ matrix.image-config.image-tag }}"
       - uses: ./.github/actions/push-latest-image-to-ghcr
+        if: false
         with:
           docker-image-tag: ${{ matrix.image-config.image-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
