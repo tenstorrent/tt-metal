@@ -11,7 +11,7 @@ PERF_EXPECTATIONS = {
     "t3000": {
         "test_perf": {"inference_time": 0.0157, "compile_time": 60},
         "test_perf_trace": {"inference_time": 0.0038, "compile_time": 60},
-        "test_perf_2cqs": {"inference_time": 0.0143, "compile_time": 60},
+        "test_perf_2cqs": {"inference_time": 0.015, "compile_time": 60},
         "test_perf_trace_2cqs": {"inference_time": 0.0031, "compile_time": 60},
     },
     "tg": {

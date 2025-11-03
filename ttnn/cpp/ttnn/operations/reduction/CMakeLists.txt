@@ -39,6 +39,9 @@ target_sources(
         accumulation/accumulation_common.cpp
         accumulation/cumprod/cumprod.cpp
         accumulation/cumsum/cumsum.cpp
+        accumulation/ema/ema.cpp
+        accumulation/ema/ema_op.cpp
+        accumulation/ema/ema_multicore.cpp
         accumulation/device/accumulation_device_operation.cpp
         accumulation/device/accumulation_program_factory.cpp
         sampling/device/sampling_op.cpp
