@@ -28,20 +28,20 @@ def _extract_seperable_conv(model, bn=None):
     assert isinstance(model, SeparableConvBlock)
     parameters = {}
     parameters["depthwise_conv"] = {}
-    parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.conv.weight, dtype=ttnn.float32)
+    parameters["depthwise_conv"]["weight"] = ttnn.from_torch(model.depthwise_conv.weight, dtype=ttnn.float32)
     parameters["depthwise_conv"]["bias"] = None
-    if model.depthwise_conv.conv.bias is not None:
-        bias = model.depthwise_conv.conv.bias
+    if model.depthwise_conv.bias is not None:
+        bias = model.depthwise_conv.bias
         bias = bias.reshape((1, 1, 1, -1))
         parameters["depthwise_conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
     parameters["pointwise_conv"] = {}
     if bn is not None:
-        weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv.conv, bn)
+        weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv, bn)
     elif hasattr(model, "bn"):
-        weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv.conv, model.bn)
+        weight, bias = fold_batch_norm2d_into_conv2d(model.pointwise_conv, model.bn)
     else:
-        weight, bias = model.pointwise_conv.conv.weight, model.pointwise_conv.conv.bias
+        weight, bias = model.pointwise_conv.weight, model.pointwise_conv.bias
 
     parameters["pointwise_conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
     if bias is not None:

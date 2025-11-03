@@ -148,10 +148,6 @@ class Conv2dStaticSamePadding(nn.Conv2d):
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, bias=True, groups=1, dilation=1, **kwargs):
         super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, bias=bias, groups=groups)
-        self.stride = self.conv.stride
-        self.kernel_size = self.conv.kernel_size
-        self.dilation = self.conv.dilation
 
         if isinstance(self.stride, int):
             self.stride = [self.stride] * 2
@@ -176,8 +172,7 @@ class Conv2dStaticSamePadding(nn.Conv2d):
 
         x = F.pad(x, [left, right, top, bottom])
 
-        x = self.conv(x)
-        return x
+        return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
 class MaxPool2dStaticSamePadding(nn.MaxPool2d):

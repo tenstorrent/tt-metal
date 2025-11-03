@@ -18,43 +18,50 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import (
 )
 from ttnn.dot_access import make_dot_access_dict
 from ttnn.model_preprocessing import ModuleArgs
+from models.experimental.efficientdetd0.common import load_torch_model_state
 
 
-# @pytest.mark.parametrize(
-#     "input_dim, hidden_dims,
-#     [
-#         (56, [256]),
-#     ],
-# )
+torch.manual_seed(0)
+
+
+@pytest.mark.parametrize(
+    "features, num_classes, box_class_repeats, num_anchors",
+    [
+        (
+            (
+                # N C H W
+                # torch.randn([1, 64, 64, 64]),
+                torch.randn([1, 64, 32, 32]),
+                torch.randn([1, 64, 32, 32]),
+                torch.randn([1, 64, 16, 16]),
+                torch.randn([1, 64, 8, 8]),
+                torch.randn([1, 64, 4, 4]),
+            ),  # features
+            90,  # num classes
+            3,  # box_class_repeats
+            9,  # num_anchors
+        ),
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_classifier(
+    features,
+    num_classes,
+    box_class_repeats,
+    num_anchors,
     device,
 ):
-    compound_coef = 0
-    num_classes = 80
-    fpn_num_filters = [64, 88, 112, 160, 224, 288, 384, 384, 384]
-    box_class_repeats = [3, 3, 3, 4, 4, 4, 5, 5, 5]
-    pyramid_levels = [5, 5, 5, 5, 5, 5, 5, 5, 6]
-    aspect_ratios = [(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)]
-    num_scales = len([2**0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)])
-    num_anchors = len(aspect_ratios) * num_scales
+    PCC_THRESHOLD = 0.99
+    pyramid_levels = len(features)
     torch_model = Classifier(
-        in_channels=fpn_num_filters[compound_coef],
+        in_channels=features[0].shape[1],
         num_anchors=num_anchors,
         num_classes=num_classes,
-        num_layers=box_class_repeats[compound_coef],
-        pyramid_levels=pyramid_levels[compound_coef],
+        num_layers=box_class_repeats,
+        pyramid_levels=pyramid_levels,
     ).eval()
-    # load_torch_model_state(torch_model, weight_key_prefix)
+    load_torch_model_state(torch_model, "classifier")
 
-    features = (
-        # torch.randn([1, 64, 64, 64]),
-        torch.randn([1, 64, 32, 32]),
-        torch.randn([1, 64, 32, 32]),
-        torch.randn([1, 64, 16, 16]),
-        torch.randn([1, 64, 8, 8]),
-        torch.randn([1, 64, 4, 4]),
-    )
     torch_out = torch_model(features)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
@@ -66,35 +73,21 @@ def test_classifier(
     # )
     module_args = infer_torch_module_args(model=torch_model, input=features, layer_type=torch.nn.Conv2d)
 
-    module_args_pruned = {}
     i = 0
-    p_i = 0
-    while i < len(module_args):
-        i += 1
-        module_args_pruned[p_i] = module_args[i]
-        p_i += 1
-        i += 2
-        module_args_pruned[p_i] = module_args[i]
-        p_i += 1
-        i += 1
-
     conv_args = {}
     conv_args["conv_list"] = {}
     conv_args["header_list"] = {}
-
-    i = 0
-    for p_level in range(pyramid_levels[compound_coef]):
+    for p_level in range(pyramid_levels):
         conv_args["conv_list"][p_level] = {}
         conv_args["header_list"][p_level] = {}
-        for layer in range(box_class_repeats[compound_coef]):
+        for layer in range(box_class_repeats):
             conv_args["conv_list"][p_level][layer] = {}
-            conv_args["conv_list"][p_level][layer]["depthwise_conv"] = module_args_pruned[i]
-            conv_args["conv_list"][p_level][layer]["pointwise_conv"] = module_args_pruned[i + 1]
+            conv_args["conv_list"][p_level][layer]["depthwise_conv"] = module_args[i]
+            conv_args["conv_list"][p_level][layer]["pointwise_conv"] = module_args[i + 1]
             i += 2
-        conv_args["header_list"][p_level]["depthwise_conv"] = module_args_pruned[i]
-        conv_args["header_list"][p_level]["pointwise_conv"] = module_args_pruned[i + 1]
+        conv_args["header_list"][p_level]["depthwise_conv"] = module_args[i]
+        conv_args["header_list"][p_level]["pointwise_conv"] = module_args[i + 1]
         i += 2
-
     conv_args = make_dot_access_dict(conv_args, ignore_types=(ModuleArgs,))
 
     ttnn_model = TTClassifier(
@@ -103,8 +96,8 @@ def test_classifier(
         conv_args,
         num_anchors=num_anchors,
         num_classes=num_classes,
-        num_layers=box_class_repeats[compound_coef],
-        pyramid_levels=pyramid_levels[compound_coef],
+        num_layers=box_class_repeats,
+        pyramid_levels=pyramid_levels,
     )
     ttnn_features = [
         ttnn.from_torch(
@@ -119,7 +112,7 @@ def test_classifier(
     ttnn_out = ttnn_model(ttnn_features)
     ttnn_out = ttnn.to_torch(ttnn_out)
 
-    passing, pcc_message = comp_pcc(torch_out, ttnn_out, 0.99)
+    passing, pcc_message = comp_pcc(torch_out, ttnn_out, PCC_THRESHOLD)
     logger.info(f"Output PCC: {pcc_message}")
     logger.info(comp_allclose(torch_out, ttnn_out))
 
@@ -128,4 +121,4 @@ def test_classifier(
     else:
         logger.warning("Classifier Test Failed!")
 
-    assert passing, f"PCC value is lower than 0.999. Check implementation! {pcc_message}"
+    assert passing, f"PCC value is lower than {PCC_THRESHOLD}. Check implementation! {pcc_message}"
