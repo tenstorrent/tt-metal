@@ -313,19 +313,17 @@ jobs:
 
             echo "Valid JSON array is provided"
 
-            # Process each requested hw_topology
-            while IFS= read -r hw_topology; do
-              echo $hw_topology
-              hw_topology=$(echo ${hw_topology} | jq -r '.')
-              echo "Processing requested hw_topology: $hw_topology"
+            # Process each requested requested_hw_topology
+            while IFS= read -r requested_requested_hw_topology; do
+              echo "Processing requested hw_topology: $requested_hw_topology"
 
-              # Validate hw_topology exists in config
-              if ! jq -e ".hw_topologies[\"$hw_topology\"]" "$config_file" >/dev/null; then
-                echo "ERROR: Unknown hw_topology '$hw_topology'. Valid values are: $valid_topologies" >&2
+              # Validate requested_hw_topology exists in config
+              if ! jq -e ".hw_topologies[\"$requested_hw_topology\"]" "$config_file" >/dev/null; then
+                echo "ERROR: Unknown hw_topology '$requested_hw_topology'. Valid values are: $valid_topologies" >&2
                 exit 1
               fi
 
-              add_images_for_topology "$hw_topology" "forced specific"
+              add_images_for_topology "$requested_hw_topology" "forced specific"
             done < <(echo ${request_input} | jq -r '.[]')
           fi
 
