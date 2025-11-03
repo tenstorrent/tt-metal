@@ -33,7 +33,7 @@ struct InputArgs {
     bool print_connectivity = false;
     bool help = false;
     bool send_traffic = false;
-    uint32_t data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
+    uint32_t data_size = 0;
     uint32_t packet_size_bytes = 64;
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
@@ -55,6 +55,11 @@ std::filesystem::path generate_output_dir() {
 
 InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     InputArgs input_args;
+
+    if (test_args::has_command_option(args_vec, "--help")) {
+        input_args.help = true;
+        return input_args;
+    }
 
     if (test_args::has_command_option(args_vec, "--cabling-descriptor-path")) {
         TT_FATAL(
@@ -91,7 +96,10 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
             input_args.data_size <= tt::tt_metal::hal::get_erisc_l1_unreserved_size(),
             "Data size must be less than or equal to the L1 unreserved size: {} bytes",
             tt::tt_metal::hal::get_erisc_l1_unreserved_size());
+    } else {
+        input_args.data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
     }
+
     if (test_args::has_command_option(args_vec, "--packet-size-bytes")) {
         input_args.packet_size_bytes = std::stoi(test_args::get_command_option(args_vec, "--packet-size-bytes"));
         TT_FATAL(
@@ -105,7 +113,6 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     input_args.print_connectivity = test_args::has_command_option(args_vec, "--print-connectivity");
     input_args.send_traffic = test_args::has_command_option(args_vec, "--send-traffic");
     input_args.sweep_traffic_configs = test_args::has_command_option(args_vec, "--sweep-traffic-configs");
-    input_args.help = test_args::has_command_option(args_vec, "--help");
     input_args.validate_connectivity =
         input_args.cabling_descriptor_path.has_value() || input_args.fsd_path.has_value();
 
