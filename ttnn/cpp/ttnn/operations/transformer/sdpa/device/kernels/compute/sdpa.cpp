@@ -44,6 +44,7 @@ void MAIN {
     constexpr uint32_t is_chunked = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
     constexpr uint32_t sliding_window_size = get_compile_time_arg_val(28);
+    constexpr uint32_t use_attention_sink = get_compile_time_arg_val(29) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -71,6 +72,7 @@ void MAIN {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
@@ -203,7 +205,6 @@ void MAIN {
                         cb_identity_scale_in,
                         Sq_chunk_t,
                         Sk_chunk_t>(alias_cur_max, alias_prev_max, k_chunk > 0);
-
                     /**
                      * sub_exp fuses a few operations.
                      * In-place it performs `QK = exp((QK - cur_max) * scale)`
@@ -269,11 +270,63 @@ void MAIN {
                     std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
                     std::swap(alias_prev_max, alias_cur_max);
                 }
-
                 /**
                  * Performs final row-reduction on the partial sum.
                  */
                 matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+
+                /**
+                 * Process attention sink as a virtual K chunk.
+                 * The attention sink provides additional logits that are included in the softmax
+                 * denominator but don't contribute to the output (no S @ V computation).
+                 * This effectively allows some attention probability to be "absorbed" by the sink,
+                 * reducing attention weights on actual tokens.
+                 *
+                 * Shape of attention_sink: [Sq_chunk_t, 1] tiles
+                 * Each head has one sink logit value that is broadcast to all query positions in the chunk.
+                 * The reader kernel replicates the per-head value across all Sq_chunk_t positions.
+                 */
+                if constexpr (use_attention_sink) {
+                    // Treat attention_sink as scores (already scaled)
+                    // Shape: [Sq_chunk_t, 1] tiles - same per-head sink value broadcast to all query positions
+
+                    // 1. Update running max: cur_max = max(prev_max, attention_sink)
+                    //    This compares the previous max with the sink logit
+                    reconfig_data_format(cb_attention_sink, cb_identity_scale_in);
+
+                    reduce_c<
+                        PoolType::MAX,
+                        ReduceDim::REDUCE_ROW,
+                        cb_attention_sink,
+                        cb_identity_scale_in,
+                        Sq_chunk_t,
+                        1>(alias_cur_max, alias_prev_max, true);
+
+                    // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    cb_pop_front(alias_prev_max, Sq_chunk_t);
+
+                    // 3. Rescale previous sum: prev_sum *= exp(prev_max - cur_max)
+                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
+                    //    This adds the attention sink's contribution to the softmax denominator
+                    sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, 1, scale_fp32>(
+                        alias_cur_max, alias_cur_sum, false);
+
+                    // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
+                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+
+                    // 6. Update running statistics for final normalization
+                    std::swap(alias_prev_sum, alias_cur_sum);
+                    std::swap(alias_prev_max, alias_cur_max);
+
+                    // 7. Rescale accumulated output: mm2_prev_out *= exp(prev_max - cur_max)
+                    //    Note: We do NOT compute attention_sink @ V, so output only has real token contributions
+                    //    But we need to rescale it due to the updated max
+                    mul_block_bcast_cols<Sq_chunk_t, vDHt>(
+                        alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, false);
+                    std::swap(alias_mm2_prev_out, alias_mm2_cur_out);
+                }
                 /* cb_cur_sum = 1.0 / cb_cur_sum */
                 recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
@@ -285,6 +338,7 @@ void MAIN {
                 // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
                 }
+                cb_pop_front(cb_attention_sink, Sq_chunk_t);
             }
         }
     }

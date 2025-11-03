@@ -85,6 +85,13 @@ def main():
         default=[],
     )
     parser.add_option(
+        "--device-memory-profiler",
+        dest="device_memory_profiler",
+        action="store_true",
+        help="Profile allocated device L1 and DRAM memory buffers",
+        default=False,
+    )
+    parser.add_option(
         "--dump-device-data-mid-run",
         dest="mid_run_device_data",
         action="store_true",
@@ -186,6 +193,9 @@ def main():
 
     if options.cpp_post_process:
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
+
+    if options.device_memory_profiler:
+        os.environ["TT_METAL_MEM_PROFILER"] = "1"
 
     if len(args) > 0:
         doReport = False
