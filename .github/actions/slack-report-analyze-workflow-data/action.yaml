@@ -29,6 +29,19 @@ runs:
           exit 0
         fi
 
+        # TEMPORARY: Add fake regression for testing - REMOVE BEFORE MERGING
+        echo "🧪 TESTING MODE: Adding fake regression for testing purposes"
+        jq '. + [{
+          "name": "[TEST] Fake Regression Workflow",
+          "workflow_url": "https://github.com/tenantplatform/tt-metal/actions/workflows/test.yaml",
+          "run_url": "https://github.com/tenantplatform/tt-metal/actions/runs/123456789",
+          "commit_url": "https://github.com/tenantplatform/tt-metal/commit/abcdef123456",
+          "commit_short": "abcdef1",
+          "owners": [{"id": "U123456", "name": "test-user"}],
+          "failing_jobs": ["test-job-1", "test-job-2"],
+          "original_owner_names_for_generic_exit": []
+        }]' "$tmp_file" > "${tmp_file}.new" && mv "${tmp_file}.new" "$tmp_file"
+
         # Check if there are any regressions
         REGRESSION_COUNT=$(jq -r 'if (type=="array") then length else 0 end' "$tmp_file")
         if [ "$REGRESSION_COUNT" -eq 0 ]; then
@@ -77,12 +90,26 @@ runs:
             "Malformed regressions payload"
           end' "$tmp_file")
 
-        # Extract workflow names from alert_all_message for simple listing
+        # Count total failing workflows from alert_all_message
         # The alert message format is: "*Alerts: failing workflows on main*\n• Workflow Name <url|open> mentions jobs"
-        # We extract just the workflow names (between "• " and "<" or end of line)
-        FAILING_WORKFLOWS_LIST=""
+        # We count lines starting with "• " to get the total number of failing workflows
+        FAILING_WORKFLOWS_COUNT_MESSAGE=""
         if [ -n "$ALERT_RAW" ]; then
-          FAILING_WORKFLOWS_LIST=$(printf '%b' "$ALERT_RAW" | grep -E '^• ' | sed -E 's/^• ([^<]*).*/\1/' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R -s 'split("\n") | map(select(length > 0)) | if length > 0 then ("\n\n*Note: All currently failing workflows:*\n" + (map("- " + .) | join("\n"))) else "" end' -r)
+          # Decode the alert message and count workflow lines
+          decoded_alert=$(printf '%b' "$ALERT_RAW")
+          total_failing_count=$(echo "$decoded_alert" | grep -E '^• ' | wc -l | tr -d ' ')
+
+          # Subtract regressions (already shown in detail) to get "other" failing workflows
+          other_failing_count=$((total_failing_count - REGRESSION_COUNT))
+
+          # Format the message (singular vs plural)
+          if [ "$other_failing_count" -gt 0 ]; then
+            if [ "$other_failing_count" -eq 1 ]; then
+              FAILING_WORKFLOWS_COUNT_MESSAGE="1 other pipeline is failing"
+            else
+              FAILING_WORKFLOWS_COUNT_MESSAGE="$other_failing_count other pipelines are failing"
+            fi
+          fi
         fi
 
         # Build the payload using blocks for guaranteed line breaks, with text fallback
@@ -91,15 +118,15 @@ runs:
         PAYLOAD=$(jq -cn \
           --arg header "$HEADER" \
           --arg body "$TEXT" \
-          --arg failing_list "$FAILING_WORKFLOWS_LIST" \
+          --arg failing_count_msg "$FAILING_WORKFLOWS_COUNT_MESSAGE" \
           '
           {
-            "text": ($header + "\n" + $body + $failing_list),
+            "text": ($header + "\n" + $body + (if ($failing_count_msg | length > 0) then "\n\n" + $failing_count_msg else "" end)),
             "blocks": ([
               { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
               { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
-            ] + (if ($failing_list | length > 0) then
-              [ { "type": "section", "text": { "type": "mrkdwn", "text": $failing_list } } ]
+            ] + (if ($failing_count_msg | length > 0) then
+              [ { "type": "section", "text": { "type": "mrkdwn", "text": $failing_count_msg } } ]
             else [] end))
           }
         ')
@@ -111,7 +138,7 @@ runs:
       shell: bash
       run: echo "ℹ️ Skipping Slack notification because there are no regressions to report."
 
-    - name: Report Github Pipeline Status Slack Action
+    - name: Report GitHub Pipeline Status Slack Action
       if: steps.build.outputs.has_regressions == 'true'
       uses: slackapi/slack-github-action@v1.26.0
       with:
