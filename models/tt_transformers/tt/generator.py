@@ -62,6 +62,9 @@ class Generator:
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
+        self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
 
     def _capture_trace_prefill(
         self,
@@ -116,6 +119,7 @@ class Generator:
         prefill_seq_len=None,
         **kwargs,
     ):
+        # We are not appeding host/device here because we never do device sampling in prefill with TTT
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -406,7 +410,7 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_decode_output = self._easy_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -462,7 +466,7 @@ class Generator:
 
         return tt_logits
 
-    def _capture_trace_text(
+    def _capture_decode_trace_text(
         self,
         tokens,
         current_pos,
@@ -507,7 +511,7 @@ class Generator:
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
 
-    def _easy_trace_text(
+    def _decode_forward_trace_text(
         self,
         tokens,
         current_pos,
@@ -516,15 +520,16 @@ class Generator:
         argmax_on_device=False,
     ):
         """
-        Tracing is easy! Just call this method and we'll handle tracing for you.
+        Run decode forward text with tracing
         """
-        if not hasattr(self, "trace_ids_text"):
-            trace_ids, tt_out_trace, *device_inputs = self._capture_trace_text(
+        # The trace is different depending on whether we are doing device sampling or not
+        if not self.trace_ids_decode[argmax_on_device]:
+            trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
                 tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
             )
-            self.trace_ids_text = trace_ids
-            self.trace_inputs_text = device_inputs
-            self.trace_output_text = tt_out_trace
+            self.trace_ids_decode[argmax_on_device] = trace_ids
+            self.trace_inputs_decode[argmax_on_device] = device_inputs
+            self.trace_output_decode[argmax_on_device] = tt_out_trace
 
         reset_inputs = not argmax_on_device
         if self.prev_page_table is None or any(
@@ -540,13 +545,13 @@ class Generator:
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_text[i],
+                    device_tensors=self.trace_inputs_decode[argmax_on_device][i],
                 )
 
-        for i, trace_id in self.trace_ids_text.items():
+        for i, trace_id in self.trace_ids_decode[argmax_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
 
-        return self.trace_output_text
+        return self.trace_output_decode[argmax_on_device]
 
     def _prefill_forward_single_user(
         self,
