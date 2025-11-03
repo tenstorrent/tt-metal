@@ -62,7 +62,7 @@ void SDMeshCommandQueue::read_shard_from_device(
 
 void SDMeshCommandQueue::submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>&, bool) {}
 
-WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index) {
+WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*index*/) {
     TT_THROW("Not supported for slow dispatch");
 }
 

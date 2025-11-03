@@ -1172,7 +1172,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
-    tt::tt_metal::Program& program,
+    tt::tt_metal::Program& /*program*/,
     const CoreCoord& ethernet_core,
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,

@@ -1050,7 +1050,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
 }
 
 void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
-    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
+    IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
     const Hal& hal = MetalContext::instance().hal();
@@ -1803,7 +1803,7 @@ void DeviceProfiler::readResults(
     const std::vector<CoreCoord>& virtual_cores,
     const ProfilerReadState state,
     const ProfilerDataBufferSource data_source,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    const std::optional<ProfilerOptionalMetadata>& /*metadata*/) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState()) {

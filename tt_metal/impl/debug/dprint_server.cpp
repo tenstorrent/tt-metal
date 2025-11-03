@@ -846,7 +846,7 @@ void DPrintServer::Impl::clear_log_file() {
 }  // clear_log_file
 
 bool DPrintServer::Impl::peek_one_risc_non_blocking(
-    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool new_data_this_iter) {
+    ChipId device_id, const umd::CoreDescriptor& logical_core, int risc_id, bool /*new_data_this_iter*/) {
     // If init magic isn't cleared for this risc, then dprint isn't enabled on it, don't read it.
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
