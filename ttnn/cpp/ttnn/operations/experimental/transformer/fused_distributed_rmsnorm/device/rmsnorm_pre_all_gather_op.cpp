@@ -43,7 +43,7 @@ std::vector<TensorSpec> FusedRMSNormPreAllGather::compute_output_specs(const std
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), input_tensor.memory_config()))};
 }
 
-operation::ProgramWithCallbacks FusedRMSNormPreAllGather::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks FusedRMSNormPreAllGather::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
