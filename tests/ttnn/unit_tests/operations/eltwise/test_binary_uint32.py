@@ -7,6 +7,25 @@ import pytest
 import ttnn
 
 
+def create_full_range_tensor(input_shape, dtype, value_ranges):
+    num_elements = torch.prod(torch.tensor(input_shape)).item()
+
+    num_ranges = len(value_ranges)
+    elements_per_range = num_elements // num_ranges
+    remainder = num_elements % num_ranges
+
+    segments = []
+    for i, (low, high) in enumerate(value_ranges):
+        range_elements = elements_per_range + (1 if i < remainder else 0)
+
+        segment = torch.linspace(low, high, steps=range_elements, dtype=dtype)
+        segments.append(segment)
+
+    in_data = torch.cat(segments)
+    in_data = in_data.reshape(input_shape)
+    return in_data
+
+
 @pytest.mark.parametrize(
     "ttnn_op, value_ranges",
     [
@@ -108,8 +127,10 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 @pytest.mark.parametrize(
     "ttnn_op, low_a, high_a, low_b, high_b",
     [
-        (ttnn.add, 0, 100, 100, 200),  # Addition: ranges don't overlap to avoid overflow
+        (ttnn.add, 0, 100, 100, 200),
         (ttnn.sub, 50000, 100000, 0, 40000),  # Subtraction: ensure a > b for valid results
+        (ttnn.eq, 0, 1610612735, 536870911, 2147483647),
+        (ttnn.ne, 0, 1610612735, 536870911, 2147483647),
     ],
 )
 @pytest.mark.parametrize(
@@ -371,3 +392,155 @@ def test_bitwise_uint32_full_range(device, ttnn_function, use_legacy):
     tt_out = ttnn.to_torch(z_tt_out, dtype=torch.uint32)
 
     assert torch.equal(z_torch, tt_out)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.eq,
+        ttnn.ne,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 2, 32, 128])),),
+)
+def test_binary_comp_ops_uint32_full_range(ttnn_op, input_shapes, device):
+    value_ranges_a = [
+        (0, 1000),  # Small numbers
+        (1e3, 1e6),  # Small - Medium numbers
+        (1e6, 1e8),  # Medium numbers
+        (1e9, 2147483647),  # Large numbers
+    ]
+
+    value_ranges_b = [
+        (0, 1500),  # Small numbers
+        (1e4, 1e7),  # Small - Medium numbers
+        (1e7, 1e9),  # Medium numbers
+        (2e9, 2147483647),  # Large numbers
+    ]
+
+    torch_input_tensor_a = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_a
+    )
+    torch_input_tensor_b = create_full_range_tensor(
+        input_shape=input_shapes, dtype=torch.int32, value_ranges=value_ranges_b
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.eq,
+        ttnn.ne,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        pytest.param([(1, 1, 1), (8, 16, 32)], id="broadcast_lhs_1"),  # scalar bcast
+        pytest.param([(8, 1, 32), (8, 16, 32)], id="broadcast_lhs_3"),  # row bcast
+        pytest.param([(8, 16, 32), (8, 16, 1)], id="broadcast_rhs_5"),  # col bcast
+        pytest.param([(1, 16, 1), (8, 1, 32)], id="broadcast_both_5"),  # mixed bcast
+    ],
+)
+@pytest.mark.parametrize(
+    "low_a, high_a, low_b, high_b",
+    [
+        (0, 1e8, 1e5, 1e9),
+    ],
+)
+def test_binary_comp_ops_uint32_bcast(ttnn_op, input_shapes, low_a, high_a, low_b, high_b, device):
+    a_shape, b_shape = input_shapes
+    num_elements = max(int(torch.prod(torch.tensor(a_shape)).item()), 1)
+    torch_input_tensor_a = torch.linspace(high_a, low_a, num_elements, dtype=torch.int32)
+    torch_input_tensor_a = torch_input_tensor_a[:num_elements].reshape(a_shape)
+
+    num_elements = max(int(torch.prod(torch.tensor(b_shape)).item()), 1)
+    torch_input_tensor_b = torch.linspace(high_b, low_b, num_elements, dtype=torch.int32)
+    torch_input_tensor_b = torch_input_tensor_b[:num_elements].reshape(b_shape)
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor, dtype=torch.int32)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.eq,
+        ttnn.ne,
+    ],
+)
+def test_binary_comp_ops_uint32_edge_cases(ttnn_op, device):
+    torch_input_tensor_a = torch.tensor(
+        [0, 1, 0, 2147483647, 2147483647, 2147483647, 1073741823, 1073741823, 4294967295, 4294967294]
+    )
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_input_tensor_b = torch.tensor([0, 0, 1, 2147483647, 2147483646, 0, 1000, 1073741823, 4294967295, 4294967295])
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.uint32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
+
+    output_tensor = ttnn_op(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert torch.equal(output_tensor, torch_output_tensor)
