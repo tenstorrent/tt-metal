@@ -67,54 +67,73 @@ runs:
         # propagate original test exit code for this step
         exit "$(cat .command_status)"
 
-    # ---- ALWAYS produce a compact summary in the job's Step Summary ----
-    - name: Compact test summary (regex)
+    # ---- Generate and output compact summary to both CI and GitHub Step Summary ----
+    - name: Compact test summary (output to CI and Step Summary)
       if: always()
       shell: bash
       run: |
         set -euo pipefail
         cd docker-job
         : "${CI_LOG_FILE:=${{ inputs.ci_log_file }}}"
+
         if [[ ! -s "$CI_LOG_FILE" ]]; then
-          {
-            echo "### Compact test summary"
-            echo
-            echo "_no aggregated log at \`$CI_LOG_FILE\`_"
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
+          # No log file case
+          summary_content="No aggregated log at $CI_LOG_FILE"
+        else
+          # Process log file
+          nolog="${CI_LOG_FILE}.nocolor"
+          sed -r 's/\x1B\[[0-9;]*[mK]//g' "$CI_LOG_FILE" > "$nolog"
+
+          # Fail-first extract (short, only on failure):
+          grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$nolog" \
+            | head -n 150 > fail-first.txt || true
+
+          # Main compact summary:
+          grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
+            | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
+
+          # Build summary content
+          summary_content=""
+          if [[ -s fail-first.txt ]]; then
+            summary_content+="=== FAILURE HIGHLIGHTS ==="$'\n'
+            summary_content+="$(cat fail-first.txt)"$'\n'$'\n'
+          fi
+          summary_content+="=== KEY LINES ==="$'\n'
+          if [[ -s compact-summary.txt ]]; then
+            summary_content+="$(cat compact-summary.txt)"
+          else
+            summary_content+="No matches for the current pattern"
+          fi
         fi
 
-        nolog="${CI_LOG_FILE}.nocolor"
-        sed -r 's/\x1B\[[0-9;]*[mK]//g' "$CI_LOG_FILE" > "$nolog"
+        # Output to CI console (plain text format)
+        echo "########################################################"
+        echo "# COMPACT TEST SUMMARY (CI LOG)"
+        echo "########################################################"
 
-        # Fail-first extract (short, only on failure):
-
-        grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$nolog" \
-          | head -n 150 > fail-first.txt || true
-
-
-        # Main compact summary:
-        grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
-          | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
-
+        # Output to GitHub Step Summary (markdown format)
         {
           echo "### Compact test summary"
           echo
-          if [[ -s fail-first.txt ]]; then
-            echo "**Failure highlights**"
-            echo
-            echo '```text'
-            cat fail-first.txt
-            echo '```'
-            echo
-          fi
-          echo "**Key lines**"
-          echo
-          if [[ -s compact-summary.txt ]]; then
-            echo '```text'
-            cat compact-summary.txt
-            echo '```'
+          if [[ ! -s "$CI_LOG_FILE" ]]; then
+            echo "_no aggregated log at \`$CI_LOG_FILE\`_"
           else
-            echo "_no matches for the current pattern_"
+            if [[ -s fail-first.txt ]]; then
+              echo "**Failure highlights**"
+              echo
+              echo '```text'
+              cat fail-first.txt
+              echo '```'
+              echo
+            fi
+            echo "**Key lines**"
+            echo
+            if [[ -s compact-summary.txt ]]; then
+              echo '```text'
+              cat compact-summary.txt
+              echo '```'
+            else
+              echo "_no matches for the current pattern_"
+            fi
           fi
         } >> "$GITHUB_STEP_SUMMARY"
