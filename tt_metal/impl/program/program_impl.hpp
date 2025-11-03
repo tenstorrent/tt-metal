@@ -292,6 +292,8 @@ public:
     // Dispatches detail::collect_kernel_meta, device is nullable
     std::vector<detail::KernelMeta> collect_kernel_meta(IDevice* device) const;
 
+    void update_runtime_info_from_descriptor(const ProgramDescriptor& descriptor);
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
