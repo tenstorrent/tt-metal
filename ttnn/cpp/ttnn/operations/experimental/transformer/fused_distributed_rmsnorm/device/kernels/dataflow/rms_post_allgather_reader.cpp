@@ -108,8 +108,6 @@ void kernel_main() {
                     uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                         uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
-                        // noc_async_read_tile(col_tile, weight_accessor, weight_wr_ptr);
-                        // weight_wr_ptr += weight_tile_bytes;
 
                         // Rather than read a full tile containing sparse data,
                         // just read the first row of the tile from the faces.
