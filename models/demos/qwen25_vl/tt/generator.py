@@ -158,6 +158,7 @@ class Generator:
                     chunk_page_table_tt,
                 ) = self.model.prepare_inputs_prefill(
                     chunk_tokens,
+                    rot_mats=rot_mats,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
