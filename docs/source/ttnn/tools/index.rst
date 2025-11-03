@@ -14,3 +14,9 @@ For more information, check out the `Getting Started <https://github.com/tenstor
 * `vllm <https://github.com/tenstorrent/vllm>`_
 
 A high-throughput and memory-efficient inference and serving engine for Large Language Models (LLMs) on Tenstorrent hardware.
+
+* `tracy profiler <https://github.com/tenstorrent/tracy>`_
+
+Tracy is a real-time, high-performance tracing tool designed for analyzing and visualizing the execution of deep learning models and operations on Tenstorrent hardware.
+
+For detailed instructions on profiling TT-NN operations, refer to the `Profiling TT-NN Operations <../ttnn/profiling_ttnn_operations>` guide.
