@@ -16,6 +16,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include "common/core_coord.hpp"
 
 namespace tt {
 

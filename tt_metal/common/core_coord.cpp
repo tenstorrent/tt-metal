@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "tracy/Tracy.hpp"
+#include "common/core_coord.hpp"
 
 auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
     -> format_context::iterator {

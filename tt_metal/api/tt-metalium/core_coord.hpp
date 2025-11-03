@@ -43,19 +43,6 @@ struct fmt::formatter<CoreCoord> {
 
 constexpr bool operator<=(const CoreCoord& a, const CoreCoord& b) { return (a < b) or (a == b); }
 
-struct RelativeCoreCoord {
-    long x = 0;
-    long y = 0;
-
-    std::string str() const;
-};
-
-constexpr bool operator==(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return a.x == b.x && a.y == b.y; }
-
-constexpr bool operator!=(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return !(a == b); }
-
-CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const CoreCoord& grid_size);
-
 class CoreRange {
 public:
     CoreCoord start_coord;
@@ -258,11 +245,6 @@ struct hash<CoreRange> {
 };
 
 template <>
-struct hash<RelativeCoreCoord> {
-    std::size_t operator()(RelativeCoreCoord const& o) const;
-};
-
-template <>
 struct hash<CoreRangeSet> {
     std::size_t operator()(const CoreRangeSet& core_range_set) const;
 };
@@ -279,16 +261,6 @@ struct to_json_t<CoreCoord> {
 template <>
 struct from_json_t<CoreCoord> {
     CoreCoord operator()(const nlohmann::json& json) noexcept;
-};
-
-template <>
-struct to_json_t<RelativeCoreCoord> {
-    nlohmann::json operator()(const RelativeCoreCoord& relative_core_coord) noexcept;
-};
-
-template <>
-struct from_json_t<RelativeCoreCoord> {
-    RelativeCoreCoord operator()(const nlohmann::json& json) noexcept;
 };
 
 template <>
