@@ -81,7 +81,7 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
-    tensor_id = tensor_id_counter.fetch_add(1);
+    tensor_id = Tensor::fetch_and_increment_tensor_id_counter();
 }
 
 void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
