@@ -635,11 +635,11 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
     };
     uint8_t is_mcast_active;
     uint8_t reserved[7];
-    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) {}
 
-    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
+    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) volatile {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) volatile {}
 };
 
 // WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
@@ -672,11 +672,11 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
         };
         uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
     };  // 4B
-    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
+    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) {}
 
-    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
+    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) volatile {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) volatile {}
 } __attribute__((packed));
 static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
 

@@ -25,7 +25,7 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    const FabricNodeId& src_fabric_node_id, uint16_t num_chips) {
+    const FabricNodeId& /*src_fabric_node_id*/, uint16_t /*num_chips*/) {
     // No-op
 }
 
