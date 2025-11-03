@@ -348,6 +348,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         auto srcs = jit_build_query.srcs(params);
         this->srcs_.insert(this->srcs_.end(), std::move_iterator(srcs.begin()), std::move_iterator(srcs.end()));
     }
+    this->firmware_is_kernel_object_ = jit_build_query.firmware_is_kernel_object(params);
 
     // Create the objs from the srcs
     for (const string& src : srcs_) {
@@ -491,9 +492,12 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
 
     if (!this->is_fw_) {
-        string weakened_elf_name =
-            env_.out_firmware_root_ + this->target_name_ + "/" + this->target_name_ + "_weakened.elf";
-        cmd += "-Wl,--just-symbols=" + weakened_elf_name + " ";
+        string fw_name = env_.out_firmware_root_ + this->target_name_ + "/" + this->target_name_;
+        if (this->firmware_is_kernel_object_) {
+            cmd += fw_name + "_object.o ";
+        } else {
+            cmd += "-Wl,--just-symbols=" + fw_name + "_weakened.elf ";
+        }
     }
 
     // Append common args provided by the build state
@@ -516,12 +520,19 @@ void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) co
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
-    std::string pathname_out = out_dir + target_name_ + "_weakened.elf";
+    std::string pathname_out = out_dir + target_name_;
 
     ll_api::ElfFile elf;
     elf.ReadImage(pathname_in);
     static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
+    if (this->firmware_is_kernel_object_) {
+        elf.ObjectifyExecutable();
+        pathname_out += "_object.o";
+    } else {
+        pathname_out += "_weakened.elf";
+    }
+    elf.Finalize();
     elf.WriteImage(pathname_out);
 }
 

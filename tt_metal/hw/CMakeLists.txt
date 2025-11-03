@@ -2,7 +2,6 @@
 set(ARCHS
     wormhole
     blackhole
-    quasar
 )
 set(PROCS
     brisc
@@ -15,11 +14,17 @@ set(PROCS
     aerisc
     main_aerisc
     subordinate_aerisc
-    dm=0
 )
 set(TYPES
     firmware
     kernel
+)
+
+set(TLS_ARCHS quasar)
+# name:number:cpu
+set(TLS_PROCS
+    trisc:4:tt-qsr32
+    dm:8:tt-qsr64
 )
 
 # for wormhole, we need to generate two different linker scripts
@@ -163,77 +168,133 @@ if(NOT TT_USE_SYSTEM_SFPI)
     endif()
 endif()
 
+# old-style
 foreach(ARCH IN LISTS ARCHS)
     if(ARCH STREQUAL "quasar")
-        set(HW_VERSION_PATH "tt-2xx")
-    else()
-        set(HW_VERSION_PATH "tt-1xx")
+        message(FATAL_ERROR "How did I get here?")
     endif()
 
-    set(DEV_MEM_MAPS
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/dev_mem_map.h"
-        "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/tensix_dev_map.h"
-    )
-    set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}")
-    set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
+    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/${ARCH}")
+    set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
     if(ARCH STREQUAL "wormhole")
         foreach(SCRIPT_TYPE IN LISTS WH_LD_SCRIPTS)
             foreach(IRAM_OPT IN LISTS IRAM_OPTIONS)
                 if(IRAM_OPT)
-                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}_iram.ld")
+                    set(HW_OUTPUT_FILE "erisc-b0-${SCRIPT_TYPE}_iram.ld")
                     set(IRAM_FLAG "-D${IRAM_OPT}")
                     set(IRAM_COMMENT " with IRAM")
                 else()
-                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}.ld")
+                    set(HW_OUTPUT_FILE "erisc-b0-${SCRIPT_TYPE}.ld")
                     set(IRAM_FLAG "")
                     set(IRAM_COMMENT "")
                 endif()
 
                 add_custom_command(
                     OUTPUT
-                        ${OUTPUT_FILE}
+                        ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                     COMMAND
-                        ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDES} -E -P -x c -o ${OUTPUT_FILE}
+                        ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDE} -E -P -x c -o
+                        ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
                     DEPENDS
                         ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
-                    COMMENT "Preprocessing toolchain/erisc-b0-${SCRIPT_TYPE}.ld${IRAM_COMMENT}"
+                        ${HW_INCLUDE}/dev_mem_map.h
+                        ${HW_INCLUDE}/tensix_dev_map.h
+                    COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}${IRAM_COMMENT}"
                     VERBATIM
                 )
 
-                list(APPEND LD_FILES ${OUTPUT_FILE})
+                list(APPEND LD_FILES ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
             endforeach()
         endforeach()
     endif()
 
     foreach(PROC IN LISTS PROCS)
+        string(TOUPPER ${PROC} PROC_DEFINE)
         string(REPLACE "=" "" PROC_FILE "${PROC}")
         foreach(TYPE IN LISTS TYPES)
             set(HW_OUTPUT_FILE "${TYPE}_${PROC_FILE}.ld")
-            string(TOUPPER ${PROC} PROC_DEFINE)
             string(TOUPPER ${TYPE} TYPE_DEFINE)
 
             # custom command to preprocess/generate the output file
             add_custom_command(
                 OUTPUT
-                    ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                    ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory ${HW_OUTPUT_DIR}
                 COMMAND
                     ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
-                    -I${HW_INCLUDES} -E -P -x c -o ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                    -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
                 DEPENDS
                     ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main.ld
-                    ${DEV_MEM_MAPS}
-                COMMENT "Preprocessing toolchain/${HW_OUTPUT_FILE}"
+                    ${HW_INCLUDE}/dev_mem_map.h
+                    ${HW_INCLUDE}/tensix_dev_map.h
+                COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
                 VERBATIM
             )
 
             # add output file to the custom target
-            list(APPEND LD_FILES ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
+            list(APPEND LD_FILES ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
+        endforeach()
+    endforeach()
+endforeach()
+
+# TLS-style
+foreach(ARCH IN LISTS TLS_ARCHS)
+    set(HW_INCLUDE "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-2xx/${ARCH}")
+    set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
+    string(TOUPPER ${ARCH} ARCH_DEFINE)
+
+    foreach(PROC IN LISTS TLS_PROCS)
+        # PROC is NAME:NUM:CPU
+        string(REPLACE ":" ";" PROC_INFO ${PROC})
+        list(LENGTH PROC_INFO LEN)
+        list(GET PROC_INFO 0 NAME)
+        list(GET PROC_INFO 1 NUM)
+        list(GET PROC_INFO 2 CPU)
+
+        foreach(TYPE IN LISTS TYPES)
+            string(TOUPPER ${TYPE} TYPE_DEFINE)
+            if(TYPE STREQUAL "firmware")
+                # Firmware is always TLS
+                set(BOUND 0)
+            else()
+                set(BOUND ${NUM})
+            endif()
+            # bounds are inclusive [0,NUM]
+            foreach(IX RANGE ${BOUND})
+                set(CNT ${IX})
+                if(CNT EQUAL BOUND)
+                    # The last one generates the non-legacy TLS script
+                    set(CNT "")
+                endif()
+                set(HW_OUTPUT_FILE "${TYPE}_${NAME}${CNT}.ld")
+                string(TOUPPER "${NAME}=${CNT}" PROC_DEFINE)
+
+                # custom command to preprocess/generate the output file
+                add_custom_command(
+                    OUTPUT
+                        ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                    COMMAND
+                        ${CMAKE_COMMAND} -E make_directory ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}
+                    COMMAND
+                        ${CMAKE_CXX_COMPILER} -DTYPE_${TYPE_DEFINE} -DCOMPILE_FOR_${PROC_DEFINE} -DARCH_${ARCH_DEFINE}
+                        -I${HW_INCLUDE} -E -P -x c -o ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
+                    DEPENDS
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/main-tls.ld
+                        ${HW_INCLUDE}/dev_mem_map.h
+                        ${HW_INCLUDE}/tensix_dev_map.h
+                    COMMENT "Preprocessing ${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE}"
+                    VERBATIM
+                )
+
+                # add output file to the custom target
+                list(APPEND LD_FILES ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
+            endforeach()
         endforeach()
     endforeach()
 endforeach()
