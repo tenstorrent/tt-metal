@@ -233,6 +233,8 @@ public:
             enchantum::to_string(params.core_type));
     }
 
+    bool firmware_is_kernel_object(const Params&) const override { return false; }
+
     std::string target_name(const Params& params) const override {
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             // build.cpp used to distinguish "active_erisc" and "erisc" and use

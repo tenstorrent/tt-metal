@@ -26,16 +26,30 @@ public:
     using word_t = std::uint32_t;     // Contents
 
     struct Segment {
+        enum Type {
+            None,
+            Text,
+            Data,
+            TLS,
+            Mask = 0xf,
+            Deleted = 0x10,
+        };
         std::vector<offset_t> relocs;      // 32-bit relocs to apply
         std::span<word_t const> contents;  // Non-owning span
+        Type type = None;
         address_t address = 0;             // Byte execution address (0 for
                                            // XIP)
         address_t lma = 0;                 // Byte load address
         offset_t membytes = 0;             // Byte size of memory image.
 
     public:
-        Segment(std::span<const word_t> contents, address_t addr, address_t lma, offset_t membytes) :
-            contents(contents), address(addr), lma(lma), membytes(membytes) {}
+        Segment(std::span<const word_t> contents, Type t, address_t addr, address_t lma, offset_t membytes) :
+            contents(contents), type(t), address(addr), lma(lma), membytes(membytes) {}
+
+    public:
+        auto GetType() const { return Type(type & Mask); }
+        auto IsDeleted() const { return bool(type & Deleted); }
+        void SetDeleted() { type = Type(type | Deleted); }
     };
 
     ElfFile() = default;
@@ -70,10 +84,20 @@ public:
     // Write the (now-processed) elf file.
     void WriteImage(const std::string& path);
 
+    // Finalize representation before end use.
+    void Finalize();
+
     // Weaken data symbols, remove all others. Keep STRONG_NAMES
     // strong (can be non-data symbols).  Names can be exact or simple
     // globs ending in '*'.
     void WeakenDataSymbols(std::span<std::string_view const> strong_names);
+
+    // Convert the executable to a relinkable object file. Relocations
+    // are removed, allocatable sections are placed at zero, their
+    // symbols are adjusted to remain section-relative. The elf type
+    // becomes 'ET_REL'. Remember, objectifying people is bad, but
+    // objectifying an executable is perfectly fine (if a little strange).
+    void ObjectifyExecutable();
 
     // XIPify
     void MakeExecuteInPlace();

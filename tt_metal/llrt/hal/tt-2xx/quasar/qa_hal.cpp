@@ -132,9 +132,12 @@ public:
     }
 
     std::string common_flags(const Params& params) const override {
+        // TODO: tt-qsr64->qsr64-rocc and tt-qsr32-tensixbh->qsr32-tensix
+        // when available.
         std::string cflags =
-            "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";  // TODO: change to -mcpu=tt-qa once
-                                                   // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
+            params.processor_class == HalProcessorClassType::DM ? "-mcpu=tt-qsr64 " : "-mcpu=tt-qsr32-tensixbh ";
+        cflags += "-fno-rvtt-sfpu-replay ";
+        cflags += "-fno-extern-tls-init ";
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
@@ -142,6 +145,7 @@ public:
         return cflags;
     }
 
+    bool firmware_is_kernel_object(const Params&) const override { return true; }
     std::string linker_script(const Params& params) const override {
         switch (params.core_type) {
             case HalProgrammableCoreType::TENSIX:

@@ -27,10 +27,12 @@ memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     elf.ReadImage(path);
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
-
+    }
+    elf.Finalize();
+    if (loading == Loading::CONTIGUOUS_XIP) {
         // debug: dump disassembly after XIP transform
         if (std::getenv("TT_METAL_XIP_DUMP") != nullptr) {
-            // Write the modified ELF out and run objdump -S -d on it
+            // Write the modified ELF out
             std::string out_elf_path = std::string(path) + ".xip.elf";
             try {
                 elf.WriteImage(out_elf_path);
