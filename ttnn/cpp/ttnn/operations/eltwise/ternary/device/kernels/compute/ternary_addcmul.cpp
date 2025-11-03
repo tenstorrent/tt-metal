@@ -48,10 +48,7 @@ void MAIN {
         mul_binary_tile(1, 2, 3);  // DST[1] * DST[2] -> DST[3]
 
         // Step 2: (input_b * input_c) * value -> DST[3]
-        // Skip multiplication if value == 1.0 to avoid precision loss
-        if (scalar_u32 != 0x3f800000) {     // 1.0f in IEEE 754
-            mul_unary_tile(3, scalar_u32);  // DST[3] * scalar -> DST[3]
-        }
+        mul_unary_tile(3, scalar_u32);  // DST[3] * scalar -> DST[3]
 
         // Step 3: input_a + (input_b * input_c * value) -> DST[0]
         add_binary_tile_init();
