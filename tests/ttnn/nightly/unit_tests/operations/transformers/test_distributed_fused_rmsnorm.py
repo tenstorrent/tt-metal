@@ -8,12 +8,8 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import tt2torch_tensor
-
 from loguru import logger
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
-from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose
 
 
 def get_rot_transformation_mat():
@@ -236,7 +232,7 @@ def test_distributed_fused_rmsnorm_sweep_shapes(
 @pytest.mark.parametrize(
     "seqlen",
     [9472, 18944],
-    ids=["seqle9472", "seqlen18944"],
+    ids=["seqlen9472", "seqlen18944"],
 )
 @pytest.mark.parametrize("hidden_dim", [5120], ids=["hidden_dim5120"])
 @pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
