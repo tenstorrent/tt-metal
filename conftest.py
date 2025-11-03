@@ -7,14 +7,14 @@ import os
 from pathlib import Path
 
 # Set up Python path to find ttnn and tracy modules
-_repo_root = Path(__file__).parent
-_ttnn_path = str(_repo_root / "ttnn")
-_tools_path = str(_repo_root / "tools")
-if _ttnn_path not in sys.path:
-    sys.path.insert(0, _ttnn_path)
-if _tools_path not in sys.path:
-    sys.path.insert(0, _tools_path)
-
+# _repo_root = Path(__file__).parent
+# _ttnn_path = str(_repo_root / "ttnn")
+# _tools_path = str(_repo_root / "tools")
+# if _ttnn_path not in sys.path:
+#     sys.path.insert(0, _ttnn_path)
+# if _tools_path not in sys.path:
+#     sys.path.insert(0, _tools_path)
+#
 import pytest
 import torch
 import random
