@@ -298,8 +298,6 @@ jobs:
             done
 
           else
-            echo ${request_input}
-            echo ${request_input} | jq 'type'
             echo "Mode: Publishing specific hw_topology list"
 
             # Validate it's a JSON array
