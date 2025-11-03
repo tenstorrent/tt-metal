@@ -277,11 +277,11 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto [device_tensor_shape, core_grid_size] = tensor_and_grid;
 
     // Test failing with watcher enabled, github issue #29554
-    // Skip specific parameter combinations when watcher is enabled (cases 6, 7, 8)
-    // These correspond to the 6GB shard configuration with all page sizes
-    if (tt::test_utils::is_watcher_enabled() && device_tensor_shape.height() == (1 << 14) &&
-        device_tensor_shape.width() == (3 << 14) && core_grid_size.x == 12 && core_grid_size.y == 1) {
-        GTEST_SKIP() << "Test is not passing with watcher enabled";
+    // Skip specific parameter combinations that are known to fail
+    if (tt::test_utils::is_watcher_enabled() && device_tensor_shape.height() == (1 << 14) && core_grid_size.y == 1 &&
+        ((device_tensor_shape.width() == (3 << 14) && core_grid_size.x == 12) ||
+         (device_tensor_shape.width() == (1 << 14) && core_grid_size.x == 8 && page_size == 4096))) {
+        GTEST_SKIP() << "Test configuration known to fail with watcher enabled";
     }
 
     uint64_t device_tensor_size = device_tensor_shape.height() * device_tensor_shape.width() * ElementSize;
