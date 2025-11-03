@@ -14,12 +14,10 @@ Pipeline:
 4. Postnet: PyTorch decoder output → TTNN vs PyTorch postnet PCC
 """
 
-import sys
 import torch
 import ttnn
 
-# Add parent directory to path
-sys.path.append("/home/ttuser/ssinghal/PR-fix/speecht5_tts/tt-metal")
+# Path already configured via PYTHONPATH
 
 from transformers import SpeechT5ForTextToSpeech, SpeechT5Processor
 from models.experimental.speecht5_tts.reference import (
@@ -81,6 +79,9 @@ def test_end_to_end_pcc():
 
     # Load HF model for reference
     hf_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
+
+    # Disable dropout in HF model for fair comparison
+    hf_model.speecht5.decoder.prenet.encode_positions.dropout.p = 0.0
 
     # Load PyTorch reference models
     pytorch_encoder = load_encoder_ref()

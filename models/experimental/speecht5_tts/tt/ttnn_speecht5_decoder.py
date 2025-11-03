@@ -339,6 +339,47 @@ class TTNNSpeechT5Attention:
         self.scaling = 1.0 / math.sqrt(self.head_dim)
         self.L1_MEMCFG = ttnn.L1_MEMORY_CONFIG
 
+        # Initialize causal mask cache
+        self.causal_mask_cache = {}
+
+    def _create_causal_mask(self, seq_len: int) -> ttnn.Tensor:
+        """
+        Get causal mask for the given sequence length.
+        Uses pre-computed cache when available, otherwise computes on-the-fly.
+
+        Args:
+            seq_len: Sequence length
+
+        Returns:
+            causal_mask: [1, 1, seq_len, seq_len] with -inf above diagonal
+
+        Note:
+            For trace support, the sequence length must be pre-computed in the cache.
+            On-the-fly computation will fail during trace capture.
+        """
+        # Check cache first
+        if seq_len in self.causal_mask_cache:
+            return self.causal_mask_cache[seq_len]
+
+        # If not in cache, compute on-the-fly (this won't work during trace!)
+        # This path is only for non-traced execution with unusual sequence lengths
+        causal_mask = torch.full((seq_len, seq_len), float("-inf"))
+        causal_mask = torch.triu(causal_mask, diagonal=1)
+        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)
+
+        causal_mask_ttnn = ttnn.from_torch(
+            causal_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Cache for future use
+        self.causal_mask_cache[seq_len] = causal_mask_ttnn
+
+        return causal_mask_ttnn
+
     def _reshape_for_multihead(self, tensor: ttnn.Tensor, batch: int, seq_len: int) -> ttnn.Tensor:
         """
         Reshape [B, S, H] -> [B*NH, S, HD] with L1 memory management.
@@ -383,6 +424,7 @@ class TTNNSpeechT5Attention:
         hidden_states: ttnn.Tensor,
         attention_mask: Optional[ttnn.Tensor] = None,
         key_value_states: Optional[ttnn.Tensor] = None,
+        past_kv: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None,
     ) -> ttnn.Tensor:
         """
         Multi-head attention with comprehensive L1 memory management.
@@ -391,6 +433,7 @@ class TTNNSpeechT5Attention:
             hidden_states: [batch, seq_len, hidden_size] - queries
             attention_mask: [batch, 1, seq_len, seq_len or kv_seq_len] - optional mask
             key_value_states: [batch, kv_seq_len, hidden_size] - for cross-attention
+            past_kv: tuple(k, v) - pre-computed K/V values (optional)
 
         Returns:
             output: [batch, seq_len, hidden_size]
@@ -418,8 +461,12 @@ class TTNNSpeechT5Attention:
         query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
         query = ensure_l1_memory(query)
 
-        # PHASE 3: K, V from key_value_states (cross-attn) or hidden_states (self-attn) (high-performance compute kernel)
-        if is_cross_attention:
+        # PHASE 3: K, V computation (high-performance compute kernel)
+        if past_kv is not None:
+            # Use pre-computed K/V values (from cache or pre-computed cross-attention)
+            key, value = past_kv
+            kv_seq_len = key.shape[1]
+        elif is_cross_attention:
             # Cross-attention: K, V from encoder
             key = l1_linear(
                 key_value_states,
@@ -462,11 +509,21 @@ class TTNNSpeechT5Attention:
 
         # PHASE 6: Apply attention mask if provided (L1 outputs)
         if attention_mask is not None:
-            # Expand mask for all heads: [B, 1, S, KS] -> [B*NH, S, KS]
-            # attention_mask already has shape [B, 1, S, KS]
-            mask_expanded = l1_reshape(attention_mask, [batch, 1, seq_len, kv_seq_len])
-            mask_expanded = ttnn.repeat(mask_expanded, [1, self.num_heads, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            # attention_mask should be [1, 1, seq_len, kv_seq_len] for proper causal masking
+            # If kv_seq_len > seq_len (due to caching), we assume the mask is already properly sized
+            # If kv_seq_len == seq_len, the mask is standard causal [1, 1, seq_len, seq_len]
+
+            # Get actual mask shape for validation
+            mask_shape = attention_mask.shape
+            expected_shape = [1, 1, seq_len, kv_seq_len]
+
+            # Expand to multi-head: [1, 1, seq_len, kv_seq_len] -> [batch, num_heads, seq_len, kv_seq_len]
+            mask_expanded = ttnn.repeat(
+                attention_mask, [batch, self.num_heads, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG
+            )
             mask_expanded = ensure_l1_memory(mask_expanded)
+
+            # Reshape for addition: [batch, num_heads, seq_len, kv_seq_len] -> [batch * num_heads, seq_len, kv_seq_len]
             mask_expanded = l1_reshape(mask_expanded, [batch * self.num_heads, seq_len, kv_seq_len])
 
             # Add mask to attention weights (L1 output)
@@ -537,38 +594,184 @@ class TTNNSpeechT5DecoderLayer:
         self.encoder_attn_layer_norm_params = parameters["encoder_attn_layer_norm"]
         self.final_layer_norm_params = parameters["final_layer_norm"]
 
+        # Initialize self-attention KV cache (dynamic concatenation approach)
+        # These will be built up through concatenation during autoregressive generation
+        self.self_attn_k_cache = None  # Will be initialized on first use
+        self.self_attn_v_cache = None  # Will be initialized on first use
+
+        # Initialize causal mask cache for self-attention
+        self.causal_mask_cache = {}
+
+    def _create_causal_mask(self, seq_len: int) -> ttnn.Tensor:
+        """
+        Get causal mask for the given sequence length.
+        Uses pre-computed cache when available, otherwise computes on-the-fly.
+        """
+        # Check cache first
+        if seq_len in self.causal_mask_cache:
+            return self.causal_mask_cache[seq_len]
+
+        # If not in cache, compute on-the-fly
+        causal_mask = torch.full((seq_len, seq_len), float("-inf"))
+        causal_mask = torch.triu(causal_mask, diagonal=1)
+        causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)
+
+        causal_mask_ttnn = ttnn.from_torch(
+            causal_mask,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Cache for future use
+        self.causal_mask_cache[seq_len] = causal_mask_ttnn
+
+        return causal_mask_ttnn
+
     def __call__(
         self,
         hidden_states: ttnn.Tensor,
-        encoder_hidden_states: ttnn.Tensor,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        current_pos: Optional[int] = None,
+        cross_attn_kv: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         attention_mask: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
-        Decoder layer with comprehensive L1 memory management.
+        Decoder layer supporting both interfaces:
 
-        Args:
-            hidden_states: [batch, seq_len, hidden_size]
-            encoder_hidden_states: [batch, enc_seq_len, hidden_size]
-            attention_mask: [batch, 1, seq_len, seq_len] - causal mask for self-attn
+        1. Full sequence processing (legacy interface):
+           - hidden_states: [batch, seq_len, hidden_size]
+           - encoder_hidden_states: [batch, enc_seq_len, hidden_size]
+           - attention_mask: [batch, 1, seq_len, seq_len] - optional mask
+
+        2. Single-token KV caching (new interface):
+           - hidden_states: [batch, 1, hidden_size] - single token input
+           - current_pos: int - current position in sequence (0-based)
+           - cross_attn_kv: tuple(cross_k, cross_v) - pre-computed from encoder
+           - attention_mask: [1, current_pos+1, current_pos+1] - causal mask for self-attn
 
         Returns:
-            hidden_states: [batch, seq_len, hidden_size]
+            hidden_states: [batch, seq_len, hidden_size] or [batch, 1, hidden_size]
         """
+        # Detect which interface is being used
+        is_kv_caching_mode = current_pos is not None and cross_attn_kv is not None
+        is_full_sequence_mode = encoder_hidden_states is not None
+
+        if not is_kv_caching_mode and not is_full_sequence_mode:
+            raise ValueError(
+                "Must provide either (current_pos, cross_attn_kv) for KV caching mode or encoder_hidden_states for full sequence mode"
+            )
+
         # PHASE 1: Ensure all inputs are in L1
         hidden_states = ensure_l1_memory(hidden_states)
-        encoder_hidden_states = ensure_l1_memory(encoder_hidden_states)
         if attention_mask is not None:
             attention_mask = ensure_l1_memory(attention_mask)
+        if encoder_hidden_states is not None:
+            encoder_hidden_states = ensure_l1_memory(encoder_hidden_states)
 
-        # PHASE 2: Self-attention sub-layer (POST-NORM, with causal masking)
+        # PHASE 1.5: Handle cross-attention K/V based on interface
+        if is_full_sequence_mode:
+            # Full sequence mode: compute cross-attention K/V on-the-fly
+            cross_k = l1_linear(
+                encoder_hidden_states,
+                self.encoder_attn.parameters["k_proj"]["weight"],
+                bias=self.encoder_attn.parameters["k_proj"]["bias"],
+            )
+            cross_v = l1_linear(
+                encoder_hidden_states,
+                self.encoder_attn.parameters["v_proj"]["weight"],
+                bias=self.encoder_attn.parameters["v_proj"]["bias"],
+            )
+            # Reshape for multi-head attention
+            cross_k = self.encoder_attn._reshape_for_multihead(
+                cross_k, encoder_hidden_states.shape[0], encoder_hidden_states.shape[1]
+            )
+            cross_v = self.encoder_attn._reshape_for_multihead(
+                cross_v, encoder_hidden_states.shape[0], encoder_hidden_states.shape[1]
+            )
+        else:
+            # KV caching mode: use pre-computed cross-attention K/V
+            cross_k, cross_v = cross_attn_kv
+            cross_k = ensure_l1_memory(cross_k)
+            cross_v = ensure_l1_memory(cross_v)
+
+        # PHASE 2: Self-attention sub-layer (POST-NORM)
         residual = hidden_states
         residual = ensure_l1_memory(residual)
 
-        hidden_states = self.self_attn(
-            hidden_states,
-            attention_mask=attention_mask,
-            key_value_states=None,  # Self-attention
-        )
+        # For self-attention, we need causal masking in autoregressive mode
+        self_attn_mask = attention_mask
+
+        if is_full_sequence_mode:
+            # Full sequence mode: use provided attention_mask (may be None for non-causal)
+            hidden_states = self.self_attn(
+                hidden_states,
+                attention_mask=self_attn_mask,
+                key_value_states=None,  # Self-attention
+                past_kv=None,  # No caching
+            )
+        else:
+            # KV caching mode: single-token with KV cache
+            # We need a causal mask for the current sequence position
+            seq_len = 1  # Always 1 for single-token input
+            kv_seq_len = current_pos + 1  # Total sequence length including current
+
+            if self_attn_mask is None:
+                # Create causal mask for autoregressive self-attention
+                # Shape: [1, 1, seq_len, kv_seq_len] = [1, 1, 1, kv_seq_len]
+                causal_mask = torch.full((seq_len, kv_seq_len), float("-inf"))
+                # For causal masking, only the current position (last) can attend to previous positions
+                causal_mask[0, :kv_seq_len] = 0.0  # Current position can attend to all previous + itself
+                causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)
+
+                self_attn_mask = ttnn.from_torch(
+                    causal_mask,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+
+            # Compute current K/V for this position
+            current_k = l1_linear(
+                hidden_states,
+                self.self_attn.parameters["k_proj"]["weight"],
+                bias=self.self_attn.parameters["k_proj"]["bias"],
+            )
+            current_v = l1_linear(
+                hidden_states,
+                self.self_attn.parameters["v_proj"]["weight"],
+                bias=self.self_attn.parameters["v_proj"]["bias"],
+            )
+
+            # Update KV cache at current position using TTNN operations
+            # For the first position, just set the cache directly
+            if current_pos == 0:
+                # Initialize cache with current K/V
+                self.self_attn_k_cache = current_k
+                self.self_attn_v_cache = current_v
+                past_k = current_k
+                past_v = current_v
+            else:
+                # Concatenate existing cache with new K/V along sequence dimension
+                # self.self_attn_k_cache: [batch, current_pos, head_dim * num_heads]
+                # current_k: [batch, 1, head_dim * num_heads]
+                # Result: [batch, current_pos + 1, head_dim * num_heads]
+                past_k = ttnn.concat([self.self_attn_k_cache, current_k], dim=1)
+                past_v = ttnn.concat([self.self_attn_v_cache, current_v], dim=1)
+                # Update the persistent cache for next step
+                self.self_attn_k_cache = past_k
+                self.self_attn_v_cache = past_v
+
+            # Perform self-attention with cached K/V
+            hidden_states = self.self_attn(
+                hidden_states,
+                attention_mask=self_attn_mask,
+                key_value_states=None,  # Self-attention - K/V computed above
+                past_kv=(past_k, past_v),  # Pass cached K/V
+            )
+
         hidden_states = ensure_l1_memory(hidden_states)
 
         # Dropout skipped for inference
@@ -591,7 +794,8 @@ class TTNNSpeechT5DecoderLayer:
         hidden_states = self.encoder_attn(
             hidden_states,
             attention_mask=None,  # No causal mask for cross-attention
-            key_value_states=encoder_hidden_states,  # Cross-attention
+            key_value_states=None,  # K/V provided via past_kv
+            past_kv=(cross_k, cross_v),  # Pre-computed cross-attention K/V
         )
         hidden_states = ensure_l1_memory(hidden_states)
 
@@ -630,6 +834,16 @@ class TTNNSpeechT5DecoderLayer:
 
         # PHASE 5: Final output must be in L1
         return ensure_l1_memory(hidden_states)
+
+    def reset_kv_cache(self):
+        """
+        Reset the self-attention KV cache.
+        Since we use dynamic concatenation, we just need to reset the cache state.
+        Call this before processing a new input sequence.
+        """
+        # Reset to None - will be initialized on first use
+        self.self_attn_k_cache = None
+        self.self_attn_v_cache = None
 
 
 class TTNNSpeechT5Decoder:
@@ -684,10 +898,10 @@ class TTNNSpeechT5Decoder:
         This avoids dynamic tensor creation during forward pass, which is
         required for trace support.
 
-        Pre-computes for lengths: 20
+        Pre-computes for lengths: powers of 2 up to 512
         Note: Add more lengths as needed for your use case.
         """
-        common_lengths = [20]
+        common_lengths = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
 
         for seq_len in common_lengths:
             # Create causal mask in PyTorch
@@ -741,49 +955,118 @@ class TTNNSpeechT5Decoder:
 
         return causal_mask_ttnn
 
+    def precompute_cross_attention_kv(
+        self, encoder_hidden_states: ttnn.Tensor
+    ) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """
+        Pre-compute cross-attention K/V values for all decoder layers.
+        This is done once before autoregressive generation since encoder output doesn't change.
+
+        Args:
+            encoder_hidden_states: [batch, enc_seq_len, hidden_size] - encoder output
+
+        Returns:
+            list of (cross_k, cross_v) tuples for each decoder layer
+        """
+        cross_attn_kv = []
+
+        for layer in self.layers:
+            # Compute cross-attention K/V using the encoder attention module
+            cross_k = l1_linear(
+                encoder_hidden_states,
+                layer.encoder_attn.parameters["k_proj"]["weight"],
+                bias=layer.encoder_attn.parameters["k_proj"]["bias"],
+            )
+            cross_v = l1_linear(
+                encoder_hidden_states,
+                layer.encoder_attn.parameters["v_proj"]["weight"],
+                bias=layer.encoder_attn.parameters["v_proj"]["bias"],
+            )
+
+            # Reshape for multi-head attention
+            cross_k = layer.encoder_attn._reshape_for_multihead(
+                cross_k, encoder_hidden_states.shape[0], encoder_hidden_states.shape[1]
+            )
+            cross_v = layer.encoder_attn._reshape_for_multihead(
+                cross_v, encoder_hidden_states.shape[0], encoder_hidden_states.shape[1]
+            )
+
+            cross_attn_kv.append((cross_k, cross_v))
+
+        return cross_attn_kv
+
     def __call__(
         self,
         decoder_input_values: ttnn.Tensor,
-        encoder_hidden_states: ttnn.Tensor,
+        encoder_hidden_states: Optional[ttnn.Tensor] = None,
+        current_pos: Optional[int] = None,
+        cross_attn_kv: Optional[list[tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
         speaker_embeddings: Optional[ttnn.Tensor] = None,
+        attention_mask: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
-        Forward pass with comprehensive L1 memory management.
+        Decoder forward pass supporting both interfaces:
 
-        Args:
-            decoder_input_values: [batch, seq_len, num_mel_bins]
-            encoder_hidden_states: [batch, enc_seq_len, hidden_size]
-            speaker_embeddings: [batch, speaker_embedding_dim] - optional
+        1. Full sequence processing (legacy interface):
+           - decoder_input_values: [batch, seq_len, num_mel_bins]
+           - encoder_hidden_states: [batch, enc_seq_len, hidden_size]
+           - speaker_embeddings: [batch, speaker_embedding_dim]
+
+        2. Single-token KV caching (new interface):
+           - decoder_input_values: [batch, 1, num_mel_bins]
+           - current_pos: int - current position in sequence (0-based)
+           - cross_attn_kv: list of (cross_k, cross_v) tuples - pre-computed from encoder for each layer
+           - speaker_embeddings: [batch, speaker_embedding_dim] - optional
+           - attention_mask: [1, current_pos+1, current_pos+1] - causal mask
 
         Returns:
-            hidden_states: [batch, seq_len, hidden_size]
+            hidden_states: [batch, seq_len, hidden_size] or [batch, 1, hidden_size]
         """
+        # Detect which interface is being used
+        is_kv_caching_mode = current_pos is not None and cross_attn_kv is not None
+        is_full_sequence_mode = encoder_hidden_states is not None
+
+        if not is_kv_caching_mode and not is_full_sequence_mode:
+            raise ValueError(
+                "Must provide either (current_pos, cross_attn_kv) for KV caching mode or encoder_hidden_states for full sequence mode"
+            )
+
         # PHASE 1: Ensure all inputs are in L1
         decoder_input_values = ensure_l1_memory(decoder_input_values)
-        encoder_hidden_states = ensure_l1_memory(encoder_hidden_states)
         if speaker_embeddings is not None:
             speaker_embeddings = ensure_l1_memory(speaker_embeddings)
+        if attention_mask is not None:
+            attention_mask = ensure_l1_memory(attention_mask)
+        if encoder_hidden_states is not None:
+            encoder_hidden_states = ensure_l1_memory(encoder_hidden_states)
 
         # PHASE 2: Prenet processing (L1 output)
         hidden_states = self.prenet(decoder_input_values, speaker_embeddings=speaker_embeddings)
         hidden_states = ensure_l1_memory(hidden_states)
 
-        seq_len = hidden_states.shape[1]
+        # PHASE 3: Pass through decoder layers
+        if is_full_sequence_mode:
+            # Full sequence mode: pass encoder_hidden_states to each layer
+            for layer in self.layers:
+                hidden_states = layer(
+                    hidden_states=hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    attention_mask=attention_mask,
+                )
+                hidden_states = ensure_l1_memory(hidden_states)
+        else:
+            # KV caching mode: use pre-computed cross-attention K/V
+            for layer_idx, layer in enumerate(self.layers):
+                layer_cross_kv = cross_attn_kv[layer_idx]
+                hidden_states = layer(
+                    hidden_states=hidden_states,
+                    current_pos=current_pos,
+                    cross_attn_kv=layer_cross_kv,
+                    attention_mask=attention_mask,
+                )
+                hidden_states = ensure_l1_memory(hidden_states)
 
-        # PHASE 3: Create causal attention mask (L1 output)
-        causal_mask = self._create_causal_mask(seq_len)
-        causal_mask = ensure_l1_memory(causal_mask)
-
-        # PHASE 4: Pass through decoder layers with L1 management
-        for layer in self.layers:
-            hidden_states = layer(
-                hidden_states=hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                attention_mask=causal_mask,
-            )
-            hidden_states = ensure_l1_memory(hidden_states)
-
-        # PHASE 5: Final output must be in L1
+        # PHASE 4: Final output must be in L1
         return ensure_l1_memory(hidden_states)
 
 
