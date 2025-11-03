@@ -17,7 +17,7 @@ namespace operations {
 namespace ternary {
 
 // Thread-local variable for addcmul value
-extern thread_local float addcmul_value;
+inline thread_local float addcmul_value = 1.0f;
 
 // Where Operation
 struct WhereOperation {

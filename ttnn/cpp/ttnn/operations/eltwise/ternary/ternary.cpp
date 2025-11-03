@@ -19,9 +19,6 @@ namespace ttnn {
 namespace operations {
 namespace ternary {
 
-// Define the thread-local variable
-thread_local float addcmul_value = 1.0f;
-
 namespace ternary_utils {
 
 // where - ternary operator y = (predicate) ? value_true : value_false; elementwise
