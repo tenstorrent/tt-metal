@@ -288,7 +288,7 @@ FORCE_INLINE void fabric_fast_write_any_len(
     uint32_t len_bytes,
     bool multicast = false,
     uint32_t num_dests = 1,
-    uint16_t trid = 0,
+    uint8_t trid = 0,
     uint8_t posted = 0) {
     auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
@@ -335,7 +335,7 @@ FORCE_INLINE void fabric_fast_write_dw_inline(
     uint64_t dest_addr,
     bool multicast = false,
     uint32_t num_dests = 1,
-    uint16_t trid = 0,
+    uint8_t trid = 0,
     uint8_t posted = 0) {
     auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
@@ -382,7 +382,7 @@ FORCE_INLINE void fabric_fast_atomic_inc(
     uint16_t dst_mesh_id,
     uint32_t incr_val,
     uint64_t dest_addr,
-    uint16_t trid = 0,
+    uint8_t trid = 0,
     uint8_t posted = 0,
     bool flush = true) {
     auto [connection, is_init] = get_or_open_fabric_connection();
@@ -494,7 +494,7 @@ FORCE_INLINE void fabric_fast_read_any_len(
     uint64_t dest_addr,
     uint32_t src_l1_addr,
     uint32_t size_bytes,
-    uint16_t trid = 0) {
+    uint8_t trid = 0) {
     auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
 
@@ -564,7 +564,7 @@ FORCE_INLINE void fabric_fast_read_any_len_ack(
     uint32_t src_l1_address = received_header->udm_control.read.src_l1_address;
     uint32_t size_bytes = received_header->udm_control.read.size_bytes;
     uint8_t src_risc_id = received_header->udm_control.read.risc_id;
-    uint16_t transaction_id = received_header->udm_control.read.transaction_id;
+    uint8_t transaction_id = received_header->udm_control.read.transaction_id;
     uint64_t dest_addr = get_noc_addr(src_noc_x, src_noc_y, src_l1_address);
 
     // Calculate the counter address for the final atomic increment

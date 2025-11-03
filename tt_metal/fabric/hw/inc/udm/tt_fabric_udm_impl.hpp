@@ -36,7 +36,7 @@ struct udm_write_fields {
     uint8_t src_noc_x;
     uint8_t src_noc_y;
     uint8_t risc_id;
-    uint16_t trid;
+    uint8_t trid;
     uint8_t posted;
 };
 
@@ -57,7 +57,7 @@ struct udm_read_fields {
     uint32_t src_l1_address;
     uint32_t size_bytes;
     uint8_t risc_id;
-    uint16_t trid;
+    uint8_t trid;
 };
 
 /**
@@ -110,7 +110,7 @@ FORCE_INLINE bool fabric_write_set_unicast_route_impl(
  */
 template <typename T = PACKET_HEADER_TYPE>
 FORCE_INLINE void fabric_write_set_unicast_route(
-    volatile tt_l1_ptr T* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t trid, uint8_t posted) {
+    volatile tt_l1_ptr T* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint8_t trid, uint8_t posted) {
     udm_write_fields udm = {my_x[edm_to_local_chip_noc], my_y[edm_to_local_chip_noc], proc_type, trid, posted};
 
     if constexpr (std::is_same_v<T, tt::tt_fabric::UDMHybridMeshPacketHeader>) {
@@ -181,7 +181,7 @@ FORCE_INLINE void fabric_read_set_unicast_route(
     uint16_t dst_mesh_id,
     uint32_t src_l1_addr,
     uint32_t size_bytes,
-    uint16_t trid) {
+    uint8_t trid) {
     udm_read_fields udm = {
         my_x[edm_to_local_chip_noc], my_y[edm_to_local_chip_noc], src_l1_addr, size_bytes, proc_type, trid};
 
