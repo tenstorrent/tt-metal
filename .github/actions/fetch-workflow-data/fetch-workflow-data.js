@@ -647,16 +647,22 @@ async function run() {
       previousRuns.push(...runs);
     }
 
-    // Build set of cached run IDs to avoid re-downloading logs/annotations
-    const cachedRunIds = new Set();
+    // Build set of cached (run ID, attempt) tuples to avoid re-downloading logs/annotations
+    // This ensures we download logs for new attempts even if the run ID was seen before
+    const cachedRunIds = new Set(); // Keep for backward compatibility with fetchAllWorkflowRuns
+    const cachedRunAttempts = new Set(); // Set of `${runId}:${attempt}` tuples
     for (const runs of cachedGrouped.values()) {
       for (const run of runs) {
-        cachedRunIds.add(String(run.id));
+        const runIdStr = String(run.id);
+        const attempt = run.run_attempt || 1; // Default to 1 if not present (older data)
+        cachedRunIds.add(runIdStr);
+        cachedRunAttempts.add(`${runIdStr}:${attempt}`);
       }
     }
 
     core.info(`[CACHE] Summary: ${previousRuns.length} runs restored, ${cachedGrouped.size} workflows`);
     core.info(`[CACHE] Cached run IDs: ${cachedRunIds.size} unique run IDs`);
+    core.info(`[CACHE] Cached run attempts: ${cachedRunAttempts.size} unique (run ID, attempt) combinations`);
 
     // Fetch new runs from GitHub (skipping runs that are already cached)
 
@@ -680,13 +686,97 @@ async function run() {
     const newRuns = [...scheduledRuns, ...allRuns];
     core.info(`[FETCH] Total new runs fetched: ${newRuns.length} (${allRuns.length} all events + ${scheduledRuns.length} scheduled)`);
 
-    // Merge and deduplicate by run id (though newRuns should already be deduplicated from cache)
-    // This ensures we keep the most recent data for each run and avoid duplicates
+    // Merge and deduplicate by (run id, attempt) tuple to avoid duplicates
+    // Note: Same run ID with different attempt numbers are different runs
     core.info(`[MERGE] Merging ${previousRuns.length} cached runs + ${newRuns.length} new runs`);
-    const seen = new Map();
-    [...previousRuns, ...newRuns].forEach(run => seen.set(run.id, run));
+    const seen = new Map(); // key: `${run.id}:${run_attempt}`, value: run
+    [...previousRuns, ...newRuns].forEach(run => {
+      const runId = run.id;
+      const attempt = run.run_attempt || 1;
+      const key = `${runId}:${attempt}`;
+      // If we already have this exact (run id, attempt) combination, keep the newer one (prefer newRuns)
+      const existingRun = seen.get(key);
+      if (!existingRun) {
+        seen.set(key, run);
+      } else {
+        // Both have same run ID and attempt - prefer the one from newRuns if applicable
+        // For now, just keep the first one we encounter (newRuns come after previousRuns, so they take precedence)
+        if (newRuns.includes(run)) {
+          seen.set(key, run);
+        }
+      }
+    });
     let mergedRuns = Array.from(seen.values());
-    core.info(`[MERGE] After deduplication: ${mergedRuns.length} unique runs`);
+    core.info(`[MERGE] After deduplication: ${mergedRuns.length} unique runs (by run id + attempt)`);
+
+    // Check for newer attempts on the latest run for each workflow
+    // Group runs by workflow name to find the latest run per workflow
+    const runsByWorkflow = new Map();
+    for (const run of mergedRuns) {
+      if (!runsByWorkflow.has(run.name)) {
+        runsByWorkflow.set(run.name, []);
+      }
+      runsByWorkflow.get(run.name).push(run);
+    }
+
+    core.info(`[RECHECK] Checking for newer attempts on latest runs for ${runsByWorkflow.size} workflows...`);
+    const delayBetweenChecks = 100; // Small delay to avoid rate limits
+    let updatedAttempts = 0;
+    const newRunsToAdd = [];
+
+    for (const [workflowName, workflowRuns] of runsByWorkflow.entries()) {
+      // Find the latest run for this workflow (on target branch, within date window)
+      const latestRuns = workflowRuns
+        .filter(r => r.head_branch === branch && r.status === 'completed')
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      if (latestRuns.length === 0) continue;
+
+      const latestRun = latestRuns[0];
+      const latestRunId = latestRun.id;
+      const currentAttempt = latestRun.run_attempt || 1;
+
+      try {
+        // Fetch the run details directly - GitHub API returns the latest attempt
+        const { data: latestRunData } = await octokit.rest.actions.getWorkflowRun({
+          owner: github.context.repo.owner,
+          repo: github.context.repo.repo,
+          run_id: latestRunId
+        });
+
+        const apiAttempt = latestRunData.run_attempt || 1;
+
+        // If API has a higher attempt, add it to mergedRuns (don't replace the old one)
+        if (apiAttempt > currentAttempt) {
+          core.info(`[RECHECK] Found newer attempt for workflow '${workflowName}' run ${latestRunId}: current=${currentAttempt}, API=${apiAttempt}, adding`);
+          // Check if the run is still within our date window and meets other criteria
+          const runDate = new Date(latestRunData.created_at);
+          const cutoff = getCutoffDate(days);
+          if (runDate >= cutoff && latestRunData.head_branch === branch && latestRunData.status === 'completed') {
+            // Add the new run to the list (don't replace the old one)
+            newRunsToAdd.push(latestRunData);
+            updatedAttempts++;
+          } else {
+            core.info(`[RECHECK] Run ${latestRunId} attempt ${apiAttempt} is outside date window or doesn't meet criteria, skipping`);
+          }
+        }
+
+        await delay(delayBetweenChecks); // Small delay to avoid rate limits
+      } catch (e) {
+        // Run might not exist anymore, or API error - log and continue
+        if (e.status !== 404) {
+          core.warning(`[RECHECK] Failed to check workflow '${workflowName}' run ${latestRunId} for newer attempts: ${e.message}`);
+        }
+      }
+    }
+
+    // Add the new runs to mergedRuns (both old and new attempts will be present)
+    if (newRunsToAdd.length > 0) {
+      mergedRuns.push(...newRunsToAdd);
+      core.info(`[RECHECK] Added ${updatedAttempts} runs with newer attempts to mergedRuns`);
+    } else {
+      core.info(`[RECHECK] No newer attempts found`);
+    }
 
     // Only keep runs on main branch, completed, and within the last N days
     const cutoff = getCutoffDate(days);
@@ -973,9 +1063,13 @@ async function run() {
           continue;
         }
 
-        // Skip if this run is already cached
-        if (cachedRunIds.has(String(targetRun.id))) {
-          core.info(`[LOGS] Skipping download for run ${targetRun.id} (workflow: ${name}) - already in cache`);
+        // Skip if this exact (run ID, attempt) combination is already cached
+        // Note: Different attempts of the same run ID need different logs/annotations
+        const targetRunIdStr = String(targetRun.id);
+        const targetRunAttempt = targetRun.run_attempt || 1;
+        const targetRunKey = `${targetRunIdStr}:${targetRunAttempt}`;
+        if (cachedRunAttempts.has(targetRunKey)) {
+          core.info(`[LOGS] Skipping download for run ${targetRunIdStr} attempt ${targetRunAttempt} (workflow: ${name}) - already in cache`);
           continue;
         }
 

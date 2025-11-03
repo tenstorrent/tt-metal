@@ -847,11 +847,14 @@ function getWorkflowStats(runs) {
   for (const run of runs) {
     totalRunsIncludingRetries++;
 
-    // Calculate the original run ID by subtracting (run_attempt - 1) from the current run ID
-    const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
+    // GitHub keeps the same run ID for re-runs, only incrementing run_attempt
+    // So we group by run.id directly, not by calculating a different ID
+    const runId = run.id;
+    const currentAttempt = run.run_attempt || 1;
 
-    if (!uniqueRuns.has(originalRunId)) { // returns true if the run id is not in the map
-      uniqueRuns.set(originalRunId, { // set default values for the run
+    if (!uniqueRuns.has(runId)) {
+      // First time seeing this run ID
+      uniqueRuns.set(runId, {
         run,
         attempts: 0,
         isSuccessful: false,
@@ -860,13 +863,14 @@ function getWorkflowStats(runs) {
         lastAttempt: run
       });
     } else {
-      // This is an attempt
-      const existingRun = uniqueRuns.get(originalRunId);
-      existingRun.attempts++; // this is just a re-run so increment the attempts
+      // This is a re-run (same run ID, different attempt)
+      const existingRun = uniqueRuns.get(runId);
+      existingRun.attempts++; // increment the attempts counter
 
-      // Update last attempt if this is a newer attempt
-      if (run.run_attempt > existingRun.lastAttempt.run_attempt) {
-        existingRun.lastAttempt = run; // update the last attempt to the current run
+      // Update last attempt if this is a newer attempt (higher run_attempt number)
+      const existingAttempt = existingRun.lastAttempt.run_attempt || 1;
+      if (currentAttempt > existingAttempt) {
+        existingRun.lastAttempt = run; // update to the latest attempt
       }
     }
   }
