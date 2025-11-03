@@ -167,13 +167,16 @@ def run_distributed_fused_rmsnorm(
         epsilon=epsilon,
         num_heads_per_device=num_heads_per_device,
         weight=tt_weight,
+        transformation_mat=tt_transformation_mat,
+        rope_cos=tt_rope_cos,
+        rope_sin=tt_rope_sin,
         compute_kernel_config=compute_kernel_config,
     )
     # tt_out = ttnn.rms_norm_post_all_gather(
     #     tt_inp, tt_stats_gathered, epsilon=epsilon, compute_kernel_config=compute_kernel_config, distributed_program_config=prog_cfg,
     # )
-    if use_rope:
-        tt_out = ttnn.experimental.rotary_embedding_llama(tt_out, tt_rope_cos, tt_rope_sin, tt_transformation_mat)
+    # if use_rope:
+    #     tt_out = ttnn.experimental.rotary_embedding_llama(tt_out, tt_rope_cos, tt_rope_sin, tt_transformation_mat, compute_kernel_config=compute_kernel_config)
 
     tensor_cat_dims = [None, None]
     tensor_cat_dims[tp_mesh_axis] = -3 if num_heads > 1 else -1

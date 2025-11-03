@@ -34,9 +34,11 @@ void kernel_main() {
         uint32_t tile_id = tile_row * head_dim_tiles;
 
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
-            cb_wait_front(output_cb, block_size);
+            const uint32_t remaining = num_tile_cols - col_tile;
+            const uint32_t curr_block = remaining < block_size ? remaining : block_size;
+            cb_wait_front(output_cb, curr_block);
             uint32_t output_read_ptr = get_read_ptr(output_cb);
-            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+            for (uint32_t i = 0; i < curr_block; i++) {
                 noc_async_write_tile(tile_id, output_accessor, output_read_ptr);
                 output_read_ptr += tile_bytes;
                 tile_id++;
@@ -48,7 +50,7 @@ void kernel_main() {
                 }
             }
             noc_async_writes_flushed();
-            cb_pop_front(output_cb, block_size);
+            cb_pop_front(output_cb, curr_block);
         }
     }
     noc_async_write_barrier();

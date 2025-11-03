@@ -18,34 +18,62 @@ void kernel_main() {
     constexpr uint32_t weight_cb = get_compile_time_arg_val(2);
     constexpr uint32_t reduce_scalar_cb = get_compile_time_arg_val(3);
     constexpr uint32_t epsilon_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(5);
-    constexpr uint32_t block_size = get_compile_time_arg_val(6);
-    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(7);
-    constexpr uint32_t scalar_value = get_compile_time_arg_val(8);
-    constexpr uint32_t epsilon_value = get_compile_time_arg_val(9);
-    constexpr uint32_t has_weight = get_compile_time_arg_val(10);
-    constexpr auto input_args = TensorAccessorArgs<11>();
+    constexpr uint32_t transformation_mat_cb = get_compile_time_arg_val(5);
+    constexpr uint32_t rope_cos_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t rope_sin_cb = get_compile_time_arg_val(7);
+    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(8);
+    constexpr uint32_t block_size = get_compile_time_arg_val(9);
+    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(10);
+    constexpr uint32_t scalar_value = get_compile_time_arg_val(11);
+    constexpr uint32_t epsilon_value = get_compile_time_arg_val(12);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(13);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(14);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(15);
+    constexpr auto input_args = TensorAccessorArgs<16>();
     constexpr auto stats_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weight_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
+    constexpr auto transformation_mat_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
+    constexpr auto rope_cos_args = TensorAccessorArgs<transformation_mat_args.next_compile_time_args_offset()>();
+    constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
 
-    const uint32_t input_addr = get_arg_val<uint32_t>(0);  // Source address in dram
-    const uint32_t stats_addr = get_arg_val<uint32_t>(1);
-    const uint32_t weight_addr = get_arg_val<uint32_t>(2);
-    const uint32_t tile_row_start = get_arg_val<uint32_t>(3);
-    const uint32_t tile_row_end = get_arg_val<uint32_t>(4);
+    uint32_t arg_idx = 0;
+    const uint32_t input_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t stats_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t weight_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t rope_cos_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t rope_sin_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
 
     // ublocks size defined in tiles
     const uint32_t input_tile_bytes = get_tile_size(input_cb);
     const uint32_t stats_tile_bytes = get_tile_size(stats_cb);
     const uint32_t weight_tile_bytes = get_tile_size(weight_cb);
+    const uint32_t transformation_mat_tile_bytes = get_tile_size(transformation_mat_cb);
+    const uint32_t rope_cos_tile_bytes = get_tile_size(rope_cos_cb);
+    const uint32_t rope_sin_tile_bytes = get_tile_size(rope_sin_cb);
 
     const auto input_accessor = TensorAccessor(input_args, input_addr, input_tile_bytes);
     const auto stats_accessor = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
     const auto weight_accessor = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+    const auto transformation_mat_accessor =
+        TensorAccessor(transformation_mat_args, transformation_mat_addr, transformation_mat_tile_bytes);
+    const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr, rope_cos_tile_bytes);
+    const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr, rope_sin_tile_bytes);
 
     // Generate constant tiles for layernorm compute
     generate_reduce_scaler(reduce_scalar_cb, scalar_value);
     generate_bcast_col_scalar(epsilon_cb, epsilon_value);
+
+    if constexpr (fuse_rope) {
+        // Read the single-tile transformation matrix for ROPE.
+        cb_reserve_back(transformation_mat_cb, 1);
+        uint32_t transformation_mat_wr_ptr = get_write_ptr(transformation_mat_cb);
+        noc_async_read_tile(0, transformation_mat_accessor, transformation_mat_wr_ptr);
+        noc_async_read_barrier();
+        cb_push_back(transformation_mat_cb, 1);
+    }
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t stats_tile_idx = tile_row * stats_tiles_cols;
@@ -83,12 +111,39 @@ void kernel_main() {
                         // noc_async_read_tile(col_tile, weight_accessor, weight_wr_ptr);
                         // weight_wr_ptr += weight_tile_bytes;
 
+                        // Rather than read a full tile containing sparse data,
+                        // just read the first row of the tile from the faces.
                         noc_async_read(weight_noc_addr, weight_wr_ptr, 16 * 2 /*one face row*/);
                         noc_async_read(weight_noc_addr + 512, weight_wr_ptr + 512, 16 * 2 /*one face row*/);
                         weight_wr_ptr += weight_tile_bytes;
                     }
                     noc_async_read_barrier();
                     cb_push_back(weight_cb, block_size);
+                }
+            }
+            if constexpr (fuse_rope) {
+                if (col_tile == 0) {
+                    /**
+                     * When processing the first column of a specific row, read the sin/cos inputs for rope.
+                     */
+                    uint32_t rope_tile_start_idx = tile_row * head_dim_tiles;
+                    cb_reserve_back(rope_cos_cb, head_dim_tiles);
+                    uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
+                    for (uint32_t i = 0; i < head_dim_tiles; i++) {
+                        noc_async_read_tile(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
+                        rope_cos_wr_ptr += rope_cos_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(rope_cos_cb, head_dim_tiles);
+
+                    cb_reserve_back(rope_sin_cb, head_dim_tiles);
+                    uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
+                    for (uint32_t i = 0; i < head_dim_tiles; i++) {
+                        noc_async_read_tile(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
+                        rope_sin_wr_ptr += rope_sin_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(rope_sin_cb, head_dim_tiles);
                 }
             }
         }

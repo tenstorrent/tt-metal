@@ -87,6 +87,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     log_info(tt::LogOp, "num_devices: {}", num_devices);
     log_info(tt::LogOp, "has_weight: {}", has_weight);
     log_info(tt::LogOp, "fuse_rope: {}", fuse_rope);
+    log_info(tt::LogOp, "num_heads: {}", num_heads);
+    log_info(tt::LogOp, "head_dim_tiles: {}", head_dim_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -226,8 +228,11 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
 
     create_cb(output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
 
-    if (has_weight || fuse_rope) {
+    if (has_weight) {
         create_cb(weight_cb_id, program, core_grid, weight_tile_size, weight_cb_num_tiles, weight_data_format);
+    }
+
+    if (has_weight || fuse_rope) {
         create_cb(
             intermediate_cb_id,
             program,
@@ -235,6 +240,22 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
             intermediate_tile_size,
             intermediate_cb_num_tiles,
             intermediate_data_format);
+    }
+
+    if (fuse_rope) {
+        create_cb(
+            transformation_mat_cb_id,
+            program,
+            core_grid,
+            transformation_mat_tile_size,
+            transformation_mat_cb_num_tiles,
+            transformation_mat_data_format);
+        create_cb(
+            rope_cos_cb_id, program, core_grid, rope_cos_tile_size, rope_cos_sin_cb_num_tiles, rope_cos_data_format);
+        create_cb(
+            rope_sin_cb_id, program, core_grid, rope_sin_tile_size, rope_cos_sin_cb_num_tiles, rope_sin_data_format);
+        create_cb(
+            rotated_input_cb_id, program, core_grid, input_tile_size, intermediate_cb_num_tiles, input_data_format);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -256,17 +277,27 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         weight_cb_id,
         reduce_scalar_cb_id,
         epsilon_cb_id,
+        transformation_mat_cb_id,
+        rope_cos_cb_id,
+        rope_sin_cb_id,
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
         packed_winv_value,
         e.u,
         has_weight,
-    };
+        fuse_rope,
+        head_dim_tiles};
 
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(stats_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(has_weight ? weight_tensor.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? transformation_mat.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_cos.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(fuse_rope ? rope_sin.value().buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
@@ -304,13 +335,18 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         reduce_result_cb_id,
         intermediate_cb_id,
         output_cb_id,
+        transformation_mat_cb_id,
+        rope_cos_cb_id,
+        rope_sin_cb_id,
+        rotated_input_cb_id,
         num_tile_cols,
         dst_reg_count,
         stats_tiles_cols,
         use_float32_reduction,
         use_legacy_rsqrt,
         has_weight,
-    };
+        fuse_rope,
+        head_dim_tiles};
 
     auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/compute/rmsnorm_post_allgather.cpp";
@@ -335,6 +371,9 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
             input_addr,
             stats_addr,
             weight_addr,
+            transformation_mat_addr,
+            rope_cos_addr,
+            rope_sin_addr,
             tile_row_start,
             tile_row_end,
         };
@@ -360,10 +399,17 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
             const auto& input_tensor = input_tensors.at(0);
             const auto& stats_tensor = input_tensors.at(1);
             const auto& weight_tensor = optional_input_tensors.at(0);
+            const auto& transformation_mat_tensor = optional_input_tensors.at(1);
+            const auto& rope_cos_tensor = optional_input_tensors.at(2);
+            const auto& rope_sin_tensor = optional_input_tensors.at(3);
 
             const auto input_addr = input_tensor.buffer()->address();
             const auto stats_addr = stats_tensor.buffer()->address();
             const auto weight_addr = weight_tensor.has_value() ? weight_tensor.value().buffer()->address() : 0;
+            const auto transformation_mat_addr =
+                transformation_mat_tensor.has_value() ? transformation_mat_tensor.value().buffer()->address() : 0;
+            const auto rope_cos_addr = rope_cos_tensor.has_value() ? rope_cos_tensor.value().buffer()->address() : 0;
+            const auto rope_sin_addr = rope_sin_tensor.has_value() ? rope_sin_tensor.value().buffer()->address() : 0;
             const auto& output_tensor = output_tensors.at(0);
             const auto output_addr = output_tensor.buffer()->address();
 
@@ -376,6 +422,9 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
                     reader_args[0] = input_addr;
                     reader_args[1] = stats_addr;
                     reader_args[2] = weight_addr;
+                    reader_args[3] = transformation_mat_addr;
+                    reader_args[4] = rope_cos_addr;
+                    reader_args[5] = rope_sin_addr;
                 }
 
                 {
