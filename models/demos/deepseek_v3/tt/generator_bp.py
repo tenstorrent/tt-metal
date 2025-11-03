@@ -86,13 +86,13 @@ class DeepseekGenerator:
         if override_num_layers is not None:
             try:
                 self.hf_config.num_hidden_layers = int(override_num_layers)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to override num_hidden_layers with value '{override_num_layers}': {e}")
         if dense_layers is not None:
             try:
                 self.hf_config.first_k_dense_replace = int(dense_layers)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Failed to override first_k_dense_replace with value '{dense_layers}': {e}")
         # Tokenizer is optional; caller can pass a tokenizer or handle failure.
         self.tokenizer = tokenizer
 
