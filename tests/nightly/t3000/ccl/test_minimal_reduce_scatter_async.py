@@ -253,16 +253,27 @@ def run_reduce_scatter_impl(
     [
         # Dim 0 tests
         (
-            [8, 2, 128, 128], 
+            [16, 2, 128, 128], 
             0, 
             ttnn.TILE_LAYOUT, 
             ttnn.bfloat16, 
-            True,
+            False,
             True,
             10,
             True,
             True
-        ),  # perf. barrier_with_persistent
+        ),  # perf, barrier_with_persistent
+        (
+            [8, 2, 128, 128], 
+            0, 
+            ttnn.TILE_LAYOUT, 
+            ttnn.bfloat16, 
+            False,
+            False,
+            1,
+            True,
+            False
+        ),  # check, barrier_without_persistent
         # Dim 1 tests
         (
             [2, 24, 256, 256],

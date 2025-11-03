@@ -21,7 +21,7 @@ void MAIN {
     add_tiles_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t i = 0; i < num_total_reduction_steps; i++) {  // Don't reduce on the first slice
-        for (uint32_t b = 0; c < slice_B; ++b) {
+        for (uint32_t b = 0; b < slice_B; ++b) {
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
 
