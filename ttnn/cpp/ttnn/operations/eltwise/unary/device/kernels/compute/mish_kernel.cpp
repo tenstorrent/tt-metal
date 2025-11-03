@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
@@ -39,9 +40,15 @@ void MAIN {
             tanh_tile_init();
             tanh_tile(0);
 
+#ifdef INP_FLOAT32
+            copy_tile(cb_input, 0, 1);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
+#else
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                 cb_input, 0, 0);
+#endif
 
             tile_regs_commit();
 
