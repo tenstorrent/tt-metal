@@ -83,14 +83,14 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format)
             break;
         case SfpuType::rsqrt:
             ckernel::sfpu::_init_rsqrt_<APPROX_MODE, false>();
-            ckernel::sfpu::_calculate_rsqrt_<APPROX_MODE, iterations, is_fp32_dest_acc_en, false>(iterations);
+            ckernel::sfpu::_calculate_rsqrt_<APPROX_MODE, iterations, is_fp32_dest_acc_en, false, false>(iterations);
             break;
         case SfpuType::sine:
             ckernel::sfpu::_calculate_sine_<APPROX_MODE, iterations>(iterations);
             break;
         case SfpuType::sqrt:
             ckernel::sfpu::_init_sqrt_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_sqrt_<APPROX_MODE, iterations, is_fp32_dest_acc_en>(iterations);
+            ckernel::sfpu::_calculate_sqrt_<APPROX_MODE, iterations, is_fp32_dest_acc_en, false, false>(iterations);
             break;
         case SfpuType::square:
             ckernel::sfpu::_calculate_square_<APPROX_MODE, iterations>(iterations);
