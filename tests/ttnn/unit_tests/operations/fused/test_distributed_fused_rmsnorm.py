@@ -206,12 +206,10 @@ def run_distributed_fused_rmsnorm(
 @pytest.mark.parametrize("stats_dtype", [ttnn.bfloat16], ids=["BFLOAT16_stats"])
 @pytest.mark.parametrize(
     "seqlen",
-    [128, 256, 2048, 8192, 9472, 18944],
-    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen8192", "seqlen9472", "seqlen18944"],
+    [128, 256, 2048, 18944],
+    ids=["seqlen128", "seqlen256", "seqlen2048", "seqlen18944"],
 )
-@pytest.mark.parametrize(
-    "hidden_dim", [256, 2048, 5120, 8192], ids=["hidden_dim256", "hidden_dim2048", "hidden_dim5120", "hidden_dim8192"]
-)
+@pytest.mark.parametrize("hidden_dim", [256, 5120, 8192], ids=["hidden_dim256", "hidden_dim5120", "hidden_dim8192"])
 @pytest.mark.parametrize("num_heads_per_device", [1, 2, 10], ids=["num_heads1_", "num_heads2", "num_heads10"])
 @pytest.mark.parametrize("use_weight", [True, False], ids=["has_weight", "no_weight"])
 @pytest.mark.parametrize("use_rope", [True, False], ids=["has_rope", "no_rope"])

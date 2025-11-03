@@ -198,7 +198,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const uint32_t epsilon_cb_num_tiles = 1;
     const uint32_t reduce_result_cb_num_tiles = 1;
     const uint32_t output_cb_num_tiles = dst_reg_count * double_buffer_constant;
-    const uint32_t weight_cb_num_tiles = num_tile_cols;
+    // kernels use weight_cb in granularity of dst_reg_count, so we need to size appropriately
+    const uint32_t weight_cb_num_tiles = std::max(num_tile_cols, dst_reg_count);
     const uint32_t intermediate_cb_num_tiles = dst_reg_count;
     const uint32_t transformation_mat_cb_num_tiles = 1;
     const uint32_t rope_cos_sin_cb_num_tiles = head_dim_tiles;
