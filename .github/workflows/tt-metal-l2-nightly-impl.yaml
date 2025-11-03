@@ -434,7 +434,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent ${{ matrix.volume_options }}"
+      options: "--device /dev/tenstorrent ${{ matrix.docker_options }}"
     defaults:
       run:
         shell: bash
@@ -454,19 +454,19 @@ jobs:
             test_path: tests/ttnn/nightly/unit_tests/operations/conv
             test_filter: "panoptic or _oft"
             hf_home: /mnt/MLPerf/tt_dnn-models/hf_home
-            volume_options: "-v /mnt/MLPerf:/mnt/MLPerf:ro"
+            docker_options: "-v /mnt/MLPerf:/mnt/MLPerf:ro"
             owner: U052J2QDDKQ # Pavle Josipovic
           - test_type: pool
             test_path: tests/ttnn/nightly/unit_tests/operations/pool
             test_filter: "panoptic or _oft"
             hf_home: /mnt/MLPerf/tt_dnn-models/hf_home
-            volume_options: "-v /mnt/MLPerf:/mnt/MLPerf:ro"
+            docker_options: "-v /mnt/MLPerf:/mnt/MLPerf:ro"
             owner: U052J2QDDKQ # Pavle Josipovic
           - test_type: group_norm
             test_path: tests/ttnn/unit_tests/operations/fused
             test_filter: "_oft"
             hf_home: ""
-            volume_options: "-e TT_GH_CI_INFRA"
+            docker_options: "-e TT_GH_CI_INFRA"
             owner: U06Q7ESTFEV # Borys Bradel
     steps:
       - name: ⬇️  Setup Job
