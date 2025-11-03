@@ -25,7 +25,7 @@ static void bind_rmsnorm_pre_all_gather_operation(py::module& module) {
             memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
             Computes per-row RMSNorm statistics over the last dimension of :attr:`input_tensor`, producing a
             one-tile-wide tensor that contains sum(x**2) per row (placed in the leftmost column). Intended to be
-            followed by an all-gather across devices, then ``wan_fused_rmsnorm_pre_allgather``.
+            followed by an all-gather across devices, then ``wan_fused_rmsnorm_post_allgather``.
 
             Notes:
               Supported data types and layouts by tensor ::
