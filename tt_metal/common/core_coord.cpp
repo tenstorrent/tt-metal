@@ -22,14 +22,7 @@
 #include "tracy/Tracy.hpp"
 #include "common/core_coord.hpp"
 
-auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
-    -> format_context::iterator {
-    std::stringstream ss;
-    ss << core_coord.str();
-    return fmt::format_to(ctx.out(), "{}", ss.str());
-}
-
-using tt::tt_metal::RelativeCoreCoord;
+namespace tt::tt_metal {
 
 std::string RelativeCoreCoord::str() const { return "(x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
 
@@ -161,13 +154,6 @@ CoreRange::CoreIterator CoreRange::end() const {
 bool CoreRange::CoreIterator::operator==(const CoreIterator& other) const { return current_ == other.current_; }
 
 bool CoreRange::CoreIterator::operator!=(const CoreIterator& other) const { return !(current_ == other.current_); }
-
-auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) const
-    -> format_context::iterator {
-    std::stringstream ss;
-    ss << core_range.str();
-    return fmt::format_to(ctx.out(), "{}", ss.str());
-}
 
 CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
@@ -656,6 +642,22 @@ std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRan
 }
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b); }
+
+}  // namespace tt::tt_metal
+
+auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_context& ctx) const
+    -> format_context::iterator {
+    std::stringstream ss;
+    ss << core_coord.str();
+    return fmt::format_to(ctx.out(), "{}", ss.str());
+}
+
+auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) const
+    -> format_context::iterator {
+    std::stringstream ss;
+    ss << core_range.str();
+    return fmt::format_to(ctx.out(), "{}", ss.str());
+}
 
 auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, format_context& ctx) const
     -> format_context::iterator {
