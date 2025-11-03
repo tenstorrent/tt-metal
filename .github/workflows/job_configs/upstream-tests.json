@@ -8,9 +8,21 @@
       "test_job": "test-wh-6u-image",
       "image_outputs": ["wh-6u-image-tag", "wh-6u-profiler-image-tag"]
     },
-    "bh-multi-card": {
+    "bh-llmbox": {
       "test_job": "test-bh-multicard-image",
-      "image_outputs": ["bh-llmbox-image-tag", "bh-deskbox-image-tag", "bh-loudbox-image-tag", "bh-qb-ge-image-tag"]
+      "image_outputs": ["bh-llmbox-image-tag"]
+    },
+    "bh-deskbox": {
+      "test_job": "test-bh-multicard-image",
+      "image_outputs": ["bh-deskbox-image-tag"]
+    },
+    "bh-loudbox": {
+      "test_job": "test-bh-multicard-image",
+      "image_outputs": ["bh-loudbox-image-tag"]
+    },
+    "bh-qb-ge": {
+      "test_job": "test-bh-multicard-image",
+      "image_outputs": ["bh-qb-ge-image-tag"]
     },
     "bh-p300": {
       "test_job": "test-bh-p300-image",
