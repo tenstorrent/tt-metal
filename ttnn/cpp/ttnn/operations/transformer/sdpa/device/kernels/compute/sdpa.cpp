@@ -338,7 +338,9 @@ void MAIN {
                 // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
                 }
-                cb_pop_front(cb_attention_sink, Sq_chunk_t);
+                if constexpr (use_attention_sink) {
+                    cb_pop_front(cb_attention_sink, Sq_chunk_t);
+                }
             }
         }
     }
