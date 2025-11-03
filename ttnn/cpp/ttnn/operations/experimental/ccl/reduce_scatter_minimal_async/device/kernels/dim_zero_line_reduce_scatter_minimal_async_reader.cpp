@@ -26,15 +26,16 @@ constexpr uint32_t page_size = get_compile_time_arg_val(6);
 constexpr uint32_t input_num_pages = get_compile_time_arg_val(7);
 constexpr uint32_t output_num_pages = get_compile_time_arg_val(8);
 constexpr uint32_t batch_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(10);
-constexpr bool is_forward = get_compile_time_arg_val(11);
-constexpr bool is_first_device_in_direction = get_compile_time_arg_val(12);
-constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(13);
-constexpr bool do_final_reduction = get_compile_time_arg_val(14);
-constexpr bool sync_with_other_direction = get_compile_time_arg_val(15);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
-constexpr uint32_t start_tiles_read = get_compile_time_arg_val(17);
-constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(18);
+constexpr uint32_t slice_B = get_compile_time_arg_val(10);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(11);
+constexpr bool is_forward = get_compile_time_arg_val(12);
+constexpr bool is_first_device_in_direction = get_compile_time_arg_val(13);
+constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(14);
+constexpr bool do_final_reduction = get_compile_time_arg_val(15);
+constexpr bool sync_with_other_direction = get_compile_time_arg_val(16);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(17);
+constexpr uint32_t start_tiles_read = get_compile_time_arg_val(18);
+constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(19);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
