@@ -203,7 +203,7 @@ def set_tensor_id(tensor, force=False):
     if isinstance(tensor, (ttnn.Tensor, torch.Tensor)):
         if not force and hasattr(tensor, "tensor_id") and tensor.tensor_id is not None:
             return
-        tensor.tensor_id = ttnn.fetch_and_increment_tensor_id()
+        tensor.tensor_id = ttnn._ttnn.fetch_and_increment_tensor_id()
     elif isinstance(tensor, (list, tuple)):
         for element in tensor:
             set_tensor_id(element, force)
