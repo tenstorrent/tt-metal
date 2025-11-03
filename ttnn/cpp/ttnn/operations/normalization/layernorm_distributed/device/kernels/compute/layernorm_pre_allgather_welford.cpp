@@ -1,5 +1,3 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
-//
 // SPDX-License-Identifier: Apache-2.0
 
 /*
@@ -50,10 +48,10 @@ void MAIN {
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
+    constexpr uint32_t cb_x2 = tt::CBIndex::c_6;  // x**2
 
     compute_kernel_hw_startup(cb_inp, cb_inp, cb_x2);
 
-    DPRINT << "WELFORDS!" << ENDL();
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr uint32_t dst0 = 0;
         constexpr uint32_t dst1 = 1;
@@ -95,6 +93,7 @@ void MAIN {
         pack_tile(dst0, cb_out);
         pack_tile(dst1, cb_out);
         cb_push_back(cb_out, 2);
+        cb_wait_front(cb_out, 2);
         tile_regs_release();
     }
 }

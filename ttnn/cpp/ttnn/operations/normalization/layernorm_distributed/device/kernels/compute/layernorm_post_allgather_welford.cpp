@@ -37,6 +37,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t W = get_compile_time_arg_val(1);
     DPRINT << "W: " << W << ENDL();
+    DPRINT << "Wt: " << Wt << ENDL();
     constexpr uint32_t blk = get_compile_time_arg_val(2);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(3) / 2;
     constexpr uint32_t do_gamma = get_compile_time_arg_val(4);
@@ -78,19 +79,15 @@ void MAIN {
         cb_times_gamma_out = tt::CBIndex::c_13;
     }
 
-    DPRINT << "pre_bin init " << ENDL();
     binary_op_init_common(cb_inp, cb_inp, cb_stats_reduced);
 
     cb_wait_front(cb_reduce, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
-    DPRINT << "post_bin init " << ENDL();
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
 
-        // combine_welford_partials()
-        DPRINT << "pre_combine " << ENDL();
         norm::kernel_util::compute::combine_welford_partials(
             cb_stats,
             cb_stats_reduced,
@@ -99,9 +96,6 @@ void MAIN {
             norm::kernel_util::compute::RSqrtPolicy{false, 0});
         cb_push_back(cb_stats_reduced, 2);
         cb_wait_front(cb_stats_reduced, 2);
-        UNPACK(tt::compute::common::print_full_tile(cb_stats_reduced, 0, true));
-        UNPACK(tt::compute::common::print_full_tile(cb_stats_reduced, 1, true));
-        DPRINT << "here " << ENDL();
         /*
          * x - E[x]
          */

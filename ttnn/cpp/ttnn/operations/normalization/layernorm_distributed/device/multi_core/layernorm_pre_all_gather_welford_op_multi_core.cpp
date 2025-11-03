@@ -197,14 +197,14 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_welford_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
-    std::vector<uint32_t> compute_args = {Wt, block_size, float32_reduction ? 1 : 0};
+    // bool float32_reduction = fp32_dest_acc_en && !program_config.legacy_reduction;
+    std::vector<uint32_t> compute_args = {Wt, W};
 
     auto compute_kernel_file =
         is_rmsnorm ? "ttnn/cpp/ttnn/operations/normalization/rmsnorm_distributed/device/kernels/compute/"
                      "rmsnorm_pre_allgather.cpp"
                    : "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/"
-                     "layernorm_pre_allgather.cpp";
+                     "layernorm_pre_allgather_welford.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
