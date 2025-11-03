@@ -146,8 +146,8 @@ class ModelOptimisations:
         self.conv_configs["ABH_128_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            deallocate_activation=False,
-            reallocate_halo_output=False,
+            deallocate_activation=True,
+            reallocate_halo_output=True,
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             reshard_if_not_optimal=True,

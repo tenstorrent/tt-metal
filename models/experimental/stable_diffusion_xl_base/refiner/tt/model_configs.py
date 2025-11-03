@@ -52,6 +52,18 @@ class RefinerModelOptimisations(ModelOptimisations):
             act_block_h_override=32,
         )
 
+        self.conv_configs["ABH_128_ADB_WDB_NO_MOVE_BS"] = ttnn.Conv2dConfig(
+            weights_dtype=self.conv_ws_dtype,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            deallocate_activation=False,
+            reallocate_halo_output=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
+            reshard_if_not_optimal=True,
+            act_block_w_div=1,
+            act_block_h_override=128,
+        )
+
         self.conv_configs["ABH_256_NO_ADB_WDB_BS"] = ttnn.Conv2dConfig(
             weights_dtype=self.conv_ws_dtype,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -87,7 +99,7 @@ class RefinerModelOptimisations(ModelOptimisations):
             if "down_blocks.0" in conv_path:
                 return self.conv_configs["ABH_256_ADB_WDB_BS_NO_MOVE"]
             elif "down_blocks.1" in conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+                return self.conv_configs["ABH_128_ADB_WDB_NO_MOVE_BS"]
             elif "down_blocks.2" in conv_path:
                 return self.conv_configs["ABH_32_ADB_WDB_BS"]
         if "down_blocks.0" in conv_path:
@@ -99,7 +111,7 @@ class RefinerModelOptimisations(ModelOptimisations):
                 return self.conv_configs["ABH_256_ADB_WDB_BS"]
         if "down_blocks.2" in conv_path:
             if "resnets.0" in conv_path and "conv1" in conv_path:
-                return self.conv_configs["ABH_128_ADB_WDB_BS"]
+                return self.conv_configs["ABH_128_ADB_WDB_NO_MOVE_BS"]
             else:
                 return self.conv_configs["ABH_128_ADB_WDB_BS"]
         if "down_blocks.3" in conv_path or "mid_block" in conv_path:
