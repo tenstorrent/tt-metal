@@ -589,14 +589,23 @@ on:
           - BH-DeskBox
           - BH-LoudBox
         default: "N150"
+      log-level:
+        description: "Log level for sweep execution. INFO level may overwhelm runners for long sweeps."
+        required: true
+        type: choice
+        options:
+          - DEBUG
+          - INFO
+          - WARNING
+          - CRITICAL
+        default: "INFO"
 
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs['runner-label'] || 'N150' }}
-  cancel-in-progress: true
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
 jobs:
   build-artifact:
@@ -749,7 +758,8 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        LOGURU_LEVEL: INFO
+        LOGURU_LEVEL: ${{ inputs.log-level }}
+        TT_LOGGER_LEVEL: ${{ inputs.log-level }}
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
@@ -785,7 +795,7 @@ jobs:
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
-      - name: Run ttnn sweeps (single sweep)
+      - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
         run: |
           SKIP_ON_TIMEOUT_FLAG=""
           if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
@@ -797,7 +807,13 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
-          python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
+          python3 tests/sweep_framework/sweeps_runner.py \
+          --module-name ${{ github.event.inputs.sweep_name }} \
+          --vector-source vectors_export \
+          --result-dest results_export \
+          --tag ci-main \
+          --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG \
+          --suite-name ${{ github.event.inputs.suite_name }} \
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
