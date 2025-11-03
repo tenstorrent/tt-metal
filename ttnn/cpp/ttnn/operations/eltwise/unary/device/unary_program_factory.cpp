@@ -106,6 +106,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         unary_defines["INP_INT32"] = "1";
     } else if (input.dtype() == DataType::UINT32) {
         unary_defines["INP_UINT32"] = "1";
+    } else {
+        unary_defines["INP_FLOAT"] = "1";
     }
 
     if (!ops_chain[0].empty()) {
