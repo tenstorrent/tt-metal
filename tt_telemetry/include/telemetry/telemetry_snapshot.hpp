@@ -36,6 +36,7 @@ struct TelemetrySnapshot {
     std::unordered_map<std::string, uint64_t> uint_metric_timestamps;
     std::unordered_map<std::string, uint16_t> double_metric_units;
     std::unordered_map<std::string, uint64_t> double_metric_timestamps;
+    std::unordered_map<std::string, uint16_t> string_metric_units;
     std::unordered_map<std::string, uint64_t> string_metric_timestamps;
 
     // Unit label maps
@@ -52,6 +53,7 @@ struct TelemetrySnapshot {
         uint_metric_timestamps.clear();
         double_metric_units.clear();
         double_metric_timestamps.clear();
+        string_metric_units.clear();
         string_metric_timestamps.clear();
         metric_unit_display_label_by_code.clear();
         metric_unit_full_label_by_code.clear();
@@ -118,6 +120,9 @@ private:
         // Update string metrics and their metadata
         for (const auto& [path, value] : other.string_metrics) {
             string_metrics[path] = value;
+        }
+        for (const auto& [path, unit] : other.string_metric_units) {
+            string_metric_units[path] = unit;
         }
         for (const auto& [path, timestamp] : other.string_metric_timestamps) {
             string_metric_timestamps[path] = timestamp;
@@ -243,6 +248,9 @@ private:
         }
 
         // Merge string metadata
+        for (const auto& [path, unit] : other.string_metric_units) {
+            string_metric_units[path] = unit;
+        }
         for (const auto& [path, timestamp] : other.string_metric_timestamps) {
             string_metric_timestamps[path] = timestamp;
         }
@@ -262,6 +270,7 @@ public:
          {"uint_metric_timestamps", t.uint_metric_timestamps},
          {"double_metric_units", t.double_metric_units},
          {"double_metric_timestamps", t.double_metric_timestamps},
+         {"string_metric_units", t.string_metric_units},
          {"string_metric_timestamps", t.string_metric_timestamps},
          {"metric_unit_display_label_by_code", t.metric_unit_display_label_by_code},
          {"metric_unit_full_label_by_code", t.metric_unit_full_label_by_code},
@@ -278,6 +287,7 @@ static inline void from_json(const nlohmann::json &j, TelemetrySnapshot &t) {
     j.at("uint_metric_timestamps").get_to(t.uint_metric_timestamps);
     j.at("double_metric_units").get_to(t.double_metric_units);
     j.at("double_metric_timestamps").get_to(t.double_metric_timestamps);
+    j.at("string_metric_units").get_to(t.string_metric_units);
     j.at("string_metric_timestamps").get_to(t.string_metric_timestamps);
     j.at("metric_unit_display_label_by_code").get_to(t.metric_unit_display_label_by_code);
     j.at("metric_unit_full_label_by_code").get_to(t.metric_unit_full_label_by_code);

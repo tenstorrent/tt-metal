@@ -222,6 +222,7 @@ static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySub
     for (size_t i = 0; i < string_metrics_.size(); i++) {
         std::string path = get_cluster_wide_telemetry_path(*string_metrics_[i]);
         snapshot->string_metrics[path] = string_metrics_[i]->value();
+        snapshot->string_metric_units[path] = static_cast<uint16_t>(string_metrics_[i]->units);
         snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
     }
 
@@ -273,6 +274,7 @@ static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<Telemetry
         }
         std::string path = get_cluster_wide_telemetry_path(*string_metrics_[i]);
         snapshot->string_metrics[path] = string_metrics_[i]->value();
+        snapshot->string_metric_units[path] = static_cast<uint16_t>(string_metrics_[i]->units);
         snapshot->string_metric_timestamps[path] = string_metrics_[i]->timestamp();
         string_metrics_[i]->mark_transmitted();
     }
