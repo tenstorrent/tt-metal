@@ -96,7 +96,7 @@ def run_demo_inference(
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             strength=strength,
-            is_galaxy=True,
+            is_galaxy=False,
             use_cfg_parallel=use_cfg_parallel,
             crop_coords_top_left=crop_coords_top_left,
             guidance_rescale=guidance_rescale,
