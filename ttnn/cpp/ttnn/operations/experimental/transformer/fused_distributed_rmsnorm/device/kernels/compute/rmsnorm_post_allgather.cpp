@@ -75,8 +75,7 @@ void MAIN {
 
         /*
          * Reduce stats input.
-         * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
-         * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
+         * cb_stats = [sum(x0**2), sum(x1**2), ...]
          */
         reduce_init<REDUCE_OP, REDUCE_DIM, use_float32_reduction>(stats_cb, reduce_scalar_cb, reduce_result_cb);
 
@@ -99,7 +98,7 @@ void MAIN {
         reduce_uninit<false>();  // NOTE: cannot pass use_float32_reduction here or outputs are incorrect?
 
         /*
-         * 1/sqrt(var + eps)
+         * 1/sqrt(mean_squared + eps)
          */
         cb_wait_front(reduce_result_cb, 1);
         reconfig_data_format(reduce_result_cb, epsilon_cb);
