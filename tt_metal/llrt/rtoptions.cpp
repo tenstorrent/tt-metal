@@ -57,8 +57,8 @@ RunTimeOptions::RunTimeOptions() :
     profile_dispatch_cores(false),
     profiler_sync_enabled(false),
     profiler_mid_run_dump(false),
-    profiler_buffer_usage_enabled(false),
-    profiler_trace_profiler(false) {
+    profiler_trace_profiler(false),
+    profiler_buffer_usage_enabled(false) {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
@@ -69,6 +69,10 @@ RunTimeOptions::RunTimeOptions() :
 
     // ENV Can Override
     const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
+    if (root_dir_str == nullptr) {
+        // Fallback to TT_METAL_HOME for backwards compatibility
+        root_dir_str = std::getenv("TT_METAL_HOME");
+    }
     if (root_dir_str != nullptr) {
         this->root_dir = std::string(root_dir_str);
         log_debug(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
@@ -92,7 +96,7 @@ RunTimeOptions::RunTimeOptions() :
             "Failed to determine TT-Metal root directory. "
             "Root directory must be set via one of the following methods:\n"
             "1. Automatically determined when using a package install\n"
-            "2. Set TT_METAL_RUNTIME_ROOT environment variable to the path containing tt_metal/\n"
+            "2. Set TT_METAL_RUNTIME_ROOT (or TT_METAL_HOME) environment variable to the path containing tt_metal/\n"
             "3. Call RunTimeOptions::set_root_dir() API before creating RunTimeOptions\n"
             "4. Run from the root of the repository\n"
             "Current working directory: {}",
@@ -146,8 +150,8 @@ RunTimeOptions::RunTimeOptions() :
     profiler_trace_tracking = false;
     profiler_cpp_post_process = false;
 
-    const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
 #if defined(TRACY_ENABLE)
+    const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
         profiler_enabled = true;
         const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
@@ -175,6 +179,7 @@ RunTimeOptions::RunTimeOptions() :
             profiler_cpp_post_process = true;
         }
     }
+#endif
 
     const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
     if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
@@ -582,12 +587,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (profiling disabled)
         // Usage: export TT_METAL_DEVICE_PROFILER=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER:
-#if defined(TRACY_ENABLE)
+#if !defined(TRACY_ENABLE)
+            TT_FATAL(false, "TT_METAL_DEVICE_PROFILER requires a Tracy-enabled build of tt-metal.");
+#else
             if (value && value[0] == '1') {
                 this->profiler_enabled = true;
             }
-#else
-            TT_FATAL(false, "TT_METAL_DEVICE_PROFILER requires a Tracy-enabled build of tt-metal.");
 #endif
             break;
 
