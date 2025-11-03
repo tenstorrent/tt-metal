@@ -16,6 +16,7 @@ def run_with_trace(
     num_links,
     output_mem_config,
     num_iter=20,
+    cluster_axis=None,
     subdevice_id=None,
 ):
     # Compile Run
@@ -23,6 +24,7 @@ def run_with_trace(
     tt_out_tensor = ttnn.all_broadcast(
         input_tensor_mesh,
         num_links=num_links,
+        cluster_axis=cluster_axis,
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
@@ -36,6 +38,7 @@ def run_with_trace(
         tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
+            cluster_axis=cluster_axis,
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
@@ -187,6 +190,7 @@ def run_all_broadcast_impl(
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
+            cluster_axis=cluster_axis,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -197,6 +201,7 @@ def run_all_broadcast_impl(
                 input_tensor_mesh_list[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
+                cluster_axis=cluster_axis,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
             )
