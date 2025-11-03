@@ -695,7 +695,7 @@ ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape) {
 
 std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required(
     MeshDevice* device,
-    const ttnn::Tensor& input_tensor_,
+    ttnn::Tensor& input_tensor,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
     uint32_t height,
@@ -704,13 +704,12 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     uint32_t out_channels,
     bool is_mm_conv,
     bool auto_shard) {
-    ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
-    bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
+    bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor);
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
     auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] =
         get_conv_padded_input_shape_and_mem_config(
-            device, input_tensor_, conv_config, batch_size, height, width, in_channels, out_channels, is_mm_conv);
+            device, input_tensor, conv_config, batch_size, height, width, in_channels, out_channels, is_mm_conv);
     ParallelConfig parallel_config = {
         .grid = input_tensor_sharded_memory_config.shard_spec().value().grid,
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
@@ -1564,7 +1563,7 @@ bool auto_enable_kernel_folding(
     }
 }
 Tensor fold_input_tensor_if_required(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     MeshDevice* device,
     uint32_t& input_height,
     uint32_t& input_width,
@@ -1590,8 +1589,7 @@ Tensor fold_input_tensor_if_required(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         auto folded_input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
         if (conv_config.deallocate_activation) {
-            auto tensor_to_deallocate = input_tensor;
-            tensor_to_deallocate.deallocate(true);
+            input_tensor.deallocate(true);
         }
 
         // Update the input tensor parameters to the folding result

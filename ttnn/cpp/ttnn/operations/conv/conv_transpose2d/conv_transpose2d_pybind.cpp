@@ -84,7 +84,7 @@ void py_bind_conv_transpose2d(py::module& module) {
 
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv_transpose2d)& self,
-               const ttnn::Tensor& input_tensor,
+               ttnn::Tensor& input_tensor,
                const ttnn::Tensor& weight_tensor,
                ttnn::MeshDevice* device,
                uint32_t in_channels,

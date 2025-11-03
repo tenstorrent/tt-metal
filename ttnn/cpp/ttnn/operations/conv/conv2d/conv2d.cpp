@@ -58,7 +58,7 @@ ResultWithOptions result_to_result_with_options(
 }
 
 ResultWithOptions conv2d(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
@@ -194,7 +194,7 @@ ResultWithOptions conv2d(
 // number of such slices.
 // Conv2dConfig does not control the final output, but rather the conv2d_L1 function that is called internally.
 Result conv2d_DRAM(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
@@ -431,7 +431,7 @@ Result conv2d_DRAM(
 }
 
 Result conv2d_L1(
-    const ttnn::Tensor& input_tensor_,
+    ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
     MeshDevice* device,
     uint32_t in_channels,
@@ -757,7 +757,7 @@ Result conv2d_L1(
 }
 
 ResultWithOptions Conv2dOperation::invoke(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
     uint32_t in_channels,
@@ -1016,10 +1016,10 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
 
     // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
     conv_config_l1.output_layout = Layout::TILE;
-
+    auto this_input_tensor = sliced_input_tensor;
     auto conv2d_result = conv2d_L1(
-        sliced_input_tensor,
-       weight_tensor,
+        this_input_tensor,
+        weight_tensor,
         device,
         input_channels,
         output_channels,

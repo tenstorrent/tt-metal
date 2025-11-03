@@ -182,7 +182,7 @@ ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape);
 std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig>
 shard_or_reshard_tensor_if_required(
     MeshDevice* device,
-    const ttnn::Tensor& input_tensor_,
+    ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
     uint32_t height,
@@ -202,7 +202,7 @@ bool auto_enable_kernel_folding(
     std::array<uint32_t, 4>& padding_n4);
 
 Tensor fold_input_tensor_if_required(
-    const ttnn::Tensor& input_tensor,
+    ttnn::Tensor& input_tensor,
     MeshDevice* device,
     uint32_t& input_height,
     uint32_t& input_width,
