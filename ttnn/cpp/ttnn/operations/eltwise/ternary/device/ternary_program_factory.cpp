@@ -566,9 +566,9 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_true_tensor_cb_handle;
+    [[maybe_unused]] tt::tt_metal::CBHandle value_true_tensor_cb_handle;
     uint32_t value_false_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_false_tensor_cb_handle;
+    [[maybe_unused]] tt::tt_metal::CBHandle value_false_tensor_cb_handle;
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_1 = value_true tensor (value_false is scalar)
