@@ -1919,7 +1919,20 @@ class ModelArgs:
                     config.num_hidden_layers = self.n_layers
 
                 model_cls = self.get_hf_model_cls()
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except:
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2534,7 +2547,19 @@ class ModelArgs:
                 else:
                     config.num_layers = self.n_layers
                     config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except:
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = model_cls.from_pretrained(
@@ -2588,7 +2613,19 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = model_cls.from_pretrained(
+                        self.CKPT_DIR,
+                        config=config,
+                        torch_dtype="auto",
+                        trust_remote_code=self.trust_remote_code_hf,
+                        local_files_only=True,
+                    )
+                    model.apply(model._init_weights)
+                except:
+                    model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if self.cached_hf_model is None:
                     model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")

@@ -1787,7 +1787,16 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except:
+                    model = AutoModelForCausalLM.from_config(config)
+
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -2297,7 +2306,15 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModel.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModel.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except:
+                    model = AutoModel.from_config(config)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModel.from_pretrained(self.CKPT_DIR)
@@ -2352,7 +2369,15 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+
+                try:
+                    # .from_pretrained + _init_weights works faster than .from_config
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
+                    )
+                    model.apply(model._init_weights)
+                except:
+                    model = AutoModelForCausalLM.from_config(config)
             else:
                 if self.is_gemma:
                     from transformers import Gemma3ForConditionalGeneration
