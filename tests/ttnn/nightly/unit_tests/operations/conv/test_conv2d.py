@@ -839,7 +839,7 @@ def test_conv_dram(
         input_layout=input_layout,
         output_layout=input_layout,
         packer_l1_acc=packer_l1_acc,
-        run_twice=False,
+        run_twice=True,
         fast_compare=True,
         throttle_level=throttle,
         use_dram_slicing=True,
@@ -3231,6 +3231,9 @@ def test_conv2d_model_fruit(
         # # input_channels 4
         (1, 4, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, 1, 1, True, False),
 
+        # # input_channels 9
+        (1, 9, 320, 128, 128,   ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 0,  1, True, ttnn.MathFidelity.HiFi2, False, False, 1, 1, True, False),
+
         # kernel 1x1
         (1, 1280, 640, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
         (1, 1920, 1280, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.LoFi, False, False, 1, 1, False, False),
@@ -5136,24 +5139,23 @@ def test_resnet50_conv_p150(
     )
 
 
-@pytest.mark.parametrize("config_in_dram", [False,True])
-@pytest.mark.parametrize("full_inner_dim", [False,True])
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
     (
         (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
         (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
         (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
-        (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
+        (32, 64, 4, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
         (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
     ),
 )
+@pytest.mark.parametrize("act_double_buffer", [True, False])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("force_split_reader", [True, False])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_block_sharding(
     device,
     torch_tensor_map,
-    config_in_dram,
     output_channels,
     input_channels,
     input_height,
@@ -5165,15 +5167,16 @@ def test_conv_block_sharding(
     pad_h,
     pad_w,
     force_split_reader,
-    full_inner_dim,
+    output_dtype,
     act_block_h_override,
+    act_double_buffer
 ):
 
     run_conv(
         device,
         torch_tensor_map,
         ttnn.MathFidelity.LoFi, #math_fidelity
-        ttnn.bfloat8_b, #output_dtype
+        output_dtype, #output_dtype
         ttnn.bfloat8_b, #weights_dtype
         1, # batch_size
         output_channels,
@@ -5192,6 +5195,5 @@ def test_conv_block_sharding(
         groups=1,
         in_place=False,
         force_split_reader=force_split_reader,
-        config_tensors_in_dram=config_in_dram,
-        bs_full_inner_dim=full_inner_dim,
+        enable_act_double_buffer=act_double_buffer,
     )

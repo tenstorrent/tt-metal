@@ -297,7 +297,7 @@ private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
     // Buffers temporarily owned by the program
-    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool = {};
+    std::vector<std::shared_ptr<Buffer>> owned_buffer_pool;
 
     // The buffer that holds the kernel/binaries/etc for this program
     std::unordered_map<ChipId, std::shared_ptr<Buffer>> kernels_buffer_;
@@ -358,7 +358,7 @@ private:
 
     std::vector<Semaphore> semaphores_;
 
-    std::unordered_set<uint32_t> compiled_;
+    std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;

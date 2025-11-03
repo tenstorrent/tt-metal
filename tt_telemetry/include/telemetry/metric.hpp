@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_map>
 
+#include <fmt/ranges.h>
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 
 enum class MetricUnit : uint16_t {
@@ -49,6 +50,9 @@ public:
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
 
+    // Get telemetry path as a slash-separated string
+    std::string telemetry_path_string() const { return fmt::format("{}", fmt::join(telemetry_path(), "/")); }
+
     virtual void update(
         const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     }
@@ -69,6 +73,12 @@ public:
     }
 
 protected:
+    void set_timestamp_now() {
+        timestamp_ =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+    }
+
     bool changed_since_transmission_ = false;
     uint64_t timestamp_ = 0;  // Unix timestamp in milliseconds, 0 = never set
 };
@@ -79,6 +89,12 @@ public:
 
     bool value() const {
         return value_;
+    }
+
+    void set_value(bool value) {
+        value_ = value;
+        changed_since_transmission_ = true;
+        set_timestamp_now();
     }
 
 protected:
@@ -93,6 +109,12 @@ public:
         return value_;
     }
 
+    void set_value(uint64_t value) {
+        value_ = value;
+        changed_since_transmission_ = true;
+        set_timestamp_now();
+    }
+
 protected:
     uint64_t value_ = 0;
 };
@@ -102,6 +124,12 @@ public:
     DoubleMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
 
     double value() const { return value_; }
+
+    void set_value(double value) {
+        value_ = value;
+        changed_since_transmission_ = true;
+        set_timestamp_now();
+    }
 
 protected:
     double value_ = 0.0;

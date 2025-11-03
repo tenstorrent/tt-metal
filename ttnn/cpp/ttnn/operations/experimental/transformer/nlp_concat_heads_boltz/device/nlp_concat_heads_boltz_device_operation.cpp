@@ -17,19 +17,41 @@ void NLPConcatHeadsBoltzDeviceOperation::validate(const std::vector<Tensor>& inp
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
-    TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::TILE, "Error");
+    TT_FATAL(
+        input_tensor.layout() == tt::tt_metal::Layout::TILE,
+        "Input tensor layout must be TILE but got {}",
+        input_tensor.layout());
     if (input_tensor.is_sharded()) {
         TT_FATAL(
-            input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, "Error");
+            input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
+            "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
+            input_tensor.memory_config().memory_layout());
         auto shard_spec = input_tensor.shard_spec().value();
-        TT_FATAL(shard_spec.shape[1] == input_tensor.padded_shape()[-1], "Error");
-        TT_FATAL(shard_spec.shape[0] % input_tensor.padded_shape()[-2] == 0, "Error");
         TT_FATAL(
-            input_tensor.padded_shape()[1] % (shard_spec.shape[0] / input_tensor.padded_shape()[-2]) == 0, "Error");
-        // Allow HEIGHT_SHARDED output memory layout for sharded inputs
-        // TT_FATAL(this->output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+            shard_spec.shape[1] == input_tensor.padded_shape()[-1],
+            "Input tensor shard width ({}) must equal padded width ({})",
+            shard_spec.shape[1],
+            input_tensor.padded_shape()[-1]);
+        TT_FATAL(
+            shard_spec.shape[0] % input_tensor.padded_shape()[-2] == 0,
+            "Input tensor shard height ({}) must be divisible by padded height ({})",
+            shard_spec.shape[0],
+            input_tensor.padded_shape()[-2]);
+        TT_FATAL(
+            input_tensor.padded_shape()[1] % (shard_spec.shape[0] / input_tensor.padded_shape()[-2]) == 0,
+            "Input tensor padded height ({}) must be divisible by shard height / padded height ({} / {})",
+            input_tensor.padded_shape()[1],
+            shard_spec.shape[0],
+            input_tensor.padded_shape()[-2]);
+        TT_FATAL(
+            this->output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "Output memory config layout must not be HEIGHT_SHARDED but got {}",
+            this->output_mem_config.memory_layout());
     } else {
-        TT_FATAL(this->output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            "Output memory config layout must be INTERLEAVED but got {}",
+            this->output_mem_config.memory_layout());
     }
 }
 
