@@ -189,6 +189,12 @@ class PytorchPanopticDeepLab(nn.Module):
             self.load_state_dict(converted_state_dict, strict=False)
             logger.info(f"Loaded {len(converted_state_dict)} parameters into model")
             logger.info("Model weights loaded successfully.")
+
+            # Always fuse ImageNet normalization into stem.conv1 weights
+            # This is the single point where normalization fusion happens
+            from models.experimental.panoptic_deeplab.tt.model_preprocessing import fuse_imagenet_normalization
+
+            fuse_imagenet_normalization(self)
         except Exception as e:
             logger.error(f"Failed to load weights from {weights_path}: {e}")
             raise

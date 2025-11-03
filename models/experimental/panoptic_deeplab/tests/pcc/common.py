@@ -22,14 +22,31 @@ def get_abs_and_relative_error(tensor_a, tensor_b):
 def check_ttnn_output(
     layer_name, pytorch_output, ttnn_output, to_channel_first=False, output_channels=None, exp_pcc=0.999
 ):
+    """
+    Compare PyTorch and TTNN outputs with format conversion and channel slicing.
+
+    Both tensors start in NCHW format (ttnn.to_torch() converts TTNN NHWC -> NCHW).
+    They are converted to the target format together, then channels are sliced if needed.
+    """
+    # Convert TTNN output to torch (converts NHWC -> NCHW, already creates new tensor)
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
-    if to_channel_first:
-        ttnn_output_torch = ttnn_output_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
+    if len(pytorch_output.shape) == 4 and len(ttnn_output_torch.shape) == 4:
+        if not to_channel_first:
+            # Convert both from NCHW to NHWC
+            pytorch_output = pytorch_output.permute(0, 2, 3, 1)
+            ttnn_output_torch = ttnn_output_torch.permute(0, 2, 3, 1)
 
+    # Slice channels if needed (after format conversion, so channel dim is correct)
     if output_channels is not None:
-        logger.debug(f"Slicing {layer_name} output from {ttnn_output_torch.shape[1]} to {output_channels} channels")
-        ttnn_output_torch = ttnn_output_torch[:, :output_channels, :, :]
+        if to_channel_first:
+            # NCHW: channels at dim 1
+            ttnn_output_torch = ttnn_output_torch[:, :output_channels, :, :]
+            pytorch_output = pytorch_output[:, :output_channels, :, :]
+        else:
+            # NHWC: channels at dim 3
+            ttnn_output_torch = ttnn_output_torch[:, :, :, :output_channels]
+            pytorch_output = pytorch_output[:, :, :, :output_channels]
 
     abs_err, rel_err = get_abs_and_relative_error(pytorch_output, ttnn_output_torch)
     passed, pcc = check_with_pcc(pytorch_output, ttnn_output_torch, exp_pcc)
