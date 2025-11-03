@@ -16,8 +16,6 @@
 #include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/core/get_tensor_id/get_tensor_id_op.hpp"
-#include "ttnn/operations/core/set_tensor_id/set_tensor_id_op.hpp"
 #include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
@@ -40,8 +38,6 @@
 #include "ttnn/distributed/api.hpp"
 
 namespace tt::tt_metal {
-
-std::atomic<std::uint64_t> Tensor::tensor_id_counter{0};
 
 namespace {
 
@@ -650,7 +646,7 @@ Tensor set_tensor_id(const Tensor& tensor) {
         return tensor;
     }
     auto output = tensor;
-    output.tensor_id = ttnn::operations::core::FetchAndIncrementTensorId::invoke();
+    output.tensor_id = Tensor::fetch_and_increment_tensor_id_counter();
     return output;
 };
 

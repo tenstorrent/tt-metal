@@ -368,58 +368,6 @@ void py_module(py::module& module) {
         py::overload_cast<const CoreCoord, const uint32_t, const CoreRangeSet&, const bool>(
             &tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids),
         R"doc(Create a CoreRangeSet containing the specified number of cores starting from start_core in given subcoregrids)doc");
-
-    // Bind tensor_id operations
-    bind_registered_operation(
-        module,
-        ttnn::get_tensor_id,
-        R"doc(get_tensor_id() -> int
-
-            Get the current tensor ID counter value.
-
-            Returns:
-                int: The current tensor ID counter value.
-
-            Example:
-                >>> current_id = ttnn.get_tensor_id()
-        )doc",
-        ttnn::pybind_overload_t{[](const decltype(ttnn::get_tensor_id)& self) -> std::uint64_t { return self(); }});
-
-    bind_registered_operation(
-        module,
-        ttnn::set_tensor_id,
-        R"doc(set_tensor_id(id: int) -> int
-
-            Set the tensor ID counter to a specific value.
-
-            Args:
-                id (int): The value to set the tensor ID counter to.
-
-            Returns:
-                int: The ID value that was set.
-
-            Example:
-                >>> ttnn.set_tensor_id(100)
-        )doc",
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::set_tensor_id)& self, std::uint64_t id) -> std::uint64_t { return self(id); },
-            py::arg("id")});
-
-    bind_registered_operation(
-        module,
-        ttnn::fetch_and_increment_tensor_id,
-        R"doc(fetch_and_increment_tensor_id() -> int
-
-            Atomically fetch the current tensor ID counter and increment it.
-
-            Returns:
-                int: The tensor ID value before incrementing.
-
-            Example:
-                >>> tensor_id = ttnn.fetch_and_increment_tensor_id()
-        )doc",
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::fetch_and_increment_tensor_id)& self) -> std::uint64_t { return self(); }});
 }
 
 }  // namespace ttnn::operations::core

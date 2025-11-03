@@ -7,8 +7,6 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/operations/core/get_tensor_id/get_tensor_id_op.hpp"
-#include "ttnn/operations/core/set_tensor_id/set_tensor_id_op.hpp"
 #include <cxxabi.h>
 #include <memory>
 #include <string>
@@ -287,8 +285,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
             "Tensor doesn't have tensor_id (sentinel value is 0), generating new one. Ideally this should not happen. "
             "Please set tensor_id "
             "for this tensor ahead of time.");
-        tensor_id = ttnn::operations::core::GetTensorId::invoke();
-        ttnn::operations::core::SetTensorId::invoke(tensor_id + 1);
+        tensor_id = tt::tt_metal::Tensor::fetch_and_increment_tensor_id_counter();
     }
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();

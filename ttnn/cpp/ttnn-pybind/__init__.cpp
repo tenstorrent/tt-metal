@@ -307,9 +307,17 @@ PYBIND11_MODULE(_ttnn, module) {
         []() -> std::uint64_t { return ttnn::CoreIDs::instance().fetch_and_increment_python_operation_id(); },
         "Increment tensor id and return the previously held id");
 
-    // Note: tensor_id operations (get_tensor_id, set_tensor_id) are now registered as operations in core.cpp
-    // fetch_and_increment_tensor_id has been replaced by: current_id = ttnn.get_tensor_id();
-    // ttnn.set_tensor_id(current_id + 1)
+    module.def(
+        "get_tensor_id", &tt::tt_metal::Tensor::get_tensor_id_counter, "Get the current tensor ID counter value");
+    module.def(
+        "set_tensor_id",
+        &tt::tt_metal::Tensor::set_tensor_id_counter,
+        py::arg("id"),
+        "Set the tensor ID counter to a specific value");
+    module.def(
+        "fetch_and_increment_tensor_id",
+        &tt::tt_metal::Tensor::fetch_and_increment_tensor_id_counter,
+        "Atomically fetch and increment the tensor ID counter");
 
     module.def(
         "get_device_operation_id",
