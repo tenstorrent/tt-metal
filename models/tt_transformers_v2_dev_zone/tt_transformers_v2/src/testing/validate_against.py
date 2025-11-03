@@ -353,8 +353,25 @@ def _prepare_metric_config(metric_tolerances_input):
     return metrics_map, hib, tol_map, logs_local
 
 
-# todo)) add capability to run the reference function instead of the decorated function on a per-module basis!
+# todo)) refactor __validate_against code into host_validate_against and device_validate_against to avoid the if-else branch!
+# make better documentation for host_validate_against and device_validate_against to explain the difference between the two
+# host_validate_against is used when the reference function is a PyTorch function --> change the name of the function to `compare_to_torch`
+# - the reference function takes as inputs to_torch_auto_compose(decorated function inputs) and compares the outputs with to_torch_auto_compose(decorated function outputs)
+# - the decorated function inputs/outputs TTNN tensors, Torch tensors, or mixed TTNN and Torch tensors
+# device_validate_against is used when the reference function is a TTNN-native function --> change the name of the function to `compare_to_ttnn`
+# - the reference function takes as inputs from_torch(decorated function inputs) and compares the outputs with from_torch(decorated function outputs)
+# - if there is no device specified in the reference function, it can be assumed to be on the host?! or 1x1 mesh device? Should also allow specifying the device with mesh_mapper
+# - the decorated function inputs/outputs TTNN tensors, Torch tensors, or mixed TTNN and Torch tensors
+# In both host_validate_against and device_validate_against, all the inputs/outputs are converted to Torch tensors using to_torch_auto_compose before the metric computation! i.e., remove the device metric computation!
+# Is there any difference between host_validate_against and device_validate_against?
+# There seems to be a third use case of validate functions:
+# - run both TTNN model and Torch model side by side (i.e., each has their separate inputs and outputs) and compare the results!
+# - this is not more useful than the above two use cases, unless we can make it more automatic!
 
+# todo)) add checks to to_torch_auto_compose to ensure it only supports ttnn.MeshDevice and cpu device for input and cpu device for output!
+
+# todo)) add capability to run the reference function instead of the decorated function on a per-module basis!
+# this is where distribute_as.py comes in handy!
 
 # todo)) also allow raise an exception from the a failed metric!
 

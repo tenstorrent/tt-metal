@@ -363,6 +363,15 @@ def test_validation_enable_disable(ttnn_mesh_device: ttnn.MeshDevice):
     enable_validation(True)
 
 
+# todo)) add a test case to show non_decorator use of host_validate_against between a class instance and a reference class instance!
+# e.g., validated_layer = host_validate_against(reference_fn=lambda _, x: hf_layer.forward(x))(layer) # layer has __call__
+# validated_layer(input) will call layer.__call__(input) and then validate the output against the reference function!
+
+# todo)) add a test case to show non_decorator use of device_validate_against between a class instance and a reference class instance!
+# e.g., validated_layer = device_validate_against(reference_fn=lambda _, x: hf_layer.forward(x))(layer) # layer has __call__
+# validated_layer(input) will call layer.__call__(input) and then validate the output against the reference function!
+
+
 def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
     registry = get_validation_registry()
     before = len(registry.results)
