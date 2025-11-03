@@ -88,15 +88,17 @@ void create_ethernet_metrics(
             std::make_unique<EthernetEndpointUpMetric>(tray_id, asic_location, chip_id, channel, hal));
         uint_metrics.push_back(
             std::make_unique<EthernetRetrainCountMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
-        auto bandwidth_reader = std::make_shared<FabricTelemetryReader>(
+        auto telemetry_reader = std::make_shared<FabricTelemetryReader>(
             tray_id, asic_location, chip_id, channel, cluster, hal);
         // TODO: does not work as expected, disable for now
         // double_metrics.push_back(
-        //     std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
+        //     std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
         uint_metrics.push_back(
-            std::make_unique<FabricWordsSentMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
+            std::make_unique<FabricWordsSentMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
         uint_metrics.push_back(
-            std::make_unique<FabricPacketsSentMetric>(tray_id, asic_location, chip_id, channel, bandwidth_reader));
+            std::make_unique<FabricPacketsSentMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
+        uint_metrics.push_back(
+            std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
         if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
             // These are available only on Wormhole
             uint_metrics.push_back(
@@ -106,8 +108,6 @@ void create_ethernet_metrics(
             uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(
                 tray_id, asic_location, chip_id, channel, cluster, hal));
         }
-        uint_metrics.push_back(
-            std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, cluster, hal));
     }
 
     log_info(tt::LogAlways, "Created Ethernet metrics");
@@ -344,11 +344,11 @@ const std::vector<std::string> FabricBandwidthMetric::telemetry_path() const {
 void FabricBandwidthMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     // Get telemetry data from the shared reader
-    const LowResolutionBandwidthTelemetryResult& tel = telemetry_reader_->get_telemetry(cluster, start_of_update_cycle);
+    const BandwidthTelemetry& tel = telemetry_reader_->get_bandwidth_telemetry(cluster, start_of_update_cycle);
     
     // Calculate bandwidth
     double old_value = value_;
-    uint64_t cycles = tel.duration.full;
+    uint64_t cycles = tel.elapsed_cycles.full;
     if (cycles > 0) {
         // Get device frequency in MHz
         uint32_t freq_mhz = cluster->get_tt_device(chip_id_)->get_clock();
@@ -395,7 +395,7 @@ const std::vector<std::string> FabricWordsSentMetric::telemetry_path() const {
 void FabricWordsSentMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     // Get telemetry data from the shared reader
-    const LowResolutionBandwidthTelemetryResult& tel = telemetry_reader_->get_telemetry(cluster, start_of_update_cycle);
+    const BandwidthTelemetry& tel = telemetry_reader_->get_bandwidth_telemetry(cluster, start_of_update_cycle);
     
     uint64_t old_value = value_;
     value_ = tel.num_words_sent;
@@ -435,7 +435,7 @@ const std::vector<std::string> FabricPacketsSentMetric::telemetry_path() const {
 void FabricPacketsSentMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     // Get telemetry data from the shared reader
-    const LowResolutionBandwidthTelemetryResult& tel = telemetry_reader_->get_telemetry(cluster, start_of_update_cycle);
+    const BandwidthTelemetry& tel = telemetry_reader_->get_bandwidth_telemetry(cluster, start_of_update_cycle);
     
     uint64_t old_value = value_;
     value_ = tel.num_packets_sent;
@@ -458,13 +458,9 @@ FabricHeartbeatMetric::FabricHeartbeatMetric(
     tt::tt_metal::ASICLocation asic_location,
     tt::ChipId chip_id,
     uint32_t channel,
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal) :
-    UIntMetric(), tray_id_(tray_id), asic_location_(asic_location), chip_id_(chip_id), channel_(channel) {
+    std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
+    UIntMetric(), tray_id_(tray_id), asic_location_(asic_location), chip_id_(chip_id), channel_(channel), telemetry_reader_(telemetry_reader) {
     value_ = 0;
-    ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
-    heartbeat_addr_ = hal->get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY);
 }
 
 const std::vector<std::string> FabricHeartbeatMetric::telemetry_path() const {
@@ -474,7 +470,24 @@ const std::vector<std::string> FabricHeartbeatMetric::telemetry_path() const {
 void FabricHeartbeatMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     uint64_t new_value = 0;
-    cluster->read_from_device(&new_value, chip_id_, ethernet_core_, heartbeat_addr_, sizeof(uint64_t));
+    switch (cluster->get_cluster_description()->get_arch()) {
+    case tt::ARCH::WORMHOLE_B0:
+        {
+            const FabricTelemetry<1>& tel = telemetry_reader_->get_wormhole_fabric_telemetry(cluster, start_of_update_cycle);
+            new_value = tel.dynamic_info[0].heartbeat.full;
+        }
+        break;
+    case tt::ARCH::BLACKHOLE:
+        {
+            //TODO: handle both cores!
+            const FabricTelemetry<2>& tel = telemetry_reader_->get_blackhole_fabric_telemetry(cluster, start_of_update_cycle);
+            new_value = tel.dynamic_info[0].heartbeat.full;
+        }
+        break;
+    default:
+        TT_FATAL(false, "Unknown architecture: {}", cluster->get_cluster_description()->get_arch());
+        return;
+    }
     changed_since_transmission_ = new_value != value_;
     value_ = new_value;
     timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
