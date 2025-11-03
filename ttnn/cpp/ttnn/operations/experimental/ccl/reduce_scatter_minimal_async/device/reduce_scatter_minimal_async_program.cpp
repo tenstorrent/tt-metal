@@ -145,6 +145,10 @@ auto map_nd_to_4d(const ttnn::Shape& shape, const uint32_t dim) {
         // gather dim to rank-3 accumulated into C
         b_dims_end = dim;
         normalized_dim = 1;
+    } else if (rank_diff == -1 && dim == 0) {
+        // scattering on dim 0 of rank 3 tensor sets normalized_dim to 0
+        // need special case to set b_dims_end accordingly
+        b_dims_end = 1;
     } else {
         // C will be 4D normalized dim 1
         b_dims_end = shape.rank() - 3;
