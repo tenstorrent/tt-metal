@@ -8,16 +8,16 @@ public:
     TTSIM_Dump_Guard(bool dump_dst = false) {
         this->dump_dst = dump_dst;
         if (this->dump_dst) {
-            __asm__ volatile(".word 0x4000003F");
+            __asm__ volatile(".word 0x4000007F");
         } else {
-            __asm__ volatile(".word 0x0000003F");
+            __asm__ volatile(".word 0x0000007F");
         }
     }
     ~TTSIM_Dump_Guard() {
         if (this->dump_dst) {
-            __asm__ volatile(".word 0xC000003F");
+            __asm__ volatile(".word 0xC000007F");
         } else {
-            __asm__ volatile(".word 0x8000003F");
+            __asm__ volatile(".word 0x8000007F");
         }
     }
 };
