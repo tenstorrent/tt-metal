@@ -182,9 +182,7 @@ void ARCUintMetric::update(
     uint64_t old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
-    timestamp_ =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    set_timestamp_now();
 }
 
 /**************************************************************************************************
@@ -220,7 +218,5 @@ void ARCDoubleMetric::update(
     double old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
-    timestamp_ =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    set_timestamp_now();
 }
