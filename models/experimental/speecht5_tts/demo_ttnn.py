@@ -131,8 +131,8 @@ def generate_speech_ttnn(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    spectrogram = []
-    max_steps = 100  # Just run 1 step for debugging
+    spectrogram_ttnn = None  # Will be built incrementally on device
+    max_steps = 60  # Maximum steps for generation (debug)
 
     # Autoregressive generation loop with detailed timing
     import time
@@ -141,6 +141,7 @@ def generate_speech_ttnn(
     total_postnet_time = 0.0
     total_conversion_time = 0.0
     total_concat_time = 0.0
+    steps_completed = 0
 
     for step in range(max_steps):
         step_start = time.time()
@@ -165,55 +166,71 @@ def generate_speech_ttnn(
         postnet_time = time.time() - postnet_start
         total_postnet_time += postnet_time
 
-        # Check stopping condition
-        stop_logits_torch = ttnn.to_torch(stop_logits)
-        prob = torch.sigmoid(stop_logits_torch)
-        if torch.sum(prob, dim=-1) >= 0.5:
+        # Check stopping condition (fully device-side comparison)
+        sigmoid_logits = ttnn.sigmoid(stop_logits, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sum_prob = ttnn.sum(sigmoid_logits, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        should_stop = ttnn.ge(sum_prob, 0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
+        any_stop_scalar = ttnn.sum(should_stop)
+        if ttnn.to_torch(any_stop_scalar).item() > 0:
             print(f" (Early stop)", flush=True)
             break
 
-        # ========== TIMING: Host operations ==========
+        # ========== Device-only operations ==========
         conversion_start = time.time()
 
-        # Extract new mel frame
-        mel_to_torch_start = time.time()
-        mel_after_torch = ttnn.to_torch(mel_after)
+        # Extract new mel frames (device-only)
         current_seq_len = output_sequence_ttnn.shape[1]
         start_idx = (current_seq_len - 1) * 2  # reduction_factor = 2
-        new_spectrum = mel_after_torch[:, start_idx : start_idx + 2, :]
-        spectrogram.append(new_spectrum)
+        end_idx = start_idx + 2
 
-        # Extend sequence
-        last_frame_ttnn = ttnn.from_torch(
-            new_spectrum[:, -1:, :],
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
+        # Slice the new frames from mel_after
+        new_frames_ttnn = ttnn.slice(
+            mel_after,
+            [0, start_idx, 0],  # start indices [batch, seq, mel_bins]
+            [batch_size, end_idx, num_mel_bins],  # end indices
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        # Build spectrogram incrementally on device
+        if spectrogram_ttnn is None:
+            spectrogram_ttnn = new_frames_ttnn
+        else:
+            spectrogram_ttnn = l1_concat([spectrogram_ttnn, new_frames_ttnn], dim=1)
+
+        # Extend sequence with last frame from new frames (directly from mel_after)
+        last_frame_idx = start_idx + 1
+        last_frame_ttnn = ttnn.slice(
+            mel_after,
+            [0, last_frame_idx, 0],  # start indices [batch, seq, mel_bins] - take frame at start_idx + 1
+            [batch_size, last_frame_idx + 1, num_mel_bins],  # end indices
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         output_sequence_ttnn = l1_concat([output_sequence_ttnn, last_frame_ttnn], dim=1)
 
-    # Concatenate spectrogram
-    if spectrogram:
-        final_spectrogram = torch.cat(spectrogram, dim=1)
+        steps_completed += 1
+
+    # Transfer final spectrogram from device to host (only final transfer)
+    if spectrogram_ttnn is not None:
+        final_spectrogram = ttnn.to_torch(spectrogram_ttnn)
     else:
         final_spectrogram = torch.zeros(batch_size, 1, num_mel_bins)
 
     # Performance Analysis
     print(f"\\n\\n🎯 Performance Analysis:")
-    print(f"   Total steps completed: {len(spectrogram)}")
-    print(f"   Total decoder time: {total_decoder_time:.3f}s ({total_decoder_time/len(spectrogram):.3f}s/step)")
-    print(f"   Total postnet time: {total_postnet_time:.3f}s ({total_postnet_time/len(spectrogram):.3f}s/step)")
-    print(
-        f"   Total conversion time: {total_conversion_time:.3f}s ({total_conversion_time/len(spectrogram):.3f}s/step)"
-    )
-    print(f"   Total concat time: {total_concat_time:.3f}s ({total_concat_time/len(spectrogram):.3f}s/step)")
-    print(
-        f"   Total generation time: {total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time:.3f}s"
-    )
-    print(
-        f"   Tokens/sec: {len(spectrogram) / (total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time):.2f}"
-    )
+    print(f"   Total steps completed: {steps_completed}")
+    if steps_completed > 0:
+        print(f"   Total decoder time: {total_decoder_time:.3f}s ({total_decoder_time/steps_completed:.3f}s/step)")
+        print(f"   Total postnet time: {total_postnet_time:.3f}s ({total_postnet_time/steps_completed:.3f}s/step)")
+        print(
+            f"   Total conversion time: {total_conversion_time:.3f}s ({total_conversion_time/steps_completed:.3f}s/step)"
+        )
+        print(f"   Total concat time: {total_concat_time:.3f}s ({total_concat_time/steps_completed:.3f}s/step)")
+        print(
+            f"   Total generation time: {total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time:.3f}s"
+        )
+        print(
+            f"   Tokens/sec: {steps_completed / (total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time):.2f}"
+        )
 
     # Generate audio
     print("\\n🎵 Generating final audio...")
@@ -224,6 +241,8 @@ def generate_speech_ttnn(
     ttnn.deallocate(ttnn_speaker_embeddings)
     ttnn.deallocate(encoder_output)
     ttnn.deallocate(output_sequence_ttnn)
+    if spectrogram_ttnn is not None:
+        ttnn.deallocate(spectrogram_ttnn)
 
     return speech
 

@@ -82,6 +82,9 @@ def test_end_to_end_pcc():
     # Load HF model for reference
     hf_model = SpeechT5ForTextToSpeech.from_pretrained("microsoft/speecht5_tts")
 
+    # Disable dropout in HF model for fair comparison
+    hf_model.speecht5.decoder.prenet.encode_positions.dropout.p = 0.0
+
     # Load PyTorch reference models
     pytorch_encoder = load_encoder_ref()
     pytorch_decoder = load_decoder_from_huggingface()
