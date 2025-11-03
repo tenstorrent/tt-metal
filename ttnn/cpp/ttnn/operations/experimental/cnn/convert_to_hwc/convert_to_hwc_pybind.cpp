@@ -33,9 +33,6 @@ void bind_convert_to_hwc(py::module& module) {
                                                      The output shard width will be rounded up to the next multiple of the alignment requirement for proper memory alignment.
         dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)
 
-    Returns:
-        ttnn.Tensor: Output tensor in HWC format, height-sharded
-
     )doc";
 
     ttnn::bind_registered_operation(

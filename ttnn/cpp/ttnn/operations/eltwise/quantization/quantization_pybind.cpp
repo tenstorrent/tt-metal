@@ -37,9 +37,6 @@ void bind_quantize_operation(
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -111,9 +108,6 @@ void bind_requantize_operation(
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -224,9 +218,6 @@ void bind_dequantize_operation(
         Keyword Args:
             axis (Number, optional): the axis of the quantization dimension of the input tensor.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:

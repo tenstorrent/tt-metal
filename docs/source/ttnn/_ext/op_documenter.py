@@ -159,7 +159,9 @@ class DocstringParser:
         signature = f"({', '.join(map(Param.to_string, self.args))}"
         if self.kwargs:
             signature += f", *, {', '.join(map(Param.to_string, self.kwargs))}"
-        signature += f") -> {self.returns.to_string() if self.returns else 'None'}"
+        # Default to ttnn.Tensor for TTNN operations since most return tensors
+        return_type = self.returns.to_string() if self.returns else "ttnn.Tensor"
+        signature += f") -> {return_type}"
 
         return signature
 
@@ -223,7 +225,14 @@ class FastOperationDocumenter(FunctionDocumenter):
                 section_match = re.match(r"^\s*(\w[\w\s]*):\s*$", line)
                 if section_match:
                     current_section = section_match.group(1).strip()
+                    # Skip Returns sections entirely - don't render them in documentation
+                    if current_section == "Returns":
+                        continue
                     new_lines.append(line)
+                    continue
+
+                # Skip content from Returns sections
+                if current_section == "Returns":
                     continue
 
                 # Only transform if we're in a Sphinx-recognized field
@@ -319,7 +328,14 @@ class OperationDocumenter(FunctionDocumenter):
                 section_match = re.match(r"^\s*(\w[\w\s]*):\s*$", line)
                 if section_match:
                     current_section = section_match.group(1).strip()
+                    # Skip Returns sections entirely - don't render them in documentation
+                    if current_section == "Returns":
+                        continue
                     new_lines.append(line)
+                    continue
+
+                # Skip content from Returns sections
+                if current_section == "Returns":
                     continue
 
                 # Only transform if we're in a Sphinx-recognized field

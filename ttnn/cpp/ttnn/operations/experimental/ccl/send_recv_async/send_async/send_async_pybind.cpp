@@ -46,9 +46,6 @@ void py_bind_send_async(pybind11::module& module) {
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
-        Returns:
-            std::vector<ttnn.Tensor>: an empty vector.
-
         )doc");
 }
 

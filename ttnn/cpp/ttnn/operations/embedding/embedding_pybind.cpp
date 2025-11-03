@@ -37,9 +37,6 @@ void py_module(py::module& module) {
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.
-
 
         Example:
             >>> device_id = 0

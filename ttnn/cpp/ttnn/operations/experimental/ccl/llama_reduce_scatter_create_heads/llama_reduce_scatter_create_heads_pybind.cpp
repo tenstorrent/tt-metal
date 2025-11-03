@@ -27,9 +27,6 @@ void py_bind_llama_rs_create_heads(py::module& module) {
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-           Returns:
-               ttnn.Tensor: the output tensor.
-
             Example:
 
                 >>> tensor = ttnn.experimental.llama_rs_create_heads(

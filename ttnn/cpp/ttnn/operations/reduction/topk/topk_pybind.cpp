@@ -40,9 +40,6 @@ void bind_reduction_topk_operation(py::module& module) {
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set to run the operation on. Defaults to `None`.
                 indices_tensor (ttnn.Tensor, optional): Preallocated indices tensor. Defaults to `None`.
 
-            Returns:
-                List of ttnn.Tensor: the output tensor.
-
             Note:
                 The :attr:`input_tensor` supports the following data type and layout:
 

@@ -66,9 +66,7 @@ void py_bind_broadcast(pybind11::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
-        Returns:
             ttnn.Tensor of the output on the mesh device.
-
         Example:
             >>> sender_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
             >>> num_devices = 4

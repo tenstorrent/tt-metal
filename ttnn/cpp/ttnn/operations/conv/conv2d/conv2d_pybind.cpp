@@ -60,9 +60,7 @@ void py_bind_conv2d(py::module& module) {
             return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
-        Returns:
             The output tensor, output height and width, and the preprocessed weights and bias.
-
             - ttnn.Tensor: The output tensor, when return_output_dim = False and return_weights_and_bias = False
             - tuple[ttnn.Tensor, tuple[int, int]]: The output tensor, and its height and width, if return_output_dim = True
             - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_weights_and_bias = True

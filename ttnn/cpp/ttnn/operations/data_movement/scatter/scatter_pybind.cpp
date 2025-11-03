@@ -27,9 +27,6 @@ void bind_scatter(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the output tensor. Defaults to `None`.
             reduce (ttnn.ScatterReductionType, optional): reduction operation to apply when multiple values are scattered to the same location (e.g., amax, amin, sum). Currently not supported. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor with scattered values.
-
         Note:
             * Input tensors must be interleaved, tiled and on device.
             * No reduction operations have been implemented yet.

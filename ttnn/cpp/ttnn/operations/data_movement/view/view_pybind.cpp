@@ -54,9 +54,6 @@ void py_bind_view(pybind11::module& module) {
             * input_tensor: Input Tensor.
             * new_shape: New shape of tensor.
 
-        Returns:
-            ttnn.Tensor: a reference to the input tensor but with the new shape.
-
         Example:
 
             >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 1, 1, 4), dtype=torch.bfloat16), device=device)

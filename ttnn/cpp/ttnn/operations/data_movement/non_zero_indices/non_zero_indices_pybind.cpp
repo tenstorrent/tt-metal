@@ -24,9 +24,6 @@ void bind_non_zero(py::module& module) {
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                List of ttnn.Tensor: the output tensors.
-
             Example:
 
                 >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)), device)

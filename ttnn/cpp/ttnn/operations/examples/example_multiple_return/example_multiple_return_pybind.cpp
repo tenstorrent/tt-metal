@@ -27,10 +27,7 @@ void bind_example_multiple_return_operation(py::module& module) {
         Args:
             input_tensor (ttnn.Tensor): The input tensor.
 
-        Returns:
-            List[ttnn.Tensor]: List of output tensors.
         )doc",
         ttnn::pybind_arguments_t{py::arg("input_tensor"), py::arg("return_output1"), py::arg("return_output2")});
 }
-
 }  // namespace ttnn::operations::examples

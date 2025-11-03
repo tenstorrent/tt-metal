@@ -109,9 +109,6 @@ void py_bind_all_reduce_create_qkv_heads(pybind11::module& module) {
             final_memory_config (MemoryConfig, optional): Final memory configuration
             optional_output_tensors (tuple[Tensor, Tensor, Tensor], optional): Optional pre-allocated output tensors
 
-        Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: Query, Key, and Value tensors
         )doc");
 }
-
 }  // namespace ttnn::operations::experimental::transformer::detail

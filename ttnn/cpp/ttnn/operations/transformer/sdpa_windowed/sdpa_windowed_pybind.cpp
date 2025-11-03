@@ -34,9 +34,6 @@ void py_bind_sdpa_windowed(py::module& module) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dh].
-
         Example:
             # For a sequence with 3 windows of sizes 10, 15, and 20 tokens:
             cu_window_seqlens = [0, 10, 25, 45]

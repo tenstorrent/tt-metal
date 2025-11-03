@@ -39,8 +39,6 @@ void py_bind_conv3d(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output of the Conv3D operation.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the Conv3D operation.
 
-        Returns:
-            ttnn.Tensor: Output tensor after applying the Conv3D operation.
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::experimental::conv3d)& self,
@@ -59,7 +57,6 @@ void py_bind_conv3d(py::module& module) {
             py::arg("config"),
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
-
     auto py_conv3d_config = py::class_<Conv3dConfig>(
                                 module,
                                 "Conv3dConfig",

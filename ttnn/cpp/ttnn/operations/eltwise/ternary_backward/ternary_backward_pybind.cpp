@@ -41,9 +41,6 @@ void bind_ternary_backward(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -118,9 +115,6 @@ void bind_ternary_backward_op(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
 
         Note:
@@ -224,9 +218,6 @@ void bind_ternary_backward_optional_output(
             are_required_outputs (List[bool], optional): list of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
 
         Note:

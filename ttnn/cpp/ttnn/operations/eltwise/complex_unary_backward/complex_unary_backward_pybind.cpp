@@ -40,9 +40,6 @@ void bind_complex_unary_backward(
             memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
 
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             {3}
 
@@ -95,9 +92,6 @@ void bind_complex_unary_backward_tensor(
         Keyword args:
             memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
 
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
         Note:
             {3}

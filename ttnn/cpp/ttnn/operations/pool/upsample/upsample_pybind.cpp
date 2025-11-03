@@ -32,9 +32,6 @@ void bind_upsample(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
 
         )doc";
 

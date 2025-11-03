@@ -71,9 +71,6 @@ void bind_fill_rm_op(py::module& module) {
             Keyword args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
-
         )doc",
         ttnn::fill_rm.base_name());
 
@@ -145,11 +142,8 @@ void bind_fill_ones_rm_op(py::module& module) {
             Keyword args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
         )doc",
         ttnn::fill_ones_rm.base_name());
-
     using OperationType = decltype(ttnn::fill_ones_rm);
     ttnn::bind_registered_operation(
         module,

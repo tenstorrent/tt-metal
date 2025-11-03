@@ -44,9 +44,6 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
-        Returns:
-            ttnn.Tensor: the experimental adaptive average pooled output tensor.
-
         Example:
             >>> import ttnn
             >>> import torch
@@ -137,9 +134,6 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
             deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
-
-        Returns:
-            ttnn.Tensor: the experimental adaptive max pooled output tensor.
 
         Example:
             >>> import ttnn

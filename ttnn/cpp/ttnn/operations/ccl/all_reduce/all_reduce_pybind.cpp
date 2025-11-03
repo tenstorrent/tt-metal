@@ -31,9 +31,6 @@ void py_bind_all_reduce(py::module& module) {
             num_links (int, optional): Number of links to use for the all_reduce operation. Defaults to `None`.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: The reduced tensor with the same shape as the input tensor. The output tensor is identical across all devices along the cluster axis if specified, otherwise it is identical across all devices in the mesh.
-
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))

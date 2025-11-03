@@ -59,12 +59,7 @@ void bind_grid_sample(py::module& module) {
                                    Note: K doesn't disappear when batch_output_channels=False, it just gets distributed to the width dimension
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the operation.
 
-        Returns:
-            ttnn.Tensor: Output tensor shape depends on batch_output_channels flag:
-                        - When batch_output_channels=False (default): (N, H_grid, W_grid*K, C) - W dimension extended
-                        - When batch_output_channels=True: (N, H_grid, W_grid, C*K) - channels batched
                         Where K is the grid batching factor.
-
         Example:
             >>> # Create input tensor (N=1, H=4, W=4, C=32) - channel last format
             >>> input_tensor = ttnn.from_torch(torch.randn(1, 4, 4, 32), device=device)
@@ -151,15 +146,6 @@ void bind_prepare_grid_sample_grid(py::module& module) {
         Keyword Args:
             padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
             output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
-
-        Returns:
-            ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
-                        - [:, :, :, 0]: North-west height coordinate (as integer stored in bfloat16)
-                        - [:, :, :, 1]: North-west width coordinate (as integer stored in bfloat16)
-                        - [:, :, :, 2]: Weight for north-west pixel
-                        - [:, :, :, 3]: Weight for north-east pixel
-                        - [:, :, :, 4]: Weight for south-west pixel
-                        - [:, :, :, 5]: Weight for south-east pixel
 
         Example:
             >>> # Create a normalized grid with coordinates in [-1, 1] range

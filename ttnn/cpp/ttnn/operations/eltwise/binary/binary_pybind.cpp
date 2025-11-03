@@ -110,12 +110,8 @@ void bind_binary_operation(
     const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
-        {2}
-
         .. math::
             {3}
-
-        {7}
 
         Args:
             * **input_tensor_a** (ttnn.Tensor): the input tensor.
@@ -126,7 +122,6 @@ void bind_binary_operation(
             * **dtype** (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             * **activations** (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
-
 
         Returns:
             * **ttnn.Tensor**: the output tensor.
@@ -144,7 +139,7 @@ void bind_binary_operation(
                  - TILE
                  - 2, 3, 4
 
-            {6}
+        {6}
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -157,7 +152,6 @@ void bind_binary_operation(
         math,
         info,
         supported_dtype,
-        note,
         BINARY_OP_DETAILED_DOC);
 
     bind_registered_operation(
@@ -264,10 +258,6 @@ void bind_binary_gcd_lcm_operation(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -358,11 +348,6 @@ void bind_binary_unary_max_operation(
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
-
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -490,11 +475,6 @@ void bind_binary_unary_operation(
             dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
-
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -624,9 +604,6 @@ void bind_binary_with_float_param(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Supports broadcasting.
 
         Note:
@@ -703,9 +680,6 @@ void bind_bitwise_binary_ops_operation(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
 
         Note:
@@ -830,9 +804,6 @@ void bind_logical_binary_ops_operation(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -922,9 +893,6 @@ void bind_binary_composite(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -992,9 +960,6 @@ void bind_binary_composite_with_rtol_atol(
             atol (float): absolute tolerance. Defaults to `1e-08f`.
             equal_nan (bool): if NaN values should be treated as equal during comparison. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1071,9 +1036,6 @@ void bind_binary_composite_overload(
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1156,9 +1118,6 @@ void bind_prelu(
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1248,9 +1207,6 @@ void bind_div(
             round_mode (string, optional): can be `None`, `floor` and `trunc` (only if the input tensor is not ComplexTensor). Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1389,9 +1345,6 @@ void bind_binary_operation_with_fast_approx(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1522,9 +1475,6 @@ void bind_polyval(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1591,9 +1541,6 @@ void bind_binary_overload_operation(
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1671,9 +1618,6 @@ void bind_inplace_operation(
         Args:
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor or Number): the input tensor.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1781,9 +1725,6 @@ void bind_inplace_operation_with_fast_approx(
         Keyword args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1890,9 +1831,6 @@ void bind_logical_inplace_operation(
         Args:
             input_tensor_a (ttnn.Tensor): the input tensor.
             input_tensor_b (ttnn.Tensor): the input tensor.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -2046,9 +1984,6 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:

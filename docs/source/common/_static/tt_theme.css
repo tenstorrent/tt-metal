@@ -481,33 +481,7 @@ https://github.com/readthedocs/sphinx_rtd_theme/issues/1301
   border: none;
 }
 
-/* CCL ops field lists - blue gradient style - ONLY for specific CCL ops */
-.rst-content dl.field-list.ccl-op > dt {
-  background: linear-gradient(90deg, var(--color-accent) 0%, var(--color-dark-purple) 100%);
-  color: white;
-  font-weight: bold;
-  font-family: var(--font-main);
-  font-size: 1.1rem;
-  padding: 0.75rem 1rem !important;
-  margin-top: 1.5rem;
-  margin-bottom: 0;
-  border: none !important;
-  width: 100% !important;
-  display: block;
-  border-radius: 4px 4px 0 0;
-}
-
-.rst-content dl.field-list.ccl-op > dd {
-  background: var(--color-background-20);
-  padding: 1rem !important;
-  margin: 0;
-  border: 2px solid var(--color-accent);
-  border-top: none;
-  border-radius: 0 0 4px 4px;
-  margin-bottom: 1rem;
-}
-
-/* ALL other field lists - grey header style (unary, binary, etc.) */
+/* ALL field lists - grey header style (unary, binary, CCL, etc.) */
 .rst-content dl.field-list > dt {
   background: #f5f5f5 !important;
   background-color: #f5f5f5 !important;

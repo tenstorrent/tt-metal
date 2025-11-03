@@ -130,9 +130,6 @@ void bind_unary_composite_optional_floats_with_default(
             * **{5}** (float or ttnn.Tensor): {6}. Defaults to `None`.
             * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            * **ttnn.Tensor**: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -294,9 +291,6 @@ void bind_unary_operation_overload_complex(
             * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            * **ttnn.Tensor**: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -368,9 +362,6 @@ void bind_unary_operation_overload_complex_return_complex(
             * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -446,9 +437,6 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            * **ttnn.Tensor**: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -512,16 +500,13 @@ void bind_unary_operation_with_float_parameter(
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float): {3}.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (float): {3}.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -589,16 +574,13 @@ void bind_unary_operation_with_scalar_parameter(
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float/int): {3}.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (float/int): {3}.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -667,16 +649,13 @@ void bind_unary_operation_with_float_parameter_default(
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            {2} (float): Defaults to `{3}`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **{2}** (float): Defaults to `{3}`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -740,14 +719,11 @@ void bind_unary_composite_with_default_float(
         Performs {0} function on :attr:`input_tensor`, :attr:`{2}`.
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float, optional): {3}. Defaults to `{4}`.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (float, optional): {3}. Defaults to `{4}`.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -804,8 +780,8 @@ void bind_unary_operation_with_int_parameter(
     const std::string& info_doc,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
-        auto doc = fmt::format(
-            R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Applies {0} to :attr:`input_tensor` element-wise with {2}.
 
         {4}
@@ -814,16 +790,13 @@ void bind_unary_operation_with_int_parameter(
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (int): {3}.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (int): {3}.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -845,31 +818,31 @@ void bind_unary_operation_with_int_parameter(
             >>> {2} = 3
             >>> output = {1}(tensor, {2})
         )doc",
-            operation.base_name(),
-            operation.python_fully_qualified_name(),
-            parameter_name,
-            parameter_doc,
-            info_doc,
-            supported_dtype,
-            note);
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_doc,
+        info_doc,
+        supported_dtype,
+        note);
 
-        bind_registered_operation(
-            module,
-            operation,
-            doc,
-            ttnn::pybind_overload_t{
-                [](const unary_operation_t& self,
-                   const Tensor& input_tensor,
-                   const std::optional<int>& parameter,
-                   const std::optional<MemoryConfig>& memory_config,
-                   const std::optional<ttnn::Tensor>& output_tensor) {
-                    return self(input_tensor, parameter, memory_config, output_tensor);
-                },
-                py::arg("input_tensor"),
-                py::kw_only(),
-                py::arg(parameter_name.c_str()) = 0,
-                py::arg("memory_config") = std::nullopt,
-                py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<int>& parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) {
+                return self(input_tensor, parameter, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg(parameter_name.c_str()) = 0,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -891,14 +864,11 @@ void bind_unary_operation_with_dim_parameter(
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (int): {3}. Defaults to `-1`.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (int): {3}. Defaults to `-1`.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -960,17 +930,14 @@ void bind_unary_rdiv(
         {7}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float): {3}.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (float): {3}.
 
         Keyword Args:
-            {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **{4}** (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1034,17 +1001,14 @@ void bind_softplus(py::module& module, const unary_operation_t& operation) {
             \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            beta (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
-            threshold (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **beta** (float, optional): Scales the input before applying the Softplus function. By modifying :attr:`beta`, you can adjust the steepness of the function. A higher :attr:`beta` value makes the function steeper, approaching a hard threshold like the ReLU function for large values of :attr:`beta`. Defaults to `1`.
+            * **threshold** (float, optional): Used to switch to a linear function for large values to improve numerical stability. This avoids issues with floating-point representation for very large values. Defaults to `20`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1097,15 +1061,12 @@ void bind_tanh_like(py::module& module, const unary_operation_t& operation) {
             \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            fast_and_approximate_mode (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **fast_and_approximate_mode** (Boolean, optional): Enables a performance-optimized approximation method. When True, the operation runs faster but may produce results with minor precision differences. Defaults to `False`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1156,16 +1117,13 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            fast_and_approximate_mode (bool, optional): Enables fast and approximate mode for exponential operation. When False, uses the accurate version of exponential algorithm. Defaults to `False`.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **fast_and_approximate_mode** (bool, optional): Enables fast and approximate mode for exponential operation. When False, uses the accurate version of exponential algorithm. Defaults to `False`.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1211,25 +1169,22 @@ void bind_sigmoid_accurate(py::module& module, const unary_operation_t& operatio
 
 template <typename unary_operation_t>
 void bind_sigmoid_mode_appx(py::module& module, const unary_operation_t& operation) {
-                            auto doc = fmt::format(
-                                R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            vector_mode (int, optional): Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)".
-            fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **vector_mode** (int, optional): Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -> Vector Mode C and 4 -> Vector Mode RC)".
+            * **fast_and_approximate_mode** (bool, optional): Use the fast and approximate mode. Defaults to `False`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1248,50 +1203,47 @@ void bind_sigmoid_mode_appx(py::module& module, const unary_operation_t& operati
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor, vector_mode=4, fast_and_approximate_mode=True)
         )doc",
-                                ttnn::sigmoid.base_name(),
-                                ttnn::sigmoid.python_fully_qualified_name());
+        ttnn::sigmoid.base_name(),
+        ttnn::sigmoid.python_fully_qualified_name());
 
-                            bind_registered_operation(
-                                module,
-                                ttnn::sigmoid,
-                                doc,
-                                ttnn::pybind_overload_t{
-                                    [](const unary_operation_t& self,
-                                       const Tensor& input_tensor,
-                                       const int vector_mode,
-                                       const bool parameter,
-                                       const std::optional<MemoryConfig>& memory_config,
-                                       const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                                        return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
-                                    },
-                                    py::arg("input_tensor"),
-                                    py::kw_only(),
-                                    py::arg("vector_mode") = 4,
-                                    py::arg("fast_and_approximate_mode") = false,
-                                    py::arg("memory_config") = std::nullopt,
-                                    py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::sigmoid,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const int vector_mode,
+               const bool parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, vector_mode, parameter, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("vector_mode") = 4,
+            py::arg("fast_and_approximate_mode") = false,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
 void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
-                                auto doc = fmt::format(
-                                    R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            ops_chain (list[ttnn.EltwiseUnaryWithParam]): list of unary ops to be chained.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **ops_chain** (list[ttnn.EltwiseUnaryWithParam]): list of unary ops to be chained.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1315,28 +1267,28 @@ void bind_unary_chain(py::module& module, const unary_operation_t& operation) {
         ttnn::unary_chain.base_name(),
         ttnn::unary_chain.python_fully_qualified_name());
 
-                                bind_registered_operation(
-                                    module,
-                                    ttnn::unary_chain,
-                                    doc,
-                                    ttnn::pybind_overload_t{
-                                        [](const unary_operation_t& self,
-                                           const Tensor& input_tensor,
-                                           const EltwiseFusedActivations& ops_chain,
-                                           const std::optional<MemoryConfig>& memory_config,
-                                           const std::optional<Tensor>& output_tensor) {
-                                            return self(input_tensor, ops_chain, memory_config, output_tensor);
-                                        },
-                                        py::arg("input_tensor"),
-                                        py::arg("ops_chain"),
-                                        py::kw_only(),
-                                        py::arg("memory_config") = std::nullopt,
-                                        py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::unary_chain,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const EltwiseFusedActivations& ops_chain,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) {
+                return self(input_tensor, ops_chain, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::arg("ops_chain"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 template <typename unary_operation_t>
 void bind_identity(py::module& module, const unary_operation_t& operation) {
-                                    auto doc = fmt::format(
-                                        R"doc(
+    auto doc = fmt::format(
+        R"doc(
         Returns a copy of the :attr:`input_tensor`; useful for profiling the SFPU.
         This shouldn't normally be used. Users should normally use clone operation instead for the same functionality since this results in lower performance.
 
@@ -1344,15 +1296,12 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
             \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1371,24 +1320,22 @@ void bind_identity(py::module& module, const unary_operation_t& operation) {
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.float16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor)
         )doc",
-                                        ttnn::identity.base_name(),
-                                        ttnn::identity.python_fully_qualified_name());
+        ttnn::identity.base_name(),
+        ttnn::identity.python_fully_qualified_name());
 
-                                    bind_registered_operation(
-                                        module,
-                                        ttnn::identity,
-                                        doc,
-                                        ttnn::pybind_overload_t{
-                                            [](const unary_operation_t& self,
-                                               const Tensor& input_tensor,
-                                               const std::optional<MemoryConfig>& memory_config,
-                                               const std::optional<Tensor>& output_tensor) {
-                                                return self(input_tensor, memory_config, output_tensor);
-                                            },
-                                            py::arg("input_tensor"),
-                                            py::kw_only(),
-                                            py::arg("memory_config") = std::nullopt,
-                                            py::arg("output_tensor") = std::nullopt});
+    bind_registered_operation(
+        module,
+        ttnn::identity,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<Tensor>& output_tensor) { return self(input_tensor, memory_config, output_tensor); },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename unary_operation_t>
@@ -1410,13 +1357,10 @@ void bind_unary_composite(
             \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor. {3}
+            * **input_tensor** (ttnn.Tensor): the input tensor. {3}
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1479,14 +1423,11 @@ void bind_unary_composite_int_with_default(
             \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float): {3}. Defaults to `{4}`.
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **{2}** (float): {3}. Defaults to `{4}`.
+            * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1551,15 +1492,12 @@ void bind_unary_composite_floats_with_default(
         Performs {0} function on :attr:`input_tensor`, :attr:`{2}`, :attr:`{5}`.
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float, optional): {3}. Defaults to `{4}`.
-            {5} (float, optional): {6}. Defaults to `{7}`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **{2}** (float, optional): {3}. Defaults to `{4}`.
+            * **{5}** (float, optional): {6}. Defaults to `{7}`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1623,14 +1561,11 @@ void bind_unary_composite_int(
         {4}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (int): {3}.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (int): {3}.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1690,15 +1625,12 @@ void bind_unary_threshold(
             \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|, \verb|{4}|)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float): {3}.
-            {4} (float): {5}.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
+            * **{2}** (float): {3}.
+            * **{4}** (float): {5}.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1764,14 +1696,11 @@ void bind_unary_composite_float_with_default(
             \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            * **input_tensor** (ttnn.Tensor): the input tensor.
 
         Keyword args:
-            {2} (float, optional): {3}. Defaults to `{4}`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **{2}** (float, optional): {3}. Defaults to `{4}`.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1832,14 +1761,11 @@ void bind_unary_composite_rpow(
         {4}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor. {5}
-            {2} (float): {3}
+            * **input_tensor** (ttnn.Tensor): the input tensor. {5}
+            * **{2}** (float): {3}
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+            * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
         Note:
             Supported dtypes, layouts, and ranks:

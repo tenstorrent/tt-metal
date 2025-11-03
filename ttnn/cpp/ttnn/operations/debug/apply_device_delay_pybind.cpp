@@ -31,9 +31,6 @@ void py_bind_apply_device_delay(py::module& module) {
                 delays (List[List[int]]): A 2D list of delay cycles, where delays[row][col] specifies the delay for device at position (row, col) in the mesh.
                 subdevice_id (ttnn.SubDeviceId, optional): The subdevice ID for the subdevice on which we schedule the worker core. Defaults to `None`.
 
-            Returns:
-                None: This function does not return a value.
-
             Example:
                 >>> # For a 2x2 mesh, apply different delays to each device
                 >>> delays = [[1000, 2000], [3000, 4000]]  # cycles

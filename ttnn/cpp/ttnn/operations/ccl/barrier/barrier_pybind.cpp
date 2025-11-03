@@ -51,8 +51,6 @@ void py_bind_barrier(pybind11::module& module) {
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options is currently only Ring, defaults to Ring`.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor which is a copy of the input tensor
         Example:
             >>> full_tensor = torch.randn([1, 1, 256, 256], dtype=torch.bfloat16)
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
@@ -61,7 +59,6 @@ void py_bind_barrier(pybind11::module& module) {
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),
                 )
             >>> output = ttnn.barrier(input_tensor, topology=ttnn.Topology.Ring)
-
         )doc");
 }
 

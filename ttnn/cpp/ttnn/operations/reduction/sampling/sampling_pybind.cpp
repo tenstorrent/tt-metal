@@ -111,9 +111,6 @@ void bind_reduction_sampling_operation(py::module& module) {
                     * - INT32, UINT32
                       - ROW_MAJOR
 
-            Returns:
-                ttnn.Tensor: The output tensor containing sampled indices.
-
             Memory Support:
               - Interleaved: DRAM and L1
 

@@ -28,9 +28,6 @@ void bind_experimental_dropout_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 

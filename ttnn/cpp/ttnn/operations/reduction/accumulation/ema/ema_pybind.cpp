@@ -39,9 +39,6 @@ void bind_reduction_ema_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to input tensor memory config.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): compute kernel configuration for the operation. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-
         Note:
 
             Supported dtypes, layouts, ranks:

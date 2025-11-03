@@ -38,9 +38,6 @@ void py_bind_llama_reduce_scatter(py::module& module) {
                 topology (ttnn.Topology, optional): Communication topology to use. Defaults to `ttnn.Topology.Linear`.
                 use_noc1_only (bool, optional): Force NOC1-only transport. Defaults to `False`.
 
-           Returns:
-               ttnn.Tensor: the output tensor.
-
             Example:
 
                 >>> tensor = ttnn.experimental.llama_reduce_scatter(

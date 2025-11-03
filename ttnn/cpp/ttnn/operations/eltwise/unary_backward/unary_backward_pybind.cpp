@@ -44,9 +44,6 @@ void bind_unary_backward_two_float(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -119,9 +116,6 @@ void bind_unary_backward_op(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -190,9 +184,6 @@ void bind_unary_backward_rsqrt(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -259,9 +250,6 @@ void bind_unary_backward_op_reciprocal(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -337,9 +325,6 @@ void bind_unary_backward_op_overload_abs(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -419,9 +404,6 @@ void bind_unary_backward_float(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -497,9 +479,6 @@ void bind_unary_backward_two_float_with_default(
             {2} (float, optional): {3}. Defaults to `{4}`.
             {5} (float, optional): {6}. Defaults to `{7}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -578,9 +557,6 @@ void bind_unary_backward_float_with_default(
             {2} (float, optional): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -655,9 +631,6 @@ void bind_unary_backward_optional_float_params_with_default(
             {2} (float, optional): {3}. Defaults to `None`.
             {5} (float, optional): {6}. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -757,9 +730,6 @@ void bind_unary_backward_rdiv(
             {4} (string, optional): {5}. Defaults to None.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -838,9 +808,6 @@ void bind_unary_backward_unary_optional_float(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -912,9 +879,6 @@ void bind_unary_backward_shape(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -984,9 +948,6 @@ void bind_unary_backward_optional(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1054,9 +1015,6 @@ void bind_unary_backward_neg(
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
 
-        Returns:
-            List of ttnn.Tensor: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -1117,9 +1075,6 @@ void bind_unary_backward_prod_bw(py::module& module, const unary_backward_operat
         Keyword args:
             dim (int, optional): dimension to perform prod backward. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -1189,9 +1144,6 @@ void bind_unary_backward_gelu(
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-
-        Returns:
-            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
