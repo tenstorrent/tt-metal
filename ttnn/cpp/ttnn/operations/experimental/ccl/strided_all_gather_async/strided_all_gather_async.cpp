@@ -16,7 +16,6 @@ namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
@@ -33,7 +32,6 @@ ttnn::Tensor ExecuteStridedAllGatherAsync::invoke(
     std::optional<uint32_t> mm_block_w) {
     return ttnn::operations::experimental::ccl::strided_all_gather_async(
         input_tensor,
-        persistent_output_buffer,
         dim,
         multi_device_global_semaphore,
         num_links,

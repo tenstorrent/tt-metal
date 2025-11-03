@@ -99,6 +99,12 @@ void kernel_main() {
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
     const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, output_page_size);
 
+    /* Args for overlapped all gather */
+    OpSignaler op_signaler_sender;
+    if constexpr (fuse_op) {
+        op_signaler_sender = OpSignaler(arg_idx);
+    }
+
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel> mux_connection;
     if (mux_connection_valid) {
@@ -218,6 +224,11 @@ void kernel_main() {
                 direction,
                 true,
                 fuse_op);
+
+            if constexpr (fuse_op && direction == 1) {
+                // Synchronize and signal that the local tensor slice is available
+                op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
+            }
 
             // Forward chunks
             uint32_t slice_writes = 0;
