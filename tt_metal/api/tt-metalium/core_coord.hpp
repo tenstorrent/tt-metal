@@ -216,12 +216,12 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 // Adding to tt::tt_metal namespace as we transition to moving this out of global namespace eventually.
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;
+using tt::tt_metal::corerange_to_cores;
 using tt::tt_metal::CoreRangeSet;
-// using tt::tt_metal::corerange_to_cores;
-// using tt::tt_metal::grid_to_cores;
-// using tt::tt_metal::grid_to_cores_with_noop;
-// using tt::tt_metal::select_contiguous_range_from_corerangeset;
-// using tt::tt_metal::select_from_corerangeset;
+using tt::tt_metal::grid_to_cores;
+using tt::tt_metal::grid_to_cores_with_noop;
+using tt::tt_metal::select_contiguous_range_from_corerangeset;
+using tt::tt_metal::select_from_corerangeset;
 
 template <>
 struct fmt::formatter<tt::tt_metal::CoreRangeSet> {
