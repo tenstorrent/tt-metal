@@ -18,7 +18,6 @@ FabricTelemetryReader::FabricTelemetryReader(
     tray_id_(tray_id),
     asic_location_(asic_location),
     chip_id_(chip_id),
-    channel_(channel),
     cached_bw_telemetry_{},
     cached_wormhole_fabric_telemetry_{},
     cached_blackhole_fabric_telemetry_{},

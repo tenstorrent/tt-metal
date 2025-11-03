@@ -48,7 +48,6 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     tt::ChipId chip_id_;
-    uint32_t channel_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t fabric_telemetry_addr_;
     uint32_t bw_telemetry_addr_;

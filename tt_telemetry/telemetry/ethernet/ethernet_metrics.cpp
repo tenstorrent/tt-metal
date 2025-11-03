@@ -94,11 +94,11 @@ void create_ethernet_metrics(
         // double_metrics.push_back(
         //     std::make_unique<FabricBandwidthMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
         uint_metrics.push_back(
-            std::make_unique<FabricWordsSentMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
+            std::make_unique<FabricWordsSentMetric>(tray_id, asic_location, channel, telemetry_reader));
         uint_metrics.push_back(
-            std::make_unique<FabricPacketsSentMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
+            std::make_unique<FabricPacketsSentMetric>(tray_id, asic_location, channel, telemetry_reader));
         uint_metrics.push_back(
-            std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, chip_id, channel, telemetry_reader));
+            std::make_unique<FabricHeartbeatMetric>(tray_id, asic_location, channel, telemetry_reader));
         if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
             // These are available only on Wormhole
             uint_metrics.push_back(
@@ -376,13 +376,11 @@ void FabricBandwidthMetric::update(
 FabricWordsSentMetric::FabricWordsSentMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    tt::ChipId chip_id,
     uint32_t channel,
     std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
     UIntMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
-    chip_id_(chip_id),
     channel_(channel),
     telemetry_reader_(telemetry_reader) {
     value_ = 0;
@@ -416,13 +414,11 @@ void FabricWordsSentMetric::update(
 FabricPacketsSentMetric::FabricPacketsSentMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    tt::ChipId chip_id,
     uint32_t channel,
     std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
     UIntMetric(),
     tray_id_(tray_id),
     asic_location_(asic_location),
-    chip_id_(chip_id),
     channel_(channel),
     telemetry_reader_(telemetry_reader) {
     value_ = 0;
@@ -456,10 +452,9 @@ void FabricPacketsSentMetric::update(
 FabricHeartbeatMetric::FabricHeartbeatMetric(
     tt::tt_metal::TrayID tray_id,
     tt::tt_metal::ASICLocation asic_location,
-    tt::ChipId chip_id,
     uint32_t channel,
     std::shared_ptr<FabricTelemetryReader> telemetry_reader) :
-    UIntMetric(), tray_id_(tray_id), asic_location_(asic_location), chip_id_(chip_id), channel_(channel), telemetry_reader_(telemetry_reader) {
+    UIntMetric(), tray_id_(tray_id), asic_location_(asic_location), channel_(channel), telemetry_reader_(telemetry_reader) {
     value_ = 0;
 }
 

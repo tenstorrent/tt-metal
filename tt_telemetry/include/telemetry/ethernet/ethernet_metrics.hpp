@@ -176,7 +176,6 @@ public:
     FabricWordsSentMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        tt::ChipId chip_id,
         uint32_t channel,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
@@ -188,7 +187,6 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    tt::ChipId chip_id_;
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
@@ -198,7 +196,6 @@ public:
     FabricPacketsSentMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        tt::ChipId chip_id,
         uint32_t channel,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
@@ -210,7 +207,6 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    tt::ChipId chip_id_;
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
@@ -220,7 +216,6 @@ public:
     FabricHeartbeatMetric(
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
-        tt::ChipId chip_id,
         uint32_t channel,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
@@ -232,7 +227,6 @@ public:
 private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
-    tt::ChipId chip_id_;
     uint32_t channel_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
