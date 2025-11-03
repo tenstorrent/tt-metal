@@ -73,7 +73,7 @@ static constexpr uint8_t NUM_FABRIC_BARRIER_TYPES = static_cast<uint8_t>(FabricB
  * @return The L1 memory address of the counter
  */
 template <uint8_t dm_id, FabricBarrierType barrier_type>
-inline __attribute__((always_inline)) uint32_t get_fabric_counter_address() {
+FORCE_INLINE uint32_t get_fabric_counter_address() {
     static_assert(dm_id < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<uint8_t>(barrier_type) < NUM_FABRIC_BARRIER_TYPES);
     constexpr uint32_t offset =
@@ -90,7 +90,7 @@ inline __attribute__((always_inline)) uint32_t get_fabric_counter_address() {
  * @return The L1 memory address of the counter
  */
 template <FabricBarrierType barrier_type>
-inline __attribute__((always_inline)) uint32_t get_fabric_counter_address(uint8_t dm_id) {
+FORCE_INLINE uint32_t get_fabric_counter_address(uint8_t dm_id) {
     static_assert(static_cast<uint8_t>(barrier_type) < NUM_FABRIC_BARRIER_TYPES);
     uint32_t offset = MEM_FABRIC_COUNTER_BASE +
                       (dm_id * NUM_FABRIC_BARRIER_TYPES + static_cast<uint8_t>(barrier_type)) * MEM_FABRIC_COUNTER_SIZE;
@@ -101,7 +101,7 @@ inline __attribute__((always_inline)) uint32_t get_fabric_counter_address(uint8_
  * @brief Get the value of a fabric counter from L1 memory
  */
 template <uint8_t dm_id, FabricBarrierType barrier_type>
-inline __attribute__((always_inline)) uint32_t get_fabric_counter_val() {
+FORCE_INLINE uint32_t get_fabric_counter_val() {
     uint32_t counter_addr = get_fabric_counter_address<dm_id, barrier_type>();
     return *reinterpret_cast<volatile uint32_t*>(counter_addr);
 }
@@ -110,7 +110,7 @@ inline __attribute__((always_inline)) uint32_t get_fabric_counter_val() {
  * @brief Increment a fabric counter value in L1 memory
  */
 template <uint8_t dm_id, FabricBarrierType barrier_type>
-inline __attribute__((always_inline)) void inc_fabric_counter_val(uint32_t inc = 1) {
+FORCE_INLINE void inc_fabric_counter_val(uint32_t inc = 1) {
     uint32_t counter_addr = get_fabric_counter_address<dm_id, barrier_type>();
     *reinterpret_cast<volatile uint32_t*>(counter_addr) += inc;
 }
@@ -119,7 +119,7 @@ inline __attribute__((always_inline)) void inc_fabric_counter_val(uint32_t inc =
  * @brief Set a fabric counter value in L1 memory
  */
 template <uint8_t dm_id, FabricBarrierType barrier_type>
-inline __attribute__((always_inline)) void set_fabric_counter_val(uint32_t val) {
+FORCE_INLINE void set_fabric_counter_val(uint32_t val) {
     uint32_t counter_addr = get_fabric_counter_address<dm_id, barrier_type>();
     *reinterpret_cast<volatile uint32_t*>(counter_addr) = val;
 }
@@ -132,7 +132,7 @@ inline __attribute__((always_inline)) void set_fabric_counter_val(uint32_t val) 
  *
  * @return true if all reads have been acknowledged, false otherwise
  */
-inline __attribute__((always_inline)) bool fabric_reads_flushed() {
+FORCE_INLINE bool fabric_reads_flushed() {
     uint32_t status_counter = get_fabric_counter_val<proc_type, FabricBarrierType::READS_NUM_ACKED>();
     return (status_counter == fabric_reads_num_acked);
 }
@@ -142,7 +142,7 @@ inline __attribute__((always_inline)) bool fabric_reads_flushed() {
  *
  * @return true if all non-posted writes have been acknowledged, false otherwise
  */
-inline __attribute__((always_inline)) bool fabric_nonposted_writes_flushed() {
+FORCE_INLINE bool fabric_nonposted_writes_flushed() {
     uint32_t status_counter = get_fabric_counter_val<proc_type, FabricBarrierType::NONPOSTED_WRITES_ACKED>();
     return (status_counter == fabric_nonposted_writes_acked);
 }
@@ -152,7 +152,7 @@ inline __attribute__((always_inline)) bool fabric_nonposted_writes_flushed() {
  *
  * @return true if all non-posted atomics have been acknowledged, false otherwise
  */
-inline __attribute__((always_inline)) bool fabric_nonposted_atomics_flushed() {
+FORCE_INLINE bool fabric_nonposted_atomics_flushed() {
     uint32_t status_counter = get_fabric_counter_val<proc_type, FabricBarrierType::NONPOSTED_ATOMICS_ACKED>();
     return (status_counter == fabric_nonposted_atomics_acked);
 }
@@ -164,7 +164,7 @@ inline __attribute__((always_inline)) bool fabric_nonposted_atomics_flushed() {
  * It polls the fabric counter and compares it with the local software counter
  * (fabric_nonposted_writes_acked) that tracks expected acknowledgments.
  */
-inline __attribute__((always_inline)) void fabric_write_barrier() {
+FORCE_INLINE void fabric_write_barrier() {
     do {
         invalidate_l1_cache();
     } while (!fabric_nonposted_writes_flushed());
@@ -177,7 +177,7 @@ inline __attribute__((always_inline)) void fabric_write_barrier() {
  * It polls the fabric counter and compares it with the local software counter
  * (fabric_reads_num_acked) that tracks expected acknowledgments.
  */
-inline __attribute__((always_inline)) void fabric_read_barrier() {
+FORCE_INLINE void fabric_read_barrier() {
     do {
         invalidate_l1_cache();
     } while (!fabric_reads_flushed());
@@ -190,7 +190,7 @@ inline __attribute__((always_inline)) void fabric_read_barrier() {
  * It polls the fabric counter and compares it with the local software counter
  * (fabric_nonposted_atomics_acked) that tracks expected acknowledgments.
  */
-inline __attribute__((always_inline)) void fabric_atomic_barrier() {
+FORCE_INLINE void fabric_atomic_barrier() {
     do {
         invalidate_l1_cache();
     } while (!fabric_nonposted_atomics_flushed());
@@ -204,7 +204,7 @@ inline __attribute__((always_inline)) void fabric_atomic_barrier() {
  * Uses proc_type which is determined at compile time (DM0 for BRISC, DM1 for others).
  * This follows the same pattern as noc_local_state_init.
  */
-inline __attribute__((always_inline)) void fabric_local_state_init() {
+FORCE_INLINE void fabric_local_state_init() {
     // Read current counter values from L1 memory (hide latency by reading all first, then writing)
     uint32_t reads_ack = get_fabric_counter_val<proc_type, FabricBarrierType::READS_NUM_ACKED>();
     uint32_t nonposted_writes_ack = get_fabric_counter_val<proc_type, FabricBarrierType::NONPOSTED_WRITES_ACKED>();
@@ -221,7 +221,7 @@ inline __attribute__((always_inline)) void fabric_local_state_init() {
  *
  * Waits for all pending fabric operations to complete on the current DM processor.
  */
-inline __attribute__((always_inline)) void fabric_full_sync() {
+FORCE_INLINE void fabric_full_sync() {
     while (!fabric_reads_flushed());
     while (!fabric_nonposted_writes_flushed());
     while (!fabric_nonposted_atomics_flushed());
@@ -238,7 +238,7 @@ inline __attribute__((always_inline)) void fabric_full_sync() {
  * @param multicast Whether this is a multicast operation
  * @param num_dests Number of destinations (for multicast)
  */
-inline __attribute__((always_inline)) void fabric_fast_write(
+FORCE_INLINE void fabric_fast_write(
     WorkerToFabricEdmSender& connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
@@ -280,7 +280,7 @@ inline __attribute__((always_inline)) void fabric_fast_write(
  * @param trid Transaction ID for UDM operations
  * @param posted Whether to use posted writes (1) or non-posted writes (0) for single packet case
  */
-inline __attribute__((always_inline)) void fabric_fast_write_any_len(
+FORCE_INLINE void fabric_fast_write_any_len(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint32_t src_addr,
@@ -328,7 +328,7 @@ inline __attribute__((always_inline)) void fabric_fast_write_any_len(
  * @param trid Transaction ID for UDM operations
  * @param posted Whether to use posted writes (1) or non-posted writes (0)
  */
-inline __attribute__((always_inline)) void fabric_fast_write_dw_inline(
+FORCE_INLINE void fabric_fast_write_dw_inline(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint32_t val,
@@ -377,7 +377,7 @@ inline __attribute__((always_inline)) void fabric_fast_write_dw_inline(
  * @param posted Whether to use posted atomics (1) or non-posted atomics (0, default)
  * @param flush Whether to flush the atomic operation (default true)
  */
-inline __attribute__((always_inline)) void fabric_fast_atomic_inc(
+FORCE_INLINE void fabric_fast_atomic_inc(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint32_t incr_val,
@@ -412,7 +412,7 @@ inline __attribute__((always_inline)) void fabric_fast_atomic_inc(
  * @param increment_value The value to increment the counter by (default 1)
  * @param flush Whether to flush the atomic operation (default false)
  */
-inline __attribute__((always_inline)) void fabric_fast_write_ack(
+FORCE_INLINE void fabric_fast_write_ack(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
     // if this is a posted write then we simply exit
     if (received_header->udm_control.write.posted) {
@@ -449,7 +449,7 @@ inline __attribute__((always_inline)) void fabric_fast_write_ack(
  * @param increment_value The value to increment the counter by (default 1)
  * @param flush Whether to flush the atomic operation (default false)
  */
-inline __attribute__((always_inline)) void fabric_fast_atomic_ack(
+FORCE_INLINE void fabric_fast_atomic_ack(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
     // if this is a posted atomic then we simply exit
     if (received_header->udm_control.write.posted) {
@@ -488,7 +488,7 @@ inline __attribute__((always_inline)) void fabric_fast_atomic_ack(
  * @param size_bytes Total number of bytes to read (can be any size)
  * @param trid Transaction ID for tracking the read operation
  */
-inline __attribute__((always_inline)) void fabric_fast_read_any_len(
+FORCE_INLINE void fabric_fast_read_any_len(
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint64_t dest_addr,
@@ -520,7 +520,7 @@ inline __attribute__((always_inline)) void fabric_fast_read_any_len(
  * @param counter_noc_addr NOC address of the counter to increment (only used if use_fused_atomic is true)
  */
 template <bool use_fused_atomic = false>
-inline __attribute__((always_inline)) void fabric_fast_read_ack(
+FORCE_INLINE void fabric_fast_read_ack(
     WorkerToFabricEdmSender& connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
@@ -551,7 +551,7 @@ inline __attribute__((always_inline)) void fabric_fast_read_ack(
  * @param received_header Pointer to the received read request packet header
  * @param src_addr Local source address where the requested data is stored
  */
-inline __attribute__((always_inline)) void fabric_fast_read_any_len_ack(
+FORCE_INLINE void fabric_fast_read_any_len_ack(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t src_addr) {
     auto [connection, is_init] = get_or_open_fabric_connection();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* response_header = get_or_allocate_header();

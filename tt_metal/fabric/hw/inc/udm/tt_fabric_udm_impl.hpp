@@ -23,11 +23,6 @@ namespace tt::tt_fabric::udm {
 enum class UDM_CONTROL_FIELD { POSTED, SRC_CHIP_ID, SRC_MESH_ID, SRC_NOC_X, SRC_NOC_Y, RISC_ID, TRANSACTION_ID };
 
 /**
- * @brief Enum for Fabric connection action type
- */
-enum class CONN_ACT_TYPE { OPEN, CLOSE };
-
-/**
  * @brief UDM (Unified Data Movement) fields for fabric write operations
  *
  * Contains the source information needed for UDM write operations:
@@ -77,7 +72,7 @@ struct udm_read_fields {
  * @param dst_mesh_id Destination mesh ID
  * @return true if route was successfully set, false otherwise
  */
-inline bool fabric_write_set_unicast_route_impl(
+FORCE_INLINE bool fabric_write_set_unicast_route_impl(
     volatile tt_l1_ptr UDMHybridMeshPacketHeader* packet_header,
     udm_write_fields& udm,
     uint16_t dst_dev_id,
@@ -141,7 +136,7 @@ FORCE_INLINE void fabric_write_set_unicast_route(
  * @param dst_mesh_id Destination mesh ID
  * @return true if route was successfully set, false otherwise
  */
-inline bool fabric_read_set_unicast_route_impl(
+FORCE_INLINE bool fabric_read_set_unicast_route_impl(
     volatile tt_l1_ptr UDMHybridMeshPacketHeader* packet_header,
     udm_read_fields& udm,
     uint16_t dst_dev_id,
@@ -247,7 +242,7 @@ FORCE_INLINE void fabric_write_set_unicast_route_control_field(volatile tt_l1_pt
  *
  * @return Reference to the fabric connection and initialized flag
  */
-inline std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabric_connection() {
+FORCE_INLINE std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabric_connection() {
     static tt::tt_fabric::WorkerToFabricEdmSender* connection = nullptr;
     static bool initialized = false;
 
@@ -270,7 +265,7 @@ inline std::pair<tt::tt_fabric::WorkerToFabricEdmSender&, bool> get_or_open_fabr
 /**
  * @brief Close a singleton fabric connection for the current worker
  */
-void close_fabric_connection() {
+FORCE_INLINE void close_fabric_connection() {
     auto [connection, initialized] = get_or_open_fabric_connection();
     if (initialized) {
         connection.close();
@@ -290,7 +285,7 @@ void close_fabric_connection() {
  *
  * @return Pointer to the allocated packet header
  */
-inline volatile tt_l1_ptr PACKET_HEADER_TYPE* get_or_allocate_header() {
+FORCE_INLINE volatile tt_l1_ptr PACKET_HEADER_TYPE* get_or_allocate_header() {
     static volatile tt_l1_ptr PACKET_HEADER_TYPE* singleton_header = nullptr;
     if (singleton_header == nullptr) {
         singleton_header = PacketHeaderPool::allocate_header();
