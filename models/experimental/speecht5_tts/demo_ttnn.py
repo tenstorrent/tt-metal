@@ -456,7 +456,7 @@ def main():
             ttnn_decoder,
             ttnn_postnet,
             device,
-            max_steps=40,
+            max_steps=10,
         )
         warmup_duration = time.time() - warmup_start_time
         print(f"✅ Warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
