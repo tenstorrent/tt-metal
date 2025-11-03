@@ -254,14 +254,22 @@ jobs:
         if: ${{ !cancelled() }}
 
       - name: Save environment data
+        id: save-environment-data
         if: ${{ !cancelled() }}
         shell: bash
         env:
           ARCH_NAME: ${{ matrix.test-info.arch }}
-        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -282,14 +290,16 @@ jobs:
           ls -hal
           export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
           ls -hal $PERF_REPORT_FILENAME
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          FULL_REPORT_PATH="$(pwd)/$PERF_REPORT_FILENAME"
+          echo "Full report location: $FULL_REPORT_PATH"
+          echo "perf_report_full_path=$FULL_REPORT_PATH" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
-          path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
+          path: "${{ steps.check-perf-report.outputs.perf_report_full_path }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
