@@ -6,7 +6,7 @@
 namespace ttnn::operations::core {
 
 Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& dtype) {
-    return tt::tt_metal::operations::to_dtype(input_tensor, dtype);
+    return tt::tt_metal::ops::to_dtype(input_tensor, dtype);
 };
 
 }  // namespace ttnn::operations::core

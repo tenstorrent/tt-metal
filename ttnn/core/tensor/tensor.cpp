@@ -706,8 +706,8 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
-namespace operations {
+namespace ops {
 Tensor to_dtype(const Tensor& tensor, DataType dtype) { return tensor_ops::tensor_to_dtype(tensor, dtype); }
-}  // namespace operations
+}  // namespace ops
 
 }  // namespace tt::tt_metal
