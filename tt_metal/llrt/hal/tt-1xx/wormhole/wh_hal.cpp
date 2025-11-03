@@ -99,6 +99,7 @@ public:
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole");
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines");
         includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/noc");
+        includes.push_back("tt_metal/lite_fabric/hw/inc/wormhole");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
 

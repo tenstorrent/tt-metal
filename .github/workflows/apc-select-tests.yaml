@@ -235,25 +235,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
 
-  galaxy-apc-fast-tests:
-    needs: [parse-tests-json, build-artifact]
-    if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'galaxy-apc-fast-tests') }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
-        ]
-    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      topology: ${{ matrix.test-group.topology }}
-
   test-ttnn-tutorials:
     needs: [parse-tests-json, build-artifact]
     if: ${{ contains(needs.parse-tests-json.outputs.tests-to-run, 'test-ttnn-tutorials') }}

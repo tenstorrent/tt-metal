@@ -88,9 +88,9 @@ HostBuffer::HostBuffer(const std::vector<T>& data) :
 
 template <typename T>
 HostBuffer::HostBuffer(tt::stl::Span<T> borrowed_data, MemoryPin pin) :
+    pin_(std::move(pin)),
     view_(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
-    pin_(std::move(pin)),
     type_info_(&typeid(T)) {}
 
 template <typename T>
