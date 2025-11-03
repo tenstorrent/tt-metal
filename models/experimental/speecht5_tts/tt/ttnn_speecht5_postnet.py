@@ -349,59 +349,82 @@ class TTNNSpeechT5SpeechDecoderPostnet:
         # PHASE 6: Final output must be in L1
         return ensure_l1_memory(output)
 
-    def __call__(self, hidden_states: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    def __call__(
+        self, hidden_states: ttnn.Tensor, timing_details: bool = False
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
         Forward pass with comprehensive L1 memory management.
 
         Args:
             hidden_states: [batch, decoder_seq_len, hidden_size]
+            timing_details: If True, return (outputs..., timing_dict)
 
         Returns:
             outputs_before_postnet: [batch, mel_seq_len, num_mel_bins]
             outputs_after_postnet: [batch, mel_seq_len, num_mel_bins]
-            stop_logits: [batch, mel_seq_len]
+            stop_logits: [batch, mel_seq_len] or (outputs..., timing_dict)
         """
+        import time
+
+        timing = {}
+
         batch_size = hidden_states.shape[0]
         seq_len = hidden_states.shape[1]
         hidden_size = hidden_states.shape[2]
 
         # PHASE 1: Ensure input is in L1
+        start_time = time.time()
         hidden_states = ensure_l1_memory(hidden_states)
+        timing["memory_input"] = time.time() - start_time
 
         # PHASE 2: Op 1: Project to mel features (high-performance compute kernel)
         # [batch, seq_len, hidden_size] → [batch, seq_len, mel_bins * reduction_factor]
+        start_time = time.time()
         feat_out = l1_linear(
             hidden_states,
             self.parameters["feat_out"]["weight"],
             bias=self.parameters["feat_out"]["bias"],
         )
+        timing["mel_projection"] = time.time() - start_time
 
         # PHASE 3: Op 2: Reshape to unfold reduction factor (L1 output)
         # [batch, seq_len, mel_bins * reduction_factor] → [batch, seq_len * reduction_factor, mel_bins]
+        start_time = time.time()
         mel_seq_len = seq_len * self.config.reduction_factor
         outputs_before_postnet = l1_reshape(feat_out, [batch_size, mel_seq_len, self.config.num_mel_bins])
+        timing["mel_reshape"] = time.time() - start_time
 
         # PHASE 4: Op 3: Apply convolutional post-net (with residual) (L1 output)
+        start_time = time.time()
         outputs_after_postnet = self.postnet(outputs_before_postnet)
         outputs_after_postnet = ensure_l1_memory(outputs_after_postnet)
+        timing["conv_postnet"] = time.time() - start_time
 
         # PHASE 5: Op 4: Predict stop tokens (high-performance compute kernel)
         # [batch, seq_len, hidden_size] → [batch, seq_len, reduction_factor]
+        start_time = time.time()
         prob_out = l1_linear(
             hidden_states,
             self.parameters["prob_out"]["weight"],
             bias=self.parameters["prob_out"]["bias"],
         )
+        timing["stop_projection"] = time.time() - start_time
 
         # PHASE 6: Op 5: Reshape stop tokens (L1 output)
         # [batch, seq_len, reduction_factor] → [batch, seq_len * reduction_factor]
+        start_time = time.time()
         stop_logits = l1_reshape(prob_out, [batch_size, mel_seq_len])
+        timing["stop_reshape"] = time.time() - start_time
 
         # PHASE 7: All outputs must be in L1
+        start_time = time.time()
         outputs_before_postnet = ensure_l1_memory(outputs_before_postnet)
         outputs_after_postnet = ensure_l1_memory(outputs_after_postnet)
         stop_logits = ensure_l1_memory(stop_logits)
+        timing["memory_output"] = time.time() - start_time
 
+        if timing_details:
+            return (outputs_before_postnet, outputs_after_postnet, stop_logits), timing
         return outputs_before_postnet, outputs_after_postnet, stop_logits
 
 

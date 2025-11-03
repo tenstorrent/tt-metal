@@ -746,6 +746,7 @@ class TTNNSpeechT5Decoder:
         decoder_input_values: ttnn.Tensor,
         encoder_hidden_states: ttnn.Tensor,
         speaker_embeddings: Optional[ttnn.Tensor] = None,
+        timing_details: bool = False,
     ) -> ttnn.Tensor:
         """
         Forward pass with comprehensive L1 memory management.
@@ -754,37 +755,61 @@ class TTNNSpeechT5Decoder:
             decoder_input_values: [batch, seq_len, num_mel_bins]
             encoder_hidden_states: [batch, enc_seq_len, hidden_size]
             speaker_embeddings: [batch, speaker_embedding_dim] - optional
+            timing_details: If True, return (output, timing_dict)
 
         Returns:
-            hidden_states: [batch, seq_len, hidden_size]
+            hidden_states: [batch, seq_len, hidden_size] or (hidden_states, timing_dict)
         """
+        import time
+
+        timing = {}
+
         # PHASE 1: Ensure all inputs are in L1
+        start_time = time.time()
         decoder_input_values = ensure_l1_memory(decoder_input_values)
         encoder_hidden_states = ensure_l1_memory(encoder_hidden_states)
         if speaker_embeddings is not None:
             speaker_embeddings = ensure_l1_memory(speaker_embeddings)
+        timing["memory_input"] = time.time() - start_time
 
         # PHASE 2: Prenet processing (L1 output)
+        start_time = time.time()
         hidden_states = self.prenet(decoder_input_values, speaker_embeddings=speaker_embeddings)
         hidden_states = ensure_l1_memory(hidden_states)
+        timing["prenet"] = time.time() - start_time
 
         seq_len = hidden_states.shape[1]
 
         # PHASE 3: Create causal attention mask (L1 output)
+        start_time = time.time()
         causal_mask = self._create_causal_mask(seq_len)
         causal_mask = ensure_l1_memory(causal_mask)
+        timing["causal_mask"] = time.time() - start_time
 
         # PHASE 4: Pass through decoder layers with L1 management
-        for layer in self.layers:
+        start_time = time.time()
+        layer_times = []
+        for i, layer in enumerate(self.layers):
+            layer_start = time.time()
             hidden_states = layer(
                 hidden_states=hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
                 attention_mask=causal_mask,
             )
             hidden_states = ensure_l1_memory(hidden_states)
+            layer_times.append(time.time() - layer_start)
+
+        timing["decoder_layers"] = time.time() - start_time
+        timing["layer_times"] = layer_times
 
         # PHASE 5: Final output must be in L1
-        return ensure_l1_memory(hidden_states)
+        start_time = time.time()
+        final_output = ensure_l1_memory(hidden_states)
+        timing["memory_output"] = time.time() - start_time
+
+        if timing_details:
+            return final_output, timing
+        return final_output
 
 
 def preprocess_decoder_parameters(torch_model, config: TTNNDecoderConfig, device):

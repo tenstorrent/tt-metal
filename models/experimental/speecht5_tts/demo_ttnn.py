@@ -81,7 +81,16 @@ def ensure_l1_memory(tensor):
 
 
 def generate_speech_ttnn(
-    text, speaker_embeddings, processor, vocoder, ttnn_encoder, ttnn_decoder, ttnn_postnet, device
+    text,
+    speaker_embeddings,
+    processor,
+    vocoder,
+    ttnn_encoder,
+    ttnn_decoder,
+    ttnn_postnet,
+    device,
+    max_steps=100,
+    return_stats=False,
 ):
     """
     Generate speech using optimized TTNN SpeechT5 pipeline.
@@ -95,9 +104,12 @@ def generate_speech_ttnn(
         ttnn_decoder: TTNN decoder model
         ttnn_postnet: TTNN postnet model
         device: TTNN device
+        max_steps: Maximum number of generation steps (default: 100)
+        return_stats: If True, return statistics along with speech (default: False)
 
     Returns:
-        torch.Tensor: Generated audio waveform
+        torch.Tensor: Generated audio waveform (if return_stats=False)
+        tuple: (speech, stats_dict) if return_stats=True
     """
 
     # Process input text
@@ -132,7 +144,7 @@ def generate_speech_ttnn(
     )
 
     spectrogram_ttnn = None  # Will be built incrementally on device
-    max_steps = 60  # Maximum steps for generation (debug)
+    # Maximum steps for generation (default: 100)
 
     # Autoregressive generation loop with detailed timing
     import time
@@ -145,26 +157,98 @@ def generate_speech_ttnn(
 
     for step in range(max_steps):
         step_start = time.time()
-        print(f"Step {step+1}/{max_steps}", end="", flush=True)
-        # Decoder step
+        current_seq_len = output_sequence_ttnn.shape[1]
+        print(f"Step {step+1}/{max_steps} (seq_len={current_seq_len})", end="", flush=True)
+        # Decoder step (with detailed timing breakdown)
         decoder_start = time.time()
-        decoder_hidden_states = ttnn_decoder(
-            decoder_input_values=output_sequence_ttnn,
-            encoder_hidden_states=encoder_output,
-            speaker_embeddings=ttnn_speaker_embeddings,
-        )
+
+        # PHASE 1: Decoder inference (includes prenet + 6 transformer layers)
+        decoder_inference_start = time.time()
+        if step < 10:  # Collect timing for first 10 steps for detailed breakdown
+            decoder_hidden_states, decoder_timing = ttnn_decoder(
+                decoder_input_values=output_sequence_ttnn,
+                encoder_hidden_states=encoder_output,
+                speaker_embeddings=ttnn_speaker_embeddings,
+                timing_details=True,
+            )
+        else:
+            decoder_hidden_states = ttnn_decoder(
+                decoder_input_values=output_sequence_ttnn,
+                encoder_hidden_states=encoder_output,
+                speaker_embeddings=ttnn_speaker_embeddings,
+            )
+        decoder_inference_time = time.time() - decoder_inference_start
+
+        # PHASE 2: Memory management
+        memory_mgmt_start = time.time()
         decoder_hidden_states = ensure_l1_memory(decoder_hidden_states)
+        memory_mgmt_time = time.time() - memory_mgmt_start
+
         decoder_time = time.time() - decoder_start
         total_decoder_time += decoder_time
 
-        # Postnet
+        # Log timing for steps (show every 10th step to avoid spam)
+        if step < 3:
+            print(
+                f" [Decoder: {decoder_time:.3f}s = inference({decoder_inference_time:.3f}s) + mem_mgmt({memory_mgmt_time:.3f}s)]",
+                end="",
+                flush=True,
+            )
+        elif step % 10 == 0:
+            print(f" [Decoder: {decoder_time:.3f}s]", end="", flush=True)
+
+        # Postnet (with detailed timing)
         postnet_start = time.time()
-        postnet_output = ttnn_postnet(decoder_hidden_states)
-        mel_before, mel_after, stop_logits = postnet_output
+
+        # PHASE 1: Postnet inference (conv layers + stop logits)
+        postnet_inference_start = time.time()
+        if step < 10:  # Collect timing for first 10 steps for detailed breakdown
+            postnet_output, postnet_timing = ttnn_postnet(decoder_hidden_states, timing_details=True)
+            mel_before, mel_after, stop_logits = postnet_output
+        else:
+            mel_before, mel_after, stop_logits = ttnn_postnet(decoder_hidden_states)
+        postnet_inference_time = time.time() - postnet_inference_start
+
+        # PHASE 2: Memory management
+        postnet_memory_start = time.time()
         mel_after = ensure_l1_memory(mel_after)
         stop_logits = ensure_l1_memory(stop_logits)
+        postnet_memory_time = time.time() - postnet_memory_start
+
         postnet_time = time.time() - postnet_start
         total_postnet_time += postnet_time
+
+        # Log postnet timing (show every 10th step to avoid spam)
+        if step < 3:
+            print(
+                f" [Postnet: {postnet_time:.3f}s = inference({postnet_inference_time:.3f}s) + mem_mgmt({postnet_memory_time:.3f}s)]",
+                end="",
+                flush=True,
+            )
+        elif step % 10 == 0:
+            print(f" [Postnet: {postnet_time:.3f}s]", end="", flush=True)
+
+        # Print detailed breakdown for first 10 steps
+        if step < 10:
+            print(f"\n🔍 Detailed timing breakdown (Step {step+1}):")
+            print(f"  Decoder phases:")
+            print(f"    Input memory: {decoder_timing['memory_input']:.4f}s")
+            print(f"    Prenet: {decoder_timing['prenet']:.4f}s")
+            print(f"    Causal mask: {decoder_timing['causal_mask']:.4f}s")
+            print(f"    Decoder layers: {decoder_timing['decoder_layers']:.4f}s")
+            for i, layer_time in enumerate(decoder_timing["layer_times"]):
+                print(f"      Layer {i+1}: {layer_time:.4f}s")
+            print(f"    Output memory: {decoder_timing['memory_output']:.4f}s")
+            print(f"  Postnet phases:")
+            print(f"    Input memory: {postnet_timing['memory_input']:.4f}s")
+            print(f"    Mel projection: {postnet_timing['mel_projection']:.4f}s")
+            print(f"    Mel reshape: {postnet_timing['mel_reshape']:.4f}s")
+            print(f"    Conv postnet: {postnet_timing['conv_postnet']:.4f}s")
+            print(f"    Stop projection: {postnet_timing['stop_projection']:.4f}s")
+            print(f"    Stop reshape: {postnet_timing['stop_reshape']:.4f}s")
+            print(f"    Output memory: {postnet_timing['memory_output']:.4f}s")
+            if step < 9:  # Don't show "Continuing..." for the last detailed step
+                print("  Continuing...", end="", flush=True)
 
         # Check stopping condition (fully device-side comparison)
         sigmoid_logits = ttnn.sigmoid(stop_logits, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -172,7 +256,7 @@ def generate_speech_ttnn(
         should_stop = ttnn.ge(sum_prob, 0.5, memory_config=ttnn.L1_MEMORY_CONFIG)
         any_stop_scalar = ttnn.sum(should_stop)
         if ttnn.to_torch(any_stop_scalar).item() > 0:
-            print(f" (Early stop)", flush=True)
+            print(f" (Early stop at step {step+1})", flush=True)
             break
 
         # ========== Device-only operations ==========
@@ -218,19 +302,16 @@ def generate_speech_ttnn(
     # Performance Analysis
     print(f"\\n\\n🎯 Performance Analysis:")
     print(f"   Total steps completed: {steps_completed}")
-    if steps_completed > 0:
-        print(f"   Total decoder time: {total_decoder_time:.3f}s ({total_decoder_time/steps_completed:.3f}s/step)")
-        print(f"   Total postnet time: {total_postnet_time:.3f}s ({total_postnet_time/steps_completed:.3f}s/step)")
-        print(
-            f"   Total conversion time: {total_conversion_time:.3f}s ({total_conversion_time/steps_completed:.3f}s/step)"
-        )
-        print(f"   Total concat time: {total_concat_time:.3f}s ({total_concat_time/steps_completed:.3f}s/step)")
-        print(
-            f"   Total generation time: {total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time:.3f}s"
-        )
-        print(
-            f"   Tokens/sec: {steps_completed / (total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time):.2f}"
-        )
+    print(f"   Total decoder time: {total_decoder_time:.3f}s ({total_decoder_time/steps_completed:.3f}s/step)")
+    print(f"   Total postnet time: {total_postnet_time:.3f}s ({total_postnet_time/steps_completed:.3f}s/step)")
+    print(f"   Total conversion time: {total_conversion_time:.3f}s ({total_conversion_time/steps_completed:.3f}s/step)")
+    print(f"   Total concat time: {total_concat_time:.3f}s ({total_concat_time/steps_completed:.3f}s/step)")
+    print(
+        f"   Total generation time: {total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time:.3f}s"
+    )
+    print(
+        f"   Tokens/sec: {steps_completed / (total_decoder_time + total_postnet_time + total_conversion_time + total_concat_time):.2f}"
+    )
 
     # Generate audio
     print("\\n🎵 Generating final audio...")
@@ -244,18 +325,46 @@ def generate_speech_ttnn(
     if spectrogram_ttnn is not None:
         ttnn.deallocate(spectrogram_ttnn)
 
-    return speech
+    if return_stats:
+        stats = {
+            "steps_completed": steps_completed,
+            "final_seq_len": current_seq_len,
+            "total_decoder_time": total_decoder_time,
+            "total_postnet_time": total_postnet_time,
+            "total_conversion_time": total_conversion_time,
+            "total_concat_time": total_concat_time,
+        }
+        return speech, stats
+    else:
+        return speech
 
 
 def main():
     """Main demo function."""
 
+    import argparse
+
+    parser = argparse.ArgumentParser(description="TTNN SpeechT5 TTS Demo")
+    parser.add_argument(
+        "texts", nargs="+", help="Input text(s) to convert to speech. Each text will generate a separate audio file."
+    )
+    parser.add_argument(
+        "--output_dir", default=".", help="Output directory for audio files (default: current directory)"
+    )
+    parser.add_argument("--max_steps", type=int, default=100, help="Maximum number of generation steps (default: 100)")
+
+    args = parser.parse_args()
+
     print("🎵 TTNN SpeechT5 Clean Demo")
     print("=" * 40)
+    print(f"📝 Processing {len(args.texts)} input text(s)")
+    print(f"🎯 Max steps per generation: {args.max_steps}")
+    print(f"📁 Output directory: {args.output_dir}")
 
-    # Configuration
-    text = "Hello, my dog is cute."
-    output_file = "speech_ttnn_clean.wav"
+    # Create output directory if it doesn't exist
+    import os
+
+    os.makedirs(args.output_dir, exist_ok=True)
 
     try:
         # Initialize device
@@ -330,20 +439,116 @@ def main():
             postnet_config,
         )
 
-        # Generate speech
-        print(f"Generating speech for: '{text}'")
-        speech = generate_speech_ttnn(
-            text, speaker_embeddings, processor, vocoder, ttnn_encoder, ttnn_decoder, ttnn_postnet, device
+        # Warm-up phase to compile TTNN operations (separate from timing)
+        import time
+
+        warmup_start_time = time.time()
+        print("🔥 Warming up TTNN operations...")
+        print("   This may take ~30-45 seconds as TTNN compiles kernels for optimal performance")
+        print("   TTNN will optimize operations for the decoder, postnet, and memory management")
+        warmup_text = "Hi there. How are you? What are you doing? How Can I help you? Do you need any help?"
+        warmup_speech = generate_speech_ttnn(
+            warmup_text,
+            speaker_embeddings,
+            processor,
+            vocoder,
+            ttnn_encoder,
+            ttnn_decoder,
+            ttnn_postnet,
+            device,
+            max_steps=40,
+        )
+        warmup_duration = time.time() - warmup_start_time
+        print(f"✅ Warm-up completed in {warmup_duration:.1f}s (generated {len(warmup_speech)} samples)")
+        print("   TTNN kernels are now optimized - subsequent inference will be much faster!")
+
+        # Generate speech for each input text
+        results = []
+        for i, text in enumerate(args.texts, 1):
+            print(f"\n🎵 [{i}/{len(args.texts)}] Generating speech for: '{text}'")
+
+            # Generate filename from text (sanitize for filesystem)
+            safe_text = "".join(c for c in text[:50] if c.isalnum() or c in (" ", "-", "_")).rstrip()
+            if not safe_text:
+                safe_text = f"speech_{i}"
+            safe_text = safe_text.replace(" ", "_")
+            output_file = os.path.join(args.output_dir, f"speech_ttnn_{safe_text}.wav")
+
+            # Time the generation
+            generation_start = time.time()
+            speech, generation_stats = generate_speech_ttnn(
+                text,
+                speaker_embeddings,
+                processor,
+                vocoder,
+                ttnn_encoder,
+                ttnn_decoder,
+                ttnn_postnet,
+                device,
+                max_steps=args.max_steps,
+                return_stats=True,
+            )
+            generation_time = time.time() - generation_start
+
+            # Save audio
+            sf.write(output_file, speech.squeeze().detach().numpy(), samplerate=16000)
+            audio_duration = len(speech.squeeze()) / 16000.0
+
+            # Calculate tokens/sec
+            tokens_generated = generation_stats.get("steps_completed", 0)
+            tokens_per_sec = tokens_generated / generation_time if generation_time > 0 else 0
+
+            # Store results
+            result = {
+                "text": text,
+                "output_file": output_file,
+                "generation_time": generation_time,
+                "audio_duration": audio_duration,
+                "tokens_generated": tokens_generated,
+                "tokens_per_sec": tokens_per_sec,
+                "sequence_length": generation_stats.get("final_seq_len", 0),
+            }
+            results.append(result)
+
+            print(f"✅ Audio saved to {output_file}")
+            print(".3f")
+            print(".2f")
+
+        # Display summary table
+        print("\n" + "=" * 120)
+        print("📊 INFERENCE SUMMARY")
+        print("=" * 120)
+        print(f"{'#':<4} {'Text':<30} {'Tokens':<8} {'Time(s)':<10} {'Audio(s)':<8} {'T/s':<8}")
+        print("-" * 104)
+
+        total_generation_time = 0
+        total_tokens = 0
+        total_audio_duration = 0
+
+        for i, result in enumerate(results, 1):
+            truncated_text = result["text"][:25] + "..." if len(result["text"]) > 28 else result["text"]
+            print(
+                f"{i:<4} {truncated_text:<30} {result['tokens_generated']:<8} {result['generation_time']:<10.3f} {result['audio_duration']:<8.1f} {result['tokens_per_sec']:<8.2f}"
+            )
+            total_generation_time += result["generation_time"]
+            total_tokens += result["tokens_generated"]
+            total_audio_duration += result["audio_duration"]
+
+        print("-" * 104)
+        print(
+            f"{'TOTAL':<4} {'':<30} {total_tokens:<8} {total_generation_time:<10.3f} {total_audio_duration:<8.1f} {total_tokens/total_generation_time:<8.2f}"
         )
 
-        # Save audio
-        sf.write(output_file, speech.squeeze().detach().numpy(), samplerate=16000)
-        audio_duration = len(speech.squeeze()) / 16000.0
-        print(f"✅ Audio saved to {output_file}")
-        print(".3f")
+        print(f"\n📈 Overall Statistics:")
+        print(f"   • Total inference time: {total_generation_time:.3f}s")
+        print(f"   • Total tokens generated: {total_tokens}")
+        print(f"   • Total audio duration: {total_audio_duration:.3f}s")
+        print(f"   • Average tokens/sec: {total_tokens/total_generation_time:.2f} (across all texts)")
+        print(f"   • Average audio duration: {total_audio_duration/len(results):.3f}s per text")
+
         # Cleanup
         ttnn.close_device(device)
-        print("✅ Demo completed successfully!")
+        print("\n✅ Demo completed successfully!")
 
     except Exception as e:
         print(f"❌ Error: {e}")
