@@ -12,11 +12,10 @@ void MAIN {
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb = get_compile_time_arg_val(2);
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
-    constexpr uint32_t input_tensor_B = get_compile_time_arg_val(4);
-    constexpr uint32_t slice_C = get_compile_time_arg_val(5);
-    constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(6);
-    constexpr uint32_t start_tiles_read = get_compile_time_arg_val(7);
-    constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(8);
+    constexpr uint32_t slice_B = get_compile_time_arg_val(4);
+    constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(5);
+    constexpr uint32_t start_tiles_read = get_compile_time_arg_val(6);
+    constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(7);
 
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
     add_tiles_init(input_cb_id, intermediate_cb, false);

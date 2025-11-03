@@ -34,44 +34,34 @@ constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
 constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(5);
 constexpr uint32_t input_num_pages = get_compile_time_arg_val(6);
-constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(12);
-constexpr uint32_t slice_C = get_compile_time_arg_val(13);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(15);
-constexpr bool is_forward = get_compile_time_arg_val(16);
-constexpr bool is_first_device_in_direction = get_compile_time_arg_val(17);
-constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(18);
-constexpr bool do_final_reduction = get_compile_time_arg_val(19);
-constexpr bool sync_with_other_direction = get_compile_time_arg_val(20);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(21);
-constexpr uint32_t dim = get_compile_time_arg_val(22);
-constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(23);
-constexpr uint32_t start_row_offset = get_compile_time_arg_val(24);
-constexpr uint32_t start_tiles_read = get_compile_time_arg_val(25);
-constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(26);
+constexpr uint32_t output_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t batch_num_pages = get_compile_time_arg_val(8);
+constexpr bool is_forward = get_compile_time_arg_val(9);
+constexpr bool is_first_device_in_direction = get_compile_time_arg_val(10);
+constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(11);
+constexpr bool do_final_reduction = get_compile_time_arg_val(12);
+constexpr bool sync_with_other_direction = get_compile_time_arg_val(13);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(14);
+constexpr uint32_t start_tiles_read = get_compile_time_arg_val(15);
+constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(16);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(27);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(28);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(29);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(30);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(31);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(32);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(33);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(34);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(35);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(36);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(37);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(38);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(39);
+constexpr bool is_termination_master = get_compile_time_arg_val(17);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(18);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(19);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(20);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(27);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(28);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(29);
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<40>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<30>();
 constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<40 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<30 + ccl_routing_utils::num_line_unicast_args>();
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -101,7 +91,7 @@ void kernel_main() {
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx =
-        40 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+        30 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -257,7 +247,6 @@ void kernel_main() {
     uint32_t chunk_count = 0;
     int slice_idx = is_forward ? ring_size - 1 : 0;
 
-    uint32_t batch_offset = input_batch_num_pages * b;
     for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
         constexpr uint32_t cb_output_id = is_first_device_in_direction ? cb_reader_output_id : cb_compute_output_id;
         chunk_count = 0;
