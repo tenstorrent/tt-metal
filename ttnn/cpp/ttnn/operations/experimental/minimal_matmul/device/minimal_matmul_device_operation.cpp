@@ -160,6 +160,10 @@ std::vector<TensorSpec> MinimalMatmulOp::compute_output_specs(const std::vector<
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
 
+std::vector<Tensor> MinimalMatmulOp::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, {});
+}
+
 tt::tt_metal::operation::ProgramWithCallbacks MinimalMatmulOp::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,

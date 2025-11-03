@@ -35,7 +35,6 @@ struct StridedAllGatherAsync {
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
-    bool using_persistent_buffers;
     std::optional<uint32_t> tiles_per_chunk;
     std::optional<uint32_t> num_workers_per_link;
     std::optional<uint32_t> num_buffers_per_channel;
@@ -54,7 +53,6 @@ struct StridedAllGatherAsync {
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
-        bool using_persistent_buffers,
         std::optional<uint32_t> tiles_per_chunk,
         std::optional<uint32_t> num_workers_per_link,
         std::optional<uint32_t> num_buffers_per_channel,
@@ -71,7 +69,6 @@ struct StridedAllGatherAsync {
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         barrier_semaphore(barrier_semaphore),
-        using_persistent_buffers(using_persistent_buffers),
         tiles_per_chunk(tiles_per_chunk),
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel),
@@ -90,7 +87,6 @@ struct StridedAllGatherAsync {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("tiles_per_chunk", tiles_per_chunk);
@@ -113,9 +109,7 @@ struct StridedAllGatherAsync {
         const ttnn::MeshCoordinate& coord,
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    std::vector<Tensor> create_output_tensors(
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
+    std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
@@ -133,7 +127,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
@@ -155,7 +148,6 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> tiles_per_chunk,
@@ -172,7 +164,6 @@ namespace ccl {
 
 Tensor strided_all_gather_async(
     const Tensor& input_tensor,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links = 1,
