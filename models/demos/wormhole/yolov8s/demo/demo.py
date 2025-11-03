@@ -50,7 +50,7 @@ def run_yolov8s(
             model_location_generator=model_location_generator,
         )
 
-    save_dir = "models/demos/yolov8s/demo/runs"
+    save_dir = "models/demos/wormhole/yolov8s/demo/runs"
 
     input_loc = os.path.abspath(input_loc)
     dataset = LoadImages(path=input_loc, batch=batch_size)
@@ -95,7 +95,7 @@ def run_yolov8s(
     [
         (
             1,
-            "models/demos/yolov8s/demo/images",
+            "models/demos/wormhole/yolov8s/demo/images",
         ),
     ],
 )
@@ -135,7 +135,7 @@ def test_demo(
     [
         (
             1,
-            "models/demos/yolov8s/demo/images",
+            "models/demos/wormhole/yolov8s/demo/images",
         ),
     ],
 )
