@@ -101,6 +101,8 @@ if [[ "$SUBMODULE_CHANGED" = true ]]; then
     # Something to make more efficient in future.
     TOOLS_CHANGED=true
     ANY_CODE_CHANGED=true
+    # Issue: https://github.com/tenstorrent/tt-metal/issues/31344
+    CMAKE_CHANGED=true
 fi
 
 # Derive combined tests-changed flag from isolated flags

@@ -9,8 +9,7 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# tests/ttnn/unit_tests/operations/cl/test_all_to_all_dispatch_t3000.py
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import (
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     run_all_to_all_dispatch_test,
     get_max_links,
     get_mesh_mapper,
