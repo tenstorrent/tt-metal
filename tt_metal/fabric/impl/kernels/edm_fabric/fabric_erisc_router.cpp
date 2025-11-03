@@ -2214,18 +2214,20 @@ constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
 void wait_for_other_local_erisc() {
     constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
-    constexpr uint32_t multi_erisc_sync_step2_value = 0x1fed;
+    constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
     if constexpr (IS_TEARDOWN_MASTER()) {
-        init_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
-        while (get_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() != multi_erisc_sync_step2_value) {
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
+               multi_erisc_sync_step2_value) {
             invalidate_l1_cache();
         }
-        init_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(0);
     } else {
-        while (get_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() != multi_erisc_sync_start_value) {
+        while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
+               multi_erisc_sync_start_value) {
             invalidate_l1_cache();
         }
-        init_ptr_val<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
+        write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_step2_value);
     }
 }
 
@@ -2889,11 +2891,17 @@ void kernel_main() {
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
         if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
-            for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
-                downstream_edm_noc_interfaces_vc0[edm_index]
-                    .template setup_edm_noc_cmd_buf<
-                        tt::tt_fabric::edm_to_downstream_noc,
-                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+            uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
+            uint32_t edm_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
+                    downstream_edm_noc_interfaces_vc0[edm_index]
+                        .template setup_edm_noc_cmd_buf<
+                            tt::tt_fabric::edm_to_downstream_noc,
+                            tt::tt_fabric::forward_and_local_write_noc_vc>();
+                }
+                edm_index++;
+                has_downstream_edm >>= 1;
             }
             if constexpr (enable_deadlock_avoidance) {
                 if (has_downstream_edm_vc1_buffer_connection) {

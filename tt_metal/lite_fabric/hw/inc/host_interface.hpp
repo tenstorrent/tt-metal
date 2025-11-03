@@ -55,6 +55,16 @@ enum class InitState : uint16_t {
     TERMINATED,
 };
 
+enum class RoutingEnabledState : uint16_t {
+    // Write to disable routing. This will stop all routing activity and propagate routing enabled state to the
+    // connected core
+    STOPPED = 0,
+    // Enabled. Call functions to service channels.
+    ENABLED = 1,
+    // Stopped
+    STOP = 2,
+};
+
 struct FabricLiteConfig {
     // Starting address of the Lite Fabric binary to be copied locally and to the neighbour.
     volatile uint32_t binary_addr = 0;
@@ -66,18 +76,18 @@ struct FabricLiteConfig {
     // get the ethernet core coordinate.
     volatile uint32_t eth_chans_mask = 0;
 
-    unsigned char padding0[4]{};
+    uint32_t padding0{};
 
     // Subordinate cores on the same chip increment this value when they are ready. The primary core
     // will stall until this value shows all eth cores are ready.
     volatile uint32_t primary_local_handshake = 0;
 
-    unsigned char padding1[12]{};
+    uint32_t padding1[3]{};
 
     // Becomes 1 when the neighbour is ready
     volatile uint32_t neighbour_handshake = 0;
 
-    unsigned char padding2[14]{};
+    uint32_t padding2[1]{};
 
     // This is the local primary core
     volatile uint16_t is_primary = false;
@@ -93,8 +103,11 @@ struct FabricLiteConfig {
 
     volatile InitState current_state = InitState::UNKNOWN;
 
-    // Set to 1 to enable routing
-    volatile uint32_t routing_enabled = 1;
+    unsigned char padding3[14]{};
+
+    volatile RoutingEnabledState routing_enabled = RoutingEnabledState::STOPPED;
+
+    unsigned char padding4[14]{};
 } __attribute__((packed));
 
 static_assert(sizeof(FabricLiteConfig) % 16 == 0);
@@ -156,14 +169,12 @@ struct HostToFabricLiteInterface {
 } __attribute__((packed));
 
 struct FabricLiteMemoryMap {
-    lite_fabric::FabricLiteConfig config;
-    tt::tt_fabric::EDMChannelWorkerLocationInfo sender_location_info;
     uint32_t sender_flow_control_semaphore{};
-    unsigned char padding0[12]{};
+    uint32_t padding0[3]{};
     uint32_t sender_connection_live_semaphore{};
-    unsigned char padding1[12]{};
+    uint32_t padding1[3]{};
     uint32_t worker_semaphore{};
-    unsigned char padding2[92]{};
+    uint32_t padding2[7]{};
     unsigned char sender_channel_buffer[lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE]{};
     unsigned char padding3[192]{};
     unsigned char
@@ -171,18 +182,13 @@ struct FabricLiteMemoryMap {
     // L1 address of the service_lite_fabric function
     uint32_t service_lite_fabric_addr{};
     unsigned char padding4[12]{};
+
+    lite_fabric::FabricLiteConfig config;
+    tt::tt_fabric::EDMChannelWorkerLocationInfo sender_location_info;
+
     // Must be last because it has members that are only stored on the host
     HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
         host_interface;
-
-#if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
-    // Returns a Host Interface for the tunnel starting at the MMIO core
-    static uint32_t get_address();
-    static uint32_t get_host_interface_addr();
-    static uint32_t get_send_channel_addr();
-    static uint32_t get_receiver_channel_addr();
-    static uint32_t get_service_channel_func_addr();
-#endif
 };
 
 static_assert(offsetof(FabricLiteMemoryMap, sender_flow_control_semaphore) % 16 == 0);
@@ -190,6 +196,7 @@ static_assert(offsetof(FabricLiteMemoryMap, sender_connection_live_semaphore) % 
 static_assert(offsetof(FabricLiteMemoryMap, worker_semaphore) % 16 == 0);
 static_assert(offsetof(FabricLiteMemoryMap, sender_channel_buffer) % GLOBAL_ALIGNMENT == 0);
 static_assert(offsetof(FabricLiteMemoryMap, receiver_channel_buffer) % GLOBAL_ALIGNMENT == 0);
+static_assert(offsetof(FabricLiteMemoryMap, config) % 16 == 0);
 static_assert(offsetof(FabricLiteMemoryMap, host_interface) % 16 == 0);
 
 }  // namespace lite_fabric

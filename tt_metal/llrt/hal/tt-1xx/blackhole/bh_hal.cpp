@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
+#include <umd/device/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
@@ -102,6 +103,7 @@ public:
         includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole");
         includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines");
         includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/noc");
+        includes.push_back("tt_metal/lite_fabric/hw/inc/blackhole");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -177,12 +179,13 @@ public:
         }
         // Unlike other core types, the stack on erisc0 is not dynamic because it's setup by base firmware.
         // Trigger an error for kernels which may exceed the static stack usage to prevent difficult to debug issues
-        // 1536 B = stack size taken from the base firmware
+        // 2048 B = stack size taken from the base firmware
+        // 64 B = Reserved for base firmware usage
         // 72 B = Approx. stack usage at the time the kernel is launched
-        // 1536 B - 64 B = 1464 B free for kernel
+        // 2048 B - 64 B - 72 B = 1912 B free for kernel
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
             blackhole::is_2_erisc_mode()) {
-            cflags += "-Werror=stack-usage=1464 ";
+            cflags += "-Werror=stack-usage=1912 ";
         }
         return cflags;
     }
@@ -396,15 +399,15 @@ void Hal::initialize_bh() {
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>();
 
-    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version fw_version) {
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t fw_version) {
         if (blackhole::is_2_erisc_mode()) {
-            tt::umd::tt_version min_version(1, 6, 2);
+            tt::umd::semver_t min_version(1, 7, 0);
             if (!(fw_version >= min_version)) {
                 log_critical(
                     tt::LogLLRuntime,
                     "In 2-erisc mode, the minimum supported ethernet firmware version is {}. Detected version is {}",
-                    min_version.str(),
-                    fw_version.str());
+                    min_version.to_string(),
+                    fw_version.to_string());
             }
         }
     };
