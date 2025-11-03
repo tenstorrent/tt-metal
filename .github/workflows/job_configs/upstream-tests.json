@@ -1,0 +1,32 @@
+{
+  "hw_topologies": {
+    "bh": {
+      "test_job": "test-bh-image",
+      "image_outputs": ["bh-image-tag", "bh-profiler-image-tag"]
+    },
+    "wh-6u": {
+      "test_job": "test-wh-6u-image",
+      "image_outputs": ["wh-6u-image-tag", "wh-6u-profiler-image-tag"]
+    },
+    "bh-llmbox": {
+      "test_job": "test-bh-multicard-image",
+      "image_outputs": ["bh-llmbox-image-tag"]
+    },
+    "bh-deskbox": {
+      "test_job": "test-bh-multicard-image",
+      "image_outputs": ["bh-deskbox-image-tag"]
+    },
+    "bh-loudbox": {
+      "test_job": "test-bh-multicard-image",
+      "image_outputs": ["bh-loudbox-image-tag"]
+    },
+    "bh-qb-ge": {
+      "test_job": "test-bh-multicard-image",
+      "image_outputs": ["bh-qb-ge-image-tag"]
+    },
+    "bh-p300": {
+      "test_job": "test-bh-p300-image",
+      "image_outputs": ["bh-p300-image-tag"]
+    }
+  }
+}
