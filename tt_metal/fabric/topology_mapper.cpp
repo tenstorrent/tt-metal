@@ -626,8 +626,6 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         }
     }
 
-    // Degrees already computed above
-
     // Fast path: if logical graph is a single path (two endpoints with degree 1; all others degree <=2),
     // map it using a linear path-extension DFS over the physical graph to avoid heavy general search.
     auto try_fast_path_for_logical_chain = [&]() -> bool {
@@ -699,11 +697,24 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             size_t li = log_order[idx_in_path];
             if (idx_in_path == 0) {
                 // Symmetry break: iterate physical starts in deterministic order
-                for (size_t pj = 0; pj < n_phys; ++pj) {
+                // Check pinning restrictions if any
+                std::vector<size_t> candidates;
+                if (!restricted_phys_indices_for_logical[li].empty()) {
+                    candidates = restricted_phys_indices_for_logical[li];
+                } else {
+                    for (size_t pj = 0; pj < n_phys; ++pj) {
+                        candidates.push_back(pj);
+                    }
+                }
+                for (size_t pj : candidates) {
                     if (used[pj]) {
                         continue;
                     }
                     if (phys_deg[pj] < log_deg[li]) {
+                        continue;
+                    }
+                    // Check mesh rank compatibility
+                    if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[pj])) {
                         continue;
                     }
                     used[pj] = true;
@@ -726,6 +737,19 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                     }
                     if (phys_deg[pj] < log_deg[li]) {
                         continue;
+                    }
+                    // Check mesh rank compatibility
+                    if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[pj])) {
+                        continue;
+                    }
+                    // Check pinning restrictions if any
+                    if (!restricted_phys_indices_for_logical[li].empty()) {
+                        if (std::find(
+                                restricted_phys_indices_for_logical[li].begin(),
+                                restricted_phys_indices_for_logical[li].end(),
+                                pj) == restricted_phys_indices_for_logical[li].end()) {
+                            continue;
+                        }
                     }
                     // Reachability pruning
                     size_t reach = reachable_unused_count(pj);
@@ -788,6 +812,10 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
             size_t cand_count = 0;
             for (size_t j = 0; j < n_phys; ++j) {
                 if (used_ref[j] || phys_deg[j] < log_deg[li]) {
+                    continue;
+                }
+                // Check mesh rank compatibility
+                if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[j])) {
                     continue;
                 }
                 bool ok_local = true;
@@ -883,15 +911,23 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         if (!restricted_phys_indices_for_logical[li].empty()) {
             for (size_t j : restricted_phys_indices_for_logical[li]) {
                 if (j < n_phys && !used[j] && phys_deg[j] >= log_deg[li]) {
-                    candidates.push_back(j);
+                    // Check mesh rank compatibility
+                    if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) == asic_id_to_mesh_rank.at(phys_nodes[j])) {
+                        candidates.push_back(j);
+                    }
                 }
             }
             if (candidates.empty()) {
+                failed_states.insert(key);
                 return false;
             }
         } else {
             for (size_t j = 0; j < n_phys; ++j) {
                 if (used[j] || phys_deg[j] < log_deg[li]) {
+                    continue;
+                }
+                // Check mesh rank compatibility
+                if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[j])) {
                     continue;
                 }
                 candidates.push_back(j);
@@ -928,9 +964,6 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
         }
 
         for (size_t j : candidates) {
-            if (fabric_node_id_to_mesh_rank.at(log_nodes[li]) != asic_id_to_mesh_rank.at(phys_nodes[j])) {
-                continue;
-            }
             // Debug: occasionally emit candidate summary for selected logical index
             if ((dfs_calls & ((1u << 18) - 1)) == 1) {
                 log_debug(
@@ -998,6 +1031,10 @@ void TopologyMapper::populate_fabric_node_id_to_asic_id_mappings(
                 for (size_t pj : unused_phys_neighbors) {
                     // Degree feasibility
                     if (phys_deg[pj] < log_deg[v]) {
+                        continue;
+                    }
+                    // Check mesh rank compatibility
+                    if (fabric_node_id_to_mesh_rank.at(log_nodes[v]) != asic_id_to_mesh_rank.at(phys_nodes[pj])) {
                         continue;
                     }
                     // Check consistency with already assigned neighbors of v

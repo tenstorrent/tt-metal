@@ -2084,6 +2084,26 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
 
 // clang-format off
 /**
+ * Sets the transaction id for a noc write.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | False    |
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID);
+    WAYPOINT("NWSW");
+    ncrisc_noc_set_transaction_id(noc, write_cmd_buf, trid);
+    WAYPOINT("NWSD");
+}
+
+// clang-format off
+/**
  * This blocking call waits for all the outstanding enqueued read transactions
  * issued on the current Tensix core with the given transaction id to complete.
  * After returning from this call there will be no outstanding read transactions
@@ -2278,6 +2298,31 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 
 // clang-format off
 /**
+ * This blocking call waits for all outstanding enqueued write transactions
+ * with the given transaction id to depart, but will not wait
+ * for them to complete.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID);
+    WAYPOINT("NFTW");
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
+        continue;
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NFTD");
+}
+
+// clang-format off
+/**
  * This resets the barrier counter for a given transaction id on a given NOC using a mask.
  * Only the N bits up to the number of transaction ids are used.
  *
@@ -2309,6 +2354,14 @@ struct noc_traits_t {
 class Noc {
 public:
     enum class AddressType { NOC, LOCAL_L1 };
+
+    enum class TxnIdMode { ENABLED, DISABLED };
+
+    enum class ResponseMode { NON_POSTED, POSTED };
+
+    enum class BarrierMode { TXN_ID, FULL };
+
+    static constexpr uint32_t INVALID_TXN_ID = 0xFFFFFFFF;
 
 private:
     template <typename T>
@@ -2359,10 +2412,12 @@ public:
      * @param src_args Additional arguments for source address calculation
      * @param dst_args Additional arguments for destination address calculation
      * @param read_req_vc Virtual channel to use for the read request (default: NOC_UNICAST_WRITE_VC)
+     * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
      * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
      * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
      */
     template <
+        TxnIdMode txn_id_mode = TxnIdMode::DISABLED,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
         bool enable_noc_tracing = true,
         typename Src,
@@ -2373,13 +2428,18 @@ public:
         uint32_t size_bytes,
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
-        uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
-        noc_async_read<max_page_size, enable_noc_tracing>(
-            get_src_ptr<AddressType::NOC>(src, src_args),
-            get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
-            size_bytes,
-            noc_id_,
-            read_req_vc);
+        uint32_t read_req_vc = NOC_UNICAST_WRITE_VC,
+        uint32_t trid = INVALID_TXN_ID) const {
+        // TODO (#31407): Add support for read with transaction id
+        ASSERT(txn_id_mode == TxnIdMode::DISABLED);
+        if constexpr (txn_id_mode == TxnIdMode::DISABLED) {
+            noc_async_read<max_page_size, enable_noc_tracing>(
+                get_src_ptr<AddressType::NOC>(src, src_args),
+                get_dst_ptr<AddressType::LOCAL_L1>(dst, dst_args),
+                size_bytes,
+                noc_id_,
+                read_req_vc);
+        }
     }
 
     /** @brief Initiates an asynchronous write.
@@ -2392,9 +2452,15 @@ public:
      * @param src_args Additional arguments for source address calculation
      * @param dst_args Additional arguments for destination address calculation
      * @param vc Virtual channel to use for the write transaction (default: NOC_UNICAST_WRITE_VC)
+     * @tparam txn_id_mode Whether transaction id will be used for the noc transaction (default: DISABLED)
+     * @tparam max_page_size Maximum page size for the transfer (default: NOC_MAX_BURST_SIZE + 1)
+     * @tparam response_mode Posted noc transactions do not get ack from receiver, non-posted ones do (default:
+     * NON_POSTED)
      * @tparam enable_noc_tracing Enable NoC tracing for debugging (default: true)
      */
     template <
+        TxnIdMode txn_id_mode = TxnIdMode::DISABLED,
+        ResponseMode response_mode = ResponseMode::NON_POSTED,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
         bool enable_noc_tracing = true,
         typename Src,
@@ -2405,13 +2471,41 @@ public:
         uint32_t size_bytes,
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
-        uint32_t vc = NOC_UNICAST_WRITE_VC) const {
-        noc_async_write<max_page_size, enable_noc_tracing>(
-            get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-            get_dst_ptr<AddressType::NOC>(dst, dst_args),
-            size_bytes,
-            noc_id_,
-            vc);
+        uint32_t vc = NOC_UNICAST_WRITE_VC,
+        uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (txn_id_mode == TxnIdMode::ENABLED) {
+            // TODO (#31535): Need to add check in ncrisc_noc_fast_write_any_len to ensure outstanding transaction register does not overflow
+            WAYPOINT("NAWW");
+            ASSERT(trid != INVALID_TXN_ID);
+            auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
+            auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+            if constexpr (enable_noc_tracing) {
+                RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size_bytes, -1);
+            }
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
+            constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
+            ncrisc_noc_fast_write_any_len<noc_mode, true, one_packet>(
+                noc_id_,
+                write_cmd_buf,
+                src_addr,
+                dst_noc_addr,
+                size_bytes,
+                vc,
+                false,  // mcast
+                false,  // linked
+                1,      // num_dests
+                true,   // multicast_path_reserve
+                response_mode == ResponseMode::POSTED,
+                trid);
+            WAYPOINT("NWPD");
+        } else {
+            noc_async_write<max_page_size, enable_noc_tracing, response_mode == ResponseMode::POSTED>(
+                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
+                get_dst_ptr<AddressType::NOC>(dst, dst_args),
+                size_bytes,
+                noc_id_,
+                vc);
+        }
     }
 
     /** @brief Initiates a read barrier for synchronization.
@@ -2419,22 +2513,46 @@ public:
      * This blocking call waits for all the outstanding enqueued read transactions
      * issued on the current Tensix core to complete.
      * After returning from this call there will be no outstanding read transactions for this noc for the current core.
+     *
+     * @param trid Transaction ID to wait on for outstanding reads (default: INVALID_TXN_ID for full barrier)
+     * @tparam barrier_type Indicates whether to issue a full barrier or on a transaction id
      */
-    void async_read_barrier() const { noc_async_read_barrier(noc_id_); }
+    template <BarrierMode barrier_type = BarrierMode::FULL>
+    void async_read_barrier(uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (barrier_type == BarrierMode::FULL) {
+            noc_async_read_barrier(noc_id_);
+        } else if constexpr (barrier_type == BarrierMode::TXN_ID) {
+            ASSERT(trid != INVALID_TXN_ID);
+            noc_async_read_barrier_with_trid(trid, noc_id_);
+        }
+    }
 
     /** @brief Initiates a write barrier for synchronization.
      *
      * This blocking call waits for all the outstanding enqueued write transactions
      * issued on the current Tensix core to complete.
      * After returning from this call there will be no outstanding write transactions for this noc for the current core.
+     *
+     * @param trid Transaction ID to wait on for outstanding writes (default: INVALID_TXN_ID for full barrier)
+     * @tparam barrier_type Indicates whether to issue a full barrier or on a transaction id
      */
-    void async_write_barrier() const { noc_async_write_barrier(noc_id_); }
+    template <BarrierMode barrier_type = BarrierMode::FULL>
+    void async_write_barrier(uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (barrier_type == BarrierMode::FULL) {
+            noc_async_write_barrier(noc_id_);
+        } else if constexpr (barrier_type == BarrierMode::TXN_ID) {
+            ASSERT(trid != INVALID_TXN_ID);
+            noc_async_write_barrier_with_trid(trid, noc_id_);
+        }
+    }
 
     /** @brief Waits for all outstanding write transactions to be flushed.
      *
      * This blocking call waits for all the outstanding enqueued write transactions
      * issued on the current Tensix core to depart, but will not wait for them to complete.
      */
+    // TODO (#31405): there is no variant of this for transaction ids. Use
+    // ncrisc_noc_nonposted_write_with_transaction_id_sent but none for dynamic noc version exists atm.
     void async_writes_flushed() const { noc_async_writes_flushed(noc_id_); }
 
     /** @brief Waits for all outstanding posted write transactions to be flushed.
