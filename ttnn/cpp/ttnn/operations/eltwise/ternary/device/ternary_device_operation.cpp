@@ -7,6 +7,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "../ternary.hpp"
 
 namespace ttnn::operations::ternary {
 
@@ -114,7 +115,13 @@ TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program
 
 tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        ternary_op_type, ternary_variant, broadcast_type, memory_config, get_dtype(), compute_kernel_config);
+        ternary_op_type,
+        ternary_variant,
+        broadcast_type,
+        memory_config,
+        get_dtype(),
+        compute_kernel_config,
+        additional_scalar);
 }
 
 void TernaryDeviceOperation::validate_on_program_cache_hit(
@@ -334,6 +341,45 @@ TernaryDeviceOperation::invoke(
         .input_dtype = input_a.dtype(),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
+        .scalar_input_a = std::nullopt,
+        .scalar_input_b = std::nullopt,
+        .additional_scalar = (op_type == TernaryOpType::ADDCMUL) ? std::optional<float>(addcmul_value) : std::nullopt,
+    };
+
+    tensor_args_t args{
+        .input_tensor_a = input_a,
+        .input_tensor_b = input_b,
+        .input_tensor_c = input_c,
+        .optional_output_tensor = optional_output_tensor};
+
+    return {attributes, args};
+}
+
+std::tuple<TernaryDeviceOperation::operation_attributes_t, TernaryDeviceOperation::tensor_args_t>
+TernaryDeviceOperation::invoke(
+    TernaryOpType op_type,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float additional_scalar,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    // Detect broadcast type for TTT variant
+    TernaryBroadcastType broadcast_type =
+        get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    operation_attributes_t attributes{
+        .ternary_op_type = op_type,
+        .ternary_variant = TernaryVariant::TTT,
+        .broadcast_type = broadcast_type,
+        .memory_config = memory_config.value_or(input_b.memory_config()),
+        .input_dtype = input_a.dtype(),
+        .dtype = output_dtype.value_or(input_b.dtype()),
+        .compute_kernel_config = std::nullopt,
+        .scalar_input_a = std::nullopt,
+        .scalar_input_b = std::nullopt,
+        .additional_scalar = additional_scalar,
     };
 
     tensor_args_t args{

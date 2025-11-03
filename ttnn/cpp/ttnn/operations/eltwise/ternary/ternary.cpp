@@ -12,10 +12,15 @@
 #include "device/ternary_device_operation.hpp"
 #include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ternary_composite_op.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace ternary {
+
+// Define the thread-local variable
+thread_local float addcmul_value = 1.0f;
 
 namespace ternary_utils {
 
@@ -228,6 +233,44 @@ Tensor WhereOperation::invoke(
         },
         value_true,
         value_false);
+}
+
+Tensor AddcmulOperation::invoke(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    log_debug(tt::LogOp, "Addcmul LLK - TTT");
+
+    TT_FATAL(
+        input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
+            input_c.storage_type() == StorageType::DEVICE,
+        "Addcmul operation requires all input tensors to be on Device.");
+
+    // Only TTT variant is supported for addcmul
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
+        is_sharded(output) || is_invalid_bcast(broadcast_type)) {
+        // Fall back to composite implementation for unsupported cases
+        return _addcmul(input_a, input_b, input_c, value, memory_config);
+    }
+
+    // Set the thread-local value for the device operation
+    addcmul_value = value;
+
+    // Use LLK implementation for all values
+    return ttnn::prim::ternary(
+        TernaryOpType::ADDCMUL,
+        input_a,
+        input_b,
+        input_c,
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        output);
 }
 
 }  // namespace ternary

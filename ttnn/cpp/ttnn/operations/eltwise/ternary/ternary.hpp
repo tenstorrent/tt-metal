@@ -16,6 +16,9 @@ namespace operations {
 
 namespace ternary {
 
+// Thread-local variable for addcmul value
+extern thread_local float addcmul_value;
+
 // Where Operation
 struct WhereOperation {
     static Tensor invoke(
@@ -26,10 +29,22 @@ struct WhereOperation {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
+// Addcmul Operation
+struct AddcmulOperation {
+    static Tensor invoke(
+        const Tensor& input_a,
+        const Tensor& input_b,
+        const Tensor& input_c,
+        float value = 1.0f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt);
+};
+
 }  // namespace ternary
 }  // namespace operations
 
-// Register the where operation
+// Register the operations
 constexpr auto where = ttnn::register_operation<"ttnn::where", operations::ternary::WhereOperation>();
+constexpr auto addcmul = ttnn::register_operation<"ttnn::addcmul", operations::ternary::AddcmulOperation>();
 
 }  // namespace ttnn
