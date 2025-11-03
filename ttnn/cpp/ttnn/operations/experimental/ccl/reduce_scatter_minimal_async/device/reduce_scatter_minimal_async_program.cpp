@@ -1238,6 +1238,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             false, "reduce_scatter_minimal_async line implementation only supports scattering on dim 0, 1, 2, or 3");
     }
 
+    TT_FATAL(
+        !(fuse_op && normalized_dim == 0),
+        "reduce_scatter_minimal_async line implementation can't be fused with matmul when scattering on dim 0");
+
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
     const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
