@@ -682,6 +682,62 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
     }
 }
 
+void Program::update_runtime_info_from_descriptor(const ProgramDescriptor& descriptor) {
+    internal_->update_runtime_info_from_descriptor(descriptor);
+}
+
+void detail::ProgramImpl::update_runtime_info_from_descriptor(const ProgramDescriptor& descriptor) {
+    auto copy_runtime_args = [](Kernel& kernel_to, const KernelDescriptor& kernel_from) {
+        auto& runtime_args_to = kernel_to.runtime_args_data();
+        for (size_t i = 0; i < kernel_from.runtime_args.size(); i++) {
+            for (size_t j = 0; j < kernel_from.runtime_args[i].size(); j++) {
+                const auto& runtime_arg_from = kernel_from.runtime_args[i][j];
+                if (runtime_arg_from.empty()) {
+                    continue;
+                }
+                std::memcpy(
+                    runtime_args_to[i][j].data(),
+                    runtime_arg_from.data(),
+                    runtime_arg_from.size() * sizeof(runtime_arg_from[0]));
+            }
+        }
+        auto common_to = kernel_to.common_runtime_args_data();
+        if (!kernel_from.common_runtime_args.empty()) {
+            std::memcpy(
+                common_to.data(),
+                kernel_from.common_runtime_args.data(),
+                kernel_from.common_runtime_args.size() * sizeof(kernel_from.common_runtime_args[0]));
+        }
+    };
+
+    for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
+        auto& kernels = kernels_[kernels_idx];
+        for (auto& [id, kernel] : kernels) {
+            copy_runtime_args(*kernel, descriptor.kernels[id]);
+        }
+    }
+
+    bool should_invalidate_cb_allocation = false;
+    for (size_t circular_buffers_idx = 0; circular_buffers_idx < circular_buffers_.size(); ++circular_buffers_idx) {
+        auto& circular_buffer = circular_buffers_[circular_buffers_idx];
+        auto& descriptor_cb = descriptor.cbs[circular_buffers_idx];
+        if (!circular_buffer->globally_allocated()) {
+            should_invalidate_cb_allocation |= circular_buffer->config().total_size() != descriptor_cb.total_size;
+        }
+        circular_buffer->config() = CircularBufferConfig(descriptor_cb);
+        if (descriptor_cb.global_circular_buffer) {
+            circular_buffer->set_global_circular_buffer(*descriptor_cb.global_circular_buffer);
+        }
+        if (circular_buffer->globally_allocated()) {
+            circular_buffer->assign_global_address();
+        }
+    }
+
+    if (should_invalidate_cb_allocation) {
+        invalidate_circular_buffer_allocation();
+    }
+}
+
 void detail::ProgramImpl::CircularBufferAllocator::mark_address(
     uint64_t address, uint64_t size, uint64_t base_address) {
     if (this->l1_regions.empty()) {

@@ -5,9 +5,9 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/program.hpp>
 
 #include "generic_op_device_operation.hpp"
-#include "tt-metalium/kernel_types.hpp"
 
 namespace ttnn::operations::generic {
 GenericOpDeviceOperation::GenericProgram::cached_program_t GenericOpDeviceOperation::GenericProgram::create(
@@ -22,6 +22,8 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {}
+    tensor_return_value_t& tensor_return_value) {
+    cached_program.program.update_runtime_info_from_descriptor(operation_attributes);
+}
 
 }  // namespace ttnn::operations::generic

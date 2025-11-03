@@ -52,6 +52,8 @@ public:
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
 
+    void update_runtime_info_from_descriptor(const ProgramDescriptor& descriptor);
+
 private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
