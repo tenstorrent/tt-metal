@@ -142,7 +142,7 @@ def run_distributed_fused_rmsnorm(
 
     ccl_semaphore_handles = setup_ccl_semaphores(mesh_device)
     ttnn.synchronize_device(mesh_device)
-    tt_stats = ttnn.experimental.fused_rmsnorm_pre_allgather(
+    tt_stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
         tt_inp, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
     )
     # tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -161,7 +161,7 @@ def run_distributed_fused_rmsnorm(
         cluster_axis=tp_mesh_axis,
     )
 
-    tt_out = ttnn.experimental.fused_rmsnorm_post_allgather(
+    tt_out = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
         tt_inp,
         tt_stats_gathered,
         epsilon=epsilon,

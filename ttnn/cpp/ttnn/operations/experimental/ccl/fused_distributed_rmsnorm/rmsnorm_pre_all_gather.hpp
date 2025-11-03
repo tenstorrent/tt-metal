@@ -24,8 +24,8 @@ struct ExecuteFusedRMSNormPreAllGather {
 }  // namespace operations::experimental::ccl
 
 namespace experimental {
-constexpr auto fused_rmsnorm_pre_allgather = ttnn::register_operation<
-    "ttnn::experimental::fused_rmsnorm_pre_allgather",
+constexpr auto wan_fused_rmsnorm_pre_allgather = ttnn::register_operation<
+    "ttnn::experimental::wan_fused_rmsnorm_pre_allgather",
     ttnn::operations::experimental::ccl::ExecuteFusedRMSNormPreAllGather>();
 
 }  // namespace experimental

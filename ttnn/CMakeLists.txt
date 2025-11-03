@@ -334,7 +334,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ccl_experimental_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/rmsnorm_distributed_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/rmsnorm_distributed_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_${PY_BINDING}.cpp
@@ -472,12 +472,12 @@ target_sources(
         cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
-        cpp/ttnn/operations/experimental/ccl/fused_dist_rms/rmsnorm_pre_all_gather.cpp
-        cpp/ttnn/operations/experimental/ccl/fused_dist_rms/rmsnorm_post_all_gather.cpp
-        cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/rmsnorm_pre_all_gather_op.cpp
-        cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/rmsnorm_post_all_gather_op.cpp
-        cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/multicore/rmsnorm_pre_all_gather_op_multi_core.cpp
-        cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/multicore/rmsnorm_post_all_gather_op_multi_core.cpp
+        cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/rmsnorm_pre_all_gather.cpp
+        cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/rmsnorm_post_all_gather.cpp
+        cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.cpp
+        cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.cpp
+        cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/multicore/rmsnorm_pre_all_gather_op_multi_core.cpp
+        cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/multicore/rmsnorm_post_all_gather_op_multi_core.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp

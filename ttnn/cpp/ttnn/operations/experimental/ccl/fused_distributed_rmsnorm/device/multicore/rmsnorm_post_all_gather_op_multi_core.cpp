@@ -6,7 +6,7 @@
 #include <string>
 #include <variant>
 
-#include "ttnn/operations/experimental/ccl/fused_dist_rms/device/rmsnorm_post_all_gather_op.hpp"
+#include "ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/math.hpp"
@@ -79,16 +79,16 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const uint32_t num_devices = stats_tiles_cols;
     TT_FATAL(num_devices > 0, "Number of devices must be greater than 0");
 
-    log_info(tt::LogOp, "W: {}", W);
-    log_info(tt::LogOp, "H: {}", H);
-    log_info(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
-    log_info(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
-    log_info(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
-    log_info(tt::LogOp, "num_devices: {}", num_devices);
-    log_info(tt::LogOp, "has_weight: {}", has_weight);
-    log_info(tt::LogOp, "fuse_rope: {}", fuse_rope);
-    log_info(tt::LogOp, "num_heads: {}", num_heads);
-    log_info(tt::LogOp, "head_dim_tiles: {}", head_dim_tiles);
+    log_debug(tt::LogOp, "W: {}", W);
+    log_debug(tt::LogOp, "H: {}", H);
+    log_debug(tt::LogOp, "num_tile_rows: {}", num_tile_rows);
+    log_debug(tt::LogOp, "num_tile_cols: {}", num_tile_cols);
+    log_debug(tt::LogOp, "stats_tiles_cols: {}", stats_tiles_cols);
+    log_debug(tt::LogOp, "num_devices: {}", num_devices);
+    log_debug(tt::LogOp, "has_weight: {}", has_weight);
+    log_debug(tt::LogOp, "fuse_rope: {}", fuse_rope);
+    log_debug(tt::LogOp, "num_heads: {}", num_heads);
+    log_debug(tt::LogOp, "head_dim_tiles: {}", head_dim_tiles);
 
     ////////////////////////////////////////////////////////////////////////////
     //                       Device Setup
@@ -136,15 +136,15 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     uint32_t rope_cos_tile_size = tt::tile_size(rope_cos_data_format);
     uint32_t rope_sin_tile_size = tt::tile_size(rope_sin_data_format);
 
-    log_info(tt::LogOp, "input_data_format: {}", input_data_format);
-    log_info(tt::LogOp, "output_data_format: {}", output_data_format);
-    log_info(tt::LogOp, "stats_data_format: {}", stats_data_format);
-    log_info(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
-    log_info(tt::LogOp, "reduce_scalar_data_format: {}", reduce_scalar_data_format);
-    log_info(tt::LogOp, "weight_data_format: {}", weight_data_format);
-    log_info(tt::LogOp, "transformation_mat_data_format: {}", transformation_mat_data_format);
-    log_info(tt::LogOp, "rope_cos_data_format: {}", rope_cos_data_format);
-    log_info(tt::LogOp, "rope_sin_data_format: {}", rope_sin_data_format);
+    log_debug(tt::LogOp, "input_data_format: {}", input_data_format);
+    log_debug(tt::LogOp, "output_data_format: {}", output_data_format);
+    log_debug(tt::LogOp, "stats_data_format: {}", stats_data_format);
+    log_debug(tt::LogOp, "intermediate_data_format: {}", intermediate_data_format);
+    log_debug(tt::LogOp, "reduce_scalar_data_format: {}", reduce_scalar_data_format);
+    log_debug(tt::LogOp, "weight_data_format: {}", weight_data_format);
+    log_debug(tt::LogOp, "transformation_mat_data_format: {}", transformation_mat_data_format);
+    log_debug(tt::LogOp, "rope_cos_data_format: {}", rope_cos_data_format);
+    log_debug(tt::LogOp, "rope_sin_data_format: {}", rope_sin_data_format);
 
     auto input_addr = input_tensor.buffer()->address();
     auto output_addr = output_tensor.buffer()->address();
@@ -313,14 +313,14 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/kernels/dataflow/"
         "rms_post_allgather_reader.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/kernels/dataflow/"
         "rms_post_allgather_writer.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -350,7 +350,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         head_dim_tiles};
 
     auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/compute/rmsnorm_post_allgather.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/kernels/compute/"
+        "rmsnorm_post_allgather.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

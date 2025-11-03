@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-void py_bind_fused_dist_rmsnorm(pybind11::module& module);
+void py_bind_wan_fused_distributed_rmsnorm(pybind11::module& module);
 
 }  // namespace ttnn::operations::experimental::ccl

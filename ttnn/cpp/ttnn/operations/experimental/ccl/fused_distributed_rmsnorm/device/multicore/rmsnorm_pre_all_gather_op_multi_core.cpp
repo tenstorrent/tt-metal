@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/ccl/fused_dist_rms/device/rmsnorm_pre_all_gather_op.hpp"
+#include "ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -169,13 +169,14 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
 
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/dataflow/rms_pre_allgather_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/kernels/dataflow/"
+        "rms_pre_allgather_reader.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/kernels/dataflow/"
         "rms_pre_allgather_writer.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -192,7 +193,8 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
     };
 
     auto compute_kernel_file =
-        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_dist_rms/device/kernels/compute/rmsnorm_pre_allgather.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/kernels/compute/"
+        "rmsnorm_pre_allgather.cpp";
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

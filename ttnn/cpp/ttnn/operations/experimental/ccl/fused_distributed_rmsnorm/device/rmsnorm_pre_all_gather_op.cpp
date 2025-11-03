@@ -21,16 +21,15 @@ void FusedRMSNormPreAllGather::validate(const std::vector<Tensor>& input_tensors
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
     auto& tensor = input_tensors.at(0);
 
-    TT_FATAL(tensor.layout() == Layout::TILE, "Only tilized inputs supported.");
+    TT_FATAL(tensor.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", tensor.layout());
     TT_FATAL(
         tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Only interleaved inputs supported.");
+        "Input tensor must use INTERLEAVED memory layout, got: {}",
+        tensor.memory_config().memory_layout());
+    TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", tensor.dtype());
     TT_FATAL(
-        tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
-            tensor.dtype() == DataType::FLOAT32,
-        "Input data format not supported.");
-    TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
-    TT_FATAL(tensor.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device, got: {}", tensor.storage_type());
+    TT_FATAL(tensor.buffer() != nullptr, "Input tensor must be allocated in device buffers (buffer is null)");
 }
 
 std::vector<TensorSpec> FusedRMSNormPreAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

@@ -4,7 +4,7 @@
 
 #include "rmsnorm_post_all_gather.hpp"
 
-#include "ttnn/operations/experimental/ccl/fused_dist_rms/device/rmsnorm_post_all_gather_op.hpp"
+#include "ttnn/operations/experimental/ccl/fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
