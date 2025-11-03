@@ -110,6 +110,7 @@ runs:
         echo "########################################################"
         echo "# COMPACT TEST SUMMARY (CI LOG)"
         echo "########################################################"
+        echo "$summary_content"
 
         # Output to GitHub Step Summary (markdown format)
         {
