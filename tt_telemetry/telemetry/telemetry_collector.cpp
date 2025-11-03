@@ -11,6 +11,7 @@
 
 #include <functional>
 #include <future>
+#include <optional>
 #include <queue>
 #include <unistd.h>
 
@@ -28,9 +29,21 @@
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
+#include <telemetry/system/system_metrics.hpp>
 #include <topology/topology.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
+
+// Helper function to format a future time point as a readable string
+static std::string format_end_time(std::chrono::seconds duration_from_now) {
+    auto end_time_system = std::chrono::system_clock::now() + duration_from_now;
+    auto end_time_t = std::chrono::system_clock::to_time_t(end_time_system);
+    std::tm tm_buf;
+    localtime_r(&end_time_t, &tm_buf);
+    char time_str[32];
+    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", &tm_buf);
+    return std::string(time_str);
+}
 
 static std::mutex mtx_;
 static std::queue<TelemetrySnapshot*> available_buffers_;
@@ -261,7 +274,8 @@ static void telemetry_thread(
     const std::vector<std::string>& aggregate_endpoints,
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
-    int watchdog_timeout_seconds) {
+    int watchdog_timeout_seconds,
+    int failure_exposure_duration_seconds) {
     try {
         Watchdog watchdog(watchdog_timeout_seconds);
         TT_FATAL(
@@ -270,25 +284,59 @@ static void telemetry_thread(
             watchdog_timeout_seconds,
             MONITOR_INTERVAL_SECONDS.count());
 
+        // Create TelemetryRunning system metric BEFORE UMD initialization
+        bool_metrics_.push_back(std::make_unique<TelemetryRunningMetric>());
+
+        // Keep index for updates (safe even if vector reallocates)
+        size_t telemetry_running_index = bool_metrics_.size() - 1;
+
         std::unique_ptr<tt::umd::Cluster> cluster;
         std::unique_ptr<tt::tt_metal::Hal> hal;
         std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
         std::unique_ptr<TopologyHelper> topology_translation;
 
-        if (telemetry_enabled) {
-            cluster = std::make_unique<tt::umd::Cluster>();
-            auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-            hal = create_hal(cluster);
-            psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-                cluster, distributed_context, hal.get(), rtoptions);
-            topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
-            log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
-            log_info(tt::LogAlways, "Our hostname is: {}", topology_translation->my_host_name);
+        // End time for main loop (std::nullopt means run forever)
+        std::optional<std::chrono::steady_clock::time_point> loop_end_time;
 
-            create_ethernet_metrics(
-                bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
-            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
-            log_info(tt::LogAlways, "Initialized metrics");
+        if (telemetry_enabled) {
+            try {
+                log_info(tt::LogAlways, "Initializing UMD and device metrics...");
+                cluster = std::make_unique<tt::umd::Cluster>();
+                auto distributed_context =
+                    tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+                hal = create_hal(cluster);
+                psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+                    cluster, distributed_context, hal.get(), rtoptions);
+                topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
+                log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
+                log_info(tt::LogAlways, "Our hostname is: {}", topology_translation->my_host_name);
+
+                create_ethernet_metrics(
+                    bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
+                create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
+                log_info(tt::LogAlways, "Initialized metrics");
+
+                // Update TelemetryRunning metric to success state
+                bool_metrics_[telemetry_running_index]->set_value(true);
+            } catch (const std::exception& e) {
+                log_fatal(tt::LogAlways, "UMD initialization failed: {}", e.what());
+
+                // Mark telemetry as failed
+                bool_metrics_[telemetry_running_index]->set_value(false);
+
+                // Set end time for failure exposure period
+                auto failure_duration = std::chrono::seconds(failure_exposure_duration_seconds);
+                loop_end_time = std::chrono::steady_clock::now() + failure_duration;
+
+                log_info(
+                    tt::LogAlways,
+                    "Exposing failure metric for {} seconds (until approximately {})",
+                    failure_exposure_duration_seconds,
+                    format_end_time(failure_duration));
+            }
+        } else {
+            // Telemetry disabled - metric remains false (not running)
+            log_info(tt::LogAlways, "Telemetry collection disabled");
         }
 
         // Create collection clients to connect to aggregate endpoints (if any specified)
@@ -306,7 +354,12 @@ static void telemetry_thread(
         watchdog.heartbeat();
 
         // Main telemetry monitoring loop
-        while (!stopped_.load()) {
+        // Continue until stopped or end time reached (if set)
+        auto should_continue = [&]() {
+            return !stopped_.load() &&
+                   (!loop_end_time.has_value() || std::chrono::steady_clock::now() < loop_end_time.value());
+        };
+        while (should_continue()) {
             try {
                 std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
 
@@ -334,6 +387,12 @@ static void telemetry_thread(
                 log_fatal(tt::LogAlways, "Unknown exception in telemetry monitoring loop");
             }
         }
+
+        // If we exited due to end time (failure exposure complete), throw to exit process
+        if (loop_end_time.has_value()) {
+            log_fatal(tt::LogAlways, "Failure exposure period complete, exiting to allow orchestrator restart");
+            throw std::runtime_error("UMD initialization failed - telemetry unavailable");
+        }
     } catch (const std::exception& e) {
         log_fatal(tt::LogAlways, "Fatal exception during telemetry thread initialization: {}", e.what());
     } catch (...) {
@@ -351,7 +410,8 @@ void run_telemetry_collector(
     const std::vector<std::string>& aggregate_endpoints,
     const tt::llrt::RunTimeOptions& rtoptions,
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd,
-    int watchdog_timeout_seconds) {
+    int watchdog_timeout_seconds,
+    int failure_exposure_duration_seconds) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
@@ -364,6 +424,7 @@ void run_telemetry_collector(
         aggregate_endpoints,
         std::cref(rtoptions),
         fsd,
-        watchdog_timeout_seconds);
+        watchdog_timeout_seconds,
+        failure_exposure_duration_seconds);
     t.wait();
 }
