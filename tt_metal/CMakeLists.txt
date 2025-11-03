@@ -88,6 +88,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program.hpp
     api/tt-metalium/program_cache.hpp
     api/tt-metalium/program_descriptors.hpp
+    api/tt-metalium/queue_id.hpp
     api/tt-metalium/routing_table_generator.hpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
@@ -211,6 +212,7 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
             tools/profiler/noc_event_profiler.hpp
+            tools/profiler/cpp_device_analyses.json
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp

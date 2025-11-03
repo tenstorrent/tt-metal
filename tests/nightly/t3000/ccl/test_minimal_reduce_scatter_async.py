@@ -1291,3 +1291,40 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
         eq, mess = comp_pcc(torch_reference, tt_output_tensor)
         assert eq, mess
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    indirect=True,
+    ids=["fabric_linear", "fabric_2d_dynamic"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32]])
+def test_reduce_scatter_async_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(520)
+    devices = mesh_device.get_num_devices()
+    input_shape[-1] *= devices
+
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for _ in range(devices)]
+
+    torch_reference = torch.zeros_like(torch_inputs_per_device[0])
+    for i in range(devices):
+        torch_reference += torch_inputs_per_device[i]
+
+    tt_input = ttnn.from_torch(
+        torch.cat(torch_inputs_per_device, dim=0),
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        device=mesh_device,
+    )  # [2, 2, 32, 32*devices] per device
+
+    tt_output = ttnn.reduce_scatter(tt_input, dim=3)  # [2, 2, 32, 32] per device
+    torch_output = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    )  # [2, 2, 32, 32*devices]
+
+    assert torch.allclose(
+        torch_reference, torch_output, atol=1e-1, rtol=1e-2
+    ), "Output mismatch between torch and ttnn reduce-scatter"

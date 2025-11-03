@@ -18,11 +18,13 @@ target_sources(
             hw/inc/channel_util.hpp
             hw/inc/channels.hpp
             hw/inc/constants.hpp
-            hw/inc/lf_dev_mem_map.hpp
+            hw/inc/wormhole/lf_dev_mem_map.hpp
+            hw/inc/wormhole/risc_interface.hpp
+            hw/inc/blackhole/lf_dev_mem_map.hpp
+            hw/inc/blackhole/risc_interface.hpp
             hw/inc/header.hpp
             hw/inc/host_interface.hpp
             hw/inc/init-fsm-basic.hpp
-            hw/inc/risc_interface.hpp
             hw/inc/types.hpp
             hw/inc/kernel_api.hpp
     PRIVATE
