@@ -13,12 +13,13 @@ constexpr int log2(uint32_t n) { return (n <= 1) ? 0 : 1 + log2(n >> 1); }
 // to avoid unaligned addresses and out-of-bounds access.
 template <uint32_t val_size>
 FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n_bytes, uint32_t val) {
+    static_assert(val_size == 2 || val_size == 4, "Unsupported val_size");
     using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
 
     auto* ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(begin_addr);
     IntType val_ = static_cast<IntType>(val);
     constexpr uint32_t val_size_log2 = log2(val_size);
-    uint32_t n = n_bytes >> val_size_log2;  // = divup(n_bytes, sizeof(val))
+    uint32_t n = n_bytes >> val_size_log2;  // = n_bytes / sizeof(val)
     for (uint32_t i = 0; i < n; ++i) {
         ptr[i] = val_;
     }
