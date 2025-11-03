@@ -13,9 +13,9 @@ inputs:
     description: "Where to append combined test output"
   summary_pattern:
     required: false
-    # Improved regex: PyTest outcomes, perf, warnings, info, and section headers
+    # Focus on short test summary info section: header, test results, and final summary line
     default: >-
-      (^[gw\d+]\s+(PASSED|FAILED|SKIPPED|ERROR)\b)|(^[A-Z]+(ED|PED|ROR|SKIPPED)\b)|(^={3,}.*={3,}$)|(^Average model time= )|(^Average model performance= )|(^Run and measurement data saved )|(^\d+\.\d+s (call|setup|teardown)\s+)|(^\s*short test summary info )|(^\s*PCC check was successful )|(^\s*All\ performance\ checks\ passed!$)
+      (^\s*short test summary info\s*=+)|(^(PASSED|FAILED|SKIPPED|ERROR)\s+)|(^=+\s*\d+.*=+$)
     description: "EGREP regex for lines to keep in the compact summary"
   summary_context:
     required: false
