@@ -29,6 +29,8 @@
 namespace ttnn {
 namespace test {
 
+using namespace ttnn::experimental;
+
 class LazyModeFixture : public TTNNFixtureWithDevice {
 protected:
     void SetUp() override {
@@ -55,8 +57,8 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
     log_info(tt::LogTest, "==== Starting LazyTensorCreation test ====");
 
     // Verify lazy mode is enabled
-    ttnn::experimental::lazy::enable();
-    ASSERT_TRUE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // 1. From materialized tensor
     auto random =
@@ -77,7 +79,7 @@ TEST_F(LazyModeFixture, LazyTensorCreation) {
     ASSERT_EQ(random.lazy()->materialized_tensor().mesh_buffer()->device(), device_)
         << "Lazy tensor should have the same mesh buffer device as the materialized tensor";
 
-    ASSERT_EQ(random.lazy()->state(), experimental::lazy::LazyTensorState::MATERIALIZED)
+    ASSERT_EQ(random.lazy()->state(), experimental::lazy::LazyTensorState::EVALUATED)
         << "Lazy tensor should be in materialized state";
     ASSERT_EQ(random.lazy()->tensor_spec(), random.tensor_spec())
         << "Lazy tensor should have the same tensor spec as the materialized tensor";
@@ -97,8 +99,8 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     log_info(tt::LogTest, "==== Starting SimpleUnaryOperationsLazy test ====");
 
     // Verify lazy mode is enabled
-    ttnn::experimental::lazy::enable();
-    ASSERT_TRUE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create input tensor
     ttnn::Shape shape({32, 32});
@@ -151,8 +153,8 @@ TEST_F(LazyModeFixture, SimpleUnaryOperationsLazy) {
     ASSERT_TRUE(relu_output.lazy()->is_materialized()) << "Lazy tensor should be materialized";
     ASSERT_TRUE(input_tensor.lazy()->is_materialized()) << "Lazy tensor should be materialized";
 
-    ttnn::experimental::lazy::disable();
-    ASSERT_FALSE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
 
     // Run the same operations in eager mode
     log_info(tt::LogTest, "Running same operations in eager mode for verification...");
@@ -176,8 +178,8 @@ TEST_F(LazyModeFixture, BinaryOperationsLazy) {
     log_info(tt::LogTest, "==== Starting BinaryOperationsLazy test ====");
 
     // Verify lazy mode is enabled
-    ttnn::experimental::lazy::enable();
-    ASSERT_TRUE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create input tensors
     ttnn::Shape shape({32, 64});
@@ -206,8 +208,8 @@ TEST_F(LazyModeFixture, BinaryOperationsLazy) {
     ASSERT_TRUE(input1.lazy()->is_materialized()) << "Lazy tensor should be materialized";
     ASSERT_TRUE(input2.lazy()->is_materialized()) << "Lazy tensor should be materialized";
 
-    ttnn::experimental::lazy::disable();
-    ASSERT_FALSE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
 
     // Run the same operations in eager mode
     log_info(tt::LogTest, "Running same operations in eager mode for verification...");
@@ -231,8 +233,8 @@ TEST_F(LazyModeFixture, MixedOperationsLazy) {
     log_info(tt::LogTest, "==== Starting MixedOperationsLazy test ====");
 
     // Verify lazy mode is enabled
-    ttnn::experimental::lazy::enable();
-    ASSERT_TRUE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create input tensors
     ttnn::Shape shape({32, 32});
@@ -277,8 +279,8 @@ TEST_F(LazyModeFixture, MixedOperationsLazy) {
     ASSERT_TRUE(input1.lazy()->is_materialized()) << "Lazy tensor should be materialized";
     ASSERT_TRUE(input2.lazy()->is_materialized()) << "Lazy tensor should be materialized";
 
-    ttnn::experimental::lazy::disable();
-    ASSERT_FALSE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
 
     // Run the same operations in eager mode
     log_info(tt::LogTest, "Running same operations in eager mode for verification...");
@@ -305,8 +307,8 @@ TEST_F(LazyModeFixture, ExecutionOrderCorrect) {
     log_info(tt::LogTest, "==== Starting ExecutionOrderCorrect test ====");
 
     // Verify lazy mode is enabled
-    ttnn::experimental::lazy::enable();
-    ASSERT_TRUE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     // Create a diamond-shaped dependency graph
     ttnn::Shape shape({32, 32});
@@ -345,8 +347,8 @@ TEST_F(LazyModeFixture, ExecutionOrderCorrect) {
     ASSERT_TRUE(exp_branch.lazy()->is_materialized()) << "Lazy tensor should be materialized";
     ASSERT_TRUE(input.lazy()->is_materialized()) << "Lazy tensor should be materialized";
 
-    ttnn::experimental::lazy::disable();
-    ASSERT_FALSE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
 
     // Run the same operations in eager mode
     log_info(tt::LogTest, "Running same operations in eager mode for verification...");
@@ -377,8 +379,8 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
 
     // ========== Run EAGER mode first to establish baseline ==========
     log_info(tt::LogTest, "Running operations in EAGER mode for baseline...");
-    ttnn::experimental::lazy::disable();
-    ASSERT_FALSE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
 
     auto matmul_input1_eager = ttnn::full(matmul_shape1, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
     auto matmul_input2_eager = ttnn::full(matmul_shape2, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
@@ -405,8 +407,8 @@ TEST_F(LazyModeFixture, MatmulWithElementwiseLazy) {
 
     // ========== Now run LAZY mode and compare ==========
     log_info(tt::LogTest, "Running same operations in LAZY mode...");
-    ttnn::experimental::lazy::enable();
-    ASSERT_TRUE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     auto matmul_input1 = ttnn::full(matmul_shape1, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
     auto matmul_input2 = ttnn::full(matmul_shape2, 0.1f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
@@ -472,8 +474,8 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
 
     // First run in eager mode to get baseline
     log_info(tt::LogTest, "Running operations in EAGER mode for baseline...");
-    ttnn::experimental::lazy::disable();
-    ASSERT_FALSE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
 
     ttnn::Shape shape({32, 32});
 
@@ -499,8 +501,8 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
 
     // Now run in lazy mode with fusion pass
     log_info(tt::LogTest, "Running same operations in LAZY mode with fusion pass...");
-    ttnn::experimental::lazy::enable();
-    ASSERT_TRUE(ttnn::experimental::lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     auto input_lazy = Tensor::from_vector(data, spec, device_);
 
@@ -517,7 +519,7 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
 
     // Traverse and log graph BEFORE fusion
     log_info(tt::LogTest, "\n==== Graph structure BEFORE fusion ====");
-    auto graph_before = ttnn::experimental::lazy::GraphUtils::topological_sort(sqrt_lazy.lazy());
+    auto graph_before = lazy::GraphUtils::topological_sort(sqrt_lazy.lazy());
     log_info(tt::LogTest, "Graph has {} nodes", graph_before.size());
 
     size_t unary_ops_before = 0;
@@ -525,8 +527,7 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
         auto& node = graph_before[i];
         auto op = node->op();
         if (op) {
-            using UnaryLazyOp =
-                ttnn::experimental::lazy::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
+            using UnaryLazyOp = lazy::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
             auto* unary_op = dynamic_cast<UnaryLazyOp*>(op.get());
             if (unary_op) {
                 const auto& attrs = unary_op->attributes();
@@ -553,7 +554,7 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
     ASSERT_EQ(unary_ops_before, 3) << "Should have 3 unary operations before fusion";
 
     // Check the chain structure before fusion
-    using UnaryLazyOp = ttnn::experimental::lazy::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
+    using UnaryLazyOp = lazy::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
     auto* sqrt_op_before = dynamic_cast<UnaryLazyOp*>(sqrt_lazy.lazy()->op().get());
     ASSERT_NE(sqrt_op_before, nullptr) << "Sqrt operation should be a unary op";
     ASSERT_EQ(sqrt_op_before->attributes().op_chain.size(), 1) << "Sqrt op_chain should have 1 element before fusion";
@@ -562,13 +563,13 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
 
     // Run the fusion pass
     log_info(tt::LogTest, "\n==== Running UnaryOperationsFusionPass ====");
-    ttnn::experimental::lazy::PassManager pass_manager;
-    pass_manager.add_pass(std::make_unique<ttnn::experimental::lazy::UnaryOperationsFusionPass>());
+    lazy::compile::PassManager pass_manager;
+    pass_manager.add_pass(std::make_unique<lazy::compile::UnaryOperationsFusionPass>());
     pass_manager.run(sqrt_lazy);
 
     // Traverse and log graph AFTER fusion
     log_info(tt::LogTest, "\n==== Graph structure AFTER fusion ====");
-    auto graph_after = ttnn::experimental::lazy::GraphUtils::topological_sort(sqrt_lazy.lazy());
+    auto graph_after = lazy::GraphUtils::topological_sort(sqrt_lazy.lazy());
     log_info(tt::LogTest, "Graph has {} nodes", graph_after.size());
 
     size_t unary_ops_after = 0;
@@ -577,8 +578,7 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
         auto& node = graph_after[i];
         auto op = node->op();
         if (op) {
-            using UnaryLazyOp =
-                ttnn::experimental::lazy::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
+            using UnaryLazyOp = lazy::LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>;
             auto* unary_op = dynamic_cast<UnaryLazyOp*>(op.get());
             if (unary_op) {
                 const auto& attrs = unary_op->attributes();

@@ -1,11 +1,9 @@
 #include "ttnn/experimental/lazy/evaluation_manager.hpp"
 #include "ttnn/experimental/lazy/graph_utils.hpp"
 #include "ttnn/experimental/lazy/lazy_tensor.hpp"
-#include "ttnn/experimental/lazy/lazy_operation.hpp"
 
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/old_infra_device_operation.hpp"
 #include <unordered_map>
 #include <enchantum/enchantum.hpp>
@@ -71,16 +69,17 @@ void evaluate(const std::shared_ptr<LazyTensor>& lazy_tensor) {
             log_info(tt::LogTest, "[Evaluate] Unknown operation[id={}, type_id=???]", tensor->id());
         }
 
-        tensor->materialize();
+        tensor->evaluate();
     }
 }
 
+namespace compile {
 void PassManager::add_pass(std::unique_ptr<Pass>&& pass) { passes_.push_back(std::move(pass)); }
 
-void PassManager::run(const tt::tt_metal::Tensor& lazy_tensor) {
+void PassManager::run(const ttnn::Tensor& lazy_tensor) {
     for (auto& pass : passes_) {
         pass->run(lazy_tensor);
     }
 }
-
+}  // namespace compile
 }  // namespace ttnn::experimental::lazy

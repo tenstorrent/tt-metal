@@ -1,18 +1,16 @@
 #include "ttnn/experimental/lazy/passes.hpp"
-#include "ttnn/experimental/lazy/graph_utils.hpp"
 #include "ttnn/experimental/lazy/lazy_device_operation.hpp"
 #include "ttnn/experimental/lazy/lazy_tensor.hpp"
-#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
+#include "ttnn/experimental/lazy/graph_utils.hpp"
 #include <enchantum/enchantum.hpp>
-
-using ttnn::Tensor;
 
 namespace ttnn::experimental::lazy {
 
+namespace compile {
 std::string UnaryOperationsFusionPass::name() const { return "UnaryOperationsFusionPass"; }
 
-void UnaryOperationsFusionPass::run(const tt::tt_metal::Tensor& tensor) {
+void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
     auto sorted_tensors = GraphUtils::topological_sort(tensor.lazy());
 
     // Track which tensors have been fused (so we don't fuse them again)
@@ -149,5 +147,5 @@ void UnaryOperationsFusionPass::run(const tt::tt_metal::Tensor& tensor) {
         }
     }
 }
-
+}  // namespace compile
 }  // namespace ttnn::experimental::lazy

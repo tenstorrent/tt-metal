@@ -11,26 +11,19 @@ namespace ttnn::experimental::lazy {
 
 // Lazy Tensor
 LazyTensor::LazyTensor(
-    const std::vector<std::shared_ptr<LazyTensor>>& op_inputs, const LazyOperationPtr& op, TensorSpec tensor_spec) :
+    const std::vector<std::shared_ptr<LazyTensor>>& op_inputs,
+    const LazyOperationPtr& op,
+    const TensorSpec& tensor_spec) :
     op_inputs_(op_inputs),
     op_(op),
-    tensor_spec_(std::move(tensor_spec)),
-    id_(GraphUtils::get_available_lazy_tensor_id()) {
-    // Inherit device and storage_type from first input tensor
-    // TODO: Is this correct though?
-    if (!op_inputs_.empty() && op_inputs_[0]) {
-        device_ = op_inputs_[0]->device();
-        storage_type_ = op_inputs_[0]->storage_type();
-    } else {
-        // Default values when no inputs
-        device_ = nullptr;
-        storage_type_ = tt::tt_metal::StorageType::DEVICE;
-    }
-}
+    tensor_metadata_(tensor_spec, op_inputs),
+    id_(GraphUtils::get_available_lazy_tensor_id()) {}
 
 std::shared_ptr<LazyTensor> LazyTensor::make_lazy_tensor(
-    const std::vector<std::shared_ptr<LazyTensor>>& op_inputs, const LazyOperationPtr& op, TensorSpec tensor_spec) {
-    return std::make_shared<LazyTensor>(op_inputs, op, std::move(tensor_spec));
+    const std::vector<std::shared_ptr<LazyTensor>>& op_inputs,
+    const LazyOperationPtr& op,
+    const TensorSpec& tensor_spec) {
+    return std::make_shared<LazyTensor>(op_inputs, op, tensor_spec);
 }
 
 std::shared_ptr<LazyTensor> LazyTensor::make_materialized_tensor(
@@ -64,14 +57,12 @@ std::vector<std::shared_ptr<LazyTensor>> LazyTensor::make_lazy_tensors(
 LazyTensor::LazyTensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor) :
     op_inputs_({}),
     op_(nullptr),
-    tensor_spec_(metal_tensor.tensor_spec()),
+    tensor_metadata_(metal_tensor.tensor_spec(), metal_tensor.device(), metal_tensor.storage_type()),
     siblings_({}),
     materialized_outputs_({metal_tensor}),
     materialized_output_idx_(0),
-    state_(LazyTensorState::MATERIALIZED),
-    id_(GraphUtils::get_available_lazy_tensor_id()),
-    device_(metal_tensor.device()),
-    storage_type_(metal_tensor.storage_type()) {}
+    state_(LazyTensorState::EVALUATED),
+    id_(GraphUtils::get_available_lazy_tensor_id()) {}
 
 // Getters
 
@@ -86,16 +77,16 @@ const tt::tt_metal::metal_tensor::Tensor& LazyTensor::materialized_tensor() cons
 tt::tt_metal::metal_tensor::Tensor& LazyTensor::materialized_tensor() {
     return materialized_outputs_[materialized_output_idx_];
 }
-const TensorSpec& LazyTensor::tensor_spec() const { return tensor_spec_.value(); }
+const TensorSpec& LazyTensor::tensor_spec() const { return tensor_metadata_.tensor_spec_.value(); }
 LazyTensorState LazyTensor::state() const { return state_; }
 LazyTensorId LazyTensor::id() const { return id_; }
-bool LazyTensor::is_materialized() const { return state_ == LazyTensorState::MATERIALIZED; }
+bool LazyTensor::is_materialized() const { return state_ == LazyTensorState::EVALUATED; }
 const LazyTensor::LazyOperationPtr& LazyTensor::op() const { return op_; }
-tt::tt_metal::distributed::MeshDevice* LazyTensor::device() const { return device_; }
-tt::tt_metal::StorageType LazyTensor::storage_type() const { return storage_type_; }
+tt::tt_metal::distributed::MeshDevice* LazyTensor::device() const { return tensor_metadata_.device_; }
+tt::tt_metal::StorageType LazyTensor::storage_type() const { return tensor_metadata_.storage_type_; }
 
-void LazyTensor::materialize() {
-    if (state_ == LazyTensorState::MATERIALIZED || state_ == LazyTensorState::SCHEDULED) {
+void LazyTensor::evaluate() {
+    if (state_ == LazyTensorState::EVALUATED || state_ == LazyTensorState::SCHEDULED) {
         return;
     }
 
@@ -112,12 +103,12 @@ void LazyTensor::materialize() {
     }
 
     materialized_outputs_ = op_->invoke();
-    state_ = LazyTensorState::MATERIALIZED;
+    state_ = LazyTensorState::EVALUATED;
     // Now update siblings' materialized tensors
     for (auto& sibling : siblings_) {
         // TODO: Make sure that this is not expensive copy
         sibling->materialized_outputs_ = materialized_outputs_;
-        sibling->state_ = LazyTensorState::MATERIALIZED;
+        sibling->state_ = LazyTensorState::EVALUATED;
     }
 }
 
@@ -126,8 +117,29 @@ void LazyTensor::set_materialized_output_idx(size_t idx) { materialized_output_i
 void LazyTensor::set_state(LazyTensorState state) { state_ = state; }
 
 void LazyTensor::set_op_inputs(const std::vector<std::shared_ptr<LazyTensor>>& new_inputs) { op_inputs_ = new_inputs; }
-
 void LazyTensor::set_op(const LazyOperationPtr& new_op) { op_ = new_op; }
+
+// ======================= LazyTensor::TensorMetadata =======================
+LazyTensor::TensorMetadata::TensorMetadata(
+    const TensorSpec& tensor_spec,
+    tt::tt_metal::distributed::MeshDevice* device,
+    tt::tt_metal::StorageType storage_type) :
+    tensor_spec_(tensor_spec), device_(device), storage_type_(storage_type) {}
+
+LazyTensor::TensorMetadata::TensorMetadata(
+    const TensorSpec& tensor_spec, const std::vector<std::shared_ptr<LazyTensor>>& op_inputs) :
+    tensor_spec_(tensor_spec) {
+    // Inherit device and storage_type from first input tensor
+    // TODO: Is this correct though?
+    if (!op_inputs.empty() && op_inputs[0]) {
+        device_ = op_inputs[0]->device();
+        storage_type_ = op_inputs[0]->storage_type();
+    } else {
+        // Default values when no inputs
+        device_ = nullptr;
+        storage_type_ = tt::tt_metal::StorageType::DEVICE;
+    }
+}
 
 //
 }  // namespace ttnn::experimental::lazy
