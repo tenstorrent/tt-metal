@@ -657,7 +657,8 @@ void append_worker_to_fabric_edm_sender_rt_args(
     std::ranges::copy(values, std::back_inserter(args_out));
 }
 
-size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx) {
+size_t log_worker_to_fabric_edm_sender_rt_args(
+    const std::vector<uint32_t>& args [[maybe_unused]], size_t starting_arg_idx) {
     log_trace(tt::LogOp, "Worker to fabric EDM Sender has {} RT Args: {}", args.size(), args);
     log_trace(tt::LogOp, "arg[{}]: edm_noc_xy {}", starting_arg_idx, args[starting_arg_idx++]);
     log_trace(tt::LogOp, "arg[{}]: edm_buffer_base_addr {}", starting_arg_idx, args[starting_arg_idx++]);
