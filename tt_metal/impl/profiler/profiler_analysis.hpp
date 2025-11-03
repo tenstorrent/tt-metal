@@ -6,12 +6,12 @@
 
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 #include <string>
 #include <nlohmann/json.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
+#include <tt-metalium/profiler_types.hpp>
 #include <tt_stl/assert.hpp>
 #include "thread_pool.hpp"
 
@@ -42,35 +42,6 @@ inline const AnalysisMarkerTypes AnalysisMarkerTypesAny = {
     tracy::TTDeviceMarkerType::TS_EVENT};
 
 using AnalysisMarkerNameKeywords = std::unordered_set<tracy::MarkerDetails::MarkerNameKeyword>;
-
-struct OpId {
-    uint64_t runtime_id = tracy::TTDeviceMarker::INVALID_NUM;
-    uint64_t trace_id = tracy::TTDeviceMarker::INVALID_NUM;
-    uint64_t trace_id_counter = tracy::TTDeviceMarker::INVALID_NUM;
-
-    bool operator==(const OpId& other) const {
-        return runtime_id == other.runtime_id && trace_id == other.trace_id &&
-               trace_id_counter == other.trace_id_counter;
-    }
-
-    bool operator<(const OpId& other) const {
-        if (runtime_id != other.runtime_id) {
-            return runtime_id < other.runtime_id;
-        }
-        if (trace_id != other.trace_id) {
-            return trace_id < other.trace_id;
-        }
-        return trace_id_counter < other.trace_id_counter;
-    }
-};
-
-struct OpIdHasher {
-    std::size_t operator()(const OpId& id) const {
-        return std::hash<uint64_t>{}(id.runtime_id) ^ (std::hash<uint64_t>{}(id.trace_id) << 1) ^
-               (std::hash<uint64_t>{}(id.trace_id_counter) << 2);
-    }
-};
-
 struct AnalysisResultsConfig {
     std::string analysis_name;
     bool display_start_and_end_timestamps = false;
@@ -79,37 +50,8 @@ struct AnalysisResultsConfig {
 };
 
 struct AnalysisResults {
-    struct SingleResult {
-        uint64_t start_timestamp = UINT64_MAX;
-        uint64_t end_timestamp = 0;
-        uint64_t duration = 0;
-
-        bool operator==(const SingleResult& other) const {
-            return start_timestamp == other.start_timestamp && end_timestamp == other.end_timestamp &&
-                   duration == other.duration;
-        }
-
-        bool operator!=(const SingleResult& other) const { return !(*this == other); }
-
-        bool operator<(const SingleResult& other) const {
-            if (start_timestamp != other.start_timestamp) {
-                return start_timestamp < other.start_timestamp;
-            }
-            if (end_timestamp != other.end_timestamp) {
-                return end_timestamp < other.end_timestamp;
-            }
-            return duration < other.duration;
-        }
-    };
-
-    static inline const SingleResult INVALID_SINGLE_RESULT = {
-        .start_timestamp = UINT64_MAX,
-        .end_timestamp = 0,
-        .duration = 0,
-    };
-
     AnalysisResultsConfig results_config;
-    std::unordered_map<OpId, SingleResult, OpIdHasher> results_per_op_id;
+    std::unordered_map<OpId, OpSingleAnalysisResult> results_per_op_id;
 };
 
 struct AnalysisStartEndConfig {
@@ -136,7 +78,7 @@ struct OpsPerfResults {
             uint32_t num_available_worker_cores = 0;
         };
         OpMetaData op_meta_data;
-        std::vector<AnalysisResults::SingleResult> analysis_results;
+        std::vector<OpSingleAnalysisResult> analysis_results;
     };
 
     std::vector<AnalysisResultsConfig> analysis_results_configs;

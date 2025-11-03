@@ -14,6 +14,19 @@
 #include "impl/context/metal_context.hpp"
 #include "profiler_analysis.hpp"
 #include "profiler_state_manager.hpp"
+#include "profiler_types.hpp"
+
+namespace std {
+std::size_t hash<tt::tt_metal::OpId>::operator()(const tt::tt_metal::OpId& id) const {
+    std::hash<uint64_t> hasher;
+    std::size_t hash_value = 0;
+    constexpr std::size_t hash_combine_prime = 0x9e3779b9;
+    hash_value ^= hasher(id.runtime_id) + hash_combine_prime + (hash_value << 6) + (hash_value >> 2);
+    hash_value ^= hasher(id.trace_id) + hash_combine_prime + (hash_value << 6) + (hash_value >> 2);
+    hash_value ^= hasher(id.trace_id_counter) + hash_combine_prime + (hash_value << 6) + (hash_value >> 2);
+    return hash_value;
+}
+};  // namespace std
 
 namespace tracy {
 NLOHMANN_JSON_SERIALIZE_ENUM(
@@ -38,6 +51,58 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
 namespace tt {
 
 namespace tt_metal {
+
+// INVALID_NUM_OP_ID and INVALID_NUM must be equal to ensure proper translation between TTDeviceMarker IDs and OpId.
+// INVALID_NUM cannot be used directly because OpId is exposed in the public API, and INVALID_NUM is declared in the
+// Tracy submodule which should not be exposed.
+static_assert(tt::tt_metal::INVALID_NUM_OP_ID == tracy::TTDeviceMarker::INVALID_NUM);
+
+static inline const OpSingleAnalysisResult OP_INVALID_SINGLE_ANALYSIS_RESULT = {
+    .start_timestamp = UINT64_MAX,
+    .end_timestamp = 0,
+    .duration = 0,
+};
+
+bool OpSingleAnalysisResult::operator<(const OpSingleAnalysisResult& other) const {
+    if (start_timestamp != other.start_timestamp) {
+        return start_timestamp < other.start_timestamp;
+    }
+    if (end_timestamp != other.end_timestamp) {
+        return end_timestamp < other.end_timestamp;
+    }
+    return duration < other.duration;
+}
+
+bool OpSingleAnalysisResult::operator==(const OpSingleAnalysisResult& other) const {
+    return start_timestamp == other.start_timestamp && end_timestamp == other.end_timestamp &&
+           duration == other.duration;
+}
+
+bool OpSingleAnalysisResult::operator!=(const OpSingleAnalysisResult& other) const { return !(*this == other); }
+
+bool OpId::operator==(const OpId& other) const {
+    return runtime_id == other.runtime_id && trace_id == other.trace_id && trace_id_counter == other.trace_id_counter;
+}
+
+bool OpId::operator<(const OpId& other) const {
+    if (runtime_id != other.runtime_id) {
+        return runtime_id < other.runtime_id;
+    }
+    if (trace_id != other.trace_id) {
+        return trace_id < other.trace_id;
+    }
+    return trace_id_counter < other.trace_id_counter;
+}
+
+bool OpAnalysisData::operator<(const OpAnalysisData& other) const {
+    TT_ASSERT(this->op_analyses_results.find("DEVICE FW DURATION [ns]") != this->op_analyses_results.end());
+    TT_ASSERT(other.op_analyses_results.find("DEVICE FW DURATION [ns]") != other.op_analyses_results.end());
+
+    const OpSingleAnalysisResult& this_fw_duration_analysis = this->op_analyses_results.at("DEVICE FW DURATION [ns]");
+    const OpSingleAnalysisResult& other_fw_duration_analysis = other.op_analyses_results.at("DEVICE FW DURATION [ns]");
+
+    return this_fw_duration_analysis < other_fw_duration_analysis;
+}
 
 bool matches_start_end_risc(tracy::RiscType risc_type, const AnalysisRiscTypes& config_risc_types) {
     return config_risc_types.find(risc_type) != config_risc_types.end();
@@ -81,24 +146,23 @@ AnalysisResults parse_duration(
     TT_FATAL(analysis_config.type == AnalysisType::OP_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
 
     AnalysisResults analysis_results;
-    std::unordered_map<OpId, AnalysisResults::SingleResult, OpIdHasher>& results_per_op_id =
-        analysis_results.results_per_op_id;
+    std::unordered_map<OpId, OpSingleAnalysisResult>& results_per_op_id = analysis_results.results_per_op_id;
     ChipId device_id = -1;
 
     for (uint32_t i = 0; i < markers.size(); ++i) {
         const auto& marker_ref = markers[i];
         const tracy::TTDeviceMarker& marker = marker_ref.get();
         const OpId op_id = {marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
-        auto [op_id_results_it, _] = results_per_op_id.try_emplace(op_id, AnalysisResults::INVALID_SINGLE_RESULT);
-        AnalysisResults::SingleResult& op_results = op_id_results_it->second;
+        auto [op_id_results_it, _] = results_per_op_id.try_emplace(op_id, OP_INVALID_SINGLE_ANALYSIS_RESULT);
+        OpSingleAnalysisResult& op_results = op_id_results_it->second;
 
         if (matches_start_end_config(marker, analysis_config.start_config)) {
-            if (op_results == AnalysisResults::INVALID_SINGLE_RESULT) {
+            if (op_results == OP_INVALID_SINGLE_ANALYSIS_RESULT) {
                 op_results.start_timestamp = marker.timestamp;
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
-            if (op_results != AnalysisResults::INVALID_SINGLE_RESULT) {
+            if (op_results != OP_INVALID_SINGLE_ANALYSIS_RESULT) {
                 op_results.end_timestamp = marker.timestamp;
             }
         }
@@ -110,7 +174,7 @@ AnalysisResults parse_duration(
     }
 
     for (auto& [_, result] : results_per_op_id) {
-        if (result != AnalysisResults::INVALID_SINGLE_RESULT) {
+        if (result != OP_INVALID_SINGLE_ANALYSIS_RESULT) {
             TT_ASSERT(result.start_timestamp <= result.end_timestamp);
             const int chip_frequency_mhz =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device_id);
@@ -130,7 +194,7 @@ std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> getMetaDataForOp
 
     std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> op_id_to_meta_data;
 
-    std::unordered_map<OpId, std::unordered_set<CoreCoord>, OpIdHasher> fw_cores_per_op_id;
+    std::unordered_map<OpId, std::unordered_set<CoreCoord>> fw_cores_per_op_id;
     for (const auto& marker_ref : markers) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
         const OpId op_id = {marker.runtime_host_id, marker.trace_id, marker.trace_id_counter};
@@ -220,7 +284,7 @@ OpsPerfResults generatePerfResultsForOps(
 
         for (const AnalysisResults& analysis_result : analysis_results) {
             TT_ASSERT(analysis_result.results_per_op_id.find(op_id) != analysis_result.results_per_op_id.end());
-            const AnalysisResults::SingleResult& single_result = analysis_result.results_per_op_id.at(op_id);
+            const OpSingleAnalysisResult& single_result = analysis_result.results_per_op_id.at(op_id);
             op_perf_results.analysis_results.push_back(single_result);
         }
         TT_ASSERT(op_perf_results.analysis_results.size() == analysis_results_configs.size());
@@ -248,18 +312,18 @@ void writeOpsPerfResultsToCSV(const OpsPerfResults& ops_perf_results, const std:
             std::to_string(op_perf_results.op_meta_data.num_available_worker_cores);
 
         for (uint32_t i = 0; i < op_perf_results.analysis_results.size(); i++) {
-            const AnalysisResults::SingleResult& analysis_result = op_perf_results.analysis_results[i];
+            const OpSingleAnalysisResult& analysis_result = op_perf_results.analysis_results[i];
             const AnalysisResultsConfig& analysis_result_config = ops_perf_results.analysis_results_configs[i];
-            results_string_per_op_id[op_id] += "," + (analysis_result == AnalysisResults::INVALID_SINGLE_RESULT
-                                                          ? ""
-                                                          : std::to_string(analysis_result.duration));
+            results_string_per_op_id[op_id] +=
+                "," +
+                (analysis_result == OP_INVALID_SINGLE_ANALYSIS_RESULT ? "" : std::to_string(analysis_result.duration));
             if (analysis_result_config.display_start_and_end_timestamps) {
                 results_string_per_op_id[op_id] += "," +
-                                                   (analysis_result == AnalysisResults::INVALID_SINGLE_RESULT
+                                                   (analysis_result == OP_INVALID_SINGLE_ANALYSIS_RESULT
                                                         ? ""
                                                         : std::to_string(analysis_result.start_timestamp)) +
                                                    "," +
-                                                   (analysis_result == AnalysisResults::INVALID_SINGLE_RESULT
+                                                   (analysis_result == OP_INVALID_SINGLE_ANALYSIS_RESULT
                                                         ? ""
                                                         : std::to_string(analysis_result.end_timestamp));
             }

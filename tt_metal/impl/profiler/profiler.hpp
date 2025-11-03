@@ -68,23 +68,6 @@ struct FabricEventMarkers {
     std::optional<tracy::TTDeviceMarker> fabric_mux_marker;
 };
 
-struct OpAnalysisData {
-    OpId op_id;
-    std::unordered_map<std::string, AnalysisResults::SingleResult> op_analyses_results;
-
-    bool operator<(const OpAnalysisData& other) const {
-        TT_ASSERT(this->op_analyses_results.find("DEVICE FW DURATION [ns]") != this->op_analyses_results.end());
-        TT_ASSERT(other.op_analyses_results.find("DEVICE FW DURATION [ns]") != other.op_analyses_results.end());
-
-        const AnalysisResults::SingleResult& this_fw_duration_analysis =
-            this->op_analyses_results.at("DEVICE FW DURATION [ns]");
-        const AnalysisResults::SingleResult& other_fw_duration_analysis =
-            other.op_analyses_results.at("DEVICE FW DURATION [ns]");
-
-        return this_fw_duration_analysis < other_fw_duration_analysis;
-    }
-};
-
 class DeviceProfiler {
 private:
     // Device architecture
