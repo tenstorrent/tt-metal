@@ -151,19 +151,10 @@ public:
 
         // Use the new ControlPlane validation API - always skip on mismatch
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-        try {
-            if (!control_plane.is_fabric_config_valid(new_fabric_config)) {
-                log_warning(tt::LogTest, "Fabric configuration validation failed - can't open device");
-                return false;
-            }
-        } catch (const std::exception& e) {
-            log_warning(
-                tt::LogTest,
-                "Fabric configuration validation threw exception: {} - can't open device",
-                e.what());
+        if (!control_plane.is_fabric_config_valid(new_fabric_config)) {
+            log_warning(tt::LogTest, "Fabric configuration validation failed - can't open device");
             return false;
         }
-
 
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_) {

@@ -202,7 +202,7 @@ public:
     get_global_logical_bindings() const;
 
     // Check if the physical system supports the specified fabric configuration
-    // Returns true if valid, false otherwise
+    // Returns true if valid, false otherwise.
     bool is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const;
 
 private:
@@ -371,6 +371,7 @@ private:
 
     // Performance caches for frequently accessed data
     // Cache for faster asic_id to fabric_node_id lookup
+    // Valid for the lifetime of the physical_system_descriptor_; cleared when fabric context is reset
     mutable std::unordered_map<uint64_t, FabricNodeId> asic_id_to_fabric_node_cache_;
 
     // This method performs validation through assertions and exceptions.

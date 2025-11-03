@@ -1954,7 +1954,10 @@ FabricContext& ControlPlane::get_fabric_context() const {
     return *this->fabric_context_;
 }
 
-void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+void ControlPlane::clear_fabric_context() {
+    this->fabric_context_.reset(nullptr);
+    asic_id_to_fabric_node_cache_.clear();
+}
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
@@ -2817,8 +2820,13 @@ bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_con
     };
 
     if (torus_fabric_configs.count(fabric_config)) {
-        validate_torus_setup(fabric_config);
-        return true;  // Validation passed if no exception was thrown
+        try {
+            validate_torus_setup(fabric_config);
+            return true;  // Validation passed if no exception was thrown
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Fabric configuration validation failed: {}", e.what());
+            return false;
+        }
     }
 
     // Non-torus configurations are valid by default since we always have at least mesh topology,
