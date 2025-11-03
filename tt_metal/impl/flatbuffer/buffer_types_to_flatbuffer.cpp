@@ -5,6 +5,7 @@
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
+#include "impl/buffers/buffer_distribution_spec.hpp"
 
 namespace tt::tt_metal {
 
@@ -111,8 +112,8 @@ flatbuffers::Offset<flatbuffer::BufferDistributionSpec> to_flatbuffer(
     auto flat_shard_shape =
         builder.CreateVector(spec->shard_shape_in_pages().view().data(), spec->shard_shape_in_pages().rank());
     std::vector<flatbuffers::Offset<flatbuffer::CoreCoord>> flat_cores;
-    flat_cores.reserve(spec->cores().size());
-    for (const auto& core : spec->cores()) {
+    flat_cores.reserve(spec->impl()->cores().size());
+    for (const auto& core : spec->impl()->cores()) {
         flat_cores.push_back(flatbuffer::CreateCoreCoord(builder, core.x, core.y));
     }
     return flatbuffer::CreateBufferDistributionSpec(

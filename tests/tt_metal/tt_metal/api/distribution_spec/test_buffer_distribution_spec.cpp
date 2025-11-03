@@ -12,6 +12,8 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 
+#include "impl/buffers/buffer_distribution_spec.hpp"
+
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
 constexpr uint32_t PADDING = tt::tt_metal::UncompressedBufferPageMapping::PADDING;
@@ -94,7 +96,7 @@ TEST_P(MeshBufferAllocationTests, Allocation) {
     const auto shard_view = mesh_buffer->get_device_buffer(mesh_coordinate);
 
     // Check that the stored cores in local device buffer matches expected cores to be used
-    auto page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
+    auto page_mapping = shard_view->buffer_distribution_spec()->impl()->compute_page_mapping();
     EXPECT_EQ(page_mapping.all_cores, params.expected.cores);
 
     /* These are the params allocator cares about; check all of them */
@@ -285,7 +287,7 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
         // changed to another dtype
         const auto* src_ptr = static_cast<const uint8_t*>(src.data());
 
-        auto buffer_page_mapping = shard_view->buffer_distribution_spec()->compute_page_mapping();
+        auto buffer_page_mapping = shard_view->buffer_distribution_spec()->impl()->compute_page_mapping();
         const auto& cores = buffer_page_mapping.all_cores;
         const auto& page_mapping = buffer_page_mapping.core_host_page_indices;
 

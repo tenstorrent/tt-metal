@@ -9,6 +9,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_pimpl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec_pimpl.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_page_mapping.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_accessor_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dispatch.cpp

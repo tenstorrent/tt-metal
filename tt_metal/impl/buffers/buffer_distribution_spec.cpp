@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "buffer_distribution_spec.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
+#include "impl/buffers/buffer_distribution_spec.hpp"
 
 #include <algorithm>
 #include <utility>
@@ -137,7 +138,7 @@ std::pair<Shape, Shape> squeeze_shape_ranks(const Shape& tensor_shape, const Sha
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
+BufferDistributionSpec BufferDistributionSpecImpl::from_shard_spec(
     tt::tt_metal::Shape tensor_shape,
     tt::tt_metal::Shape shard_shape,
     tt::tt_metal::Shape2D page_shape,
@@ -150,7 +151,7 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
         tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
 }
 
-BufferDistributionSpec::BufferDistributionSpec(
+BufferDistributionSpecImpl::BufferDistributionSpecImpl(
     const tt::tt_metal::Shape& tensor_shape_in_pages,
     const tt::tt_metal::Shape& shard_shape_in_pages,
     const CoreRangeSet& core_range_set,
@@ -171,7 +172,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     init_precomputed_data();
 }
 
-BufferDistributionSpec::BufferDistributionSpec(
+BufferDistributionSpecImpl::BufferDistributionSpecImpl(
     const Shape& tensor_shape_in_pages, const Shape& shard_shape_in_pages, std::vector<CoreCoord> cores) :
     cores_(std::move(cores)) {
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
@@ -187,7 +188,31 @@ BufferDistributionSpec::BufferDistributionSpec(
     init_precomputed_data();
 }
 
-std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
+// Copy constructor
+BufferDistributionSpecImpl::BufferDistributionSpecImpl(const BufferDistributionSpecImpl& other) :
+    tensor_shape_in_pages_(other.tensor_shape_in_pages_),
+    shard_shape_in_pages_(other.shard_shape_in_pages_),
+    cores_(other.cores_),
+    core_groups_(other.core_groups_),
+    cores_with_data_(other.cores_with_data_),
+    shard_volume_(other.shard_volume_),
+    num_shards_(other.num_shards_) {}
+
+// Copy assignment operator
+BufferDistributionSpecImpl& BufferDistributionSpecImpl::operator=(const BufferDistributionSpecImpl& other) {
+    if (this != &other) {
+        tensor_shape_in_pages_ = other.tensor_shape_in_pages_;
+        shard_shape_in_pages_ = other.shard_shape_in_pages_;
+        cores_ = other.cores_;
+        core_groups_ = other.core_groups_;
+        cores_with_data_ = other.cores_with_data_;
+        shard_volume_ = other.shard_volume_;
+        num_shards_ = other.num_shards_;
+    }
+    return *this;
+}
+
+std::vector<CoreCoord> BufferDistributionSpecImpl::compute_core_list(
     const Shape& tensor_shape_in_pages,
     const Shape& shard_shape_in_pages,
     const CoreRangeSet& core_range_set,
@@ -225,29 +250,31 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
         trimmed_core_grid, trimmed_core_grid.size(), shard_orientation == ShardOrientation::ROW_MAJOR);
 }
 
-size_t BufferDistributionSpec::num_shards() const { return num_shards_; }
+size_t BufferDistributionSpecImpl::num_shards() const { return num_shards_; }
 
-size_t BufferDistributionSpec::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
+size_t BufferDistributionSpecImpl::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
 
-size_t BufferDistributionSpec::max_num_shards_per_core() const {
+size_t BufferDistributionSpecImpl::max_num_shards_per_core() const {
     if (cores_.empty()) {
         return 0;
     }
     return (num_shards() + cores_.size() - 1) / cores_.size();
 }
 
-size_t BufferDistributionSpec::max_num_dev_pages_per_core() const { return max_num_shards_per_core() * shard_volume_; }
+size_t BufferDistributionSpecImpl::max_num_dev_pages_per_core() const {
+    return max_num_shards_per_core() * shard_volume_;
+}
 
-size_t BufferDistributionSpec::num_shards_per_core(size_t core_idx) const {
+size_t BufferDistributionSpecImpl::num_shards_per_core(size_t core_idx) const {
     return (num_shards() / num_cores()) + (core_idx < num_shards() % num_cores() ? 1 : 0);
 }
 
-size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
+size_t BufferDistributionSpecImpl::num_dev_pages_per_core(size_t core_idx) const {
     return num_shards_per_core(core_idx) * shard_volume_;
 }
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t>
-BufferDistributionSpec::core_groups_tuple() const {
+BufferDistributionSpecImpl::core_groups_tuple() const {
     return {
         core_groups_.cores_with_data.num_cores(),
         core_groups_.cores_with_data,
@@ -258,7 +285,7 @@ BufferDistributionSpec::core_groups_tuple() const {
     };
 }
 
-void BufferDistributionSpec::init_precomputed_data() {
+void BufferDistributionSpecImpl::init_precomputed_data() {
     shard_volume_ = shard_shape_in_pages_.volume();
     if (tensor_shape_in_pages_.volume() != 0) {
         num_shards_ = 1;

@@ -33,6 +33,7 @@
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
+#include "impl/buffers/buffer_distribution_spec.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -357,7 +358,7 @@ public:
         auto buffer_distribution_spec = tt::tt_metal::BufferDistributionSpec(
             Shape{num_cores, 1}, Shape{1, 1}, all_cores, tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
-        auto buffer_page_mapping = buffer_distribution_spec.compute_page_mapping();
+        auto buffer_page_mapping = buffer_distribution_spec.impl()->compute_page_mapping();
 
         DeviceLocalBufferConfig buffer_specs = {
             .page_size = size_bytes,
@@ -396,7 +397,7 @@ public:
         const auto& buffer_distribution_spec =
             mesh_buffer->device_local_config().sharding_args.buffer_distribution_spec();
         TT_FATAL(buffer_distribution_spec.has_value(), "Buffer distribution spec is not set");
-        const auto buffer_page_mapping = buffer_distribution_spec->compute_page_mapping();
+        const auto buffer_page_mapping = buffer_distribution_spec->impl()->compute_page_mapping();
 
         // Preallocate data buffer
         auto total_size = size_bytes * buffer_page_mapping.all_cores.size();

@@ -9,6 +9,7 @@
 #include <tt-metalium/distributed.hpp>
 
 #include "impl/buffers/buffer.hpp"
+#include "impl/buffers/buffer_distribution_spec.hpp"
 
 namespace {
 struct NDShardingParams {
@@ -55,7 +56,7 @@ struct NDShardingCoreInfoParams {
 
     size_t expected_max_num_shards_per_core = 0;
     std::vector<size_t> expected_num_shards_per_core;
-    BufferDistributionSpec::CoreGroups expected_groups;
+    BufferDistributionSpecImpl::CoreGroups expected_groups;
 };
 struct NDShardingSqueezeRankParams {
     Shape tensor_shape_pages;
@@ -332,14 +333,14 @@ TEST_P(NDShardingCoreInfoTests, TestCoreInfo) {
     BufferDistributionSpec dspec(
         params.shape_in_pages, params.shard_shape_in_pages, cores, ShardOrientation::ROW_MAJOR);
 
-    EXPECT_EQ(dspec.max_num_shards_per_core(), params.expected_max_num_shards_per_core);
-    EXPECT_EQ(dspec.num_cores(), params.grid_size.x * params.grid_size.y);
-    EXPECT_EQ(dspec.num_cores(), params.expected_num_shards_per_core.size());
-    for (size_t i = 0; i < dspec.num_cores(); i++) {
-        EXPECT_EQ(dspec.num_shards_per_core(i), params.expected_num_shards_per_core[i]);
+    EXPECT_EQ(dspec.impl()->max_num_shards_per_core(), params.expected_max_num_shards_per_core);
+    EXPECT_EQ(dspec.impl()->num_cores(), params.grid_size.x * params.grid_size.y);
+    EXPECT_EQ(dspec.impl()->num_cores(), params.expected_num_shards_per_core.size());
+    for (size_t i = 0; i < dspec.impl()->num_cores(); i++) {
+        EXPECT_EQ(dspec.impl()->num_shards_per_core(i), params.expected_num_shards_per_core[i]);
     }
 
-    const auto& core_groups = dspec.core_groups();
+    const auto& core_groups = dspec.impl()->core_groups();
     EXPECT_EQ(core_groups.cores_with_data, params.expected_groups.cores_with_data);
     EXPECT_EQ(core_groups.cores_in_group_1, params.expected_groups.cores_in_group_1);
     EXPECT_EQ(core_groups.cores_in_group_2, params.expected_groups.cores_in_group_2);
@@ -360,8 +361,9 @@ TEST_P(NDShardingSqueezeRankTests, TestSqueezeRank) {
 
     if (params.tensor_shape_pages.rank() == params.shard_shape_pages.rank()) {
         auto expected_page_mapping =
-            detail::compute_page_mapping(params.tensor_shape_pages, params.shard_shape_pages, dspec.cores());
-        EXPECT_EQ(dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
+            detail::compute_page_mapping(params.tensor_shape_pages, params.shard_shape_pages, dspec.impl()->cores());
+        EXPECT_EQ(
+            dspec.impl()->compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
     }
 }
 
@@ -416,9 +418,10 @@ TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
         iterate_shapes(tensor_shape, [&](const Shape& shard_shape) {
             BufferDistributionSpec dspec(tensor_shape, shard_shape, cores, ShardOrientation::ROW_MAJOR);
             auto expected_page_mapping =
-                tt::tt_metal::detail::compute_page_mapping(tensor_shape, shard_shape, dspec.cores());
+                tt::tt_metal::detail::compute_page_mapping(tensor_shape, shard_shape, dspec.impl()->cores());
             EXPECT_EQ(
-                dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
+                dspec.impl()->compute_page_mapping().core_host_page_indices,
+                expected_page_mapping.core_host_page_indices);
         });
     });
 }

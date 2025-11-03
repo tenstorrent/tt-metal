@@ -6,6 +6,8 @@
 
 #include <tt-metalium/device.hpp>
 
+#include "impl/buffers/buffer_distribution_spec.hpp"
+
 namespace tt::tt_metal {
 
 namespace {
@@ -17,7 +19,7 @@ void append_sharded_args(
     const auto& buffer_distribution_spec = buffer.buffer_distribution_spec().value();
     const auto& tensor_shape = buffer_distribution_spec.tensor_shape_in_pages();
     const auto& shard_shape = buffer_distribution_spec.shard_shape_in_pages();
-    const auto& bank_coords = buffer_distribution_spec.cores();
+    const auto& bank_coords = buffer_distribution_spec.impl()->cores();
 
     auto add_rank = args_config.test(tensor_accessor::ArgConfig::RuntimeRank) == is_runtime;
     auto add_num_banks = args_config.test(tensor_accessor::ArgConfig::RuntimeNumBanks) == is_runtime;

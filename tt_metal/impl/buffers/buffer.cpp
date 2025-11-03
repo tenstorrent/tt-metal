@@ -28,6 +28,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
+#include "impl/buffers/buffer_distribution_spec.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -198,7 +199,7 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
     }
 
     if (buffer.buffer_distribution_spec().has_value()) {
-        return buffer.buffer_distribution_spec()->compute_page_mapping();
+        return buffer.buffer_distribution_spec()->impl()->compute_page_mapping();
     }
 
     uint32_t num_cores = buffer.num_cores().value();
