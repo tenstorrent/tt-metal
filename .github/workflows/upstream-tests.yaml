@@ -333,6 +333,7 @@ jobs:
       - test-bh-image
       - test-bh-p300-image
       - test-bh-multicard-image
+      - test-bh-glx-image
     runs-on: ubuntu-latest
     outputs:
       images-to-push: ${{ steps.calculate-images.outputs.images-to-push }}
@@ -367,6 +368,7 @@ jobs:
             ["bh-loudbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}"
             ["bh-p300-image-tag"]="${{ needs.get-image-tags.outputs.bh-p300-image-tag }}"
             ["bh-qb-ge-image-tag"]="${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}"
+            ["bh-glx-image-tag"]="${{ needs.get-image-tags.outputs.bh-glx-image-tag }}"
           )
 
           # Get test job results
@@ -375,6 +377,7 @@ jobs:
             ["test-wh-6u-image"]="${{ needs.test-wh-6u-image.result }}"
             ["test-bh-multicard-image"]="${{ needs.test-bh-multicard-image.result }}"
             ["test-bh-p300-image"]="${{ needs.test-bh-p300-image.result }}"
+            ["test-bh-glx-image"]="${{ needs.test-bh-glx-image.result }}"
           )
 
           # Initialize array for images to push (optimized approach)
