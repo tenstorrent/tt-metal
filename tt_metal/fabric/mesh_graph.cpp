@@ -219,9 +219,12 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
                            : 0,  // Z set to the same number as xy if in black hole
     };
 
+    // Count total meshes including switches (switches are treated as meshes internally)
+    uint32_t total_mesh_count = mgd.all_meshes().size() + mgd.all_switches().size();
+
     // Make intramesh connectivity
     // NOTE: Not using MGD 2.0 Mesh graph because it currently does not support port direction
-    this->intra_mesh_connectivity_.resize(mgd.all_meshes().size());
+    this->intra_mesh_connectivity_.resize(total_mesh_count);
 
     // This is to make sure emtpy elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
@@ -229,6 +232,19 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         this->intra_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
     }
 
+    // Handle switches as meshes for intra-mesh connectivity
+    uint32_t next_mesh_id = mgd.all_meshes().size();
+    for (const auto& switch_inst : mgd.all_switches()) {
+        const auto& switch_instance = mgd.get_instance(switch_inst);
+        // Assign next available mesh_id to switch (after all regular meshes)
+        MeshId switch_mesh_id(next_mesh_id++);
+        switch_id_to_mesh_id_[SwitchId(switch_instance.local_id)] = switch_mesh_id;
+        mesh_id_to_switch_id_[switch_mesh_id] = SwitchId(switch_instance.local_id);
+        switch_ids_.push_back(SwitchId(switch_instance.local_id));
+        this->intra_mesh_connectivity_[*switch_mesh_id].resize(switch_instance.sub_instances.size());
+    }
+
+    // Handle intra-mesh connections (type "MESH")
     for (const auto& connection : mgd.connections_by_type("MESH")) {
         const auto& connection_data = mgd.get_connection(connection);
         const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
@@ -236,10 +252,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
 
         const auto& mesh_instance = mgd.get_instance(connection_data.parent_instance_id);
 
-        const MeshId src_mesh_id = MeshId(mesh_instance.local_id);
+        MeshId src_mesh_id;
+        if (mesh_instance.kind == NodeKind::Switch) {
+            src_mesh_id = switch_id_to_mesh_id_.at(SwitchId(mesh_instance.local_id));
+        } else {
+            src_mesh_id = MeshId(mesh_instance.local_id);
+        }
 
         const ChipId src_chip_id = src_instance.local_id;
-        const ChipId dst_chip_id = dst_instance.local_id;  // ONly expect one single dest chip
+        const ChipId dst_chip_id = dst_instance.local_id;  // Only expect one single dest chip
 
         RouterEdge router_edge{
             .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
@@ -254,12 +275,44 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         this->intra_mesh_connectivity_[*src_mesh_id][src_chip_id].insert({dst_chip_id, router_edge});
     }
 
-    this->inter_mesh_connectivity_.resize(mgd.all_meshes().size());
+    // Handle intra-switch connections (type "SWITCH")
+    for (const auto& connection : mgd.connections_by_type("SWITCH")) {
+        const auto& connection_data = mgd.get_connection(connection);
+        const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
+        const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);
+
+        const auto& switch_instance = mgd.get_instance(connection_data.parent_instance_id);
+        MeshId switch_mesh_id = switch_id_to_mesh_id_.at(SwitchId(switch_instance.local_id));
+
+        const ChipId src_chip_id = src_instance.local_id;
+        const ChipId dst_chip_id = dst_instance.local_id;  // Only expect one single dest chip
+
+        RouterEdge router_edge{
+            .port_direction = routing_direction_to_port_direction(connection_data.routing_direction),
+            .connected_chip_ids = std::vector<ChipId>(chip_spec_.num_eth_ports_per_direction, dst_chip_id),
+            .weight = 0,
+        };
+
+        if (this->intra_mesh_connectivity_[*switch_mesh_id].size() <= switch_instance.sub_instances.size()) {
+            this->intra_mesh_connectivity_[*switch_mesh_id].resize(switch_instance.sub_instances.size());
+        }
+
+        this->intra_mesh_connectivity_[*switch_mesh_id][src_chip_id].insert({dst_chip_id, router_edge});
+    }
+
+    this->inter_mesh_connectivity_.resize(total_mesh_count);
 
     // This is to make sure emtpy elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
         const auto& mesh_instance = mgd.get_instance(mesh);
         this->inter_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
+    }
+
+    // Fill inter-mesh connectivity for switches
+    for (const auto& switch_inst : mgd.all_switches()) {
+        const auto& switch_instance = mgd.get_instance(switch_inst);
+        MeshId switch_mesh_id = switch_id_to_mesh_id_.at(SwitchId(switch_instance.local_id));
+        this->inter_mesh_connectivity_[*switch_mesh_id].resize(switch_instance.sub_instances.size());
     }
 
     for (const auto& connection : mgd.connections_by_type("FABRIC")) {
@@ -274,19 +327,61 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
             const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
             const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
 
-            const MeshId src_mesh_id = MeshId(src_mesh_instance.local_id);
-            const MeshId dst_mesh_id = MeshId(dst_mesh_instance.local_id);
+            MeshId src_mesh_id;
+            MeshId dst_mesh_id;
+
+            // Map switch instances to mesh_ids
+            if (src_mesh_instance.kind == NodeKind::Switch) {
+                src_mesh_id = switch_id_to_mesh_id_.at(SwitchId(src_mesh_instance.local_id));
+            } else {
+                src_mesh_id = MeshId(src_mesh_instance.local_id);
+            }
+
+            if (dst_mesh_instance.kind == NodeKind::Switch) {
+                dst_mesh_id = switch_id_to_mesh_id_.at(SwitchId(dst_mesh_instance.local_id));
+            } else {
+                dst_mesh_id = MeshId(dst_mesh_instance.local_id);
+            }
 
             const ChipId src_chip_id = src_instance.local_id;
             const ChipId dst_chip_id = dst_instance.local_id;
 
             requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back(
                 {src_chip_id, dst_chip_id, connection_data.count});
+
+            // Track switch-to-mesh connections
+            if (src_mesh_instance.kind == NodeKind::Switch && dst_mesh_instance.kind == NodeKind::Mesh) {
+                switch_to_meshes_[SwitchId(src_mesh_instance.local_id)].push_back(dst_mesh_id);
+            }
+            if (dst_mesh_instance.kind == NodeKind::Switch && src_mesh_instance.kind == NodeKind::Mesh) {
+                switch_to_meshes_[SwitchId(dst_mesh_instance.local_id)].push_back(src_mesh_id);
+            }
         } else {
-            const MeshId src_mesh_id = MeshId(src_instance.local_id);
-            const MeshId dst_mesh_id = MeshId(dst_instance.local_id);
+            MeshId src_mesh_id;
+            MeshId dst_mesh_id;
+
+            // Map switch instances to mesh_ids
+            if (src_instance.kind == NodeKind::Switch) {
+                src_mesh_id = switch_id_to_mesh_id_.at(SwitchId(src_instance.local_id));
+            } else {
+                src_mesh_id = MeshId(src_instance.local_id);
+            }
+
+            if (dst_instance.kind == NodeKind::Switch) {
+                dst_mesh_id = switch_id_to_mesh_id_.at(SwitchId(dst_instance.local_id));
+            } else {
+                dst_mesh_id = MeshId(dst_instance.local_id);
+            }
 
             requested_intermesh_connections_[*src_mesh_id][*dst_mesh_id] = connection_data.count;
+
+            // Track switch-to-mesh connections
+            if (src_instance.kind == NodeKind::Switch && dst_instance.kind == NodeKind::Mesh) {
+                switch_to_meshes_[SwitchId(src_instance.local_id)].push_back(dst_mesh_id);
+            }
+            if (dst_instance.kind == NodeKind::Switch && src_instance.kind == NodeKind::Mesh) {
+                switch_to_meshes_[SwitchId(dst_instance.local_id)].push_back(src_mesh_id);
+            }
         }
     }
 
@@ -380,6 +475,78 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         for (std::uint32_t chip_id = 0; chip_id < (mesh_shape[0] * mesh_shape[1]); chip_id += mesh_shape[1]) {
             for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
                 mesh_edge_ports_to_chip_id_[*mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
+            }
+        }
+    }
+
+    // Populate switches as meshes (switches are treated as meshes internally)
+    for (const auto& switch_inst : mgd.all_switches()) {
+        const auto& switch_instance = mgd.get_instance(switch_inst);
+        TT_FATAL(
+            std::holds_alternative<const proto::SwitchDescriptor*>(switch_instance.desc),
+            "MeshGraph: Instance {} is not a switch",
+            switch_instance.name);
+        const auto& switch_desc = std::get<const proto::SwitchDescriptor*>(switch_instance.desc);
+
+        SwitchId switch_id(switch_instance.local_id);
+        MeshId switch_mesh_id = switch_id_to_mesh_id_.at(switch_id);
+        MeshShape switch_shape(
+            switch_desc->device_topology().dims().at(0), switch_desc->device_topology().dims().at(1));
+
+        // Switches are always single host, so host_shape is [1, 1]
+        MeshShape host_shape(1, 1);
+
+        // Populate mesh_host_ranks_ for switch (single host)
+        std::vector<MeshHostRankId> switch_host_ranks_values;
+        switch_host_ranks_values.push_back(MeshHostRankId{0});
+        this->mesh_host_ranks_[*switch_mesh_id] =
+            tt_metal::distributed::MeshContainer<MeshHostRankId>(host_shape, switch_host_ranks_values);
+
+        // Populate mesh_host_rank_coord_ranges_ for switch
+        this->mesh_host_rank_coord_ranges_.emplace(
+            std::make_pair(*switch_mesh_id, MeshHostRankId{0}),
+            MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(switch_shape[0] - 1, switch_shape[1] - 1)));
+
+        // Populate switch_to_chip_ids
+        std::vector<ChipId> chip_ids(switch_shape[0] * switch_shape[1]);
+        std::iota(chip_ids.begin(), chip_ids.end(), 0);
+        this->switch_to_chip_ids_.emplace(
+            switch_id, tt_metal::distributed::MeshContainer<ChipId>(switch_shape, chip_ids));
+        this->mesh_to_chip_ids_.emplace(
+            *switch_mesh_id, tt_metal::distributed::MeshContainer<ChipId>(switch_shape, chip_ids));
+
+        // Get the edge ports of each switch (same as mesh)
+        mesh_edge_ports_to_chip_id_.resize(
+            std::max(mesh_edge_ports_to_chip_id_.size(), static_cast<size_t>(*switch_mesh_id + 1)));
+        std::uint32_t chan_id = 0;
+        // North
+        for (std::uint32_t chip_id = 0; chip_id < switch_shape[1]; chip_id++) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::N, chan_id++}] = chip_id;
+            }
+        }
+        // South
+        chan_id = 0;
+        for (std::uint32_t chip_id = ((switch_shape[0] * switch_shape[1]) - switch_shape[1]);
+             chip_id < (switch_shape[0] * switch_shape[1]);
+             chip_id++) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::S, chan_id++}] = chip_id;
+            }
+        }
+        // East
+        chan_id = 0;
+        for (std::uint32_t chip_id = (switch_shape[1] - 1); chip_id < (switch_shape[0] * switch_shape[1]);
+             chip_id += switch_shape[1]) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::E, chan_id++}] = chip_id;
+            }
+        }
+        // West
+        chan_id = 0;
+        for (std::uint32_t chip_id = 0; chip_id < (switch_shape[0] * switch_shape[1]); chip_id += switch_shape[1]) {
+            for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
+                mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::W, chan_id++}] = chip_id;
             }
         }
     }
@@ -709,6 +876,45 @@ MeshCoordinateRange MeshGraph::get_coord_range(MeshId mesh_id, std::optional<Mes
 
 const IntraMeshConnectivity& MeshGraph::get_intra_mesh_connectivity() const { return intra_mesh_connectivity_; }
 const InterMeshConnectivity& MeshGraph::get_inter_mesh_connectivity() const { return inter_mesh_connectivity_; }
+
+std::vector<SwitchId> MeshGraph::get_switch_ids() const { return switch_ids_; }
+
+MeshId MeshGraph::get_mesh_id_for_switch(SwitchId switch_id) const {
+    auto it = switch_id_to_mesh_id_.find(switch_id);
+    TT_FATAL(it != switch_id_to_mesh_id_.end(), "Switch id {} not found", *switch_id);
+    return it->second;
+}
+
+std::vector<MeshId> MeshGraph::get_meshes_connected_to_switch(SwitchId switch_id) const {
+    auto it = switch_to_meshes_.find(switch_id);
+    if (it != switch_to_meshes_.end()) {
+        return it->second;
+    }
+    return {};
+}
+
+bool MeshGraph::is_mesh_connected_to_switch(MeshId mesh_id, SwitchId switch_id) const {
+    auto it = switch_to_meshes_.find(switch_id);
+    if (it != switch_to_meshes_.end()) {
+        const auto& meshes = it->second;
+        return std::find(meshes.begin(), meshes.end(), mesh_id) != meshes.end();
+    }
+    return false;
+}
+
+std::optional<SwitchId> MeshGraph::get_switch_for_mesh(MeshId mesh_id) const {
+    auto it = mesh_id_to_switch_id_.find(mesh_id);
+    if (it != mesh_id_to_switch_id_.end()) {
+        return it->second;
+    }
+    // Check if any switch connects to this mesh
+    for (const auto& [switch_id, meshes] : switch_to_meshes_) {
+        if (std::find(meshes.begin(), meshes.end(), mesh_id) != meshes.end()) {
+            return switch_id;
+        }
+    }
+    return std::nullopt;
+}
 
 std::vector<MeshId> MeshGraph::get_mesh_ids() const {
     std::vector<MeshId> mesh_ids;

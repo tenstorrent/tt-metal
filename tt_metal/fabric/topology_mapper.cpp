@@ -977,7 +977,6 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
             }
         }
     }
-
     // Build MeshContainer<MeshHostRankId> by row-major ordering of host tile ranges
     // Determine host grid using unique start rows/cols
     mesh_host_ranks_.clear();
@@ -1032,6 +1031,25 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
         }
         mesh_host_ranks_[*mesh_id] = MeshContainer<MeshHostRankId>(host_grid_shape, host_rank_values);
     }
+}
+
+HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
+    // Map switch_id to mesh_id and get hostname from mesh mapping
+    MeshId switch_mesh_id = mesh_graph_.get_mesh_id_for_switch(switch_id);
+
+    // Get all hosts for this mesh_id from the fabric node mapping
+    // Switches are single host, so we can get it from any ASIC in the switch
+    std::unordered_set<HostName> switch_hosts;
+    for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
+        if (fabric_node_id.mesh_id == switch_mesh_id) {
+            switch_hosts.insert(physical_system_descriptor_.get_host_name_for_asic(asic_id));
+        }
+    }
+
+    TT_FATAL(!switch_hosts.empty(), "Switch mesh_id {} not found in fabric node mapping", *switch_mesh_id);
+    TT_FATAL(switch_hosts.size() == 1, "Switch should have exactly one host, but found {}", switch_hosts.size());
+
+    return *switch_hosts.begin();
 }
 
 }  // namespace tt::tt_fabric

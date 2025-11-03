@@ -1141,4 +1141,280 @@ TEST(MeshGraphDescriptorTests, DirectionalConnections) {
     ASSERT_EQ(connections_from_mesh_1.size(), 0);
 }
 
+TEST(MeshGraphDescriptorTests, ParsesSwitchDescriptor) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+}
+
+TEST(MeshGraphDescriptorTests, SwitchInstanceCreation) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Check that switch instances are created
+    const auto& switch_instances = desc.all_switches();
+    EXPECT_EQ(switch_instances.size(), 1) << "Should have exactly 1 switch instance";
+
+    // Check switch instance properties
+    const auto& switch_instance = desc.get_instance(switch_instances[0]);
+    EXPECT_TRUE(desc.is_switch(switch_instance)) << "Instance should be a switch";
+    EXPECT_EQ(std::string(switch_instance.name), "SW0") << "Switch should have name SW0";
+    EXPECT_EQ(switch_instance.type, "SWITCH") << "Switch type should be SWITCH";
+    EXPECT_EQ(switch_instance.local_id, 0) << "Switch should have local_id 0";
+
+    // Check that switch has devices
+    EXPECT_EQ(switch_instance.sub_instances.size(), 8) << "Switch should have 2*4=8 devices";
+
+    // Check switch devices
+    for (LocalNodeId i = 0; i < 8; ++i) {
+        auto it = switch_instance.sub_instances_local_id_to_global_id.find(i);
+        ASSERT_TRUE(it != switch_instance.sub_instances_local_id_to_global_id.end())
+            << "Missing device local id " << i << " in switch";
+        const auto& dev = desc.get_instance(it->second);
+        EXPECT_EQ(dev.kind, NodeKind::Device);
+        EXPECT_EQ(std::string(dev.type), "DEVICE");
+        EXPECT_EQ(dev.local_id, i);
+    }
+}
+
+TEST(MeshGraphDescriptorTests, SwitchConnections) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 3 } }
+            channels: { count: 2 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Get switch instance
+    const auto& switch_instances = desc.all_switches();
+    ASSERT_EQ(switch_instances.size(), 1);
+    const auto& switch_instance = desc.get_instance(switch_instances[0]);
+    auto switch_device_2 = switch_instance.sub_instances_local_id_to_global_id.at(2);
+    auto switch_device_3 = switch_instance.sub_instances_local_id_to_global_id.at(3);
+
+    // Check connections from switch devices
+    const auto& connections_from_switch_dev_2 = desc.connections_by_source_device_id(switch_device_2);
+    const auto& connections_from_switch_dev_3 = desc.connections_by_source_device_id(switch_device_3);
+
+    EXPECT_GT(connections_from_switch_dev_2.size(), 0) << "Switch device 2 should have connections";
+    EXPECT_GT(connections_from_switch_dev_3.size(), 0) << "Switch device 3 should have connections";
+}
+
+TEST(MeshGraphDescriptorTests, SwitchValidationSingleHost) {
+    // Test that switch descriptor without host_topology is valid (single host implicit)
+    const std::string text_proto = R"proto(
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+        }
+
+        top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+}
+
+TEST(MeshGraphDescriptorTests, SwitchValidationInvalidDimensions) {
+    // Test validation fails for invalid switch dimensions
+    const std::string text_proto = R"proto(
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 0, 4 ] }  # Invalid: 0 dimension
+          channels: { count: 2 }
+        }
+
+        top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto")));
+}
+
+TEST(MeshGraphDescriptorTests, SwitchValidationInvalidChannels) {
+    // Test validation fails for invalid channel count
+    const std::string text_proto = R"proto(
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 0 }  # Invalid: 0 channels
+        }
+
+        top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto")));
+}
+
+TEST(MeshGraphDescriptorTests, SwitchExpressConnections) {
+    // Test switch with express connections
+    const std::string text_proto = R"proto(
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+          express_connections: { src: 0 dst: 4 }
+          express_connections: { src: 1 dst: 5 }
+        }
+
+        top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+}
+
+TEST(MeshGraphDescriptorTests, SwitchMixedWithMeshesInGraph) {
+    // Test that switches can be mixed with meshes in a graph via explicit connections
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto));
+
+    MeshGraphDescriptor desc(text_proto);
+
+    // Verify we have meshes and switches
+    EXPECT_EQ(desc.all_meshes().size(), 2) << "Should have 2 mesh instances";
+    EXPECT_EQ(desc.all_switches().size(), 1) << "Should have 1 switch instance";
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

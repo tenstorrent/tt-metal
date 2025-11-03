@@ -25,10 +25,12 @@ enum Architecture : int;
 class MeshGraphDescriptor;
 class MeshDescriptor;
 class GraphDescriptor;
+class SwitchDescriptor;
 class Channels;
 class NodeRef;
 class MeshRef;
 class GraphRef;
+class SwitchRef;
 enum Policy : int;
 enum RoutingDirection : int;
 }
@@ -38,15 +40,16 @@ using LocalNodeId = uint32_t;   // Scoped to parent (mesh_id, graph_id, device i
 using GlobalNodeId = uint32_t;  // Unique across the instantiated MGD
 using ConnectionId = uint32_t;
 
-enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2 };
+enum class NodeKind : uint8_t { Mesh = 0, Graph = 1, Device = 2, Switch = 3 };
 // NOTE: Instance Data and ConnectionData are subject to change as Physical discovery is implemented
 // These will be moved to Mesh Graph object once MGD 1.0 is deprecated
 struct InstanceData {
     LocalNodeId local_id;        // instance id from proto or computed device index
     std::string name;
     std::string type;
-    NodeKind kind; // Type of instance (mesh, graph, device)
-    std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*> desc; // Pointer to the descriptor that this instance is based on
+    NodeKind kind;  // Type of instance (mesh, graph, device, switch)
+    std::variant<const proto::MeshDescriptor*, const proto::GraphDescriptor*, const proto::SwitchDescriptor*>
+        desc;                                       // Pointer to the descriptor that this instance is based on
     std::unordered_set<GlobalNodeId> sub_instances; // direct list of child GlobalNodeIds
     std::unordered_map<LocalNodeId, GlobalNodeId> sub_instances_local_id_to_global_id; // child LocalId -> GlobalId
     std::vector<GlobalNodeId> hierarchy; // path from root using GlobalNodeIds
@@ -111,11 +114,12 @@ public:
     // Instance type checks
     bool is_graph(const InstanceData& instance) const { return instance.kind == NodeKind::Graph; }
     bool is_mesh(const InstanceData& instance) const { return instance.kind == NodeKind::Mesh; }
-
+    bool is_switch(const InstanceData& instance) const { return instance.kind == NodeKind::Switch; }
 
     // Typed enumeration
     const std::vector<GlobalNodeId>& all_meshes() const { return mesh_instances_; }
     const std::vector<GlobalNodeId>& all_graphs() const { return graph_instances_; }
+    const std::vector<GlobalNodeId>& all_switches() const { return switch_instances_; }
 
     // Queries
     const std::vector<GlobalNodeId>& instances_by_name(const std::string& name) const {
@@ -155,6 +159,7 @@ private:
     std::unique_ptr<const proto::MeshGraphDescriptor> proto_;
     std::unordered_map<std::string, const proto::MeshDescriptor*> mesh_desc_by_name_;
     std::unordered_map<std::string, const proto::GraphDescriptor*> graph_desc_by_name_;
+    std::unordered_map<std::string, const proto::SwitchDescriptor*> switch_desc_by_name_;
 
     // Global node table and typed stores
     std::unordered_map<GlobalNodeId, InstanceData> instances_;
@@ -166,6 +171,7 @@ private:
     std::vector<GlobalNodeId> device_instances_;
     std::vector<GlobalNodeId> mesh_instances_;
     std::vector<GlobalNodeId> graph_instances_;
+    std::vector<GlobalNodeId> switch_instances_;
     GlobalNodeId top_level_id_;
 
     // Connections
@@ -185,6 +191,7 @@ private:
     static void validate_architecture_consistency(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_channels(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_express_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
+    static void validate_switch_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_graph_descriptors(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
     static void validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& errors);
 
@@ -201,6 +208,7 @@ private:
     GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);
     GlobalNodeId populate_mesh_instance(const proto::MeshRef& mesh_ref, std::vector<GlobalNodeId>& hierarchy);
     GlobalNodeId populate_graph_instance(const proto::GraphRef& graph_ref, std::vector<GlobalNodeId>& hierarchy);
+    GlobalNodeId populate_switch_instance(const proto::SwitchRef& switch_ref, std::vector<GlobalNodeId>& hierarchy);
     GlobalNodeId populate_device_instance(LocalNodeId local_id, std::vector<GlobalNodeId>& hierarchy);
 
     // Populate Connections

@@ -7,6 +7,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <vector>
 
@@ -878,6 +879,129 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutesMGD2) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
         EXPECT_EQ(!path.empty(), true);
     }
+}
+
+TEST(MeshGraphValidation, TestSwitchMeshGraphInit) {
+    const std::filesystem::path switch_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
+
+    EXPECT_NO_THROW(MeshGraph mesh_graph(switch_mesh_graph_desc_path.string()));
+
+    MeshGraph mesh_graph(switch_mesh_graph_desc_path.string());
+
+    // Test switch query APIs
+    const auto& switch_ids = mesh_graph.get_switch_ids();
+    EXPECT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
+    EXPECT_EQ(*switch_ids[0], 0) << "Switch ID should be 0";
+
+    // Test mesh_id mapping for switch
+    MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(SwitchId{0});
+    EXPECT_GE(*switch_mesh_id, 0) << "Switch should have a mapped mesh_id";
+
+    // Test meshes connected to switch
+    const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(SwitchId{0});
+    EXPECT_EQ(connected_meshes.size(), 3) << "Switch should be connected to 3 meshes";
+
+    // Test mesh-to-switch connectivity queries
+    for (const auto& mesh_id : connected_meshes) {
+        EXPECT_TRUE(mesh_graph.is_mesh_connected_to_switch(mesh_id, SwitchId{0}))
+            << "Mesh " << *mesh_id << " should be connected to switch 0";
+
+        auto switch_for_mesh = mesh_graph.get_switch_for_mesh(mesh_id);
+        ASSERT_TRUE(switch_for_mesh.has_value()) << "Mesh " << *mesh_id << " should have a connected switch";
+        EXPECT_EQ(*switch_for_mesh.value(), 0) << "Mesh " << *mesh_id << " should be connected to switch 0";
+    }
+
+    // Test that switches are treated as meshes internally (have host ranks, chip IDs, etc.)
+    const auto& host_ranks = mesh_graph.get_host_ranks(switch_mesh_id);
+    EXPECT_EQ(host_ranks.size(), 1) << "Switch should have exactly 1 host (single host constraint)";
+
+    const auto& chip_ids = mesh_graph.get_chip_ids(switch_mesh_id);
+    EXPECT_EQ(chip_ids.size(), 8) << "Switch should have 2*4=8 chips";
+}
+
+TEST(MeshGraphValidation, TestSwitchMeshGraphQueryAPIs) {
+    // Create a simple test MGD with switches
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+          host_topology: { dims: [ 1, 1 ] }
+        }
+
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+        }
+
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 1 } }
+          instances: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
+            nodes: { switch: { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+            channels: { count: 2 }
+          }
+        }
+
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+
+    // Write to temporary file
+    const std::filesystem::path temp_file = std::filesystem::temp_directory_path() / "test_switch_mgd.textproto";
+    std::ofstream out(temp_file);
+    out << text_proto;
+    out.close();
+
+    MeshGraph mesh_graph(temp_file.string());
+
+    // Test switch query APIs
+    const auto& switch_ids = mesh_graph.get_switch_ids();
+    EXPECT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
+
+    SwitchId switch_id = switch_ids[0];
+    EXPECT_EQ(*switch_id, 0) << "Switch ID should be 0";
+
+    // Test mesh_id mapping
+    MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
+    EXPECT_GE(*switch_mesh_id, 0) << "Switch should have a mapped mesh_id";
+
+    // Test connected meshes
+    const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(switch_id);
+    EXPECT_EQ(connected_meshes.size(), 2) << "Switch should be connected to 2 meshes";
+
+    // Verify each mesh is connected to the switch
+    for (const auto& mesh_id : connected_meshes) {
+        EXPECT_TRUE(mesh_graph.is_mesh_connected_to_switch(mesh_id, switch_id))
+            << "Mesh " << *mesh_id << " should be connected to switch";
+
+        auto switch_for_mesh = mesh_graph.get_switch_for_mesh(mesh_id);
+        ASSERT_TRUE(switch_for_mesh.has_value()) << "Mesh " << *mesh_id << " should have a connected switch";
+        EXPECT_EQ(*switch_for_mesh.value(), *switch_id) << "Mesh " << *mesh_id << " should be connected to switch";
+    }
+
+    // Test that switch is treated as a mesh internally
+    const auto& host_ranks = mesh_graph.get_host_ranks(switch_mesh_id);
+    EXPECT_EQ(host_ranks.size(), 1) << "Switch should have exactly 1 host (single host constraint)";
+
+    const auto& chip_ids = mesh_graph.get_chip_ids(switch_mesh_id);
+    EXPECT_EQ(chip_ids.size(), 8) << "Switch should have 2*4=8 chips";
+
+    // Clean up
+    std::filesystem::remove(temp_file);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

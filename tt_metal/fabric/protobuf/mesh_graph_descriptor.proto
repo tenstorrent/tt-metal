@@ -8,10 +8,11 @@ package tt.tt_fabric.proto;
 // in-line next to the relevant types and fields.
 //
 // Quick orientation:
-// - An MGD has three parts:
+// - An MGD has four parts:
 //   1) mesh_descriptors: reusable mesh templates
-//   2) graph_descriptors: groupings/connectivity across meshes/graphs
-//   3) top_level_instance: single root NodeRef to instantiate
+//   2) switch_descriptors: reusable switch templates (single host external interconnects)
+//   3) graph_descriptors: groupings/connectivity across meshes/graphs/switches
+//   4) top_level_instance: single root NodeRef to instantiate
 //
 // Example (very small):
 //   mesh_descriptors {
@@ -34,13 +35,19 @@ message MeshGraphDescriptor {
     // channels.count, and host_topology.dims.
     repeated MeshDescriptor mesh_descriptors = 1;
 
-    // Optional logical groupings and connectivity across meshes/graphs.
-    // Each GraphDescriptor groups instances (all meshes OR all graphs) and defines
+    // Reusable switch templates (definitions) referenced by graphs and instances.
+    // Switches are single-host external interconnects between meshes.
+    // Required fields inside each SwitchDescriptor: name, arch, device_topology.dims,
+    // and channels.count. Note: switches do not have host_topology as they are always single host.
+    repeated SwitchDescriptor switch_descriptors = 4;
+
+    // Optional logical groupings and connectivity across meshes/graphs/switches.
+    // Each GraphDescriptor groups instances (all meshes OR all graphs OR all switches) and defines
     // connectivity either via shorthand graph_topology (+ usually channels) or via
     // explicit connections.
     repeated GraphDescriptor graph_descriptors = 2;
 
-    // Single root NodeRef to instantiate (mesh or graph instance).
+    // Single root NodeRef to instantiate (mesh, switch, or graph instance).
     // Exactly one root should be provided.
     NodeRef top_level_instance = 3;
 }
@@ -97,8 +104,56 @@ message MeshDescriptor {
 }
 
 // -----------------------------------------------------------------------------
+// SwitchDescriptor
+// Represents a single-host external interconnect device that connects multiple meshes.
+// Switches are always single host (no host_topology field needed).
+// Required: name, arch, device_topology.dims, channels.count.
+// Optional: express_connections.
+//
+// Example:
+//   switch_descriptors {
+//     name: "SW0"
+//     arch: WORMHOLE_B0
+//     device_topology { dims: [ 2, 4 ] }
+//     channels { count: 2 policy: STRICT }
+//   }
+//
+// Pitfalls:
+// - Use `name` as the descriptor identifier. References use switch_descriptor + switch_id.
+// - Ensure all dims > 0 and channels.count > 0.
+// - device_topology.dim_types must be the same size as device_topology.dims if specified.
+// - Switches are always single host (no host_topology field).
+// - Device indices for express links are linearized (row-major convention).
+message SwitchDescriptor {
+    // Logical identifier used in SwitchRef.switch_descriptor (e.g., "SW0").
+    string name = 1;
+
+    // Target device architecture for this switch. Valid values: WORMHOLE_B0, BLACKHOLE.
+    Architecture arch = 2;
+
+    // Device grid shape. `dims` required; `dim_types` optional per dimension (LINE/RING).
+    // When `dim_types` is omitted or shorter than `dims`, treat missing entries as LINE.
+    TorusTopology device_topology = 3;
+
+    // Required per-neighbor link count; optional Policy controls enforcement.
+    // If policy is omitted, treat as STRICT unless your control plane overrides this default.
+    Channels channels = 4;
+
+    message ExpressConnection {
+        // Explicit intra-switch express link from device `src` to device `dst`.
+        // `src`/`dst` are device indices in this switch (linearized, row-major convention).
+        int32 src = 1;
+
+        int32 dst = 2;
+    }
+
+    // Optional list of explicit intra-switch express links.
+    repeated ExpressConnection express_connections = 7;
+}
+
+// -----------------------------------------------------------------------------
 // GraphDescriptor
-// Groups instances of a single kind (all MeshRef OR all GraphRef) and defines
+// Groups instances of a single kind (all MeshRef OR all GraphRef OR all SwitchRef) and defines
 // connectivity among them.
 // Required: name, type, instances (uniform node kind).
 // Connectivity: choose ONE style
@@ -130,7 +185,7 @@ message MeshDescriptor {
 //   }
 //
 // Pitfalls:
-// - Do not mix meshes and graphs in the same `instances` list.
+// - Do not mix meshes, switches, and graphs in the same `instances` list.
 // - When using `graph_topology`, include `channels` to define edge multiplicity.
 // - `type` is a freeform grouping label (e.g., "POD", "SUPERPOD", "CLUSTER").
 // - If `instances` are GraphRefs, their referenced GraphDescriptors should share the
@@ -154,8 +209,8 @@ message GraphDescriptor {
 
 // -----------------------------------------------------------------------------
 // Node references (NodeRef)
-// Identify a mesh, a graph, or drill down to a specific device inside a mesh.
-// You assign instance ids (mesh_id/graph_id) in your textproto; use them
+// Identify a mesh, a switch, a graph, or drill down to a specific device inside a mesh/switch.
+// You assign instance ids (mesh_id/switch_id/graph_id) in your textproto; use them
 // consistently wherever referenced. These ids are user-assigned uint32 values.
 // Device indices are linearized (row-major convention).
 //
@@ -167,17 +222,17 @@ message GraphDescriptor {
 //     (0,0)->0, (0,1)->1, (0,2)->2, (1,0)->3, (1,1)->4, (1,2)->5
 //
 // Nested path semantics:
-// - A GraphRef can optionally narrow to a sub MeshRef (and optionally device) that
+// - A GraphRef can optionally narrow to a sub MeshRef/SwitchRef (and optionally device) that
 //   belongs to that graph. Deep nesting (graph->graph->mesh->device) is allowed.
-// - The nested MeshRef/GraphRef is interpreted in the context of the parent graph.
-// - device_id is only meaningful when the NodeRef resolves to a MeshRef. Do not set
+// - The nested MeshRef/SwitchRef/GraphRef is interpreted in the context of the parent graph.
+// - device_id is only meaningful when the NodeRef resolves to a MeshRef or SwitchRef. Do not set
 //   device_id for a bare GraphRef.
 //
 // Connectivity usage tips:
 // - In GraphDescriptor.connections
-//       - you can specify to the level of meshes/graphs to allow the ethernet connection to live on any device within the mesh/graph
-//       - you can specify to the level of devices to restrict the ethernet connection to a specific device within the mesh/graph
-//   Provide device_id to connect specific devices inside meshes.
+//       - you can specify to the level of meshes/switches/graphs to allow the ethernet connection to live on any device within the mesh/switch/graph
+//       - you can specify to the level of devices to restrict the ethernet connection to a specific device within the mesh/switch/graph
+//   Provide device_id to connect specific devices inside meshes or switches.
 // - When using GraphTopology (e.g., ALL_TO_ALL), also supply Channels to define the
 //   per-edge lane count and policy.
 //
@@ -187,6 +242,12 @@ message GraphDescriptor {
 //
 //   # Mesh device reference inside that instance (linearized device 3)
 //   mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 3 }
+//
+//   # Switch instance
+//   switch { switch_descriptor: "SW0" switch_id: 0 }
+//
+//   # Switch device reference inside that instance (linearized device 2)
+//   switch { switch_descriptor: "SW0" switch_id: 0 device_id: 2 }
 //
 //   # Graph instance
 //   graph { graph_descriptor: "G0" graph_id: 2 }
@@ -207,16 +268,18 @@ message GraphDescriptor {
 //   }
 //
 // Common pitfalls:
-// - Don't confuse descriptor identifiers: use MeshDescriptor.name/GraphDescriptor.name
-//   in references via mesh_descriptor/graph_descriptor; instance ids go in mesh_id/graph_id.
-// - Do not mix MeshRef and GraphRef types within a single GraphDescriptor.instances list.
-// - Only set device_id on MeshRef; not on GraphRef.
+// - Don't confuse descriptor identifiers: use MeshDescriptor.name/SwitchDescriptor.name/GraphDescriptor.name
+//   in references via mesh_descriptor/switch_descriptor/graph_descriptor; instance ids go in mesh_id/switch_id/graph_id.
+// - Do not mix MeshRef, SwitchRef, and GraphRef types within a single GraphDescriptor.instances list.
+// - Only set device_id on MeshRef or SwitchRef; not on GraphRef.
 // - Ensure dims and channels.count are positive; ensure device_id is within range.
 message NodeRef {
     oneof node_ref {
         MeshRef mesh = 1;
 
         GraphRef graph = 2;
+
+        SwitchRef switch = 3;
     }
 }
 
@@ -238,6 +301,17 @@ message MeshRef {
     int32 mesh_id = 2;
 
     // Optional device index within the mesh (linearized).
+    optional int32 device_id = 3;
+}
+
+message SwitchRef {
+    // Name of target SwitchDescriptor (must match `SwitchDescriptor.name`).
+    string switch_descriptor = 1;
+
+    // Instance index of the referenced switch.
+    int32 switch_id = 2;
+
+    // Optional device index within the switch (linearized).
     optional int32 device_id = 3;
 }
 
@@ -335,9 +409,9 @@ enum Policy {
 }
 
 // Connection defines an explicit edge between NodeRefs.
-// - nodes: typically exactly two NodeRefs (mesh or graph or nested down to device).
-//          Omit device_id to connect entire meshes/graphs; include device_id to target
-//          a specific device inside a mesh.
+// - nodes: typically exactly two NodeRefs (mesh, switch, or graph or nested down to device).
+//          Omit device_id to connect entire meshes/switches/graphs; include device_id to target
+//          a specific device inside a mesh or switch.
 // - channels: required; specifies ethernet lane count and policy for this edge.
 // - directional: optional; false (undirected) when omitted.
 // Examples:
@@ -354,6 +428,13 @@ enum Policy {
 //     nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 device_id: 3 } }
 //     channels { count: 2 }
 //     directional: false
+//   }
+//
+//   # Edge between a mesh and a switch:
+//   connection {
+//     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
+//     nodes { switch { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+//     channels { count: 2 }
 //   }
 message Connection {
     // Typically two NodeRefs; multi-endpoint not recommended unless explicitly supported.

@@ -52,6 +52,7 @@ namespace tt::tt_fabric {
 
 using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
+using SwitchId = tt::stl::StrongType<uint32_t, struct SwitchIdTag>;
 
 }  // namespace tt::tt_fabric
 namespace tt::tt_metal {

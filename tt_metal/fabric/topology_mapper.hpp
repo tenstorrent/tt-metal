@@ -142,6 +142,16 @@ public:
     MeshShape get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     /**
+     * @brief Get hostname for a switch
+     *
+     * Maps switch_id to mesh_id internally and retrieves the hostname from the mesh mapping.
+     *
+     * @param switch_id The switch ID to get hostname for
+     * @return HostName The hostname of the switch
+     */
+    HostName get_hostname_for_switch(SwitchId switch_id) const;
+
+    /**
      * @brief Get the coordinate range for the global mesh or a host's submesh
      *
      * When host_rank is not provided, returns the full logical mesh coordinate range (0..N-1, 0..M-1).
