@@ -153,7 +153,7 @@ void kernel_main() {
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
 
-            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+            cb_reserve_back(cb_id_act_row_major_bfloat16, 10 * act_block_num_tiles);
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
