@@ -50,7 +50,14 @@ struct Pool2D {
             tt::tt_metal::CBHandle raw_in_cb{};
             tt::tt_metal::CBHandle out_cb{};
             tt::tt_metal::CBHandle out_idx_cb{};
-            // MPWI-specific CBs for index tracking
+            tt::tt_metal::CBHandle in_scalar_cb_0{};
+            tt::tt_metal::CBHandle in_scalar_cb_1{};
+            tt::tt_metal::CBHandle clear_value_cb{};
+            tt::tt_metal::CBHandle in_reader_indices_cb{};
+            tt::tt_metal::CBHandle in_cb_0{};
+            tt::tt_metal::CBHandle in_cb_1{};
+            tt::tt_metal::CBHandle pre_tilize_cb{};
+            tt::tt_metal::CBHandle config_cb{};
             tt::tt_metal::CBHandle in_idx_cb{};
             tt::tt_metal::CBHandle pack_tmp_cb{};
             tt::tt_metal::CBHandle pack_idx_tmp_cb{};
