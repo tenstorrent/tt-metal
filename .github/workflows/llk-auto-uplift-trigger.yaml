@@ -589,6 +589,8 @@ jobs:
 
       - name: Auto-approve by codeowners
         if: success()
+        env:
+          GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
         run: |
           echo "🚀 Triggering auto-approval"
           gh workflow run "code-analysis.yaml" \
