@@ -29,6 +29,8 @@ auto fmt::formatter<CoreCoord>::format(const CoreCoord& core_coord, format_conte
     return fmt::format_to(ctx.out(), "{}", ss.str());
 }
 
+using tt::tt_metal::RelativeCoreCoord;
+
 std::string RelativeCoreCoord::str() const { return "(x=" + std::to_string(x) + ",y=" + std::to_string(y) + ")"; }
 
 CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const CoreCoord& grid_size) {
@@ -664,6 +666,8 @@ auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, fo
 
 namespace std {
 
+using tt::tt_metal::RelativeCoreCoord;
+
 std::size_t hash<RelativeCoreCoord>::operator()(RelativeCoreCoord const& o) const {
     std::size_t seed = 0;
     seed = std::hash<std::size_t>()(o.x) ^ std::hash<std::size_t>()(o.y) << 1;
@@ -697,11 +701,13 @@ CoreCoord from_json_t<CoreCoord>::operator()(const nlohmann::json& json) noexcep
     return {from_json<uint32_t>(json.at("x")), from_json<uint32_t>(json.at("y"))};
 }
 
-nlohmann::json to_json_t<RelativeCoreCoord>::operator()(const RelativeCoreCoord& relative_core_coord) noexcept {
+nlohmann::json to_json_t<tt::tt_metal::RelativeCoreCoord>::operator()(
+    const tt::tt_metal::RelativeCoreCoord& relative_core_coord) noexcept {
     return {{"x", to_json(relative_core_coord.x)}, {"y", to_json(relative_core_coord.y)}};
 }
 
-RelativeCoreCoord from_json_t<RelativeCoreCoord>::operator()(const nlohmann::json& json) noexcept {
+tt::tt_metal::RelativeCoreCoord from_json_t<tt::tt_metal::RelativeCoreCoord>::operator()(
+    const nlohmann::json& json) noexcept {
     return {from_json<int32_t>(json.at("x")), from_json<int32_t>(json.at("y"))};
 }
 
