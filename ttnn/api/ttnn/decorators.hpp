@@ -72,10 +72,6 @@ concept HasSupportedLazyReturnType = std::same_as<typename operation_t::tensor_r
 template <typename operation_t>
 concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t> && HasSupportedLazyReturnType<operation_t>;
 
-// Forward declaration of lazy operation key (defined later)
-template <typename operation_t>
-struct lazy_operation_key_t;
-
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
@@ -113,15 +109,6 @@ private:
     template <typename... args_t>
         requires PrimitiveOperationConcept<operation_t>
     auto invoke(args_t&&... args) const {
-        // Check if lazy mode is enabled and a lazy version of this operation exists
-        if constexpr (requires(lazy_operation_key_t<operation_t> key) { get(key); }) {
-            if (ttnn::experimental::lazy::is_lazy_enabled()) {
-                // Dispatch to the lazy version
-                constexpr auto lazy_op = get(lazy_operation_key_t<operation_t>{});
-                return lazy_op(std::forward<args_t>(args)...);
-            }
-        }
-
         // Regular eager execution
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },

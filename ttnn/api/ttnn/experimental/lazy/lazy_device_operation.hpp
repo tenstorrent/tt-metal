@@ -30,6 +30,7 @@ public:
     using tensor_args_t = typename operation_t::tensor_args_t;
     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
 
+    // TODO: It's not greate to capture tensor_args_ in the op
     LazyDeviceOperation(operation_attributes_t attributes, tensor_args_t tensor_args, const std::string& name) :
         attributes_(std::move(attributes)),
         tensor_args_(tensor_args),  // Copy tensor_args (shallow copy since Tensor is shallow-copyable)
