@@ -11,13 +11,11 @@
 
 #include <optional>
 
-using uint32_t = std::uint32_t;
-using namespace tt::constants;
-using namespace tt::tt_metal;
-
 namespace ttnn::operations::experimental::transformer {
 
 void FusedRMSNormPreAllGather::validate(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::constants;
+
     TT_FATAL(input_tensors.size() == 1, "Must have 1 input tensor");
     auto& tensor = input_tensors.at(0);
 
@@ -33,6 +31,9 @@ void FusedRMSNormPreAllGather::validate(const std::vector<Tensor>& input_tensors
 }
 
 std::vector<TensorSpec> FusedRMSNormPreAllGather::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    using namespace tt::tt_metal;
+    using namespace tt::constants;
+
     const auto& input_tensor = input_tensors.at(0);
 
     auto output_shape = input_tensors.at(0).logical_shape();

@@ -16,9 +16,6 @@
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-using uint32_t = std::uint32_t;
-using namespace tt::constants;
-
 namespace ttnn::operations::experimental::transformer {
 
 namespace {
@@ -60,6 +57,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     uint32_t num_heads,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    using namespace tt::constants;
+    using namespace tt::tt_metal;
 
     Program program = tt::tt_metal::CreateProgram();
 

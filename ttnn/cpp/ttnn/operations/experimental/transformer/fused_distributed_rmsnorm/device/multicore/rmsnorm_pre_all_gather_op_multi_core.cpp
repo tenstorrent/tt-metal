@@ -15,9 +15,6 @@
 #include <string>
 #include <variant>
 
-using uint32_t = std::uint32_t;
-using namespace tt::constants;
-
 namespace ttnn::operations::experimental::transformer {
 
 namespace {
@@ -50,6 +47,8 @@ namespace operation = tt::tt_metal::operation;
 operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
     const Tensor& input_tensor, Tensor& output_tensor, DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
+    using namespace tt::constants;
+    using namespace tt::tt_metal;
 
     Program program = tt::tt_metal::CreateProgram();
 

@@ -11,14 +11,13 @@
 
 #include <optional>
 
-using uint32_t = std::uint32_t;
-using namespace tt::constants;
-
 namespace ttnn::operations::experimental::transformer {
 
 void FusedRMSNormPostAllGather::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    using namespace tt::constants;
+
     TT_FATAL(input_tensors.size() == 2, "Must have 2 input tensors");
     auto& a = input_tensors.at(0);
     auto& stats = input_tensors.at(1);
