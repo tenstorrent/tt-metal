@@ -193,7 +193,7 @@ struct PacketHeaderBase {
     }
 
     Derived& to_noc_unicast_write(
-        const NocUnicastCommandHeader& /*noc_unicast_command_header*/, size_t /*payload_size_bytes*/) {
+        const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
@@ -213,7 +213,7 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& /*noc_unicast_command_header*/) {
+    Derived& to_noc_unicast_inline_write(const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
@@ -241,8 +241,7 @@ struct PacketHeaderBase {
         return *static_cast<Derived*>(this);
     }
 
-    Derived& to_noc_unicast_atomic_inc(
-        const NocUnicastAtomicIncCommandHeader& /*noc_unicast_atomic_inc_command_header*/) {
+    Derived& to_noc_unicast_atomic_inc(const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
         auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
@@ -281,7 +280,7 @@ struct PacketHeaderBase {
     }
 
     volatile Derived* to_noc_unicast_write(
-        const NocUnicastCommandHeader& /*noc_unicast_command_header*/, size_t /*payload_size_bytes*/) volatile {
+        const NocUnicastCommandHeader& noc_unicast_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
@@ -300,8 +299,7 @@ struct PacketHeaderBase {
     }
 
     volatile Derived* to_noc_unicast_scatter_write(
-        const NocUnicastScatterCommandHeader& /*noc_unicast_scatter_command_header*/,
-        size_t /*payload_size_bytes*/) volatile {
+        const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
         for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
@@ -325,7 +323,7 @@ struct PacketHeaderBase {
     }
 
     volatile Derived* to_noc_unicast_inline_write(
-        const NocUnicastInlineWriteCommandHeader& /*noc_unicast_command_header*/) volatile {
+        const NocUnicastInlineWriteCommandHeader& noc_unicast_command_header) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_INLINE_WRITE;
         auto noc_address_components = get_noc_address_components(noc_unicast_command_header.noc_address);
@@ -357,8 +355,8 @@ struct PacketHeaderBase {
     }
 
     volatile Derived* to_noc_fused_unicast_write_atomic_inc(
-        const NocUnicastAtomicIncFusedCommandHeader& /*noc_fused_unicast_write_atomic_inc_command_header*/,
-        size_t /*payload_size_bytes*/) volatile {
+        const NocUnicastAtomicIncFusedCommandHeader& noc_fused_unicast_write_atomic_inc_command_header,
+        size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_FUSED_UNICAST_ATOMIC_INC;
         auto noc_address_components =
@@ -390,7 +388,7 @@ struct PacketHeaderBase {
     }
 
     volatile Derived* to_noc_unicast_atomic_inc(
-        const NocUnicastAtomicIncCommandHeader& /*noc_unicast_atomic_inc_command_header*/) volatile {
+        const NocUnicastAtomicIncCommandHeader& noc_unicast_atomic_inc_command_header) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_ATOMIC_INC;
         auto noc_address_components = get_noc_address_components(noc_unicast_atomic_inc_command_header.noc_address);
@@ -635,11 +633,11 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
     };
     uint8_t is_mcast_active;
     uint8_t reserved[7];
-    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) {}
+    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
 
-    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) volatile {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) volatile {}
+    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 };
 
 // WARN: 13x13 mesh. want 16x16, want to be same as SINGLE_ROUTE_SIZE_2D
@@ -672,11 +670,11 @@ struct HybridMeshPacketHeader : PacketHeaderBase<HybridMeshPacketHeader> {
         };
         uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
     };  // 4B
-    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) {}
+    void to_chip_unicast_impl(uint8_t distance_in_hops) {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
 
-    void to_chip_unicast_impl(uint8_t /*distance_in_hops*/) volatile {}
-    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& /*chip_multicast_command_header*/) volatile {}
+    void to_chip_unicast_impl(uint8_t distance_in_hops) volatile {}
+    void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 } __attribute__((packed));
 static_assert(sizeof(HybridMeshPacketHeader) == 64, "sizeof(HybridMeshPacketHeader) is not equal to 64B");
 
