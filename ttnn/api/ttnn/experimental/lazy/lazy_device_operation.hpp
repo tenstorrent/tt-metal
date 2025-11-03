@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/experimental/jit/lazy_operation.hpp"
-#include "ttnn/experimental/jit/lazy_utils.hpp"
+#include "ttnn/experimental/lazy/lazy_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_utils.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt_stl/reflection.hpp>
 #include <vector>
@@ -14,7 +14,7 @@
 #include <utility>
 #include <boost/pfr.hpp>
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 template <typename operation_t>
 constexpr tt::stl::hash::hash_t get_operation_type_id() {
@@ -136,4 +136,4 @@ std::shared_ptr<LazyDeviceOperation<operation_t>> make_lazy_device_operation(
     return std::make_shared<LazyDeviceOperation<operation_t>>(attributes, tensor_args, name);
 }
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

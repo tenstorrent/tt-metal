@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "ttnn/experimental/jit/lazy_tensor.hpp"
+#include "ttnn/experimental/lazy/lazy_tensor.hpp"
 #include <unordered_set>
 #include <vector>
 #include <functional>
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 class GraphUtils {
 public:
@@ -28,4 +28,4 @@ public:
 
     static std::vector<std::shared_ptr<LazyTensor>> topological_sort(const std::shared_ptr<LazyTensor>& root);
 };
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

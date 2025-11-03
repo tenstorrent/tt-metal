@@ -6,9 +6,9 @@
 
 #include <vector>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/experimental/jit/lazy_tensor.hpp"
+#include "ttnn/experimental/lazy/lazy_tensor.hpp"
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 struct LazyOperation {
     LazyOperation() = default;
@@ -19,4 +19,4 @@ struct LazyOperation {
     virtual ~LazyOperation() = default;
 };
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

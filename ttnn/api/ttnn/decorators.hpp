@@ -9,8 +9,8 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/experimental/jit/lazy_mode.hpp"
-#include "ttnn/experimental/jit/lazy_device_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_mode.hpp"
+#include "ttnn/experimental/lazy/lazy_device_operation.hpp"
 #include <boost/pfr/core.hpp>
 
 namespace ttnn {
@@ -166,7 +166,7 @@ private:
     auto invoke(args_t&&... args) const {
         // Check if lazy mode is enabled and a lazy version of this operation exists
         if constexpr (requires(lazy_operation_key_t<operation_t> key) { get(key); }) {
-            if (ttnn::experimental::jit::is_lazy_enabled()) {
+            if (ttnn::experimental::lazy::is_lazy_enabled()) {
                 // Dispatch to the lazy version
                 constexpr auto lazy_op = get(lazy_operation_key_t<operation_t>{});
                 return lazy_op(std::forward<args_t>(args)...);
@@ -178,7 +178,7 @@ private:
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        // if (ttnn::experimental::jit::is_lazy_enabled()) {
+        // if (ttnn::experimental::lazy::is_lazy_enabled()) {
         //     return invoke_lazy(operation_attributes, tensors_args);
         // }
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
@@ -202,7 +202,7 @@ private:
     //     // if constexpr (detail::CanBeMadeLazy<operation_t>) {
     //     if constexpr (detail::HasSupportedLazyReturnType<operation_t>) {
     //         // Create lazy operation wrapper
-    //         auto lazy_op = ttnn::experimental::jit::make_lazy_device_operation<operation_t>(
+    //         auto lazy_op = ttnn::experimental::lazy::make_lazy_device_operation<operation_t>(
     //             operation_attributes,
     //             tensor_args,
     //             std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
@@ -215,7 +215,7 @@ private:
     //         // TODO: Add support for all kinds of returns
     //         // Extract input tensors from tensor_args
     //         std::vector<Tensor> input_tensors =
-    //             ttnn::experimental::jit::object_to_vector<tensor_args_t, Tensor>(tensor_args);
+    //             ttnn::experimental::lazy::object_to_vector<tensor_args_t, Tensor>(tensor_args);
 
     //         if constexpr (std::same_as<tensor_return_value_t, Tensor>) {
     //             // TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
@@ -277,10 +277,10 @@ private:
 
         // Extract input tensors from tensor_args
         std::vector<Tensor> input_tensors =
-            ttnn::experimental::jit::object_to_vector<tensor_args_t, Tensor>(tensor_args);
+            ttnn::experimental::lazy::object_to_vector<tensor_args_t, Tensor>(tensor_args);
 
         // Create lazy operation wrapper
-        auto lazy_op = ttnn::experimental::jit::make_lazy_device_operation<operation_t>(
+        auto lazy_op = ttnn::experimental::lazy::make_lazy_device_operation<operation_t>(
             operation_attributes,
             tensor_args,
             std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));

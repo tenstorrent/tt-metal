@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <ttnn/tensor/tensor.hpp>
-#include "ttnn/experimental/jit/lazy_tensor.hpp"
-#include "ttnn/experimental/jit/graph_utils.hpp"
-#include "ttnn/experimental/jit/lazy_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_tensor.hpp"
+#include "ttnn/experimental/lazy/graph_utils.hpp"
+#include "ttnn/experimental/lazy/lazy_operation.hpp"
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 // Lazy Tensor
 LazyTensor::LazyTensor(
@@ -130,4 +130,4 @@ void LazyTensor::set_op_inputs(const std::vector<std::shared_ptr<LazyTensor>>& n
 void LazyTensor::set_op(const LazyOperationPtr& new_op) { op_ = new_op; }
 
 //
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

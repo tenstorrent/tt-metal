@@ -6,7 +6,7 @@ namespace tt::tt_metal {
 class Tensor;
 }
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 class LazyTensor;
 
 void evaluate(const std::shared_ptr<LazyTensor>& lazy_tensor);
@@ -28,4 +28,4 @@ private:
     std::vector<std::unique_ptr<Pass>> passes_;
 };
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

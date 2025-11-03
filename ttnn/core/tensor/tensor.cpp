@@ -34,9 +34,9 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/experimental/jit/evaluation_manager.hpp"
+#include "ttnn/experimental/lazy/evaluation_manager.hpp"
 
-using LazyTensor = ttnn::experimental::jit::LazyTensor;
+using LazyTensor = ttnn::experimental::lazy::LazyTensor;
 
 namespace tt::tt_metal {
 namespace {
@@ -271,7 +271,7 @@ std::shared_ptr<TensorAttributes> Tensor::tensor_attributes() const {
 
 Tensor Tensor::make_lazy_tensor(
     const std::vector<Tensor>& op_inputs,
-    const std::shared_ptr<ttnn::experimental::jit::LazyOperation>& op,
+    const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
     TensorSpec tensor_spec) {
     std::vector<std::shared_ptr<LazyTensor>> lazy_op_inputs;
     std::transform(op_inputs.begin(), op_inputs.end(), std::back_inserter(lazy_op_inputs), [](const Tensor& tensor) {
@@ -282,7 +282,7 @@ Tensor Tensor::make_lazy_tensor(
 
 std::vector<Tensor> Tensor::make_lazy_tensors(
     const std::vector<Tensor>& op_inputs,
-    const std::shared_ptr<ttnn::experimental::jit::LazyOperation>& op,
+    const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
     const std::vector<TensorSpec>& tensor_specs) {
     std::vector<std::shared_ptr<LazyTensor>> lazy_op_inputs;
     std::transform(op_inputs.begin(), op_inputs.end(), std::back_inserter(lazy_op_inputs), [](const Tensor& tensor) {
@@ -300,7 +300,7 @@ std::vector<Tensor> Tensor::make_lazy_tensors(
 const std::shared_ptr<LazyTensor>& Tensor::lazy() const { return lazy_tensor_; }
 
 // TODO: Rename to eval
-void Tensor::materialize() { ttnn::experimental::jit::evaluate(lazy_tensor_); }
+void Tensor::materialize() { ttnn::experimental::lazy::evaluate(lazy_tensor_); }
 
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,

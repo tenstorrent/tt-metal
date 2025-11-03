@@ -14,7 +14,7 @@ class MeshDevice;
 }
 }  // namespace tt::tt_metal
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 struct LazyOperation;
 using LazyTensorId = uint32_t;
@@ -25,7 +25,7 @@ enum class LazyTensorState {
 };
 
 class LazyTensor {
-    using LazyOperationPtr = std::shared_ptr<ttnn::experimental::jit::LazyOperation>;
+    using LazyOperationPtr = std::shared_ptr<ttnn::experimental::lazy::LazyOperation>;
     using TensorSpec = tt::tt_metal::TensorSpec;
     using MaterializedTensor = tt::tt_metal::metal_tensor::Tensor;
 
@@ -86,4 +86,4 @@ private:
     tt::tt_metal::StorageType storage_type_ = tt::tt_metal::StorageType::DEVICE;
 };
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

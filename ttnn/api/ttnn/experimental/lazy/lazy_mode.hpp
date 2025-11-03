@@ -4,7 +4,7 @@
 
 #pragma once
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 namespace detail {
 // Runtime flag that can be toggled
@@ -44,4 +44,4 @@ private:
     bool was_enabled_;
 };
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

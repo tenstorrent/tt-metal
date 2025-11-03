@@ -28,7 +28,7 @@
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
-#include "ttnn/experimental/jit/lazy_tensor.hpp"
+#include "ttnn/experimental/lazy/lazy_tensor.hpp"
 
 namespace tt {
 
@@ -193,23 +193,23 @@ public:
     const tt::tt_metal::metal_tensor::Tensor& get_materialized_tensor() const;
     [[nodiscard]] Tensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor);
     [[nodiscard]] Tensor(tt::tt_metal::metal_tensor::Tensor&& metal_tensor);
-    [[nodiscard]] const std::shared_ptr<ttnn::experimental::jit::LazyTensor>& lazy() const;
+    [[nodiscard]] const std::shared_ptr<ttnn::experimental::lazy::LazyTensor>& lazy() const;
     std::shared_ptr<TensorAttributes> tensor_attributes() const;
 
     static Tensor make_lazy_tensor(
         const std::vector<Tensor>& op_inputs,
-        const std::shared_ptr<ttnn::experimental::jit::LazyOperation>& op,
+        const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
         TensorSpec tensor_spec);
     static std::vector<Tensor> make_lazy_tensors(
         const std::vector<Tensor>& op_inputs,
-        const std::shared_ptr<ttnn::experimental::jit::LazyOperation>& op,
+        const std::shared_ptr<ttnn::experimental::lazy::LazyOperation>& op,
         const std::vector<TensorSpec>& tensor_specs);
 
     void materialize();
 
 private:
-    Tensor(std::shared_ptr<ttnn::experimental::jit::LazyTensor> lazy_tensor);
-    std::shared_ptr<ttnn::experimental::jit::LazyTensor> lazy_tensor_;
+    Tensor(std::shared_ptr<ttnn::experimental::lazy::LazyTensor> lazy_tensor);
+    std::shared_ptr<ttnn::experimental::lazy::LazyTensor> lazy_tensor_;
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);

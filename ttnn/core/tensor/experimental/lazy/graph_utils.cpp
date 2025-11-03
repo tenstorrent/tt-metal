@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/experimental/jit/graph_utils.hpp"
+#include "ttnn/experimental/lazy/graph_utils.hpp"
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 void GraphUtils::dfs_visit(
     const std::shared_ptr<LazyTensor>& node,
@@ -94,4 +94,4 @@ std::vector<std::shared_ptr<LazyTensor>> GraphUtils::topological_sort(const std:
     dfs(root);
     return result;
 }
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

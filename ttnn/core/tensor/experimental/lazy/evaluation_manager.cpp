@@ -1,7 +1,7 @@
-#include "ttnn/experimental/jit/evaluation_manager.hpp"
-#include "ttnn/experimental/jit/graph_utils.hpp"
-#include "ttnn/experimental/jit/lazy_tensor.hpp"
-#include "ttnn/experimental/jit/lazy_operation.hpp"
+#include "ttnn/experimental/lazy/evaluation_manager.hpp"
+#include "ttnn/experimental/lazy/graph_utils.hpp"
+#include "ttnn/experimental/lazy/lazy_tensor.hpp"
+#include "ttnn/experimental/lazy/lazy_operation.hpp"
 
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <enchantum/enchantum.hpp>
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 namespace {
 // This is an example of how we're going to traverse nodes in graph later
@@ -83,4 +83,4 @@ void PassManager::run(const tt::tt_metal::Tensor& lazy_tensor) {
     }
 }
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

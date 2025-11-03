@@ -1,14 +1,14 @@
-#include "ttnn/experimental/jit/passes.hpp"
-#include "ttnn/experimental/jit/graph_utils.hpp"
-#include "ttnn/experimental/jit/lazy_device_operation.hpp"
-#include "ttnn/experimental/jit/lazy_tensor.hpp"
+#include "ttnn/experimental/lazy/passes.hpp"
+#include "ttnn/experimental/lazy/graph_utils.hpp"
+#include "ttnn/experimental/lazy/lazy_device_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_tensor.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
 #include <enchantum/enchantum.hpp>
 
 using ttnn::Tensor;
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 std::string UnaryOperationsFusionPass::name() const { return "UnaryOperationsFusionPass"; }
 
@@ -150,4 +150,4 @@ void UnaryOperationsFusionPass::run(const tt::tt_metal::Tensor& tensor) {
     }
 }
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy

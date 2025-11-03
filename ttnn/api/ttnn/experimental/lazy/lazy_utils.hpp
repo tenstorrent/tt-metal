@@ -11,7 +11,7 @@
 #include <tuple>
 #include <utility>
 
-namespace ttnn::experimental::jit {
+namespace ttnn::experimental::lazy {
 
 template <typename object_t, typename T>
 std::vector<T> object_to_vector(const object_t& object) {
@@ -20,4 +20,4 @@ std::vector<T> object_to_vector(const object_t& object) {
     return vector;
 }
 
-}  // namespace ttnn::experimental::jit
+}  // namespace ttnn::experimental::lazy
