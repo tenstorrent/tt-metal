@@ -58,6 +58,11 @@ void kernel_main() {
                 tt::tt_fabric::udm::fabric_fast_write_dw_inline(
                     dst_dev_id, dst_mesh_id, inline_value, get_noc_addr(noc_x_start, noc_y_start, target_address));
             } break;
+            case NOC_UNICAST_ATOMIC_INC: {
+                uint32_t incr_value = time_seed;
+                tt::tt_fabric::udm::fabric_fast_atomic_inc(
+                    dst_dev_id, dst_mesh_id, incr_value, get_noc_addr(noc_x_start, noc_y_start, target_address));
+            } break;
             default: {
                 ASSERT(false);
             } break;
@@ -79,6 +84,9 @@ void kernel_main() {
             case NOC_UNICAST_WRITE:
             case NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::udm::fabric_write_barrier();
+            } break;
+            case NOC_UNICAST_ATOMIC_INC: {
+                tt::tt_fabric::udm::fabric_atomic_barrier();
             } break;
             default: {
                 ASSERT(false);

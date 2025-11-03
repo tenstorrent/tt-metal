@@ -73,6 +73,20 @@ void kernel_main() {
                     break;
                 }
             } break;
+            case NOC_UNICAST_ATOMIC_INC: {
+                // Send atomic ACK back to the sender
+                tt::tt_fabric::udm::fabric_fast_atomic_ack(received_header);
+
+                uint32_t received_value = *start_addr;
+                uint32_t expected_value = time_seed;
+                if (received_value != expected_value) {
+                    match = false;
+                    mismatch_addr = reinterpret_cast<uint32_t>(start_addr);
+                    mismatch_val = received_value;
+                    expected_val = expected_value;
+                    break;
+                }
+            } break;
             default: {
                 ASSERT(false);
             } break;

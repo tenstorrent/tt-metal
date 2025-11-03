@@ -248,7 +248,9 @@ inline __attribute__((always_inline)) void fabric_fast_write(
     uint32_t num_dests = 1) {
     if (multicast) {
         // TODO: Set up multicast header with proper routing
-
+        ASSERT(false);
+        while (1) {
+        }
     } else {
         packet_header->to_noc_unicast_write(NocUnicastCommandHeader{dest_addr}, len_bytes);
     }
@@ -342,7 +344,9 @@ inline __attribute__((always_inline)) void fabric_fast_write_dw_inline(
 
     if (multicast) {
         // TODO: Set up multicast header with proper routing
-
+        ASSERT(false);
+        while (1) {
+        }
     } else {
         packet_header->to_noc_unicast_inline_write(NocUnicastInlineWriteCommandHeader{dest_addr, val});
     }
@@ -353,6 +357,46 @@ inline __attribute__((always_inline)) void fabric_fast_write_dw_inline(
 
     if (!posted) {
         fabric_nonposted_writes_acked += num_dests;
+    }
+}
+
+/**
+ * @brief Perform an atomic increment to a remote location through the fabric using inline atomic
+ *
+ * This function sends an atomic increment command through the fabric network to a remote destination.
+ * The atomic increment is efficient as the increment value is embedded directly in the packet header
+ * rather than sent as separate payload. The operation atomically increments a counter at the destination.
+ * We reuse UDMWriteControlHeader for tracking source information since atomic increments follow
+ * similar acknowledgment patterns as writes.
+ *
+ * @param dst_dev_id Destination device ID for fabric routing
+ * @param dst_mesh_id Destination mesh ID for fabric routing
+ * @param incr_val The value to atomically add to the destination
+ * @param dest_addr Destination NOC address (encoded with x,y coordinates and local address)
+ * @param trid Transaction ID for UDM operations
+ * @param posted Whether to use posted atomics (1) or non-posted atomics (0, default)
+ * @param flush Whether to flush the atomic operation (default true)
+ */
+inline __attribute__((always_inline)) void fabric_fast_atomic_inc(
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t incr_val,
+    uint64_t dest_addr,
+    uint16_t trid = 0,
+    uint8_t posted = 0,
+    bool flush = true) {
+    auto [connection, is_init] = get_or_open_fabric_connection();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
+
+    fabric_write_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid, posted);
+    packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(dest_addr, incr_val, flush));
+
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_blocking_from_address(
+        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+
+    if (!posted) {
+        fabric_nonposted_atomics_acked += 1;
     }
 }
 
@@ -387,7 +431,44 @@ inline __attribute__((always_inline)) void fabric_fast_write_ack(
 
     ack_header->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
-    fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 0);  // trid=0, posted=0
+    fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
+
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+/**
+ * @brief Send an atomic increment acknowledgment back to the sender
+ *
+ * This function sends an atomic increment to the sender's NONPOSTED_ATOMICS_ACKED counter
+ * to acknowledge receipt of an atomic increment packet. It extracts the sender's information from
+ * the received packet's UDM control fields and sends an atomic increment to the appropriate counter.
+ * Since atomic increments reuse the write control header structure, we access udm_control.write fields.
+ *
+ * @param received_header Pointer to the received packet header containing UDM control fields
+ * @param increment_value The value to increment the counter by (default 1)
+ * @param flush Whether to flush the atomic operation (default false)
+ */
+inline __attribute__((always_inline)) void fabric_fast_atomic_ack(
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header, uint32_t increment_value = 1, bool flush = false) {
+    // if this is a posted atomic then we simply exit
+    if (received_header->udm_control.write.posted) {
+        return;
+    }
+    auto [connection, is_init] = get_or_open_fabric_connection();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* ack_header = get_or_allocate_header();
+
+    uint8_t src_chip_id = received_header->udm_control.write.src_chip_id;
+    uint16_t src_mesh_id = received_header->udm_control.write.src_mesh_id;
+    uint8_t src_noc_x = received_header->udm_control.write.src_noc_x;
+    uint8_t src_noc_y = received_header->udm_control.write.src_noc_y;
+    uint8_t src_risc_id = received_header->udm_control.write.risc_id;
+
+    uint32_t counter_addr = get_fabric_counter_address<FabricBarrierType::NONPOSTED_ATOMICS_ACKED>(src_risc_id);
+
+    ack_header->to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader(get_noc_addr(src_noc_x, src_noc_y, counter_addr), increment_value, flush));
+    fabric_write_set_unicast_route(ack_header, src_chip_id, src_mesh_id, 0, 1);  // trid=0, posted=1
 
     connection.wait_for_empty_write_slot();
     connection.send_payload_blocking_from_address(reinterpret_cast<uint32_t>(ack_header), sizeof(PACKET_HEADER_TYPE));

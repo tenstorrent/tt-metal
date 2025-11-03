@@ -2342,7 +2342,7 @@ void UDMFabricUnicastCommon(
 
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE or noc_send_type == NOC_UNICAST_ATOMIC_INC) {
         worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
     } else {
         auto single_payload_size_bytes = worker_mem_map.packet_payload_size_bytes;
@@ -2443,6 +2443,18 @@ void UDMFabricUnicastCommon(
         receiver_runtime_args);
 
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+
+    // Clear target L1 memory for atomic increments since we expect initial values to be 0
+    if (noc_send_type == NOC_UNICAST_ATOMIC_INC) {
+        uint32_t total_size_to_clear = num_packets * worker_mem_map.packet_payload_size_bytes;
+        std::vector<uint32_t> zeros(total_size_to_clear / sizeof(uint32_t), 0);
+        tt_metal::detail::WriteToDeviceL1(
+            receiver_device->get_devices()[0],
+            receiver_logical_core,
+            worker_mem_map.target_address,
+            zeros,
+            CoreType::WORKER);
+    }
 
     // Run programs
     fixture->RunProgramNonblocking(receiver_device, receiver_program);
