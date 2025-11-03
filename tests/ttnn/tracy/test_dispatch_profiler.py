@@ -49,8 +49,8 @@ def test_with_ops(device):
     indirect=True,
 )
 def test_mesh_device(
-    system_mesh_device,
+    mesh_device,
     device_params,
 ):
-    ttnn.ReadDeviceProfiler(system_mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
     logger.debug("Testing Mesh Device")

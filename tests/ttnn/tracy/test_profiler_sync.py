@@ -40,6 +40,6 @@ def test_with_ops(device):
 
 
 def test_mesh_device(
-    system_mesh_device,
+    mesh_device,
 ):
     logger.debug("Testing Mesh Device")
