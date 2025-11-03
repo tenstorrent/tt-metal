@@ -35,6 +35,8 @@ pytestmark = [
     ),
 ]
 
+# todo)) add test cases along the dtype axis: we have bfloat16, bfp8, bfp4
+
 
 # Test case definitions
 # Format: (name, tensor_a_fn, tensor_b_fn, max_spec, mean_spec, cosine_spec)
@@ -115,7 +117,7 @@ TEST_CASES = [
 
 
 @pytest.mark.parametrize("name,tensor_a_fn,tensor_b_fn,max_spec,mean_spec", TEST_CASES)
-def test_metrics_vs_pytorch(ttnn_mesh_device, name, tensor_a_fn, tensor_b_fn, max_spec, mean_spec):
+def test_abs_metrics_vs_pytorch(ttnn_mesh_device, name, tensor_a_fn, tensor_b_fn, max_spec, mean_spec):
     """
     Unified test for all metrics against PyTorch ground truth.
     Tests various tensor configurations and verifies TTNN metrics match PyTorch.
@@ -133,9 +135,15 @@ def test_metrics_vs_pytorch(ttnn_mesh_device, name, tensor_a_fn, tensor_b_fn, ma
     ttnn_a = ttnn.from_torch(torch_a, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_b = ttnn.from_torch(torch_b, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    # Compute with TTNN
+    # Compute with TTNN (ttnn vs ttnn)
     max_error_ttnn = compute_max_abs_error(ttnn_a, ttnn_b)
     mean_error_ttnn = compute_mean_abs_error(ttnn_a, ttnn_b)
+
+    # Mixed-mode checks (torch vs ttnn and ttnn vs torch)
+    max_error_mixed_torch_ttnn = compute_max_abs_error(torch_a, ttnn_b)
+    mean_error_mixed_torch_ttnn = compute_mean_abs_error(torch_a, ttnn_b)
+    max_error_mixed_ttnn_torch = compute_max_abs_error(ttnn_a, torch_b)
+    mean_error_mixed_ttnn_torch = compute_mean_abs_error(ttnn_a, torch_b)
 
     # Default tolerance for TTNN vs PyTorch comparison (bf16 precision)
     default_tolerance = 0.02
@@ -150,11 +158,30 @@ def test_metrics_vs_pytorch(ttnn_mesh_device, name, tensor_a_fn, tensor_b_fn, ma
         assert (
             abs(max_error_ttnn - max_error_torch) < tolerance_max
         ), f"max_abs_error TTNN vs PyTorch: {max_error_ttnn} vs {max_error_torch}"
+        # Mixed variants also match expected and PyTorch
+        assert (
+            abs(max_error_mixed_torch_ttnn - expected_max) < tolerance_max
+        ), f"max_abs_error (torch,ttnn): expected {expected_max}, got {max_error_mixed_torch_ttnn}"
+        assert (
+            abs(max_error_mixed_ttnn_torch - expected_max) < tolerance_max
+        ), f"max_abs_error (ttnn,torch): expected {expected_max}, got {max_error_mixed_ttnn_torch}"
+        assert (
+            abs(max_error_mixed_torch_ttnn - max_error_torch) < tolerance_max
+        ), f"max_abs_error (torch,ttnn) vs PyTorch: {max_error_mixed_torch_ttnn} vs {max_error_torch}"
+        assert (
+            abs(max_error_mixed_ttnn_torch - max_error_torch) < tolerance_max
+        ), f"max_abs_error (ttnn,torch) vs PyTorch: {max_error_mixed_ttnn_torch} vs {max_error_torch}"
     else:
         # No expected value, just check TTNN matches PyTorch with default tolerance
         assert (
             abs(max_error_ttnn - max_error_torch) < default_tolerance
         ), f"max_abs_error TTNN vs PyTorch: {max_error_ttnn} vs {max_error_torch}"
+        assert (
+            abs(max_error_mixed_torch_ttnn - max_error_torch) < default_tolerance
+        ), f"max_abs_error (torch,ttnn) vs PyTorch: {max_error_mixed_torch_ttnn} vs {max_error_torch}"
+        assert (
+            abs(max_error_mixed_ttnn_torch - max_error_torch) < default_tolerance
+        ), f"max_abs_error (ttnn,torch) vs PyTorch: {max_error_mixed_ttnn_torch} vs {max_error_torch}"
 
     # Verify mean_abs_error
     if mean_spec is not None:
@@ -166,11 +193,30 @@ def test_metrics_vs_pytorch(ttnn_mesh_device, name, tensor_a_fn, tensor_b_fn, ma
         assert (
             abs(mean_error_ttnn - mean_error_torch) < tolerance_mean
         ), f"mean_abs_error TTNN vs PyTorch: {mean_error_ttnn} vs {mean_error_torch}"
+        # Mixed variants also match expected and PyTorch
+        assert (
+            abs(mean_error_mixed_torch_ttnn - expected_mean) < tolerance_mean
+        ), f"mean_abs_error (torch,ttnn): expected {expected_mean}, got {mean_error_mixed_torch_ttnn}"
+        assert (
+            abs(mean_error_mixed_ttnn_torch - expected_mean) < tolerance_mean
+        ), f"mean_abs_error (ttnn,torch): expected {expected_mean}, got {mean_error_mixed_ttnn_torch}"
+        assert (
+            abs(mean_error_mixed_torch_ttnn - mean_error_torch) < tolerance_mean
+        ), f"mean_abs_error (torch,ttnn) vs PyTorch: {mean_error_mixed_torch_ttnn} vs {mean_error_torch}"
+        assert (
+            abs(mean_error_mixed_ttnn_torch - mean_error_torch) < tolerance_mean
+        ), f"mean_abs_error (ttnn,torch) vs PyTorch: {mean_error_mixed_ttnn_torch} vs {mean_error_torch}"
     else:
         # No expected value, just check TTNN matches PyTorch with default tolerance
         assert (
             abs(mean_error_ttnn - mean_error_torch) < default_tolerance
         ), f"mean_abs_error TTNN vs PyTorch: {mean_error_ttnn} vs {mean_error_torch}"
+        assert (
+            abs(mean_error_mixed_torch_ttnn - mean_error_torch) < default_tolerance
+        ), f"mean_abs_error (torch,ttnn) vs PyTorch: {mean_error_mixed_torch_ttnn} vs {mean_error_torch}"
+        assert (
+            abs(mean_error_mixed_ttnn_torch - mean_error_torch) < default_tolerance
+        ), f"mean_abs_error (ttnn,torch) vs PyTorch: {mean_error_mixed_ttnn_torch} vs {mean_error_torch}"
 
 
 def test_pcc_ttnn_native(ttnn_mesh_device):
@@ -194,10 +240,16 @@ def test_pcc_ttnn_native(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    # Mixed-mode PCC (ttnn vs torch and torch vs ttnn)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  Perfect correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn >= 0.999, f"Perfect correlation should be ~1.0, got {pcc_ttnn}"
     assert abs(pcc_ttnn - pcc_torch) < 0.01, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+    # Mixed should match PyTorch within same tolerance
+    assert abs(pcc_mixed_1 - pcc_torch) < 0.01, f"PCC (ttnn,torch) vs PyTorch mismatch: {pcc_mixed_1} vs {pcc_torch}"
+    assert abs(pcc_mixed_2 - pcc_torch) < 0.01, f"PCC (torch,ttnn) vs PyTorch mismatch: {pcc_mixed_2} vs {pcc_torch}"
 
     # Test case 2: High correlation with small noise
     torch.manual_seed(42)
@@ -209,11 +261,15 @@ def test_pcc_ttnn_native(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  High correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn >= 0.95, f"High correlation should be >= 0.95, got {pcc_ttnn}"
     # Allow more tolerance here due to bfloat16 and noise
     assert abs(pcc_ttnn - pcc_torch) < 0.05, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+    assert abs(pcc_mixed_1 - pcc_torch) < 0.05, f"PCC (ttnn,torch) vs PyTorch mismatch: {pcc_mixed_1} vs {pcc_torch}"
+    assert abs(pcc_mixed_2 - pcc_torch) < 0.05, f"PCC (torch,ttnn) vs PyTorch mismatch: {pcc_mixed_2} vs {pcc_torch}"
 
     # Test case 3: Negative correlation
     torch.manual_seed(42)
@@ -225,10 +281,14 @@ def test_pcc_ttnn_native(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  Negative correlation - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn < -0.8, f"Negative correlation should be < -0.8, got {pcc_ttnn}"
     assert abs(pcc_ttnn - pcc_torch) < 0.1, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+    assert abs(pcc_mixed_1 - pcc_torch) < 0.1, f"PCC (ttnn,torch) vs PyTorch mismatch: {pcc_mixed_1} vs {pcc_torch}"
+    assert abs(pcc_mixed_2 - pcc_torch) < 0.1, f"PCC (torch,ttnn) vs PyTorch mismatch: {pcc_mixed_2} vs {pcc_torch}"
 
     # Test case 4: Larger tensor (128x256)
     torch.manual_seed(42)
@@ -240,10 +300,14 @@ def test_pcc_ttnn_native(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  Large tensor - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn >= 0.90, f"Large tensor PCC should be >= 0.90, got {pcc_ttnn}"
     assert abs(pcc_ttnn - pcc_torch) < 0.1, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+    assert abs(pcc_mixed_1 - pcc_torch) < 0.1, f"PCC (ttnn,torch) vs PyTorch mismatch: {pcc_mixed_1} vs {pcc_torch}"
+    assert abs(pcc_mixed_2 - pcc_torch) < 0.1, f"PCC (torch,ttnn) vs PyTorch mismatch: {pcc_mixed_2} vs {pcc_torch}"
 
     # Test case 5: Large noise - should produce low PCC (< 1.0)
     torch.manual_seed(42)
@@ -256,11 +320,15 @@ def test_pcc_ttnn_native(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  Large noise (0.5x) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn < 0.99, f"Large noise should reduce PCC below 0.99, got {pcc_ttnn}"
     assert pcc_ttnn > 0.50, f"PCC should still show some correlation (>0.50), got {pcc_ttnn}"
     assert abs(pcc_ttnn - pcc_torch) < 0.1, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+    assert abs(pcc_mixed_1 - pcc_torch) < 0.1, f"PCC (ttnn,torch) vs PyTorch mismatch: {pcc_mixed_1} vs {pcc_torch}"
+    assert abs(pcc_mixed_2 - pcc_torch) < 0.1, f"PCC (torch,ttnn) vs PyTorch mismatch: {pcc_mixed_2} vs {pcc_torch}"
 
     # Test case 6: Very large noise - should produce very low PCC
     torch.manual_seed(42)
@@ -273,10 +341,14 @@ def test_pcc_ttnn_native(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  Very large noise (2.0x) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn < 0.80, f"Very large noise should reduce PCC below 0.80, got {pcc_ttnn}"
     assert abs(pcc_ttnn - pcc_torch) < 0.15, f"TTNN vs PyTorch mismatch: {pcc_ttnn} vs {pcc_torch}"
+    assert abs(pcc_mixed_1 - pcc_torch) < 0.15, f"PCC (ttnn,torch) vs PyTorch mismatch: {pcc_mixed_1} vs {pcc_torch}"
+    assert abs(pcc_mixed_2 - pcc_torch) < 0.15, f"PCC (torch,ttnn) vs PyTorch mismatch: {pcc_mixed_2} vs {pcc_torch}"
 
     print("  ✓ TTNN-native PCC correctly detects varying correlation strengths!")
 
@@ -299,10 +371,15 @@ def test_pcc_constant_tensors(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    # Mixed-mode PCC computation
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  Same constant (5.0) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn == 1.0, f"Same constant tensors should have PCC=1.0, got {pcc_ttnn}"
     assert pcc_torch == 1.0, f"PyTorch should also return 1.0, got {pcc_torch}"
+    assert pcc_mixed_1 == pcc_torch, f"PCC (ttnn,torch) should equal PyTorch: {pcc_mixed_1} vs {pcc_torch}"
+    assert pcc_mixed_2 == pcc_torch, f"PCC (torch,ttnn) should equal PyTorch: {pcc_mixed_2} vs {pcc_torch}"
 
     # Test case 2: Different constant values
     a_torch = torch.ones(32, 32).bfloat16() * 5.0
@@ -313,11 +390,15 @@ def test_pcc_constant_tensors(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  Different constants (5.0 vs 3.0) - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn == 0.0, f"Different constant tensors should have PCC=0.0, got {pcc_ttnn}"
     # PyTorch returns True/False which becomes 1.0/0.0
     assert pcc_torch in [0.0, 1.0], f"PyTorch should return 0.0 or 1.0, got {pcc_torch}"
+    assert pcc_mixed_1 == pcc_torch, f"PCC (ttnn,torch) should equal PyTorch: {pcc_mixed_1} vs {pcc_torch}"
+    assert pcc_mixed_2 == pcc_torch, f"PCC (torch,ttnn) should equal PyTorch: {pcc_mixed_2} vs {pcc_torch}"
 
     # Test case 3: All zeros
     a_torch = torch.zeros(32, 32).bfloat16()
@@ -328,10 +409,14 @@ def test_pcc_constant_tensors(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_ttnn, b_ttnn)
     pcc_torch = compute_pcc(a_torch, b_torch)
+    pcc_mixed_1 = compute_pcc(a_ttnn, b_torch)
+    pcc_mixed_2 = compute_pcc(a_torch, b_ttnn)
 
     print(f"  All zeros - TTNN: {pcc_ttnn:.6f}, PyTorch: {pcc_torch:.6f}")
     assert pcc_ttnn == 1.0, f"Zero tensors should have PCC=1.0, got {pcc_ttnn}"
     assert pcc_torch == 1.0, f"PyTorch should also return 1.0, got {pcc_torch}"
+    assert pcc_mixed_1 == pcc_torch, f"PCC (ttnn,torch) should equal PyTorch: {pcc_mixed_1} vs {pcc_torch}"
+    assert pcc_mixed_2 == pcc_torch, f"PCC (torch,ttnn) should equal PyTorch: {pcc_mixed_2} vs {pcc_torch}"
 
     print("  ✓ TTNN-native PCC correctly handles constant tensors!")
 
@@ -355,16 +440,26 @@ def test_pcc_all_nan_and_mixed_nan(ttnn_mesh_device):
     # Both all-NaN -> 1.0
     pcc_ttnn = compute_pcc(a_nan_t, b_nan_t)
     pcc_cpu = compute_pcc(a_nan, b_nan)
+    # Mixed-mode PCC computation
+    pcc_mixed_1 = compute_pcc(a_nan_t, b_nan)
+    pcc_mixed_2 = compute_pcc(a_nan, b_nan_t)
     print(f"  both NaN - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
     assert pcc_ttnn == 1.0
     assert pcc_cpu == 1.0
+    assert pcc_mixed_1 == 1.0
+    assert pcc_mixed_2 == 1.0
 
     # Mixed NaN presence -> 0.0
     pcc_ttnn = compute_pcc(a_nan_t, a_num_t)
     pcc_cpu = compute_pcc(a_nan, a_num)
+    # Mixed-mode PCC computation
+    pcc_mixed_1 = compute_pcc(a_nan_t, a_num)
+    pcc_mixed_2 = compute_pcc(a_nan, a_num_t)
     print(f"  mixed NaN - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
     assert pcc_ttnn == 0.0
     assert pcc_cpu == 0.0
+    assert pcc_mixed_1 == 0.0
+    assert pcc_mixed_2 == 0.0
 
     print("  ✓ TTNN-native PCC correctly handles NaN cases!")
 
@@ -383,10 +478,14 @@ def test_pcc_zero_vs_nonzero(ttnn_mesh_device):
 
     pcc_ttnn = compute_pcc(a_zero_t, b_nonzero_t)
     pcc_cpu = compute_pcc(a_zero, b_nonzero)
-
+    # Mixed-mode PCC computation
+    pcc_mixed_1 = compute_pcc(a_zero_t, b_nonzero)
+    pcc_mixed_2 = compute_pcc(a_zero, b_nonzero_t)
     print(f"  zero vs non-zero - TTNN: {pcc_ttnn}, CPU: {pcc_cpu}")
     assert pcc_ttnn == 0.0
     assert pcc_cpu == 0.0
+    assert pcc_mixed_1 == 0.0
+    assert pcc_mixed_2 == 0.0
     print("  ✓ TTNN-native PCC correctly handles zero vs non-zero!")
 
 
