@@ -18,7 +18,7 @@ inputs:
       (.*:=.*short test summary info.*=)|(.*:(PASSED|FAILED|SKIPPED|ERROR) )|(.*:=.*[0-9].*passed.*=)
     description: "EGREP regex for lines to keep in the compact summary"
   summary_context:
-    required: false
+    required: falsedn
     default: "2"
     description: "grep -C context lines"
   summary_max_lines:
