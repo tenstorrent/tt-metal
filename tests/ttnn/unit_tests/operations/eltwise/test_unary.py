@@ -226,20 +226,8 @@ def test_relu(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_rsqrt(device, h, w):
-    run_unary_test(device, h, w, ttnn.rsqrt)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_silu(device, h, w):
     run_unary_test(device, h, w, ttnn.silu)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_rsqrt(device, h, w):
-    run_unary_test(device, h, w, ttnn.rsqrt)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -1851,3 +1839,41 @@ def test_hardmish_bfloat16_allclose(device):
     tt_result = ttnn.hardmish(tt_in)
     result = ttnn.to_torch(tt_result)
     assert_allclose(golden, result, rtol=1e-05, atol=1e-35)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 1, 3, 64, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("ttnn_op", [ttnn.rsqrt, ttnn.sqrt])
+@pytest.mark.parametrize("fast_approx_mode", [True, False])
+def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fast_approx_mode, device):
+    if fast_approx_mode:
+        in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(1, 100)
+    else:
+        in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn_op(input_tensor, fast_and_approximate_mode=fast_approx_mode)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_tensor = golden_function(in_data)
+
+    if fast_approx_mode:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
+    else:
+        output_tensor = ttnn.to_torch(output_tensor, dtype=torch_dtype)
+        if torch_dtype == torch.bfloat16:
+            output_tensor = torch.where(
+                torch.isinf(output_tensor), torch.tensor(float("nan"), dtype=output_tensor.dtype), output_tensor
+            )
+        torch.isclose(output_tensor, golden_tensor, equal_nan=True)
