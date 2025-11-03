@@ -120,15 +120,15 @@ Introduce a ttnn::to_string(tensor) operation for pybind and move the ttnn::dist
 
 * Move `ttnn/api/ttnn/tensor/*` to:
 
-  * Public headers: `tt_metal/api/tt-metalium/tensor/*`
+  * Public headers: `tt_metal/api/experimental/tt-metalium/tensor/*`
 
-  * Impl: `tt_metal/impl/tensor/*`
+  * Impl: `tt_metal/impl/experimental/tensor/*`
 
 * Move distributed `Tensor` deps:
 
-  * `tt_metal/impl/tensor/distributed/tensor_topology.cpp`
+  * `tt_metal/impl/experimental/tensor/distributed/tensor_topology.cpp`
 
-  * `tt_metal/impl/tensor/distributed/distributed_configs.cpp`
+  * `tt_metal/impl/experimental/tensor/distributed/distributed_configs.cpp`
 
 * Move flatbuffer serialization (optionaly)
   * Keep **flatbuffer dump** in `ttnn` due to dependency from `host_ccl::all_gather`.
