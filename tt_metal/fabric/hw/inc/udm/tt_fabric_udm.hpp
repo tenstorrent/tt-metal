@@ -311,6 +311,52 @@ inline __attribute__((always_inline)) void fabric_fast_write_any_len(
 }
 
 /**
+ * @brief Write a single 32-bit value to a remote location through the fabric using inline write
+ *
+ * This function sends a 32-bit value through the fabric network to a remote destination
+ * using an inline write. Inline writes are efficient for small data as the value is embedded
+ * directly in the packet header rather than sent as separate payload.
+ *
+ * @param dst_dev_id Destination device ID for fabric routing
+ * @param dst_mesh_id Destination mesh ID for fabric routing
+ * @param val The 32-bit value to write
+ * @param dest_addr Destination NOC address (encoded with x,y coordinates and local address)
+ * @param multicast Whether this is a multicast operation
+ * @param num_dests Number of destinations (for multicast)
+ * @param trid Transaction ID for UDM operations
+ * @param posted Whether to use posted writes (1) or non-posted writes (0)
+ */
+inline __attribute__((always_inline)) void fabric_fast_write_dw_inline(
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t val,
+    uint64_t dest_addr,
+    bool multicast = false,
+    uint32_t num_dests = 1,
+    uint16_t trid = 0,
+    uint8_t posted = 0) {
+    auto [connection, is_init] = get_or_open_fabric_connection();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = get_or_allocate_header();
+
+    fabric_write_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id, trid, posted);
+
+    if (multicast) {
+        // TODO: Set up multicast header with proper routing
+
+    } else {
+        packet_header->to_noc_unicast_inline_write(NocUnicastInlineWriteCommandHeader{dest_addr, val});
+    }
+
+    connection.wait_for_empty_write_slot();
+    connection.send_payload_blocking_from_address(
+        reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+
+    if (!posted) {
+        fabric_nonposted_writes_acked += num_dests;
+    }
+}
+
+/**
  * @brief Send a write acknowledgment back to the sender using atomic increment
  *
  * This function sends an atomic increment to the sender's NONPOSTED_WRITES_ACKED counter

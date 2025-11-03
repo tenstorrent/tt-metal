@@ -48,12 +48,35 @@ void kernel_main() {
         volatile tt_l1_ptr PACKET_HEADER_TYPE* received_header =
             wait_for_notification(curr_notification_addr, time_seed, req_notification_size_bytes);
 
-        // Send write ACK back to the sender
-        tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+        switch (noc_send_type) {
+            case NOC_UNICAST_WRITE: {
+                // Send write ACK back to the sender
+                tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
 
-        // Check for data correctness
-        match = check_packet_data(
-            start_addr, packet_payload_size_bytes / 16, time_seed, mismatch_addr, mismatch_val, expected_val);
+                // Check for data correctness
+                match = check_packet_data(
+                    start_addr, packet_payload_size_bytes / 16, time_seed, mismatch_addr, mismatch_val, expected_val);
+
+            } break;
+            case NOC_UNICAST_INLINE_WRITE: {
+                // Send write ACK back to the sender
+                tt::tt_fabric::udm::fabric_fast_write_ack(received_header);
+
+                // Check data correctness for a single uint32_t
+                uint32_t received_value = *start_addr;
+                uint32_t expected_value = time_seed;
+                if (received_value != expected_value) {
+                    match = false;
+                    mismatch_addr = reinterpret_cast<uint32_t>(start_addr);
+                    mismatch_val = received_value;
+                    expected_val = expected_value;
+                    break;
+                }
+            } break;
+            default: {
+                ASSERT(false);
+            } break;
+        }
         if (!match) {
             break;
         }

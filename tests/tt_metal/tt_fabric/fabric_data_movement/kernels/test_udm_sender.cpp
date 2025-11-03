@@ -52,19 +52,32 @@ void kernel_main() {
                     source_l1_buffer_address,
                     get_noc_addr(noc_x_start, noc_y_start, target_address),
                     packet_payload_size_bytes);
+            } break;
+            case NOC_UNICAST_INLINE_WRITE: {
+                uint32_t inline_value = time_seed;
+                tt::tt_fabric::udm::fabric_fast_write_dw_inline(
+                    dst_dev_id, dst_mesh_id, inline_value, get_noc_addr(noc_x_start, noc_y_start, target_address));
+            } break;
+            default: {
+                ASSERT(false);
+            } break;
+        }
 
-                uint32_t notification_buffer_addr = local_notification_addr + i * req_notification_size_bytes;
-                uint32_t remote_notification_dest = remote_notification_addr + i * req_notification_size_bytes;
-                notify_receiver(
-                    dst_dev_id,
-                    dst_mesh_id,
-                    noc_x_start,
-                    noc_y_start,
-                    notification_buffer_addr,
-                    remote_notification_dest,
-                    time_seed,
-                    req_notification_size_bytes);
+        uint32_t notification_buffer_addr = local_notification_addr + i * req_notification_size_bytes;
+        uint32_t remote_notification_dest = remote_notification_addr + i * req_notification_size_bytes;
+        notify_receiver(
+            dst_dev_id,
+            dst_mesh_id,
+            noc_x_start,
+            noc_y_start,
+            notification_buffer_addr,
+            remote_notification_dest,
+            time_seed,
+            req_notification_size_bytes);
 
+        switch (noc_send_type) {
+            case NOC_UNICAST_WRITE:
+            case NOC_UNICAST_INLINE_WRITE: {
                 tt::tt_fabric::udm::fabric_write_barrier();
             } break;
             default: {

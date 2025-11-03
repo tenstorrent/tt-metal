@@ -2335,8 +2335,6 @@ void UDMFabricUnicastCommon(
     auto receiver_device = fixture->get_device(dst_physical_device_id);
     auto dest_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
-    log_info(tt::LogTest, "src_fabric_node_id: {}, dest_fabric_node_id: {}", src_fabric_node_id, dest_fabric_node_id);
-
     auto sender_device = fixture->get_device(src_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
@@ -2345,7 +2343,7 @@ void UDMFabricUnicastCommon(
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
     if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
-        worker_mem_map.packet_payload_size_bytes = 4;
+        worker_mem_map.packet_payload_size_bytes = 16;  // l1 aligned
     } else {
         auto single_payload_size_bytes = worker_mem_map.packet_payload_size_bytes;
         worker_mem_map.packet_payload_size_bytes = single_payload_size_bytes * 2 - 16;
