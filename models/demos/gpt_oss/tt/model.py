@@ -173,7 +173,9 @@ class Model:
 
         return instance
 
-    def _forward_layers_and_head(self, hidden_states, rope_mats, current_pos, attention_masks, page_table, kv_cache):
+    def _forward_layers_and_head(
+        self, hidden_states, rope_mats, current_pos, attention_masks, page_table, kv_cache, get_last_token=-1
+    ):
         """
         Shared forward pass through decoder layers and final projection.
 
@@ -205,6 +207,18 @@ class Model:
                 page_table=page_table,
                 kv_cache=layer_kv_cache,
             )
+        logits = hidden_states
+
+        if get_last_token != -1:
+            # The logits come from the shared method, slice them
+            if len(logits.shape) == 3:
+                logits = ttnn.unsqueeze(logits, dim=1)
+            logits_sliced = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
+            logits.deallocate(True)
+            logits = logits_sliced
+            if len(logits.shape) == 4 and logits.shape[1] == 1:
+                logits = ttnn.squeeze(logits, dim=1)
+            hidden_states = logits
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
@@ -213,7 +227,9 @@ class Model:
         # TP all-gather if using tensor parallelism
         config = self.mesh_config.get_config(mode)
         if config.tp > 1:
-            logits = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=2)
+            logits_gathered = self.mesh_config.allgather(logits, self.ccl_manager, axis=self.mesh_config.tp_axis, dim=2)
+            logits.deallocate(True)
+            logits = logits_gathered
         return logits
 
     def ttnn_decode_forward(
@@ -295,16 +311,8 @@ class Model:
             attention_masks=attention_masks,
             page_table=page_table,
             kv_cache=kv_cache,
+            get_last_token=get_last_token,
         )
-
-        # Handle last token slicing for efficiency (prefill-specific)
-        if get_last_token != -1:
-            # The logits come from the shared method, slice them
-            if len(logits.shape) == 3:
-                logits = ttnn.unsqueeze(logits, dim=1)
-            logits = ttnn.slice(logits, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, logits.shape[-1]))
-            if len(logits.shape) == 4 and logits.shape[1] == 1:
-                logits = ttnn.squeeze(logits, dim=1)
 
         return logits
 
@@ -384,8 +392,8 @@ class Model:
             tokens = tokens.reshape(1, 1, 1, -1)
 
         tokens = ttnn.from_torch(tokens, device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
-
+        tokens_embd = ttnn.embedding(tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        tokens.deallocate(True)
         # Ensure proper 4D shape
         if len(tokens_embd.shape) == 3:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)

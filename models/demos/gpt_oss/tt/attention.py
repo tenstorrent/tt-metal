@@ -247,7 +247,7 @@ class Attention:
         mode = "decode" if is_decode_mode else "prefill"
 
         # QKV projection: single matmul + bias
-        xqkv_fused = ttnn.matmul(x, self.wqkv)
+        xqkv_fused = ttnn.matmul(x, self.wqkv, dtype=ttnn.bfloat16)
         xqkv_fused = ttnn.add(xqkv_fused, self.wqkv_bias, output_tensor=xqkv_fused)
 
         if is_decode_mode:
