@@ -37,7 +37,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     Program program{};
 
     auto input_buffer{input_tensor.buffer()};
-    auto zero_tile_buffer{tensor_args.zero_tile_tensor.buffer()};
+    // auto zero_tile_buffer{tensor_args.zero_tile_tensor.buffer()};
     auto output_buffer{output_tensor.buffer()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(input_tensor.dtype())};
@@ -106,7 +106,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     };
     std::vector<uint32_t> dataflow_compile_time_args{compute_compile_time_args};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(dataflow_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(zero_tile_buffer).append_to(dataflow_compile_time_args);
+    // tt::tt_metal::TensorAccessorArgs(zero_tile_buffer).append_to(dataflow_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(dataflow_compile_time_args);
 
     const ReaderDataMovementConfig reader_config{dataflow_compile_time_args};
@@ -122,7 +122,9 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     auto compute_kernel_id{create_kernel(program, KERNEL_PATHS[1], total_core_range_set, compute_config)};
     auto writer_kernel_id{create_kernel(program, KERNEL_PATHS[2], total_core_range_set, writer_config)};
 
-    const CoreCoord core_mesh_size = total_core_range_set.bounding_box().end_coord;
+    // std::cout <<
+    const CoreCoord core_mesh_size = CoreCoord{
+        total_core_range_set.bounding_box().end_coord.x + 1, total_core_range_set.bounding_box().end_coord.y + 1};
     const auto per_core_set_work_split = split_intimg_work_to_cores(input_shape, core_mesh_size);
 
     set_runtime_args(
@@ -132,7 +134,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
         writer_kernel_id,
         per_core_set_work_split,
         input_buffer->address(),
-        zero_tile_buffer->address(),
+        // zero_tile_buffer->address(),
         output_buffer->address());
 
     return {
@@ -153,7 +155,7 @@ void IntImgProgramFactory::override_runtime_arguments(
     const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
 
     auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
-    auto zero_tile_buffer_address = tensor_args.zero_tile_tensor.buffer()->address();
+    // auto zero_tile_buffer_address = tensor_args.zero_tile_tensor.buffer()->address();
     auto output_buffer_address = tensor_return_value.buffer()->address();
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
 
@@ -164,10 +166,11 @@ void IntImgProgramFactory::override_runtime_arguments(
         "the total core range set calculated by the input shape {} is empty, cannot proceed further with program "
         "creation",
         input_shape);
-    const CoreCoord core_mesh_size = total_core_range_set.bounding_box().end_coord;
+    const CoreCoord core_mesh_size = CoreCoord{
+        total_core_range_set.bounding_box().end_coord.x + 1, total_core_range_set.bounding_box().end_coord.y + 1};
+    // const CoreCoord core_mesh_size = total_core_range_set.bounding_box().end_coord;
     const auto per_core_set_work_split = intimg::common::split_intimg_work_to_cores(input_shape, core_mesh_size);
 
-    std::cout << "CCCCCCCCC" << std::endl;
     set_runtime_args(
         program,
         reader_kernel_id,
@@ -175,7 +178,7 @@ void IntImgProgramFactory::override_runtime_arguments(
         writer_kernel_id,
         per_core_set_work_split,
         input_buffer_address,
-        zero_tile_buffer_address,
+        // zero_tile_buffer_address,
         output_buffer_address);
 }
 
@@ -193,15 +196,15 @@ CBHandle IntImgProgramFactory::create_cb(
     return CreateCircularBuffer(program, core_range_set, cb_config);
 }
 
-KernelHandle IntImgProgramFactory::create_kernel(
+inline KernelHandle IntImgProgramFactory::create_kernel(
     Program& program,
     const char* kernel_path,
     const CoreRangeSet& core_range_set,
-    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-    const std::vector<uint32_t>& runtime_args) {
+    // const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    // const std::vector<uint32_t>& runtime_args) {
     auto kernel_id{CreateKernel(program, kernel_path, core_range_set, config)};
-
-    SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
+    // SetRuntimeArgs(program, kernel_id, core_range_set, runtime_args);
 
     return kernel_id;
 }
@@ -213,9 +216,10 @@ void IntImgProgramFactory::set_runtime_args(
     KernelHandle writer_kernel_id,
     const IntImgPerCoreSetWorkSplit& per_core_set_work_split,
     uint32_t input_buffer_address,
-    uint32_t zero_tile_buffer_address,
+    // uint32_t zero_tile_buffer_address,
     uint32_t output_buffer_address) {
     for (const auto& [core_set_name, core_set_work_def] : make_intimg_work_map(per_core_set_work_split)) {
+        std::cout << core_set_name << std::endl;
         bool core_set_engaged = core_set_work_def.first;
         if (core_set_engaged) {
             const auto& engaged_core_set = core_set_work_def.second.first;
@@ -238,7 +242,7 @@ void IntImgProgramFactory::set_runtime_args(
 
                     std::vector<uint32_t> runtime_args{
                         input_buffer_address,
-                        zero_tile_buffer_address,
+                        // zero_tile_buffer_address,
                         output_buffer_address,
                         starting_row_chunk_for_core_set_along_channels,
                         per_core_set_work_def.row_chunks_per_core_along_channels,

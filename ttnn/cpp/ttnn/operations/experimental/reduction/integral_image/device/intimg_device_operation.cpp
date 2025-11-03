@@ -30,7 +30,6 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
         "Expected at least {} cores to be available in the core grid along columns, there are {} instead",
         EXPECTED_AVAILABLE_CORES_IN_ROW,
         grid_size.y);
-    std::cout << "GGGGGGGGG" << std::endl;
 }
 
 void IntImgDeviceOperation::validate_on_program_cache_hit(
@@ -48,23 +47,21 @@ IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output
 
 IntImgDeviceOperation::tensor_return_value_t IntImgDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    std::cout << "SHAPE: " << tensor_args.input_tensor.padded_shape() << std::endl;
     return create_device_tensor(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
 IntImgDeviceOperation::invocation_result_t IntImgDeviceOperation::invoke(const Tensor& input_tensor) {
-    const auto tile_spec = input_tensor.tensor_spec().tile();
-    std::cout << "AAAAAAA" << std::endl;
-    const Tensor zero_tile = ttnn::zeros(
-        Shape{tile_spec.get_tile_shape()},
-        input_tensor.dtype(),
-        input_tensor.layout(),
-        *input_tensor.device(),
-        input_tensor.memory_config());
+    // const auto tile_spec = input_tensor.tensor_spec().tile();
+    // const Tensor zero_tile = ttnn::zeros(
+    //     Shape{tile_spec.get_tile_shape()},
+    //     input_tensor.dtype(),
+    //     input_tensor.layout(),
+    //     *input_tensor.device(),
+    //     input_tensor.memory_config());
     // const Tensor zero_tile = ttnn::zeros_like(input_tensor);
-    std::cout << "BBBBBBB" << std::endl;
-    return {operation_attributes_t{}, tensor_args_t{input_tensor, zero_tile}};
+    // return {operation_attributes_t{}, tensor_args_t{input_tensor, zero_tile}};
+    return {operation_attributes_t{}, tensor_args_t{input_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::reduction

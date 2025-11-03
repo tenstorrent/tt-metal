@@ -1,12 +1,13 @@
 #pragma once
 
-#include <cmath>
-
 constexpr uint32_t ONE_TILE{1};
 constexpr uint32_t FIRST_TILE{0};
 constexpr uint32_t WORKING_REG{0};
 constexpr uint32_t SEMAPHORE_BUSY{0};
 constexpr uint32_t SEMAPHORE_READY{1};
+
+constexpr uint32_t FIRST_ROW_ORD = 0;
+constexpr uint32_t LAST_ROW_ORD = 32 - 1;
 
 // choose the right C++ POD type at compile-time
 template <DataFormat df>
@@ -48,6 +49,7 @@ template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
 
 // aggressively cutting lines in the main logic (kek DABlyu)
+// CB read RAII
 class ReadCBGuard {
     uint32_t cb;
     uint32_t tiles;
@@ -63,6 +65,8 @@ public:
     template <typename any_type_t>
     operator any_type_t() = delete;
 };
+
+// CB write RAII
 class WriteCBGuard {
     uint32_t cb;
     uint32_t tiles;
@@ -79,7 +83,7 @@ public:
     operator any_type_t() = delete;
 };
 
-// NoC
+// L1 -> DRAM
 template <typename addr_gen_t>
 FORCE_INLINE void write_to_dram(
     uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
@@ -89,6 +93,8 @@ FORCE_INLINE void write_to_dram(
     noc_async_write_tile(write_tile_id, addr_gtor, l1_read_addr);
     noc_async_write_barrier();
 }
+
+// DRAM -> L1
 template <typename addr_gen_type>
 FORCE_INLINE void load_to_cb(
     uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
@@ -125,7 +131,8 @@ FORCE_INLINE uint32_t get_tile_id(
 }
 
 // all static data
-template <typename InputAccessorArgs, typename ZeroTileAccessorArgs, typename OutputAccessorArgs>
+// template <typename InputAccessorArgs, typename ZeroTileAccessorArgs, typename OutputAccessorArgs>
+template <typename InputAccessorArgs, typename OutputAccessorArgs>
 struct IntImgCTAs {
     const uint32_t start_cb;
     const uint32_t input_cb;
@@ -145,17 +152,17 @@ struct IntImgCTAs {
     const uint32_t input_width;
     const uint32_t num_tiles_along_channels;
     const uint32_t num_tiles_along_height;
-    const uint32_t top_semaphore_id;
-    const uint32_t bot_semaphore_id;
+    const uint32_t top_semaphore;
+    const uint32_t bot_semaphore;
     const InputAccessorArgs input_args;
-    const ZeroTileAccessorArgs zero_tile_args;
+    // const ZeroTileAccessorArgs zero_tile_args;
     const OutputAccessorArgs output_args;  // reused for reading upper block for propagation.
 };
 
 // all per-core runtime data
 struct IntImgRTAs {
     const uint32_t input_base_addr;
-    const uint32_t zero_tile_base_addr;
+    // const uint32_t zero_tile_base_addr;
     const uint32_t output_base_addr;
     const uint32_t starting_tile_along_channels;
     const uint32_t num_tiles_along_channels_per_core;
@@ -165,9 +172,11 @@ struct IntImgRTAs {
 
 FORCE_INLINE constexpr auto get_ctas() {
     constexpr auto input_args = TensorAccessorArgs<19>();
-    constexpr auto zero_tile_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto output_args = TensorAccessorArgs<zero_tile_args.next_compile_time_args_offset()>();
-    return IntImgCTAs<decltype(input_args), decltype(zero_tile_args), decltype(output_args)>{
+    // constexpr auto zero_tile_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    // constexpr auto output_args = TensorAccessorArgs<zero_tile_args.next_compile_time_args_offset()>();
+    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    // return IntImgCTAs<decltype(input_args), decltype(zero_tile_args), decltype(output_args)>{
+    return IntImgCTAs<decltype(input_args), decltype(output_args)>{
         get_compile_time_arg_val(0),
         get_compile_time_arg_val(1),
         get_compile_time_arg_val(2),
@@ -188,7 +197,7 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(17),
         get_compile_time_arg_val(18),
         input_args,
-        zero_tile_args,
+        // zero_tile_args,
         output_args,
     };
 }
@@ -201,6 +210,6 @@ FORCE_INLINE const auto get_rtas() {
         get_arg_val<uint32_t>(3),
         get_arg_val<uint32_t>(4),
         get_arg_val<uint32_t>(5),
-        get_arg_val<uint32_t>(6),
+        // get_arg_val<uint32_t>(6),
     };
 }

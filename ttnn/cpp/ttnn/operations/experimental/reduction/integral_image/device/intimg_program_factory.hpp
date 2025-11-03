@@ -59,12 +59,13 @@ struct IntImgProgramFactory {
         const CoreRangeSet& core_range_set,
         const uint32_t& tiles_num);
 
-    static KernelHandle create_kernel(
+    static inline KernelHandle create_kernel(
         Program& program,
         const char* kernel_path,
         const CoreRangeSet& core_range_set,
-        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
-        const std::vector<uint32_t>& runtime_args = {});
+        // const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+        const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config);
+    // const std::vector<uint32_t>& runtime_args = {});
 
     static void set_runtime_args(
         Program& program,
@@ -73,7 +74,7 @@ struct IntImgProgramFactory {
         KernelHandle writer_kernel_id,
         const IntImgPerCoreSetWorkSplit& per_core_set_work_split,
         uint32_t input_buffer_address,
-        uint32_t zero_tile_buffer_address,
+        // uint32_t zero_tile_buffer_address,
         uint32_t output_buffer_address);
 };
 

@@ -25,7 +25,7 @@ struct operation_attributes_t {};
 
 struct tensor_args_t {
     const Tensor& input_tensor;
-    const Tensor& zero_tile_tensor;
+    // const Tensor& zero_tile_tensor;
 };
 
 using spec_return_value_t = TensorSpec;
