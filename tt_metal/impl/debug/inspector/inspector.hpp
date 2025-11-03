@@ -39,16 +39,16 @@ public:
     static void program_set_binary_status(
         const detail::ProgramImpl* program, std::size_t device_id, ProgramBinaryStatus status) noexcept;
     static void program_compile_started(
-        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
     static void program_compile_already_exists(
-        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
     static void program_kernel_compile_finished(
         const detail::ProgramImpl* program,
         const IDevice* device,
         const std::shared_ptr<Kernel>& kernel,
         const tt::tt_metal::JitBuildOptions& build_options) noexcept;
     static void program_compile_finished(
-        const detail::ProgramImpl* program, const IDevice* device, uint32_t build_key) noexcept;
+        const detail::ProgramImpl* program, const IDevice* device, uint64_t build_key) noexcept;
 
     static void mesh_device_created(
         const distributed::MeshDevice* mesh_device, std::optional<int> parent_mesh_id) noexcept;

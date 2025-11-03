@@ -244,7 +244,8 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     if is_wormhole_b0():
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -358,7 +359,8 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])
     torch_input_tensor_b = torch.rand([1, 1, 1152, 384])
     torch_input_tensor_c = torch.rand([1, 1, 1, 1152])
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=True,

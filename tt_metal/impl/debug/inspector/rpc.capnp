@@ -78,7 +78,7 @@ struct OperationData {
 # enabling correct firmware path resolution without relying on relative
 # paths
 struct BuildEnvData {
-    buildKey @0 :UInt32; # Unique identifier for the build configuration
+    buildKey @0 :UInt64; # Unique identifier for the build configuration
     firmwarePath @1 :Text; # Absolute path to the firmware directory for this device
     fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
 }

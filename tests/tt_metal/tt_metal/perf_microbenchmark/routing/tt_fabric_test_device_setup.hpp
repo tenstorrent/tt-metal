@@ -292,6 +292,19 @@ public:
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const;
+    // Validation read operations struct for non-blocking reads
+    struct ValidationReadOps {
+        TestFixture::ReadBufferOperation sender_op;
+        TestFixture::ReadBufferOperation receiver_op;
+        bool has_senders = false;
+        bool has_receivers = false;
+    };
+
+    // New split validation methods for non-blocking operation
+    ValidationReadOps initiate_results_readback() const;
+    void validate_results_after_readback(const ValidationReadOps& ops) const;
+
+    // Original validation method for backward compatibility
     void validate_results() const;
     void set_sync_core(CoreCoord coord) { sync_core_coord_ = coord; };
     void set_local_runtime_args_for_core(
