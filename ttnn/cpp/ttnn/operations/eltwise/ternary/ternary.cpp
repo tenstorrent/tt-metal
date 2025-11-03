@@ -256,7 +256,7 @@ Tensor AddcmulOperation::invoke(
         return _addcmul(input_a, input_b, input_c, value, memory_config);
     }
 
-    // Use LLK implementation - pass value as additional_scalar parameter
+    // Use LLK implementation - pass value as scalar parameter
     return ttnn::prim::ternary(
         TernaryOpType::ADDCMUL,
         input_a,

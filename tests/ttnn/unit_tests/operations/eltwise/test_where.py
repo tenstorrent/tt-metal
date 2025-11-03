@@ -50,7 +50,7 @@ def torch_equal_nan(a, b):
 @pytest.mark.parametrize("condition", [1])
 def test_ttnn_addcmul(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
-    C = torch.randn(t_shape, dtype=torch.bfloat16) * 4
+    C = torch.randn(t_shape, dtype=torch.bfloat16) * -4
     if variant == "TTS":
         T = torch.randn(t_shape, dtype=torch.bfloat16)
         F = scalar
@@ -58,9 +58,9 @@ def test_ttnn_addcmul(c_shape, t_shape, f_shape, scalar, variant, condition, dev
         T = scalar
         F = torch.randn(f_shape, dtype=torch.bfloat16)
     elif variant == "TTT":
-        T = torch.randn(t_shape, dtype=torch.bfloat16)
-        F = torch.ones(f_shape, dtype=torch.bfloat16) * 10
-    golden = torch.addcmul(C, T, F)
+        T = torch.randn(t_shape, dtype=torch.bfloat16) * 2
+        F = torch.randn(f_shape, dtype=torch.bfloat16) * 10
+    golden = torch.addcmul(C, T, F, value=15.5)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     if variant == "TTS":
@@ -72,9 +72,11 @@ def test_ttnn_addcmul(c_shape, t_shape, f_shape, scalar, variant, condition, dev
     elif variant == "TTT":
         ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         ttnn_F = ttnn.from_torch(F, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_result = ttnn.addcmul(ttnn_C, ttnn_T, ttnn_F)
+    ttnn_result = ttnn.addcmul(ttnn_C, ttnn_T, ttnn_F, value=15.5)
     result = ttnn.to_torch(ttnn_result)
-    # assert_with_ulp(golden, result, 64)
+    print(torch.abs(result - golden))
+    print(torch.max(torch.abs(result - golden)))
+
     assert_with_pcc(result, golden, 0.999)
 
 
