@@ -36,7 +36,12 @@ TUTORIALS_DATA_PATHS = {
         LOCAL_SOURCE_PATH_KEY: "./ttnn_clip_zero_shot_image_classification",
         EXTERNAL_SOURCE_PATH_KEY: "ttnn_clip_zero_shot_image_classification",
         ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_CLIP_PATH",  # Send model path as environment variable (avoids hard-coding values in notebook)
-    }
+    },
+    "ttnn_tracer_model": {
+        LOCAL_SOURCE_PATH_KEY: "./ttnn_tracer_model",
+        EXTERNAL_SOURCE_PATH_KEY: "ttnn_tracer_model",
+        ENVIRONMENT_VARIABLE_MODEL: "TTNN_TUTORIALS_MODELS_TRACER_PATH",
+    },
     # NOTE: Add entries here for new tutorials that require external data
 }
 

@@ -3,13 +3,11 @@
 
 
 import os
-
+from pathlib import Path
 import torch
 import transformers
-
 import ttnn
 from ttnn.tracer import trace, visualize
-
 from models.demos.bert.tt import ttnn_bert
 from models.demos.bert.tt import ttnn_optimized_bert
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -17,6 +15,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 def main():
     os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": false}'
+
     transformers.logging.set_verbosity_error()
 
     with trace():
@@ -48,9 +47,52 @@ def main():
     # Visualize the graph showing PyTorch → TT-NN → reshape → PyTorch conversion
     visualize(tensor)
 
+    def download_google_bert_model_and_config(
+        model_name: str,
+    ) -> tuple[transformers.models.bert.modeling_bert.BertSelfOutput, transformers.BertConfig]:
+        model_location = model_name  # By default, download from Hugging Face
+
+        # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+        cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
+        if cache_dir is not None:
+            model_location = Path(cache_dir) / Path("google_bert_model")
+
+        # Load model weights (download if cache_dir was not set)
+        config = transformers.BertConfig.from_pretrained(model_location)
+        model = transformers.models.bert.modeling_bert.BertSelfOutput(config).eval()
+
+        return model, config
+
+    def download_ttnn_bert_config(model_name: str) -> transformers.BertConfig:
+        config_location = model_name  # By default, download from Hugging Face
+
+        # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+        cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
+        if cache_dir is not None:
+            config_location = Path(cache_dir) / Path("ttnn_bert_config")
+
+        # Load config (download if cache_dir was not set)
+        config = transformers.BertConfig.from_pretrained(config_location)
+
+        return config
+
+    def download_ttnn_bert_model(
+        model_name: str, config: transformers.BertConfig
+    ) -> transformers.BertForQuestionAnswering:
+        model_location = model_name  # By default, download from Hugging Face
+
+        # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
+        cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
+        if cache_dir is not None:
+            model_location = Path(cache_dir) / Path("ttnn_bert_model")
+
+        # Load model weights (download if cache_dir was not set)
+        model = transformers.BertForQuestionAnswering.from_pretrained(model_location, config=config).eval()
+
+        return model
+
     model_name = "google/bert_uncased_L-4_H-256_A-4"
-    config = transformers.BertConfig.from_pretrained(model_name)
-    model = transformers.models.bert.modeling_bert.BertSelfOutput(config).eval()
+    model, config = download_google_bert_model_and_config(model_name)
 
     # Trace the BERT self-output layer operations
     with trace():
@@ -91,7 +133,7 @@ def main():
         """
         # Use a larger BERT model fine-tuned for question answering
         model_name = "phiyodr/bert-large-finetuned-squad2"
-        config = transformers.BertConfig.from_pretrained(model_name)
+        config = download_ttnn_bert_config(model_name)
 
         # Limit to 1 layer for faster execution in this demo
         # Full BERT-large has 24 layers
@@ -104,10 +146,9 @@ def main():
         # ===== Model Parameter Preprocessing =====
         # Convert model parameters to TT-NN format and optimize for device
         # This includes weight packing, layout conversion, and memory placement
+        model = download_ttnn_bert_model(model_name, config)
         parameters = preprocess_model_parameters(
-            initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-                model_name, config=config
-            ).eval(),
+            initialize_model=lambda: model,
             custom_preprocessor=bert.custom_preprocessor,
             device=device,
         )
