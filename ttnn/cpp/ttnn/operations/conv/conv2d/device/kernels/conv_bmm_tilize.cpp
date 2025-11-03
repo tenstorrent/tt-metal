@@ -12,7 +12,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
-#include "tools/profiler/kernel_profiler.hpp"
 // #include "debug/dprint.h"
 
 #define DEBUG_PRINT 0
@@ -31,11 +30,7 @@ void tilize_in(
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         cb_wait_front(in_cb_id, in_block_w);
         cb_reserve_back(out_cb_id, in_block_w);
-
-        {
-            DeviceZoneScopedN("TILIZE BLOCK");
-            fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
-        }
+        fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
         cb_push_back(out_cb_id, in_block_w);
         cb_pop_front(in_cb_id, in_block_w);
     }
@@ -216,7 +211,6 @@ void MAIN {
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
     constexpr uint32_t tilized_cb_second_reader_id = get_compile_time_arg_val(40);
 
-
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
@@ -230,8 +224,7 @@ void MAIN {
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
-    constexpr uint32_t in0_num_subblocks_read_last =
-        (split_reader) ? reader_num_h_subblocks / 2 : 0;
+    constexpr uint32_t in0_num_subblocks_read_last = (split_reader) ? reader_num_h_subblocks / 2 : 0;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
 
     // if activation reuse is enabled, we need to update read pointers of the act buffers
@@ -419,19 +412,16 @@ void MAIN {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
                             // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
-                            {
-                                DeviceZoneScopedN("MATMUL BLOCK");
-                                matmul_block(
-                                    mm_in0_cb_id,
-                                    in1_cb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
-                                    false,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                            }
+                            matmul_block(
+                                mm_in0_cb_id,
+                                in1_cb_id,
+                                in0_index,
+                                in1_index,
+                                dst_index,
+                                false,
+                                out_subblock_w,
+                                out_subblock_h,
+                                in0_block_w);
                             in0_index++;               // stride right by 1
                             in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w (should be
                                                        // called in1_block_w)
