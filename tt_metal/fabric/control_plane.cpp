@@ -145,7 +145,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
     this->router_port_directions_to_num_routing_planes_map_.clear();
 
-    auto topology = FabricContext::get_topology_from_config(fabric_config);
+    // auto topology = FabricContext::get_topology_from_config(fabric_config);
 
     // For TG need to skip the direction on the remote devices directly connected to the MMIO devices as we have only
     // one outgoing eth chan to the mmio device
@@ -200,18 +200,18 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     build_golden_link_counts(
         this->routing_table_generator_->mesh_graph->get_inter_mesh_connectivity(), golden_link_counts);
 
-    auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
-        if (skip_direction(fabric_node_id, direction)) {
-            return;
-        }
-        if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
-            this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
-            !this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).empty()) {
-            this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
-        }
-    };
+    // auto apply_count = [&](FabricNodeId fabric_node_id, RoutingDirection direction, size_t count) {
+    //     if (skip_direction(fabric_node_id, direction)) {
+    //         return;
+    //     }
+    //     if (this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id) &&
+    //         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).contains(direction) &&
+    //         !this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id).at(direction).empty()) {
+    //         this->router_port_directions_to_num_routing_planes_map_[fabric_node_id][direction] = count;
+    //     }
+    // };
 
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    // const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     // For each mesh in the system
     for (auto mesh_id : user_meshes) {
         const auto& mesh_shape = this->get_physical_mesh_shape(MeshId{mesh_id});
