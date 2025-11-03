@@ -1,0 +1,1131 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Building CLIP Model for Zero-Shot Image Classification with TT-NN &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_clip_zero_shot_classification.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+        <script src="../../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="TT-NN Visualizer" href="ttnn_visualizer.html" />
+    <link rel="prev" title="Running a Simple CNN Inference on CIFAR-10" href="ttnn_simplecnn_inference.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="ttnn_add_tensors.html">Add Tensors</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_operations.html">Basic Tensor Operations</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_mlp_inference_mnist.html">MLP Inference</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_multihead_attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_basic_conv.html">Basic Convolution</a></li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_simplecnn_inference.html">Running a Simple CNN Inference on CIFAR-10</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Building CLIP Model for Zero-Shot Image Classification with TT-NN</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#What-CLIP-Does">What CLIP Does</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Imports-and-Dependencies">Imports and Dependencies</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#TT-NN-Device-Management-and-Utility-Functions">TT-NN Device Management and Utility Functions</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Model-Weight-Conversion">Model Weight Conversion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Generic-Transformer-Implementation">Generic Transformer Implementation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Transformer-Architecture">Transformer Architecture</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#Vision-Transformer-Implementation">Vision Transformer Implementation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Vision-Processing-Pipeline">Vision Processing Pipeline</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#Complete-CLIP-Model-Implementation">Complete CLIP Model Implementation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#CLIP-Architecture-Components">CLIP Architecture Components</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Key-Methods">Key Methods</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#Image-Preprocessing">Image Preprocessing</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Preprocessing-Pipeline">Preprocessing Pipeline</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#Image-Download-Utility">Image Download Utility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Model-and-Tokenizer-downloading">Model and Tokenizer downloading</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#Running-CLIP-Inference">Running CLIP Inference</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Inference-Pipeline:">Inference Pipeline:</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Text-Tokenization">Text Tokenization</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="ttnn_visualizer.html">TT-NN Visualizer</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New TT-NN Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+      <li class="breadcrumb-item active">Building CLIP Model for Zero-Shot Image Classification with TT-NN</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/2025_dx_rework/ttnn_clip_zero_shot_classification.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Building-CLIP-Model-for-Zero-Shot-Image-Classification-with-TT-NN">
+<h1>Building CLIP Model for Zero-Shot Image Classification with TT-NN<a class="headerlink" href="#Building-CLIP-Model-for-Zero-Shot-Image-Classification-with-TT-NN" title="Permalink to this heading"></a>
+</h1>
+<p>CLIP (Contrastive Language-Image Pre-Training) is a foundational multimodal AI model developed by OpenAI that learns visual concepts from natural language supervision. Unlike traditional computer vision models that are trained on fixed categories, CLIP can understand and classify images based on arbitrary text descriptions.</p>
+<section id="What-CLIP-Does">
+<h2>What CLIP Does<a class="headerlink" href="#What-CLIP-Does" title="Permalink to this heading"></a>
+</h2>
+<p>CLIP bridges the gap between vision and language by associating images with their textual descriptions. CLIP consists of two main components:</p>
+<ol class="arabic simple">
+<li><p><strong>Vision Encoder</strong>: A Vision Transformer (ViT) that processes images and converts them into feature embeddings.</p></li>
+<li><p><strong>Text Encoder</strong>: A Transformer that processes text descriptions and converts them into feature embeddings.</p></li>
+</ol>
+<p><img alt="CLIP Diagram" src="https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/refs/heads/main/media/clip_tutorial/CLIP.png"></p>
+<p>During inference, CLIP can: - <strong>Zero-shot image classification</strong>: Classify images into categories it has never explicitly seen during training by comparing image embeddings with text embeddings of category descriptions. - <strong>Image-text similarity</strong>: Measure how well an image matches a given text description. - <strong>Content-based image retrieval</strong>: Find images that best match a text query.</p>
+<p>In this tutorial, we will implement CLIP for image classification. CLIP classifies images using natural language prompts like “a diagram”, “a dog”, or “a cat”.</p>
+<p>The following diagram illustrates CLIP-based image classification of a list of prompts, and an image. CLIP computes the probability that a prompt matches the image using two pipelines:</p>
+<ul class="simple">
+<li><p>A <strong>Vision Pipeline</strong> - Includes an image pre-processing step (resize, center image, etc.) and the vision encoder.</p></li>
+<li><p>A <strong>Text Pipeline</strong> - Includes a tokenizer to convert prompts into a tensor, and the text encoder.</p></li>
+</ul>
+<p>Once both pipelines have been performed, their results are combined through a matrix multiplication, which gives us the probability for each prompt.</p>
+<p><img alt="CLIP Zero Shot Classification" src="https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/refs/heads/main/media/clip_tutorial/clip_zero_shot_classification.png"></p>
+<p>We use OpenAI’s pre-trained weights for the clip-vit-base-patch32 model and focus on inference.</p>
+</section>
+<section id="Imports-and-Dependencies">
+<h2>Imports and Dependencies<a class="headerlink" href="#Imports-and-Dependencies" title="Permalink to this heading"></a>
+</h2>
+<p>We start by importing the necessary libraries for our CLIP implementation:</p>
+<ul class="simple">
+<li><p><strong>TT-NN</strong>: Tenstorrent’s neural network library for hardware-accelerated deep learning.</p></li>
+<li><p><strong>Torch</strong>: PyTorch for model loading and tensor pre-processing.</p></li>
+<li><p><strong>Transformers</strong>: Hugging Face library for downloading pre-trained models and tokenizing text prompts.</p></li>
+<li><p><strong>PIL</strong>: Python Imaging Library for image pre-processing.</p></li>
+<li><p><strong>Torchvision</strong>: Computer vision utilities for image preprocessing.</p></li>
+</ul>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">PIL</span><span class="w"> </span><span class="kn">import</span> <span class="n">Image</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">transformers</span><span class="w"> </span><span class="kn">import</span> <span class="n">CLIPTokenizer</span><span class="p">,</span> <span class="n">CLIPModel</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">requests</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">io</span><span class="w"> </span><span class="kn">import</span> <span class="n">BytesIO</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">safetensors.torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">torchvision.transforms</span><span class="w"> </span><span class="kn">import</span> <span class="n">Compose</span><span class="p">,</span> <span class="n">Resize</span><span class="p">,</span> <span class="n">CenterCrop</span><span class="p">,</span> <span class="n">ToTensor</span><span class="p">,</span> <span class="n">Normalize</span><span class="p">,</span> <span class="n">InterpolationMode</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="TT-NN-Device-Management-and-Utility-Functions">
+<h2>TT-NN Device Management and Utility Functions<a class="headerlink" href="#TT-NN-Device-Management-and-Utility-Functions" title="Permalink to this heading"></a>
+</h2>
+<p>Helper functions are defined as TT-NN management devices and simplify device initialization.</p>
+<p><strong>Note on L1 Small Size</strong>: For our model, we use a custom L1 memory configuration. The <code class="docutils literal notranslate"><span class="pre">l1_small_size</span></code> parameter (8192 bytes) sets aside a portion of the on-chip L1 memory for sliding-window operations such as convolutions. Without <code class="docutils literal notranslate"><span class="pre">l1_small_size=8192</span></code>, convolution kernel would fail due to a lack of available L1 space.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><br><span></span><span class="k">def</span><span class="w"> </span><span class="nf">open_ttnn</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">"""Initialize TT-NN device with specified L1 cache size."""</span>
+    <span class="k">global</span> <span class="n">device</span>
+    <span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">close_ttnn</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">"""Clean up and close the TT-NN device."""</span>
+    <span class="k">global</span> <span class="n">device</span>
+    <span class="k">if</span> <span class="n">device</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">get_device</span><span class="p">():</span>
+<span class="w">    </span><span class="sd">"""Get the current TT-NN device handle."""</span>
+    <span class="k">global</span> <span class="n">device</span>
+    <span class="k">return</span> <span class="n">device</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Model-Weight-Conversion">
+<h2>Model Weight Conversion<a class="headerlink" href="#Model-Weight-Conversion" title="Permalink to this heading"></a>
+</h2>
+<p>TT-NN uses a custom tensor format that converts torch to TT-NN and vice versa. We can write a function to convert the entire model (more specifically, its <code class="docutils literal notranslate"><span class="pre">state_dict</span></code>) from PyTorch tensors to TT-NN tensors, enabling pre-trained CLIP weights on TT hardware.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">convert_model_to_ttnn</span><span class="p">(</span><span class="n">state_dict</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Convert a PyTorch model's state dictionary to TT-NN format.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        state_dict: PyTorch model state dictionary containing weights and biases</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        dict: State dictionary with tensors converted to TT-NN format</span>
+<span class="sd">    """</span>
+    <span class="n">ttnn_state_dict</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Converting model to TT-NN format"</span><span class="p">)</span>
+
+    <span class="c1"># Convert each tensor in the state dictionary to TT-NN format</span>
+    <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">state_dict</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">):</span>
+            <span class="c1"># Convert PyTorch tensors to TT-NN tensors</span>
+            <span class="n">ttnn_state_dict</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">get_device</span><span class="p">())</span>
+            <span class="n">ttnn_state_dict</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">typecast</span><span class="p">(</span><span class="n">ttnn_state_dict</span><span class="p">[</span><span class="n">key</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+        <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Size</span><span class="p">):</span>
+            <span class="c1"># Convert PyTorch Size objects to TT-NN Size objects</span>
+            <span class="n">ttnn_state_dict</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">Size</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">ttnn_state_dict</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Generic-Transformer-Implementation">
+<h2>Generic Transformer Implementation<a class="headerlink" href="#Generic-Transformer-Implementation" title="Permalink to this heading"></a>
+</h2>
+<p>CLIP uses two types of transformers: a text transformer and a vision transformer. To maximize code reuse, we define a generic Transformer class that can be used for both modalities with the appropriate configuration.</p>
+<section id="Transformer-Architecture">
+<h3>Transformer Architecture<a class="headerlink" href="#Transformer-Architecture" title="Permalink to this heading"></a>
+</h3>
+<p>The transformer models used by CLIP consist of multiple layers (residual blocks), each containing the following sub-operations in sequence:</p>
+<ol class="arabic simple">
+<li><p><strong>Layer Normalization</strong>: Normalizes inputs for stable inference and training.</p></li>
+<li>
+<p><strong>Multi-Head Self-Attention</strong>:</p>
+<ul class="simple">
+<li><p><strong>Text</strong>: Uses causal masking to prevent execution of future tokens.</p></li>
+<li><p><strong>Vision</strong>: Uses full attention across all image patches.</p></li>
+</ul>
+</li>
+<li><p><strong>Layer Normalization</strong>: Second normalization layer.</p></li>
+<li><p><strong>MLP (Multi-Layer Perceptron)</strong>: Two linear layers with GELU activation (Linear → GELU → Linear).</p></li>
+</ol>
+<p>Each block uses residual connections, where the output of each sub-operation is added to its input, enabling deeper networks and better gradient flow.</p>
+<p>Each block uses pre-trained weights and biases. These weights and biases are provided at initialization through the <code class="docutils literal notranslate"><span class="pre">state_dict</span></code> dictionary. This dictionary contains TT-NN tensors.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">MultiHeadAttention</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state_dict</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">""</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">attention_mask</span> <span class="o">=</span> <span class="n">attention_mask</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prefix</span> <span class="o">=</span> <span class="n">prefix</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_heads</span> <span class="o">=</span> <span class="n">num_heads</span>
+
+        <span class="c1"># Scale factor for attention scores: 1/sqrt(head_dim) for numerical stability</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">scale</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">math</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">num_heads</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">q_proj_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.q_proj.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">q_proj_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.q_proj.bias"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">k_proj_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.k_proj.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">k_proj_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.k_proj.bias"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">v_proj_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.v_proj.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">v_proj_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.v_proj.bias"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out_proj_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.out_proj.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out_proj_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.out_proj.bias"</span><span class="p">]</span>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">hidden_states</span><span class="p">):</span>
+        <span class="n">sequence_size</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">hidden_size</span> <span class="o">=</span> <span class="n">hidden_states</span><span class="o">.</span><span class="n">shape</span>
+
+        <span class="n">head_size</span> <span class="o">=</span> <span class="n">hidden_size</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_heads</span>
+
+        <span class="c1"># Compute Q, K, V projections from input hidden states</span>
+        <span class="c1"># Each projection: [sequence_size, batch_size, hidden_size] -&gt; [sequence_size, batch_size, hidden_size]</span>
+        <span class="n">q</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">q_proj_weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">q_proj_bias</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">k</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">k_proj_weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">k_proj_bias</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">v</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">hidden_states</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">v_proj_weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">v_proj_bias</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># Reshape for multi-head attention: split hidden_size into (num_heads * head_dim)</span>
+        <span class="c1"># [sequence_size, batch_size, hidden_size] -&gt; [sequence_size, batch_size * num_heads, head_dim]</span>
+        <span class="n">q</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="p">(</span><span class="n">sequence_size</span><span class="p">,</span> <span class="n">batch_size</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_heads</span><span class="p">,</span> <span class="n">head_size</span><span class="p">))</span>
+        <span class="n">k</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="p">(</span><span class="n">sequence_size</span><span class="p">,</span> <span class="n">batch_size</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_heads</span><span class="p">,</span> <span class="n">head_size</span><span class="p">))</span>
+        <span class="n">v</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="p">(</span><span class="n">sequence_size</span><span class="p">,</span> <span class="n">batch_size</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">num_heads</span><span class="p">,</span> <span class="n">head_size</span><span class="p">))</span>
+
+        <span class="c1"># Transpose to bring batch_size * num_heads dimension first for parallel attention computation</span>
+        <span class="c1"># [sequence_size, batch_size * num_heads, head_dim] -&gt; [batch_size * num_heads, sequence_size, head_size]</span>
+        <span class="n">q</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">k</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">v</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">v</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># Compute attention scores: Q @ K^T</span>
+        <span class="c1"># [batch_size * num_heads, sequence_size, head_size] @ [batch_size * num_heads, head_size, sequence_size]</span>
+        <span class="c1">#   -&gt; [batch_size * num_heads, sequence_size, sequence_size]</span>
+        <span class="n">scores</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">q</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+        <span class="c1"># Scale scores by 1 / sqrt(head_size) to prevent softmax saturation</span>
+        <span class="n">scores</span> <span class="o">=</span> <span class="n">scores</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">scale</span>
+
+        <span class="c1"># Apply attention mask if provided (for causal attention in text encoder)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_mask</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="c1"># Add mask to scores (mask contains -inf for positions that should be ignored)</span>
+            <span class="c1"># Mask is broadcastable to [batch_size * num_heads, sequence_size, sequence_size]</span>
+            <span class="n">scores</span> <span class="o">=</span> <span class="n">scores</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention_mask</span>
+
+        <span class="c1"># Apply softmax to get attention weights</span>
+        <span class="c1"># numeric_stable=True uses the numerically stable softmax: softmax(x) = softmax(x - max(x))</span>
+        <span class="c1"># This prevents overflow when computing exp(x) for large values</span>
+        <span class="n">attn_weights</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span>
+            <span class="n">scores</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">,</span> <span class="n">numeric_stable</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="c1"># [batch_size * num_heads, sequence_size, sequence_size] @ [batch_size*heads, sequence_size, head_size]</span>
+        <span class="c1">#   -&gt; [batch_size * num_heads, sequence_size, head_size]</span>
+        <span class="n">attn_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">attn_weights</span><span class="p">,</span> <span class="n">v</span><span class="p">)</span>
+
+        <span class="c1"># Transpose back to sequence-first format</span>
+        <span class="c1"># [batch_size * num_heads, sequence_size, head_size] -&gt; [sequence_size, batch_size * num_heads, head_size]</span>
+        <span class="n">attn_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">attn_output</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># Merge heads back into hidden dimension</span>
+        <span class="c1"># [sequence_size, batch_size * num_heads, head_size] -&gt; [sequence_size, batch_size, hidden_size]</span>
+        <span class="n">attn_output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">attn_output</span><span class="p">,</span> <span class="p">(</span><span class="n">sequence_size</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">hidden_size</span><span class="p">))</span>
+
+        <span class="c1"># Apply output projection</span>
+        <span class="n">dense_out</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span>
+            <span class="n">attn_output</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">out_proj_weight</span><span class="p">,</span>
+            <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">out_proj_bias</span><span class="p">,</span>
+            <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">dense_out</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MultilayerPerceptron</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state_dict</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">""</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prefix</span> <span class="o">=</span> <span class="n">prefix</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_fc_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.fc1.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_fc_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.fc1.bias"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_proj_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.fc2.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_proj_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.fc2.bias"</span><span class="p">]</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_fc_weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_fc_bias</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">gelu</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">linear</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_proj_weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">mlp_c_proj_bias</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">x</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">ResidualAttentionBlock</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state_dict</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">""</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prefix</span> <span class="o">=</span> <span class="n">prefix</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_heads</span> <span class="o">=</span> <span class="n">num_heads</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">attention</span> <span class="o">=</span> <span class="n">MultiHeadAttention</span><span class="p">(</span><span class="n">state_dict</span><span class="p">,</span> <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="n">attention_mask</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.self_attn"</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">mlp</span> <span class="o">=</span> <span class="n">MultilayerPerceptron</span><span class="p">(</span><span class="n">state_dict</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.mlp"</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_1_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.layer_norm1.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_1_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.layer_norm1.bias"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_2_weight</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.layer_norm2.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_2_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.layer_norm2.bias"</span><span class="p">]</span>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="c1"># LayerNorm</span>
+        <span class="n">residual</span> <span class="o">=</span> <span class="n">x</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_1_weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_1_bias</span><span class="p">)</span>
+
+        <span class="c1"># Multihead attention / Self-Attention</span>
+        <span class="c1"># This must be equal to nn.MultiheadAttention(d_model, n_head)(x, x, x, need_weights=False, attn_mask=self.attn_mask)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">residual</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">attention</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="c1"># LayerNorm</span>
+        <span class="n">x_post_layer_norm</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_2_weight</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">layer_norm_2_bias</span><span class="p">)</span>
+
+        <span class="c1"># Multi-Layer Perceptron</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">mlp</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">x_post_layer_norm</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">x</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Transformer</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state_dict</span><span class="p">,</span> <span class="n">num_layers</span><span class="p">,</span> <span class="n">num_heads</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">""</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Initialize a generic Transformer that can be used for both text and vision encoding.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            state_dict: Model weights dictionary</span>
+<span class="sd">            num_heads: Number of attention heads</span>
+<span class="sd">            attention_mask: Attention mask for causal attention (used for text, None for vision)</span>
+<span class="sd">            prefix: Prefix for layer names in state_dict (e.g., "text_model.encoder" or "vision_model.encoder")</span>
+<span class="sd">        """</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">prefix</span> <span class="o">=</span> <span class="n">prefix</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="p">[]</span>
+
+        <span class="c1"># Initialize each transformer layer with converted weights</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">ResidualAttentionBlock</span><span class="p">(</span><span class="n">state_dict</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="n">attention_mask</span><span class="p">,</span> <span class="n">num_heads</span><span class="o">=</span><span class="n">num_heads</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">prefix</span><span class="si">}</span><span class="s2">.layers.</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">num_layers</span><span class="p">)</span>
+        <span class="p">]</span>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">)):</span>
+            <span class="n">layer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">layer</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">x</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="Vision-Transformer-Implementation">
+<h2>Vision Transformer Implementation<a class="headerlink" href="#Vision-Transformer-Implementation" title="Permalink to this heading"></a>
+</h2>
+<p>The Vision Transformer class processes images for CLIP. It converts input images into patch embeddings, adds positional encodings, and processes them through transformer layers.</p>
+<section id="Vision-Processing-Pipeline">
+<h3>Vision Processing Pipeline<a class="headerlink" href="#Vision-Processing-Pipeline" title="Permalink to this heading"></a>
+</h3>
+<ol class="arabic simple">
+<li><p><strong>Patch Embedding</strong>: Converts 2D image into sequence of patch embeddings using convolution.</p></li>
+<li><p><strong>Class Token</strong>: Prepends a learnable classification token to the sequence.</p></li>
+<li><p><strong>Positional Encoding</strong>: Adds positional information to each patch.</p></li>
+<li><p><strong>Transformer Layers</strong>: Processes the sequence through multiple attention layers.</p></li>
+<li><p><strong>Classification Head</strong>: Extracts features from the class token for final representation.</p></li>
+</ol>
+<p>The <code class="docutils literal notranslate"><span class="pre">forward()</span></code> method organizes and executes this entire pipeline, preprocessing image embeddings and calling the generic transformer.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">VisionTransformer</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state_dict</span><span class="p">,</span> <span class="n">num_vision_layers</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_dim</span> <span class="o">=</span> <span class="mi">0</span>
+
+        <span class="n">conv2_state_dict_name</span> <span class="o">=</span> <span class="s2">"vision_model.embeddings.patch_embedding.weight"</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">vision_width</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="n">conv2_state_dict_name</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="n">conv2_state_dict_name</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">vision_heads</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">vision_width</span> <span class="o">//</span> <span class="mi">64</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">class_embedding</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"vision_model.embeddings.class_embedding"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">positional_embedding</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"vision_model.embeddings.position_embedding.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">proj</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"visual_projection.weight"</span><span class="p">]</span>
+
+        <span class="c1"># Weights preparation for convolution (ttnn.conv2d) must be done on host (CPU)</span>
+        <span class="c1"># To that end, we move convolution weights from device to host and perform its</span>
+        <span class="c1"># layout to Row-Major, which is the preferred layout for TT-NN convolution kernels.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_device</span><span class="p">(</span><span class="n">state_dict</span><span class="p">[</span><span class="n">conv2_state_dict_name</span><span class="p">])</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_dtype</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+
+        <span class="c1"># Layer normalization applied before transformer layers</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ln_pre_weights</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"vision_model.pre_layrnorm.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ln_pre_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"vision_model.pre_layrnorm.bias"</span><span class="p">]</span>
+
+        <span class="c1"># Layer normalization applied after transformer layers (to class token)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ln_post_weights</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"vision_model.post_layernorm.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ln_post_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"vision_model.post_layernorm.bias"</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span> <span class="o">=</span> <span class="n">Transformer</span><span class="p">(</span>
+            <span class="n">state_dict</span><span class="p">,</span> <span class="n">num_layers</span><span class="o">=</span><span class="n">num_vision_layers</span><span class="p">,</span> <span class="n">num_heads</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">vision_heads</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">"vision_model.encoder"</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">):</span>
+        <span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">,</span> <span class="n">height</span><span class="p">,</span> <span class="n">width</span><span class="p">)</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span>
+
+        <span class="c1"># === Important: TT-NN conv2d differs from PyTorch in tensor layout ===</span>
+        <span class="c1">#</span>
+        <span class="c1"># PyTorch Conv2d expects: (N, C_in, H, W) - channels-first "Struct of Arrays"</span>
+        <span class="c1"># TT-NN conv2d expects:   (N, H, W, C_in) - channels-last "Array of Structs"</span>
+        <span class="c1">#</span>
+        <span class="c1"># PyTorch Conv2d output:  (N, C_out, H_out, W_out) - 4D tensor</span>
+        <span class="c1"># TT-NN conv2d output:    (1, 1, N*H_out*W_out, C_out) - flattened 4D tensor</span>
+        <span class="c1">#</span>
+        <span class="c1"># This is why we need to permute and reshape before and after convolution.</span>
+
+        <span class="c1"># Step 1: Rearrange from channels-first to channels-last layout</span>
+        <span class="c1"># [batch_size, in_channels, height, width] -&gt; [batch_size, height, width, in_channels]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+
+        <span class="c1"># Step 2: Convert to row-major layout (required by ttnn.conv2d)</span>
+        <span class="c1"># TT-NN convolution kernels are optimized for row-major data access</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+
+        <span class="c1"># Output channels for patch embedding (standard ViT uses 768)</span>
+        <span class="n">out_channels</span> <span class="o">=</span> <span class="mi">768</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">prepare_conv_weights</span><span class="p">(</span>
+            <span class="n">weight_tensor</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span><span class="p">,</span>
+            <span class="n">input_memory_config</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">memory_config</span><span class="p">(),</span>
+            <span class="n">input_layout</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">layout</span><span class="p">,</span>
+            <span class="n">weights_format</span><span class="o">=</span><span class="s2">"OIHW"</span><span class="p">,</span>
+            <span class="n">in_channels</span><span class="o">=</span><span class="n">in_channels</span><span class="p">,</span>
+            <span class="n">out_channels</span><span class="o">=</span><span class="n">out_channels</span><span class="p">,</span>
+            <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
+            <span class="n">input_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">input_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">kernel_size</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">],</span>
+            <span class="n">stride</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">],</span>
+            <span class="n">padding</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+            <span class="n">dilation</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span>
+            <span class="n">has_bias</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+            <span class="n">groups</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+            <span class="n">device</span><span class="o">=</span><span class="n">get_device</span><span class="p">(),</span>
+            <span class="n">input_dtype</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Step 3: Apply patch embedding convolution</span>
+        <span class="c1"># This converts the 2D image into a sequence of patch embeddings</span>
+        <span class="c1"># For patch_size=32 and image 224x224: creates (224/32)^2 = 49 patches</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">conv2d</span><span class="p">(</span>
+            <span class="n">input_tensor</span><span class="o">=</span><span class="n">x</span><span class="p">,</span>
+            <span class="n">weight_tensor</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">conv1_weights</span><span class="p">,</span>
+            <span class="n">in_channels</span><span class="o">=</span><span class="n">in_channels</span><span class="p">,</span>  <span class="c1"># Input channels (3 for RGB)</span>
+            <span class="n">out_channels</span><span class="o">=</span><span class="n">out_channels</span><span class="p">,</span>  <span class="c1"># Embedding dimension (768)</span>
+            <span class="n">batch_size</span><span class="o">=</span><span class="n">batch_size</span><span class="p">,</span>
+            <span class="n">input_height</span><span class="o">=</span><span class="n">height</span><span class="p">,</span>
+            <span class="n">input_width</span><span class="o">=</span><span class="n">width</span><span class="p">,</span>
+            <span class="n">kernel_size</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">),</span>  <span class="c1"># Patch size (e.g., 32x32)</span>
+            <span class="n">stride</span><span class="o">=</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">patch_size</span><span class="p">),</span>  <span class="c1"># Non-overlapping patches: stride = kernel_size</span>
+            <span class="n">padding</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>  <span class="c1"># No padding needed</span>
+            <span class="n">dilation</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>  <span class="c1"># Standard convolution (no dilation)</span>
+            <span class="n">groups</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>  <span class="c1"># Standard convolution (not grouped/depthwise)</span>
+            <span class="n">device</span><span class="o">=</span><span class="n">get_device</span><span class="p">(),</span>
+            <span class="n">return_weights_and_bias</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>  <span class="c1"># We already have weights, don't return them</span>
+            <span class="n">return_output_dim</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>  <span class="c1"># We know the output dimensions</span>
+        <span class="p">)</span>
+
+        <span class="c1"># Step 4: Reshape convolution output from flattened to sequence format</span>
+        <span class="c1"># Convert to tile layout for subsequent operations (TT-NN's optimized 2D tiled format)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+        <span class="c1"># Unflatten: [1, 1, N*H_out*W_out, C_out] -&gt; [N, num_patches, embed_dim]</span>
+        <span class="c1"># where num_patches = H_out * W_out = (224/32)^2 = 49</span>
+
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">3</span><span class="p">]))</span>
+
+        <span class="c1"># Step 5: Prepare the [CLS] token (class embedding)</span>
+        <span class="c1"># ViT prepends a learnable class token to the sequence of patch embeddings</span>
+        <span class="c1"># Reshape class token: [embed_dim] -&gt; [batch_size, 1, embed_dim]</span>
+        <span class="n">class_embedding</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">class_embedding</span><span class="p">,</span> <span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]))</span>
+
+
+        <span class="c1"># Step 6: Prepare tensors for concatenation</span>
+        <span class="c1"># Move to DRAM memory (slower but more capacity than L1) for concatenation operation</span>
+        <span class="c1"># Note: Concatenation currently requires DRAM memory; future optimizations may use L1 sharded memory</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_memory_config</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">DRAM_MEMORY_CONFIG</span><span class="p">)</span>
+
+        <span class="c1"># Ensure class_embedding has matching memory configuration</span>
+        <span class="n">class_embedding</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_memory_config</span><span class="p">(</span><span class="n">class_embedding</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">memory_config</span><span class="p">())</span>
+
+        <span class="c1"># Step 7: Prepend class token to patch sequence</span>
+        <span class="c1"># [batch, 1, embed] + [batch, num_patches, embed] -&gt; [batch, num_patches+1, embed]</span>
+        <span class="c1"># This creates: [[CLS], patch_1, patch_2, ..., patch_49]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">class_embedding</span><span class="p">,</span> <span class="n">x</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
+
+        <span class="c1"># Step 8: Add positional embeddings</span>
+        <span class="c1"># Positional embeddings encode the position of each token in the sequence</span>
+        <span class="c1"># [1, num_patches+1, embed] -&gt; broadcast and add to [batch, num_patches+1, embed]</span>
+        <span class="n">positional_embedding</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">positional_embedding</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">]))</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="n">positional_embedding</span>
+
+        <span class="c1"># Step 9: Pre-transformer layer normalization</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ln_pre_weights</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ln_pre_bias</span><span class="p">)</span>
+
+        <span class="c1"># Step 10: Permute to sequence-first format for transformer</span>
+        <span class="c1"># Transformers typically process in sequence-first format</span>
+        <span class="c1"># [batch_size, sequence_size, hidden_size] -&gt; [sequence_size, batch_size, hidden_size]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+
+        <span class="c1"># Step 11: Pass through transformer encoder layers</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="c1"># Step 12: Permute back to batch-first format</span>
+        <span class="c1"># [sequence_size, batch_size, hidden_size] -&gt; [batch_size, sequence_size, hidden_size]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+
+        <span class="c1"># Step 13: Extract [CLS] token and apply post-layer normalization</span>
+        <span class="c1"># In ViT, the [CLS] token (first token) is used for classification</span>
+        <span class="c1"># x[:, 0, :] extracts the [CLS] token: [batch, seq_len, embed] -&gt; [batch, embed]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">:],</span> <span class="n">weight</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ln_post_weights</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ln_post_bias</span><span class="p">)</span>
+
+        <span class="c1"># Step 14: Project to final embedding space (optional projection layer)</span>
+        <span class="c1"># Maps from hidden dimension to the shared vision-language embedding space</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">proj</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">proj</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">x</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="Complete-CLIP-Model-Implementation">
+<h2>Complete CLIP Model Implementation<a class="headerlink" href="#Complete-CLIP-Model-Implementation" title="Permalink to this heading"></a>
+</h2>
+<p>We can now define the main CLIP class that combines both text and vision processing capabilities. This class organizes and executes the entire multimodal inference pipeline.</p>
+<section id="CLIP-Architecture-Components">
+<h3>CLIP Architecture Components<a class="headerlink" href="#CLIP-Architecture-Components" title="Permalink to this heading"></a>
+</h3>
+<p>The CLIP class instantiates and manages the following components: - <strong>Text Transformer</strong>: Processes tokenized text inputs using causal attention masking. - <strong>Vision Transformer</strong>: Processes image inputs through patch-based attention. - <strong>Shared Embedding Space</strong>: Projects both modalities into a common feature space for comparison.</p>
+</section>
+<section id="Key-Methods">
+<h3>Key Methods<a class="headerlink" href="#Key-Methods" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">encode_text()</span></code>: Converts text tokens to feature embeddings.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">encode_image()</span></code>: Converts images to feature embeddings.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">forward()</span></code>: Performs complete inference and computing similarity scores between images and text.</p></li>
+</ul>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">CLIP</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">state_dict</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">token_embedding</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"text_model.embeddings.token_embedding.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">positional_embedding</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"text_model.embeddings.position_embedding.weight"</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">text_projection</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"text_projection.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_embedding</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">vocab_size</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">token_embedding</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transformer_width</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"text_model.final_layer_norm.weight"</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">transformer_heads</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer_width</span> <span class="o">//</span> <span class="mi">64</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">ln_final_weights</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"text_model.final_layer_norm.weight"</span><span class="p">]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">ln_final_bias</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"text_model.final_layer_norm.bias"</span><span class="p">]</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">logit_scale</span> <span class="o">=</span> <span class="n">state_dict</span><span class="p">[</span><span class="s2">"logit_scale"</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+
+        <span class="n">num_vision_layers</span> <span class="o">=</span> <span class="mi">12</span> <span class="c1"># Hardcoded value for CLIP-ViT-base-patch32</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">visual</span> <span class="o">=</span> <span class="n">VisionTransformer</span><span class="p">(</span><span class="n">state_dict</span><span class="p">,</span> <span class="n">num_vision_layers</span><span class="o">=</span><span class="n">num_vision_layers</span><span class="p">)</span>
+
+        <span class="n">num_text_layers</span> <span class="o">=</span> <span class="mi">12</span> <span class="c1"># Hardcoded value for CLIP-ViT-base-patch32</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span> <span class="o">=</span> <span class="n">Transformer</span><span class="p">(</span>
+            <span class="n">state_dict</span><span class="p">,</span> <span class="n">num_layers</span><span class="o">=</span><span class="n">num_text_layers</span><span class="p">,</span> <span class="n">num_heads</span><span class="o">=</span><span class="n">transformer_heads</span><span class="p">,</span> <span class="n">attention_mask</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">build_attention_mask</span><span class="p">(),</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">"text_model.encoder"</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">build_attention_mask</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Build causal attention mask for text transformer.</span>
+
+<span class="sd">        Causal masking ensures each token can only attend to itself and previous tokens,</span>
+<span class="sd">        preventing the model from "cheating" by looking at future tokens. This is essential</span>
+<span class="sd">        for autoregressive language modeling.</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Upper triangular mask [context_length, context_length] with -inf above diagonal</span>
+<span class="sd">        """</span>
+        <span class="c1"># Create a square mask filled with -inf (tokens cannot attend to masked positions)</span>
+        <span class="c1"># Shape: [context_length, context_length]</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">(</span>
+            <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">context_length</span><span class="p">],</span>
+            <span class="n">fill_value</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="s2">"-inf"</span><span class="p">),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">,</span>
+            <span class="n">device</span><span class="o">=</span><span class="n">get_device</span><span class="p">(),</span>
+            <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span>
+        <span class="p">)</span>
+        <span class="c1"># Keep only upper triangle (excluding diagonal): prevents attending to future tokens</span>
+        <span class="c1"># diagonal=1 means the diagonal itself is not masked (tokens can attend to themselves)</span>
+        <span class="n">mask</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">triu</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">diagonal</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">mask</span>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">encode_image</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image</span><span class="p">):</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">visual</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">encode_text</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">tokens</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Encode text tokens into feature embeddings.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            tokens: Tokenized text input [batch_size, context_length]</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            Text embeddings in shared vision-language space [batch_size, embed_dim]</span>
+<span class="sd">        """</span>
+        <span class="c1"># Convert token IDs to uint32 for embedding lookup</span>
+        <span class="n">tokens</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">typecast</span><span class="p">(</span><span class="n">tokens</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">uint32</span><span class="p">)</span>
+
+        <span class="c1"># Token embedding: [batch, seq_len] -&gt; [batch, seq_len, embed_dim]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">embedding</span><span class="p">(</span><span class="n">tokens</span><span class="p">,</span> <span class="n">weight</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">token_embedding</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+
+        <span class="c1"># Add learned positional embeddings</span>
+        <span class="c1"># Positional embeddings help the model understand token order</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">positional_embedding</span>
+
+        <span class="c1"># Permute to sequence-first format for transformer</span>
+        <span class="c1"># [batch, seq_len, embed] -&gt; [seq_len, batch, embed]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+
+        <span class="c1"># Pass through text transformer with causal masking</span>
+        <span class="c1"># Causal masking prevents tokens from attending to future tokens</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">transformer</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="c1"># Permute back to batch-first format</span>
+        <span class="c1"># [seq_len, batch, embed] -&gt; [batch, seq_len, embed]</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>
+
+        <span class="c1"># Final layer normalization</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">layer_norm</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">weight</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ln_final_weights</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">ln_final_bias</span><span class="p">)</span>
+
+
+        <span class="c1"># Text Transformer is auto-regressive. This means that the last token has access to all the information in the sequence.</span>
+        <span class="c1"># We can thus extract text features from the end-of-text (EOT) token position</span>
+        <span class="c1"># Note: Using PyTorch for argmax since TT-NN doesn't support advanced indexing yet</span>
+        <span class="n">torch_tokens</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span>
+        <span class="n">torch_x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+
+        <span class="n">eot_indices</span> <span class="o">=</span> <span class="n">torch_tokens</span><span class="o">.</span><span class="n">argmax</span><span class="p">(</span><span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>  <span class="c1"># [batch_size]</span>
+        <span class="n">torch_selected_features</span> <span class="o">=</span> <span class="n">torch_x</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">torch_x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">eot_indices</span><span class="p">]</span>  <span class="c1"># [batch_size, embed_dim]</span>
+
+        <span class="c1"># Move back to TT device and apply text projection</span>
+        <span class="c1"># Projects from transformer hidden size to shared embedding space</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_selected_features</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">get_device</span><span class="p">(),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">text_projection</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">x</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image</span><span class="p">,</span> <span class="n">tokens</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Compute similarity scores between images and text descriptions.</span>
+
+<span class="sd">        Args:</span>
+<span class="sd">            image: Preprocessed image tensor [batch_size, channels, height, width]</span>
+<span class="sd">            tokens: Tokenized text tensor [batch_size, context_length]</span>
+
+<span class="sd">        Returns:</span>
+<span class="sd">            logits_per_image: Image-to-text similarity scores [batch_size_image, batch_size_text]</span>
+<span class="sd">            logits_per_text: Text-to-image similarity scores [batch_size_text, batch_size_image]</span>
+<span class="sd">        """</span>
+        <span class="c1"># Encode both modalities into the shared embedding space</span>
+        <span class="n">text_features</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encode_text</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span>  <span class="c1"># [batch_text, embed_dim]</span>
+        <span class="n">image_features</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encode_image</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>  <span class="c1"># [batch_image, embed_dim]</span>
+
+        <span class="c1"># Normalize features to unit vectors for cosine similarity</span>
+        <span class="c1"># L2 norm: ||x||_2 = sqrt(sum(x_i^2))</span>
+        <span class="n">norm_image_features</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">operations</span><span class="o">.</span><span class="n">moreh</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">image_features</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">norm_text_features</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">operations</span><span class="o">.</span><span class="n">moreh</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">text_features</span><span class="p">,</span> <span class="n">p</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">keepdim</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+        <span class="c1"># Normalize: x / ||x|| -&gt; unit vector</span>
+        <span class="n">image_features</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">divide</span><span class="p">(</span><span class="n">image_features</span><span class="p">,</span> <span class="n">norm_image_features</span><span class="p">)</span>
+        <span class="n">text_features</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">divide</span><span class="p">(</span><span class="n">text_features</span><span class="p">,</span> <span class="n">norm_text_features</span><span class="p">)</span>
+
+        <span class="c1"># Compute cosine similarity scaled by learned temperature parameter</span>
+        <span class="c1"># logit_scale is learned during training to control the sharpness of the distribution</span>
+        <span class="n">logit_scale</span> <span class="o">=</span> <span class="n">math</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">logit_scale</span><span class="p">)</span>
+
+        <span class="c1"># Compute similarity matrix: scaled dot product of normalized features</span>
+        <span class="c1"># Result: [batch_image, embed] @ [embed, batch_text] = [batch_image, batch_text]</span>
+        <span class="n">logits_per_image</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">logit_scale</span> <span class="o">*</span> <span class="n">image_features</span><span class="p">,</span> <span class="n">text_features</span><span class="p">,</span> <span class="n">transpose_b</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="c1"># Transpose for text-to-image direction</span>
+        <span class="n">logits_per_text</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="n">logits_per_image</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="k">return</span> <span class="n">logits_per_image</span><span class="p">,</span> <span class="n">logits_per_text</span>
+<br></pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="Image-Preprocessing">
+<h2>Image Preprocessing<a class="headerlink" href="#Image-Preprocessing" title="Permalink to this heading"></a>
+</h2>
+<p>While input images can have any dimensions and color spaces, CLIP expects standardized 224×224 RGB images. Images are pre-processed to match the model’s expected input format.</p>
+<section id="Preprocessing-Pipeline">
+<h3>Preprocessing Pipeline<a class="headerlink" href="#Preprocessing-Pipeline" title="Permalink to this heading"></a>
+</h3>
+<p>Preprocessing applies the following transformations in sequence: 1. <strong>Resize</strong>: Scale image to 224×224 pixels using bicubic interpolation. 2. <strong>Center Crop</strong>: Crop the center region to ensure exact dimensions. 3. <strong>RGB Conversion</strong>: Convert to RGB color space if needed. 4. <strong>Normalization</strong>: Apply ImageNet normalization statistics used during CLIP training.</p>
+<p>Preprocessing ensures consistent input format regardless of the original image properties.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">preprocess_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">model_resolution</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_convert_image_to_rgb</span><span class="p">(</span><span class="n">image</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">image</span><span class="o">.</span><span class="n">convert</span><span class="p">(</span><span class="s2">"RGB"</span><span class="p">)</span>
+
+    <span class="c1"># Pre-process image on host with torch</span>
+    <span class="n">transform_fn</span> <span class="o">=</span> <span class="n">Compose</span><span class="p">(</span>
+        <span class="p">[</span>
+            <span class="n">Resize</span><span class="p">(</span><span class="n">model_resolution</span><span class="p">,</span> <span class="n">interpolation</span><span class="o">=</span><span class="n">InterpolationMode</span><span class="o">.</span><span class="n">BICUBIC</span><span class="p">),</span>
+            <span class="n">CenterCrop</span><span class="p">(</span><span class="n">model_resolution</span><span class="p">),</span>
+            <span class="n">_convert_image_to_rgb</span><span class="p">,</span>
+            <span class="n">ToTensor</span><span class="p">(),</span>
+            <span class="n">Normalize</span><span class="p">((</span><span class="mf">0.48145466</span><span class="p">,</span> <span class="mf">0.4578275</span><span class="p">,</span> <span class="mf">0.40821073</span><span class="p">),</span> <span class="p">(</span><span class="mf">0.26862954</span><span class="p">,</span> <span class="mf">0.26130258</span><span class="p">,</span> <span class="mf">0.27577711</span><span class="p">)),</span>
+        <span class="p">]</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">transform_fn</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="Image-Download-Utility">
+<h2>Image Download Utility<a class="headerlink" href="#Image-Download-Utility" title="Permalink to this heading"></a>
+</h2>
+<p>We use a utility function to download images from URLs for demonstrations. This function handles HTTP requests and converts the response into a PIL Image object that can be processed by the preprocessing pipeline.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">download_image</span><span class="p">(</span><span class="n">url</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Download an image from a URL and return it as a PIL Image object.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        url (str): The URL of the image to download</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        PIL.Image: The downloaded image</span>
+<span class="sd">    """</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">response</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+        <span class="n">response</span><span class="o">.</span><span class="n">raise_for_status</span><span class="p">()</span>  <span class="c1"># Raise an exception for bad status codes</span>
+
+        <span class="c1"># Convert the response content to a PIL Image</span>
+        <span class="n">image</span> <span class="o">=</span> <span class="n">Image</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">BytesIO</span><span class="p">(</span><span class="n">response</span><span class="o">.</span><span class="n">content</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">image</span>
+    <span class="k">except</span> <span class="n">requests</span><span class="o">.</span><span class="n">RequestException</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Failed to download image from </span><span class="si">{</span><span class="n">url</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">Exception</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Failed to process downloaded image: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Model-and-Tokenizer-downloading">
+<h2>Model and Tokenizer downloading<a class="headerlink" href="#Model-and-Tokenizer-downloading" title="Permalink to this heading"></a>
+</h2>
+<p>We define two functions to download the weights and tokenizer from Hugging Face.</p>
+<p>For practical purposes, we can also specify a <code class="docutils literal notranslate"><span class="pre">TTNN_TUTORIALS_MODELS_CLIP_PATH</span></code> environment variable to avoid downloading the model. If it is defined, then model and weights will be loaded from the location indicated by <code class="docutils literal notranslate"><span class="pre">TTNN_TUTORIALS_MODELS_CLIP_PATH</span></code>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">download_model</span><span class="p">(</span><span class="n">model_name</span><span class="p">):</span>
+    <span class="n">clip_model_location</span> <span class="o">=</span> <span class="n">model_name</span> <span class="c1"># By default, download from Hugging Face</span>
+
+    <span class="c1"># If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
+    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_CLIP_PATH"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">clip_model_location</span> <span class="o">=</span> <span class="n">cache_dir</span>
+
+    <span class="c1"># Load model weights (download if cache_dir was not set)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">CLIPModel</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">clip_model_location</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">model</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">download_tokenizer</span><span class="p">(</span><span class="n">tokenizer_name</span><span class="p">):</span>
+    <span class="n">clip_tokenizer_location</span> <span class="o">=</span> <span class="n">tokenizer_name</span> <span class="c1"># By default, download from Hugging Face</span>
+
+    <span class="c1"># If TTNN_TUTORIALS_MODELS_CLIP_PATH is set, use it as the cache directory to avoid requests to Hugging Face</span>
+    <span class="n">cache_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s2">"TTNN_TUTORIALS_MODELS_CLIP_PATH"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">cache_dir</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">clip_tokenizer_location</span> <span class="o">=</span> <span class="n">cache_dir</span>
+
+    <span class="n">tokenizer</span> <span class="o">=</span> <span class="n">CLIPTokenizer</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="n">clip_tokenizer_location</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">tokenizer</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Running-CLIP-Inference">
+<h2>Running CLIP Inference<a class="headerlink" href="#Running-CLIP-Inference" title="Permalink to this heading"></a>
+</h2>
+<p>Having defined each component in the CLIP model, we can perform inference on an input image and text prompts. This section demonstrates the complete inference pipeline from loading pre-trained weights to computing similarity scores.</p>
+<section id="Inference-Pipeline:">
+<h3>Inference Pipeline:<a class="headerlink" href="#Inference-Pipeline:" title="Permalink to this heading"></a>
+</h3>
+<ol class="arabic simple">
+<li><p><strong>Device Initialization</strong>: Open TT-NN device with configured L1 cache size.</p></li>
+<li><p><strong>Model Loading</strong>: Download pre-trained CLIP weights from Hugging Face using <code class="docutils literal notranslate"><span class="pre">CLIPModel.from_pretrained()</span></code>.</p></li>
+<li><p><strong>Weight Conversion</strong>: Convert PyTorch weights to TT-NN format for hardware acceleration.</p></li>
+<li>
+<p><strong>Image Processing</strong>:</p>
+<ul class="simple">
+<li><p>Download image from URL.</p></li>
+<li><p>Preprocess (resize to 224×224, normalize with ImageNet statistics)</p></li>
+<li><p>Convert to TT-NN tensor with bfloat16 precision.</p></li>
+</ul>
+</li>
+<li>
+<p><strong>Text Processing</strong>:</p>
+<ul class="simple">
+<li><p>Tokenize text prompts using <code class="docutils literal notranslate"><span class="pre">CLIPTokenizer</span></code>.</p></li>
+<li><p>Add padding to match context length.</p></li>
+<li><p>Convert to TT-NN tensors.</p></li>
+</ul>
+</li>
+<li>
+<p><strong>Forward Pass</strong>:</p>
+<ul class="simple">
+<li><p>Encode image through Vision Transformer.</p></li>
+<li><p>Encode text through Text Transformer.</p></li>
+<li><p>Normalize both embeddings to unit vectors.</p></li>
+<li><p>Compute cosine similarity (dot product of normalized vectors).</p></li>
+</ul>
+</li>
+<li><p><strong>Results</strong>: Apply softmax to convert similarity scores to probabilities.</p></li>
+</ol>
+</section>
+<section id="Text-Tokenization">
+<h3>Text Tokenization<a class="headerlink" href="#Text-Tokenization" title="Permalink to this heading"></a>
+</h3>
+<p>Since TT-NN does not handle tokenization natively, we use the <code class="docutils literal notranslate"><span class="pre">CLIPTokenizer</span></code> from the <code class="docutils literal notranslate"><span class="pre">transformers</span></code> library. The tokenizer performs the following tasks: - Converts text strings into token IDs matching CLIP’s vocabulary (49,408 tokens). - Adds special tokens: [SOS] (start of sequence) and [EOS] (end of sequence). - Pads sequences to the model’s context length (77 tokens for CLIP). - The [EOS] token position is used to extract the final text representation.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Initialize TT-NN device for hardware acceleration</span>
+<span class="n">open_ttnn</span><span class="p">()</span>
+
+
+<span class="c1"># Load pre-trained CLIP model and convert weights to TT-NN format</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Loading pre-trained CLIP model..."</span><span class="p">)</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">download_model</span><span class="p">(</span><span class="s2">"openai/clip-vit-base-patch32"</span><span class="p">)</span>
+<span class="n">state_dict</span> <span class="o">=</span> <span class="n">convert_model_to_ttnn</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">state_dict</span><span class="p">())</span>
+
+<span class="n">tokenizer</span> <span class="o">=</span> <span class="n">download_tokenizer</span><span class="p">(</span><span class="s2">"openai/clip-vit-base-patch32"</span><span class="p">)</span>
+
+
+<span class="c1"># Initialize our TT-NN CLIP implementation</span>
+<span class="n">clip</span> <span class="o">=</span> <span class="n">CLIP</span><span class="p">(</span><span class="n">state_dict</span><span class="p">)</span>
+
+<span class="c1"># Download and preprocess test image</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Downloading and preprocessing image..."</span><span class="p">)</span>
+<span class="n">image_url</span> <span class="o">=</span> <span class="s2">"https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/refs/heads/main/media/clip_tutorial/CLIP.png"</span>
+<span class="n">image</span> <span class="o">=</span> <span class="n">download_image</span><span class="p">(</span><span class="n">image_url</span><span class="p">)</span>
+
+<span class="c1"># Preprocess image to model requirements (224x224, normalized with ImageNet statistics)</span>
+<span class="c1"># unsqueeze(0) adds batch dimension: [C, H, W] -&gt; [1, C, H, W]</span>
+<span class="n">image</span> <span class="o">=</span> <span class="n">preprocess_image</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="mi">224</span><span class="p">)</span><span class="o">.</span><span class="n">unsqueeze</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="s2">"cpu"</span><span class="p">)</span>
+
+<span class="c1"># Convert PyTorch image tensor to TT-NN tensor with bfloat16 precision</span>
+<span class="c1"># bfloat16 provides good balance between precision and memory/compute efficiency</span>
+<span class="n">preferred_dtype</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span>
+<span class="n">tt_image</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">image</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">get_device</span><span class="p">(),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">preferred_dtype</span><span class="p">)</span>
+
+<span class="c1"># Define text prompts for zero-shot classification</span>
+<span class="c1"># The model will compute similarity between the image and each text description</span>
+<span class="n">prompts</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"a diagram"</span><span class="p">,</span> <span class="s2">"a dog"</span><span class="p">,</span> <span class="s2">"a cat"</span><span class="p">]</span>
+
+<span class="c1"># Tokenize text prompts using CLIP's tokenizer</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Tokenizing text prompts..."</span><span class="p">)</span>
+<span class="c1"># padding="max_length" ensures all sequences are padded to context_length (77 tokens)</span>
+<span class="c1"># return_tensors="pt" returns PyTorch tensors</span>
+<span class="n">tokenized_inputs</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="p">(</span><span class="n">prompts</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="s2">"max_length"</span><span class="p">,</span> <span class="n">max_length</span><span class="o">=</span><span class="n">clip</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">return_tensors</span><span class="o">=</span><span class="s2">"pt"</span><span class="p">)</span>
+<span class="n">tokens_pretrained_host</span> <span class="o">=</span> <span class="n">tokenized_inputs</span><span class="p">[</span><span class="s2">"input_ids"</span><span class="p">]</span>  <span class="c1"># Shape: [num_prompts, context_length]</span>
+<span class="c1"># Convert tokenized text to TT-NN tensors for device execution</span>
+<span class="n">tokens_pretrained</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">tokens_pretrained_host</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">get_device</span><span class="p">(),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+
+
+<span class="c1"># Perform CLIP inference: compute similarity between image and text</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Running CLIP inference..."</span><span class="p">)</span>
+<span class="n">time_start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">logits_per_image</span><span class="p">,</span> <span class="n">logits_per_text</span> <span class="o">=</span> <span class="n">clip</span><span class="o">.</span><span class="n">forward</span><span class="p">(</span><span class="n">tt_image</span><span class="p">,</span> <span class="n">tokens_pretrained</span><span class="p">)</span>
+<span class="n">time_end</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Time taken: </span><span class="si">{</span><span class="n">time_end</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">time_start</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> seconds"</span><span class="p">)</span>
+
+<span class="c1"># Convert logits (similarity scores) to probabilities using softmax</span>
+<span class="c1"># Softmax normalizes scores so they sum to 1.0, representing a probability distribution</span>
+<span class="n">probs</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">logits_per_image</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"==== Zero-shot Classification Results ===="</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Image: </span><span class="si">{</span><span class="n">image_url</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">'/'</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Classification probabilities:"</span><span class="p">)</span>
+
+<span class="c1"># Display results sorted by probability (highest first)</span>
+<span class="n">probs_torch</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">probs</span><span class="p">)</span>
+<span class="n">results</span> <span class="o">=</span> <span class="p">[(</span><span class="n">prompt</span><span class="p">,</span> <span class="n">probs_torch</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">())</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">prompt</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">prompts</span><span class="p">)]</span>
+<span class="n">results</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">reverse</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">prompt</span><span class="p">,</span> <span class="n">prob</span> <span class="ow">in</span> <span class="n">results</span><span class="p">:</span>
+    <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  '</span><span class="si">{</span><span class="n">prompt</span><span class="si">}</span><span class="s2">': </span><span class="si">{</span><span class="n">prob</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">prob</span><span class="o">*</span><span class="mi">100</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">%)"</span><span class="p">)</span>
+
+<span class="c1"># Clean up resources</span>
+<span class="n">close_ttnn</span><span class="p">()</span>
+<br></pre></div>
+</div>
+</div>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="ttnn_simplecnn_inference.html" class="btn btn-neutral float-left" title="Running a Simple CNN Inference on CIFAR-10" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn_visualizer.html" class="btn btn-neutral float-right" title="TT-NN Visualizer" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
