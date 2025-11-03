@@ -166,15 +166,19 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   ttsim-unit-tests:
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
     needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
-    uses: ./.github/workflows/ttsim-post-commit.yaml
+    uses: ./.github/workflows/ttsim.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      basic-docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      run-metal-cpp-unit-tests: true
 
   run-profiler-regression:
     needs: [build-artifact]
