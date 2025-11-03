@@ -27,6 +27,9 @@ void bind_reduction_argmax_operation(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
 
+            Returns:
+                ttnn.Tensor: Output tensor containing the indices of the maximum value.
+
             Note:
                 The input tensor supports the following data types and layouts:
 

@@ -123,9 +123,6 @@ void bind_binary_operation(
             * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             * **activations** (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
 
-        Returns:
-            * **ttnn.Tensor**: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 

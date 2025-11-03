@@ -225,13 +225,42 @@ class FastOperationDocumenter(FunctionDocumenter):
                 section_match = re.match(r"^\s*(\w[\w\s]*):\s*$", line)
                 if section_match:
                     current_section = section_match.group(1).strip()
-                    # Skip Returns sections entirely - don't render them in documentation
+                    # For Returns sections, check if they contain meaningful information
                     if current_section == "Returns":
+                        # Collect the Returns section content to analyze
+                        returns_content = []
+                        content_start_idx = docstring_lines.index(line) + 1
+                        content_idx = content_start_idx
+
+                        # Find the end of this Returns section
+                        while content_idx < len(docstring_lines):
+                            next_line = docstring_lines[content_idx]
+                            if re.match(r"^\s*(\w[\w\s]*):\s*$", next_line):  # Next section header
+                                break
+                            if next_line.strip():  # Non-empty line
+                                returns_content.append(next_line.strip())
+                            content_idx += 1
+
+                        # Check if this Returns section has meaningful content
+                        returns_text = " ".join(returns_content)
+                        if (
+                            "ttnn.Tensor: the output tensor" in returns_text
+                            or "* **ttnn.Tensor**: the output tensor" in returns_text
+                        ):
+                            # Skip generic Returns sections - don't add anything
+                            pass
+                        else:
+                            # Keep meaningful Returns sections as regular RST sections
+                            new_lines.append(line)  # Keep the "Returns:" header
+                            # Add the content lines as-is
+                            for content_line in returns_content:
+                                if content_line.strip():
+                                    new_lines.append(f"    {content_line}")
                         continue
                     new_lines.append(line)
                     continue
 
-                # Skip content from Returns sections
+                # Skip content from generic Returns sections (already handled above)
                 if current_section == "Returns":
                     continue
 
@@ -258,6 +287,16 @@ class FastOperationDocumenter(FunctionDocumenter):
                         return_type = match_return.group(2).strip()
                         description = match_return.group(3)
                         # Remove bullet and bold for Sphinx field lists: "Type: description"
+                        new_lines.append(f"{indent}{return_type}: {description}")
+                        continue
+
+                    # Check for plain return type format: "Type: description"
+                    match_plain_return = re.match(r"^(\s*)([^:]+):\s*(.*)$", line)
+                    if match_plain_return and current_section == "Returns":
+                        indent = match_plain_return.group(1)
+                        return_type = match_plain_return.group(2).strip()
+                        description = match_plain_return.group(3)
+                        # Format for Sphinx field lists: "Type: description"
                         new_lines.append(f"{indent}{return_type}: {description}")
                         continue
 
@@ -328,13 +367,42 @@ class OperationDocumenter(FunctionDocumenter):
                 section_match = re.match(r"^\s*(\w[\w\s]*):\s*$", line)
                 if section_match:
                     current_section = section_match.group(1).strip()
-                    # Skip Returns sections entirely - don't render them in documentation
+                    # For Returns sections, check if they contain meaningful information
                     if current_section == "Returns":
+                        # Collect the Returns section content to analyze
+                        returns_content = []
+                        content_start_idx = docstring_lines.index(line) + 1
+                        content_idx = content_start_idx
+
+                        # Find the end of this Returns section
+                        while content_idx < len(docstring_lines):
+                            next_line = docstring_lines[content_idx]
+                            if re.match(r"^\s*(\w[\w\s]*):\s*$", next_line):  # Next section header
+                                break
+                            if next_line.strip():  # Non-empty line
+                                returns_content.append(next_line.strip())
+                            content_idx += 1
+
+                        # Check if this Returns section has meaningful content
+                        returns_text = " ".join(returns_content)
+                        if (
+                            "ttnn.Tensor: the output tensor" in returns_text
+                            or "* **ttnn.Tensor**: the output tensor" in returns_text
+                        ):
+                            # Skip generic Returns sections - don't add anything
+                            pass
+                        else:
+                            # Keep meaningful Returns sections as regular RST sections
+                            new_lines.append(line)  # Keep the "Returns:" header
+                            # Add the content lines as-is
+                            for content_line in returns_content:
+                                if content_line.strip():
+                                    new_lines.append(f"    {content_line}")
                         continue
                     new_lines.append(line)
                     continue
 
-                # Skip content from Returns sections
+                # Skip content from generic Returns sections (already handled above)
                 if current_section == "Returns":
                     continue
 
@@ -361,6 +429,16 @@ class OperationDocumenter(FunctionDocumenter):
                         return_type = match_return.group(2).strip()
                         description = match_return.group(3)
                         # Remove bullet and bold for Sphinx field lists: "Type: description"
+                        new_lines.append(f"{indent}{return_type}: {description}")
+                        continue
+
+                    # Check for plain return type format: "Type: description"
+                    match_plain_return = re.match(r"^(\s*)([^:]+):\s*(.*)$", line)
+                    if match_plain_return and current_section == "Returns":
+                        indent = match_plain_return.group(1)
+                        return_type = match_plain_return.group(2).strip()
+                        description = match_plain_return.group(3)
+                        # Format for Sphinx field lists: "Type: description"
                         new_lines.append(f"{indent}{return_type}: {description}")
                         continue
 

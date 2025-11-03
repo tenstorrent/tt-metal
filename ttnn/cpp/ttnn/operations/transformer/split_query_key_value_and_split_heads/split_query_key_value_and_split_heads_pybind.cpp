@@ -69,6 +69,9 @@ void py_bind_split_query_key_value_and_split_heads(pybind11::module& module) {
                 transpose_key (bool): Whether to transpose the Key tensor on the last two dimensions. Defaults to `true`
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
+            Returns:
+               Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.
+
         )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::transformer::split_query_key_value_and_split_heads)& self,

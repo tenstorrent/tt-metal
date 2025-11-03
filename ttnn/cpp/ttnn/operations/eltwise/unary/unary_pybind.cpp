@@ -38,9 +38,6 @@ void bind_unary_clamp(py::module& module, const unary_operation_t& operation) {
             * **memory_config** (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
-        Returns:
-            * **ttnn.Tensor**: the output tensor.
-
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -221,9 +218,6 @@ void bind_unary_operation(
         Keyword Args:
             * **memory_config** (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             * **output_tensor** (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-        Returns:
-            * **ttnn.Tensor**: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
