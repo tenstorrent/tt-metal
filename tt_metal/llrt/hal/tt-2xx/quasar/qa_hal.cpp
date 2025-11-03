@@ -330,7 +330,7 @@ void Hal::initialize_qa() {
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
 
-    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version /*eth_fw_version*/) {
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
         // No checks
     };
 }
