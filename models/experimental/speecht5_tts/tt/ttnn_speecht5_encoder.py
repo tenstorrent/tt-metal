@@ -26,6 +26,8 @@ from typing import Tuple
 import torch
 import ttnn
 
+from models.experimental.speecht5_tts.reference.speecht5_encoder import create_sinusoidal_positions
+
 
 @dataclass
 class TTNNEncoderConfig:
@@ -419,6 +421,10 @@ class TTNNSpeechT5Encoder:
             memory_config=self.L1_MEMCFG,
         )
 
+        pe_slice = self.parameters["positional_encoding"][:, :seq_len, :]
+
+        hidden_states = hidden_states + self.parameters["encode_positions_alpha"] * pe_slice
+
         # Op 2: Pre-encoder layer norm
         hidden_states = ttnn.layer_norm(
             hidden_states,
@@ -668,12 +674,10 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
 
     # 3. Create positional encoding tensor (for compatibility with encoder implementation)
     # SpeechT5 uses relative positional encoding, so we create a dummy absolute PE
-    max_seq_len = 2048  # Reasonable max length
-    hidden_size = core_encoder.embed_positions.pe_k.weight.shape[1]
     # Create zeros for now (relative PE is handled differently in SpeechT5)
-    dummy_pe = torch.zeros(1, max_seq_len, hidden_size)
+    pe = create_sinusoidal_positions(config.max_position_embeddings, config.hidden_size)
     parameters["positional_encoding"] = ttnn.from_torch(
-        dummy_pe,
+        pe,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -682,7 +686,7 @@ def preprocess_encoder_parameters(torch_encoder, config: TTNNEncoderConfig, devi
 
     # 4. Positional encoding alpha (dummy value)
     parameters["encode_positions_alpha"] = ttnn.from_torch(
-        torch.tensor([1.0]),
+        torch_encoder.prenet.encode_positions.alpha.data.unsqueeze(0),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
