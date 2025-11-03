@@ -28,15 +28,15 @@ BATCH_TEST_CASES = [1, 2]
             ),
             32,
         ),
-        # (
-        # 128,
-        # ttnn.CoreRangeSet(
-        # {
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
-        # }
-        # ),
-        # 64,
-        # ),
+        (
+            128,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                }
+            ),
+            64,
+        ),
         # (
         # 168960,
         # ttnn.CoreRangeSet(

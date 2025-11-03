@@ -14,6 +14,226 @@ namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
 
+// Generate individual transfers for a single destination core
+std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core(
+    uint32_t dst_core,
+    uint32_t batch_size,
+    uint32_t channels,
+    uint32_t hw_total,
+    uint32_t input_num_cores,
+    uint32_t output_num_cores,
+    uint32_t element_size_bytes) {
+    std::map<uint32_t, std::vector<TransferData>> transfers_by_src;
+
+    uint32_t hw_per_input_core = hw_total / input_num_cores;
+    uint32_t bhw_total = batch_size * hw_total;
+    uint32_t bhw_per_output_core = bhw_total / output_num_cores;
+
+    // Calculate BHW range this output core handles
+    uint32_t dst_bhw_start = dst_core * bhw_per_output_core;
+    uint32_t dst_bhw_end = std::min(dst_bhw_start + bhw_per_output_core, bhw_total);
+
+    for (uint32_t bhw_idx = dst_bhw_start; bhw_idx < dst_bhw_end; bhw_idx++) {
+        // Convert BHW index back to (batch_id, hw_idx)
+        uint32_t batch_id = bhw_idx / hw_total;
+        uint32_t hw_idx = bhw_idx % hw_total;
+
+        // Find which input core has this hw_idx data
+        uint32_t src_core = hw_idx / hw_per_input_core;
+        uint32_t src_hw_offset = hw_idx % hw_per_input_core;
+
+        // Calculate source offset: [B, C, HW_per_input_core] layout
+        uint32_t src_offset = (batch_id * channels * hw_per_input_core + src_hw_offset * channels) * element_size_bytes;
+
+        // Calculate destination offset: [1, C, BHW_per_output_core] layout
+        uint32_t dst_bhw_offset = bhw_idx - dst_bhw_start;
+        uint32_t dst_offset = dst_bhw_offset * channels * element_size_bytes;
+
+        // Group by source core
+        if (transfers_by_src.find(src_core) == transfers_by_src.end()) {
+            transfers_by_src[src_core] = std::vector<TransferData>();
+        }
+
+        transfers_by_src[src_core].emplace_back(src_offset, dst_offset, channels * element_size_bytes);
+    }
+
+    return transfers_by_src;
+}
+
+// Optimize transfers using batch-aware grouping
+std::vector<BatchTransferInstruction> optimize_transfers_batch_aware(
+    const std::map<uint32_t, std::vector<TransferData>>& transfers_by_src,
+    uint32_t dst_core,
+    uint32_t batch_size,
+    uint32_t channels,
+    uint32_t hw_total,
+    uint32_t input_num_cores,
+    uint32_t element_size_bytes,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores) {
+    std::vector<BatchTransferInstruction> instructions;
+    uint32_t hw_per_input_core = hw_total / input_num_cores;
+
+    for (const auto& [src_core, transfer_list] : transfers_by_src) {
+        // Sort by source offset
+        std::vector<TransferData> sorted_transfers = transfer_list;
+        std::sort(sorted_transfers.begin(), sorted_transfers.end(), [](const TransferData& a, const TransferData& b) {
+            return a.src_offset < b.src_offset;
+        });
+
+        if (sorted_transfers.empty()) {
+            continue;
+        }
+
+        // Group transfers by batch to ensure at least one transfer per batch
+        std::map<uint32_t, std::vector<TransferData>> transfers_by_batch;
+        uint32_t batch_size_bytes = channels * hw_per_input_core * element_size_bytes;
+
+        for (const TransferData& transfer : sorted_transfers) {
+            // Determine which batch this transfer belongs to
+            uint32_t batch_id = transfer.src_offset / batch_size_bytes;
+            transfers_by_batch[batch_id].push_back(transfer);
+        }
+
+        // Process each batch separately to ensure at least one transfer per batch
+        for (auto& [batch_id, batch_transfers] : transfers_by_batch) {
+            // Group consecutive transfers within this batch
+            TransferData current_transfer = batch_transfers[0];
+
+            for (size_t i = 1; i < batch_transfers.size(); i++) {
+                const TransferData& next_transfer = batch_transfers[i];
+
+                // Check if we can combine transfers (within same batch)
+                if (next_transfer.src_offset == current_transfer.src_offset + current_transfer.size &&
+                    next_transfer.dst_offset == current_transfer.dst_offset + current_transfer.size) {
+                    current_transfer.size += next_transfer.size;
+                } else {
+                    // Emit current transfer and start new one
+                    instructions.emplace_back(
+                        src_core,
+                        dst_core,
+                        input_cores[src_core],
+                        output_cores[dst_core],
+                        current_transfer.src_offset,
+                        current_transfer.dst_offset,
+                        current_transfer.size);
+                    current_transfer = next_transfer;
+                }
+            }
+
+            // Emit final transfer for this batch
+            instructions.emplace_back(
+                src_core,
+                dst_core,
+                input_cores[src_core],
+                output_cores[dst_core],
+                current_transfer.src_offset,
+                current_transfer.dst_offset,
+                current_transfer.size);
+        }
+    }
+
+    return instructions;
+}
+
+// Log transfer generation parameters and results
+void log_transfer_generation_info(
+    uint32_t batch_size,
+    uint32_t channels,
+    uint32_t hw_total,
+    uint32_t input_num_cores,
+    uint32_t output_num_cores,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    const std::vector<BatchTransferInstruction>& instructions) {
+    uint32_t hw_per_input_core = hw_total / input_num_cores;
+    uint32_t bhw_total = batch_size * hw_total;
+    uint32_t bhw_per_output_core = bhw_total / output_num_cores;
+
+    log_info(
+        tt::LogType::LogAlways,
+        "generate_batch_redistribution_transfers: B={}, C={}, HW={}, input_cores={}, output_cores={}",
+        batch_size,
+        channels,
+        hw_total,
+        input_num_cores,
+        output_num_cores);
+    log_info(
+        tt::LogType::LogAlways,
+        "  hw_per_input_core={}, bhw_per_output_core={}",
+        hw_per_input_core,
+        bhw_per_output_core);
+
+    // Log core coordinates for debugging
+    log_info(tt::LogType::LogAlways, "Input cores:");
+    for (size_t i = 0; i < input_cores.size(); i++) {
+        log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, input_cores[i].x, input_cores[i].y);
+    }
+    log_info(tt::LogType::LogAlways, "Output cores:");
+    for (size_t i = 0; i < output_cores.size(); i++) {
+        log_info(tt::LogType::LogAlways, "  [{}]: ({}, {})", i, output_cores[i].x, output_cores[i].y);
+    }
+
+    log_info(tt::LogType::LogAlways, "Generated {} batch transfer instructions", instructions.size());
+    for (size_t i = 0; i < instructions.size(); i++) {
+        const auto& instr = instructions[i];
+        log_info(
+            tt::LogType::LogAlways,
+            "  {}: src_core={}({},{}), dst_core={}({},{}), src_offset={}, dst_offset={}, size={}",
+            i,
+            instr.src_core_idx,
+            instr.src_core_coord.x,
+            instr.src_core_coord.y,
+            instr.dst_core_idx,
+            instr.dst_core_coord.x,
+            instr.dst_core_coord.y,
+            instr.src_offset,
+            instr.dst_offset,
+            instr.transfer_size);
+    }
+}
+
+std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
+    uint32_t batch_size,
+    uint32_t channels,
+    uint32_t hw_total,
+    const std::vector<CoreCoord>& input_cores,
+    const std::vector<CoreCoord>& output_cores,
+    uint32_t element_size_bytes) {
+    std::vector<BatchTransferInstruction> instructions;
+
+    uint32_t input_num_cores = input_cores.size();
+    uint32_t output_num_cores = output_cores.size();
+
+    // For each output core, generate and optimize transfers
+    for (uint32_t dst_core = 0; dst_core < output_num_cores; dst_core++) {
+        // Generate individual transfers for this destination core
+        auto transfers_by_src = generate_transfers_for_output_core(
+            dst_core, batch_size, channels, hw_total, input_num_cores, output_num_cores, element_size_bytes);
+
+        // Optimize transfers using batch-aware grouping
+        auto core_instructions = optimize_transfers_batch_aware(
+            transfers_by_src,
+            dst_core,
+            batch_size,
+            channels,
+            hw_total,
+            input_num_cores,
+            element_size_bytes,
+            input_cores,
+            output_cores);
+
+        // Add to overall instruction list
+        instructions.insert(instructions.end(), core_instructions.begin(), core_instructions.end());
+    }
+
+    // Log transfer generation information
+    log_transfer_generation_info(
+        batch_size, channels, hw_total, input_num_cores, output_num_cores, input_cores, output_cores, instructions);
+
+    return instructions;
+}
+
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
     const uint32_t element_size_bytes = input_tensor.element_size();
     const uint32_t l1_alignment_bytes = tt::tt_metal::hal::get_l1_alignment();
@@ -38,8 +258,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     const uint32_t l1_input_shard_height = is_input_in_dram ? a.logical_shape()[-2] : a.shard_spec()->shape[0];
     const uint32_t l1_input_shard_width = is_input_in_dram ? output_shard_height : a.shard_spec()->shape[1];
-    const uint32_t batch_size = a.logical_shape()[1];  // TODO: get this from the right place
-    //
+    const uint32_t batch_size = a.logical_shape()[1];
+    const uint32_t input_channels = a.logical_shape()[2];
+    const uint32_t hw_total = a.logical_shape()[3];
+
     const CoreRangeSet l1_input_core_grid = is_input_in_dram ? output.shard_spec()->grid : a.shard_spec()->grid;
     const std::vector<CoreCoord> l1_input_cores = corerange_to_cores(
         l1_input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
@@ -50,12 +272,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         l1_input_shard_width,
         l1_input_cores.size());
 
-    // TT_FATAL(
-    // l1_input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller (was {})", l1_input_shard_height);
-    // TT_FATAL(
-    // l1_input_shard_width % TILE_WIDTH == 0,
-    //"Shard width must be multiple of tile width (was {})",
-    // l1_input_shard_width);
     const auto alignment_elements = compute_alignment_requirement_in_elements(output);
     log_info(tt::LogType::LogAlways, "convert_to_hwc: Alignment elements={}", alignment_elements);
     TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
@@ -91,6 +307,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         "convert_to_hwc: Input format={}, element_size={}",
         static_cast<int>(input_format),
         input_element_size);
+
+    const auto transfers = generate_batch_redistribution_transfers(
+        batch_size, input_channels, hw_total, l1_input_cores, l1_input_cores, input_element_size);
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
