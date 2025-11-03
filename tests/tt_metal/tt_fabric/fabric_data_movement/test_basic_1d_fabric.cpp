@@ -2296,7 +2296,7 @@ void FabricUnicastCommon(
     }
 }
 
-void UDMFabric1DUnicastCommon(
+void UDMFabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::tuple<RoutingDirection, uint32_t>& pair_ordered_dir) {
@@ -2335,6 +2335,8 @@ void UDMFabric1DUnicastCommon(
     auto receiver_device = fixture->get_device(dst_physical_device_id);
     auto dest_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
 
+    log_info(tt::LogTest, "src_fabric_node_id: {}, dest_fabric_node_id: {}", src_fabric_node_id, dest_fabric_node_id);
+
     auto sender_device = fixture->get_device(src_physical_device_id);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
@@ -2372,9 +2374,7 @@ void UDMFabric1DUnicastCommon(
     compile_time_args.push_back(req_notification_size_bytes);
 
     // Set up fabric connection runtime args
-    auto sender_available_links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dest_fabric_node_id);
-    uint32_t sender_link_idx = sender_available_links.empty() ? 0 : sender_available_links[0];
-
+    uint32_t sender_link_idx = 0;
     std::vector<uint32_t> sender_runtime_args;
     append_fabric_connection_rt_args(
         src_fabric_node_id,
@@ -2435,8 +2435,7 @@ void UDMFabric1DUnicastCommon(
 
     // Set up fabric connection runtime args for receiver to send ACKs back to sender
     std::vector<uint32_t> receiver_runtime_args;
-    auto receiver_available_links = tt::tt_fabric::get_forwarding_link_indices(dest_fabric_node_id, src_fabric_node_id);
-    uint32_t receiver_link_idx = receiver_available_links.empty() ? 0 : receiver_available_links[0];
+    uint32_t receiver_link_idx = 0;
     append_fabric_connection_rt_args(
         dest_fabric_node_id,
         src_fabric_node_id,
@@ -3150,20 +3149,20 @@ TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricMulticastNocUnicastWrit
 
 // UDM Mode Tests - test udm api changes for 1D
 TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricUnicastEast) {
-    UDMFabric1DUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
 }
 
 TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricUnicastWest) {
-    UDMFabric1DUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 1));
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 1));
 }
 
 // UDM Mode Read Tests - test udm read api for 1D
 TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricReadEast) {
-    UDMFabric1DUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
 }
 
 TEST_F(NightlyFabric1DUDMModeFixture, TestLinearUDMFabricReadWest) {
-    UDMFabric1DUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
 }
 
 }  // namespace fabric_router_tests

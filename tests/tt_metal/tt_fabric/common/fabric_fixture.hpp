@@ -207,7 +207,7 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
-class Fabric2DUDMModeFixture : public BaseFabricFixture {
+class NightlyFabric2DUDMModeFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {
         BaseFabricFixture::DoSetUpTestSuite(
@@ -317,6 +317,11 @@ void FabricUnicastCommon(
     const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
     FabricApiType api_type = FabricApiType::Linear,
     bool with_state = false);
+
+void UDMFabricUnicastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::tuple<RoutingDirection, uint32_t /*num_hops*/>& pair_ordered_dir);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
