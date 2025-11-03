@@ -13,7 +13,15 @@ from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 15
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("sum")
 
 parameters = {
     "pytorch": {
@@ -626,6 +634,7 @@ parameters = {
             ),
         ],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -663,9 +672,4 @@ def test_forge(device, params):
         logger.info(f"E2E Performance: {e2e_perf}")
 
 
-def run(
-    params,
-    *,
-    device,
-) -> list:
     return run_sum(device, params)

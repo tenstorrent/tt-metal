@@ -8,6 +8,9 @@ import torch
 import random
 import ttnn
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.ttnn.utils_for_testing import (
     check_with_pcc,
     start_measuring_time,
@@ -67,6 +70,9 @@ parameter_tiled = {
 }
 
 
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("concat")
+
 parameters = {**parameter_tiled}
 print(f"parameter keys: {parameters.keys()}")
 
@@ -100,17 +106,18 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 
 def run(
-    concat_specs,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
+    concat_specs=None,
+    dtype=None,
+    layout=None,
+    input_mem_config=None,
+    output_mem_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     torch_input_tensors = []
 
     torch_input_tensors.append(torch_random(concat_specs["shape1"], -0.1, 0.1, dtype=torch.bfloat16))
+) -> list:
     torch_input_tensors.append(torch_random(concat_specs["shape2"], -0.1, 0.1, dtype=torch.bfloat16))
 
     input_tensors = []

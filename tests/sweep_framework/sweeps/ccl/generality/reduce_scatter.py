@@ -11,6 +11,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
+
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.sweep_framework.sweep_utils.ccl_common import (
     device_context,
     get_mem_configs,
@@ -108,6 +112,9 @@ GENERALITY_PARAMETERS = {
 }
 
 
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("reduce_scatter")
+
 parameters = {
     "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
     "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
@@ -134,6 +141,7 @@ parameters = {
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -228,22 +236,23 @@ def _get_tensors(
 
 
 def run(
-    mesh_shape,
-    fabric_config,
-    input_shape,
-    dim,
-    cluster_axis,
-    num_links,
-    input_dtype,
-    layout,
-    buffer_type,
-    shard_specs,
-    num_iters,
-    topology,
+    mesh_shape=None,
+    fabric_config=None,
+    input_shape=None,
+    dim=None,
+    cluster_axis=None,
+    num_links=None,
+    input_dtype=None,
+    layout=None,
+    buffer_type=None,
+    shard_specs=None,
+    num_iters=None,
+    topology=None,
+    traced_config_name=None,
     *,
     device,  # unused
-) -> list:
     logger.info("STARTING SWEEP")
+) -> list:
 
     logger.info(vars())
 

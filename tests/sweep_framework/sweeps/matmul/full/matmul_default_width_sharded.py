@@ -13,6 +13,10 @@ import torch
 import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
+
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.ttnn.utils_for_testing import (
     get_per_core_size_and_num_cores,
     start_measuring_time,
@@ -32,6 +36,9 @@ def get_width_sharded_specs(k_size_choices: List[int], num_cores_choices: List[i
         ):
             yield (k_size, per_core_width, num_cores_width)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
 
 parameters = {
     "default": {
@@ -53,6 +60,7 @@ parameters = {
         "output_dtype": [ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
         "compute_kernel_config": [None],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -72,7 +80,6 @@ def run_matmul(
     output_dtype,
     input_layout,
     compute_kernel_config,
-) -> list:
     k_size, per_core_width, num_cores_width = width_sharded_specs
     total_height = functools.reduce(operator.mul, batch_sizes) * m_size
 
@@ -171,22 +178,22 @@ def test_matmul(
 
 
 def run(
-    batch_sizes,
-    m_size,
-    width_sharded_specs,
-    n_size,
-    batch_matrix_multiply,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
-    input_a_dtype,
-    input_b_dtype,
-    output_dtype,
-    input_layout,
-    compute_kernel_config,
+    batch_sizes=None,
+    m_size=None,
+    width_sharded_specs=None,
+    n_size=None,
+    batch_matrix_multiply=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    output_dtype=None,
+    input_layout=None,
+    compute_kernel_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_matmul(
         device,
         batch_sizes,
@@ -203,3 +210,4 @@ def run(
         input_layout,
         compute_kernel_config,
     )
+) -> list:

@@ -19,9 +19,17 @@ from models.common.utility_functions import torch_random
 
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range_batch_norm
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 30
 
 random.seed(0)
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("batch_norm")
 
 parameters = {
     "BN_Testing": {
@@ -37,6 +45,7 @@ parameters = {
         "eps": [1.0, 0.0, 2.34, 1e-05],
         "momentum": [0.0, 0.1, 0.5],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -147,20 +156,20 @@ def run_batch_norm(
 
 
 def run(
-    input_shape,
-    input_dtype,
-    input_layout,
-    input_memory_config,
-    training,
-    check_mean,
-    check_var,
-    weight,
-    bias,
-    eps,
-    momentum,
+    input_shape=None,
+    input_dtype=None,
+    input_layout=None,
+    input_memory_config=None,
+    training=None,
+    check_mean=None,
+    check_var=None,
+    weight=None,
+    bias=None,
+    eps=None,
+    momentum=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_batch_norm(
         input_shape,
         input_dtype,
@@ -175,6 +184,7 @@ def run(
         momentum,
         device,
     )
+) -> list:
 
 
 param_keys = parameters["BN_Testing"].keys()

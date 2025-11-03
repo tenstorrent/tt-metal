@@ -11,14 +11,26 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 10
 # seed for random
 random.seed(0)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("embedding")
+
 parameters = {
     "nightly": {
         "embedding_specs": [
-            {"weight_shape": [1, 768], "indices_shape": [1, 10]},
+            {
+                "weight_shape": [1, 768],
+                "indices_shape": [1, 10],
+                "model_traced": model_traced_params,
+            },
             {"weight_shape": [1024, 768], "indices_shape": [1, 7]},
             {"weight_shape": [2, 1024], "indices_shape": [1, 256]},
             {"weight_shape": [2, 128], "indices_shape": [1, 12]},
@@ -108,6 +120,7 @@ def run(
     indices_layout,
     weight_layout,
     output_layout,
+    traced_config_name=None,
     *,
     device,
 ):

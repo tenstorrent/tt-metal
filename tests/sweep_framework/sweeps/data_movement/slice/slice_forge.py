@@ -13,6 +13,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 10
 random.seed(0)
 
@@ -22,11 +26,16 @@ json_path = os.path.join(base_dir, "slice_forge_processed.json")
 with open(json_path, "r") as f:
     processed_slice_specs = json.load(f)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("slice")
+
 parameters = {
     "nightly": {
         "slice_specs": processed_slice_specs,
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -49,6 +58,7 @@ def run(
     slice_specs,
     dtype,
     layout,
+    traced_config_name=None,
     *,
     device,
 ):

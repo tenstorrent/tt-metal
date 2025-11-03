@@ -8,6 +8,9 @@ import torch
 import random
 import ttnn
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.ttnn.utils_for_testing import (
     check_with_pcc,
     start_measuring_time,
@@ -220,6 +223,10 @@ parameters_width_sharded = {
     }
 }
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("concat")
+
 parameters = {**parameter_block_sharded, **parameters_height_sharded, **parameters_width_sharded}
 print(f"parameter keys: {parameters.keys()}")
 
@@ -258,14 +265,14 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 
 def run(
-    concat_specs,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
+    concat_specs=None,
+    dtype=None,
+    layout=None,
+    input_mem_config=None,
+    output_mem_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     torch_input_tensors = []
     if input_mem_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
         input_mem_config_a = ttnn.create_sharded_memory_config(

@@ -14,6 +14,13 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.conv_transpose2d_common import run_short, mesh_device_fixture
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("conv_transpose2d")
+
 parameters = {
     "short_sweep_suite": {
         "input_specs": [
@@ -33,6 +40,7 @@ parameters = {
             [1, 64, 128, 128, 32, 2, 2, 2, 2, 0, 0, 1, 1, 0, 0],
         ]
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -40,11 +48,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def run(
-    input_specs,
-    *,
-    device,
-) -> list:
     return run_short(
         input_specs,
         device,

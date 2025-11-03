@@ -11,8 +11,16 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 10
 random.seed(0)
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("fill")
 
 parameters = {
     "nightly": {
@@ -27,6 +35,7 @@ parameters = {
         ],
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -49,6 +58,7 @@ def run(
     value,
     dtype,
     layout,
+    traced_config_name=None,
     *,
     device,
 ):

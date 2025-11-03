@@ -13,7 +13,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.logical_not.default.md
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("logical_not")
 
 parameters = {
     "nightly": {
@@ -25,19 +33,21 @@ parameters = {
         "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
 def run(
-    input_shape,
-    input_dtype,
-    input_layout,
-    input_memory_config,
-    output_memory_config,
+    input_shape=None,
+    input_dtype=None,
+    input_layout=None,
+    input_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     torch.manual_seed(0)
+) -> list:
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype

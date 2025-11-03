@@ -14,6 +14,10 @@ import torch
 import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
+
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.ttnn.utils_for_testing import (
     get_per_core_size_and_num_cores,
     start_measuring_time,
@@ -35,6 +39,9 @@ def get_height_sharded_specs(
         ):
             yield (batch_sizes, m_size, per_core_height, num_cores_height)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
 
 parameters = {
     "default": {
@@ -62,6 +69,7 @@ parameters = {
         # "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
         "compute_kernel_config": [None],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -80,7 +88,6 @@ def run_matmul(
     output_dtype,
     input_layout,
     compute_kernel_config,
-) -> list:
     batch_sizes, m_size, per_core_height, num_cores_height = height_sharded_specs
 
     core_grid = device.compute_with_storage_grid_size()
@@ -176,21 +183,21 @@ def test_matmul(
 
 
 def run(
-    height_sharded_specs,
-    k_size,
-    n_size,
-    batch_matrix_multiply,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
-    input_a_dtype,
-    input_b_dtype,
-    output_dtype,
-    input_layout,
-    compute_kernel_config,
+    height_sharded_specs=None,
+    k_size=None,
+    n_size=None,
+    batch_matrix_multiply=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    output_dtype=None,
+    input_layout=None,
+    compute_kernel_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_matmul(
         device,
         height_sharded_specs,
@@ -206,3 +213,4 @@ def run(
         input_layout,
         compute_kernel_config,
     )
+) -> list:

@@ -11,7 +11,15 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 15  # longer timeout since permute calls transpose recursively
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("permute")
 
 parameters = {
     "traces": {
@@ -263,6 +271,7 @@ parameters = {
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.TILE_LAYOUT],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -284,6 +293,7 @@ def run(
     permute_specs,
     dtype,
     layout,
+    traced_config_name=None,
     *,
     device,
 ):

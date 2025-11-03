@@ -15,12 +15,20 @@ from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 70
 
 # params contains the shape of the first tensor followed by the second tensor
 # Note: the shape of the second tensor starts at int(count / 2). It's easiest
 # to reason about if both tensors are the same rank, although some other
 # combinations may be valid.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     "pytorch": {
         "params": [
@@ -2617,6 +2625,7 @@ parameters = {
         "dtype": [ttnn.float32, ttnn.bfloat16],
         "test_bias": [True, False],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -2694,12 +2703,4 @@ def test_trace(device, params, core_grid, dtype, test_bias):
     logger.info(f"e2e_perf: {e2e_perf}")
 
 
-def run(
-    params,
-    core_grid,
-    dtype,
-    test_bias,
-    *,
-    device,
-) -> list:
     return run_matmul(device, params, core_grid, dtype, test_bias)

@@ -16,10 +16,17 @@ from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 
 TIMEOUT = 15
 
 # TODO: Missing coverage for mixed precision; passed in dtype does nothing in current matmul path
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     "default": {
         "batch_sizes": [(2,)],
@@ -56,6 +63,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -71,7 +79,6 @@ def run_matmul(
     input_a_memory_config,
     input_b_memory_config,
     output_memory_config,
-) -> list:
     (m_size, n_size) = m_n_sizes
     input_a_dtype = dtype
     input_b_dtype = dtype
@@ -143,18 +150,18 @@ def test_matmul(
 
 
 def run(
-    batch_sizes,
-    m_n_sizes,
-    k_size,
-    batch_matrix_multiply,
-    dtype,
-    input_layout,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
+    batch_sizes=None,
+    m_n_sizes=None,
+    k_size=None,
+    batch_matrix_multiply=None,
+    dtype=None,
+    input_layout=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_matmul(
         device,
         batch_sizes,
@@ -167,3 +174,4 @@ def run(
         input_b_memory_config,
         output_memory_config,
     )
+) -> list:

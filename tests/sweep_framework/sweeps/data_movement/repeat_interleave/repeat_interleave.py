@@ -16,12 +16,20 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 360
 random.seed(0)
 
 
 # Does not have memory_config parameter
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("repeat_interleave")
+
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 6, 256, 256], [1, 1, 1, 1], 8)
@@ -34,6 +42,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -79,17 +88,18 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 
 def run(
-    input_shape,
-    repeats,
-    dim,
-    input_a_dtype,
-    input_a_layout,
-    input_a_memory_config,
-    output_memory_config,
+    input_shape=None,
+    repeats=None,
+    dim=None,
+    input_a_dtype=None,
+    input_a_layout=None,
+    input_a_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     data_seed = random.randint(0, 20000000)
+) -> list:
     torch.manual_seed(data_seed)
 
     # Fix shape for row mayor

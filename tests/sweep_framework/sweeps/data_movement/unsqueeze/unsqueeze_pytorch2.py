@@ -11,6 +11,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 10
 # seed for random
 random.seed(0)
@@ -49,10 +53,17 @@ def generate_unsqueeze_config(num_samples=10):
         }
 
 
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("unsqueeze")
+
 parameters = {
     "nightly": {
         "unsqueeze_specs": [
-            {"shape": [0], "dim": 1},
+            {
+                "shape": [0],
+                "dim": 1,
+                "model_traced": model_traced_params,
+            },
             {"shape": [1, 1, 1, 16], "dim": 4},
             {"shape": [1, 1, 10], "dim": 2},
             {"shape": [1, 1, 12], "dim": 2},
@@ -285,6 +296,7 @@ def run(
     unsqueeze_specs,
     dtype,
     layout,
+    traced_config_name=None,
     *,
     device,
 ):

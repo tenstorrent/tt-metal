@@ -13,6 +13,10 @@ from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -21,16 +25,23 @@ random.seed(0)
 DIM_SIZES = [0, 32]
 """Possible tensor dimensions are picked from this list"""
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("softmax")
+
 parameters = {
-    f"rank_{rank}": {
-        "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
-        "dim": list(range(-rank, rank)) if rank > 0 else [0, -1],  # Rank 0 has no dimensions
-        # normalization operations to test
-        "op": [
-            "softmax",
-        ],
-    }
-    for rank in range(5)
+    **{
+        f"rank_{rank}": {
+            "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
+            "dim": list(range(-rank, rank)) if rank > 0 else [0, -1],  # Rank 0 has no dimensions
+            # normalization operations to test
+            "op": [
+                "softmax",
+            ],
+        }
+        for rank in range(5)
+    },
+    "model_traced": model_traced_params,
 }
 
 
@@ -115,16 +126,11 @@ def test_normalization(
     assert result, error_msg
 
 
-def run(
-    tensor_shape,
-    dim,
-    op,
-    *,
-    device,
-) -> tuple:
+def run(tensor_shape=None, dim=None, op=None, traced_config_name=None, *, device) -> tuple:
     return run_softmax(
         device,
         tensor_shape,
         dim,
         op,
     )
+) -> list:

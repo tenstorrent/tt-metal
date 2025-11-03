@@ -7,6 +7,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, mesh_device_fixture, invalidate_vector
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Shapes are taken from existing unit tests
 input_shapes = [
     [[1, 256, 56, 56]],
@@ -20,6 +24,10 @@ input_shapes = [
 # Total test cases
 #   max_pool2d_full_sweep_suite_params_{idx} = 13 * 7 * 7 * 3 * 6(input_shapes) * 2 * 2 = 45864
 # There can be invalid test cases in here based on conditions in invalidate_vector.
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("max_pool2d")
 
 parameters = {
     f"max_pool2d_full_sweep_suite_params_{idx}": {
@@ -35,7 +43,18 @@ parameters = {
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "ceil_mode": [True, False],
     }
-    for idx, shape_ in enumerate(input_shapes)
+    ** {
+        f"shape_{idx}": {
+            "shape": [shape_],
+            "kernel_size": kernel_sizes,
+            "padding": paddings,
+            "stride": strides,
+            "sharding": shardings,
+            "dtype": dtypes,
+        }
+        for idx, shape_ in enumerate(input_shapes)
+    },
+    "model_traced": model_traced_params,
 }
 
 
@@ -47,6 +66,7 @@ def run(
     shape,
     dtype,
     ceil_mode=False,
+    traced_config_name=None,
     *,
     device,
 ):

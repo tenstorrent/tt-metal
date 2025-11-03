@@ -13,6 +13,10 @@ from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -21,18 +25,24 @@ random.seed(0)
 DIM_SIZES = [0, 32]
 """Possible tensor dimensions are picked from this list"""
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("argmax")
+
 parameters = {
-    f"rank_{rank}": {
-        "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
-        "dim": [None] + [rank, -1] if rank > 0 else [],
-        "keepdim": [True, False],
-        "use_multicore": [True, False],
-    }
-    for rank in range(5)
+    **{
+        f"rank_{rank}": {
+            "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
+            "dim": [None] + [rank, -1] if rank > 0 else [],
+            "keepdim": [True, False],
+            "use_multicore": [True, False],
+        }
+        for rank in range(5)
+    },
+    "model_traced": model_traced_params,
 }
 
 
-def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes and dim values.
@@ -118,14 +128,6 @@ def test_argmax(
     assert result, error_msg
 
 
-def run(
-    tensor_shape,
-    dim,
-    keepdim,
-    use_multicore,
-    *,
-    device,
-) -> list:
     return run_argmax(
         device,
         tensor_shape,

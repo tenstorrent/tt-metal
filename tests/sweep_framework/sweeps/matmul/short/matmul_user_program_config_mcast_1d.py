@@ -16,6 +16,10 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 5
 
 
@@ -28,6 +32,10 @@ IN0_INNER_DIM_PER_CORE = 96
 core_grid = ttnn.CoreCoord(8, 7)
 
 # Set up suites and specify input_shapes, program_config, and input_a_custom_memory_config parameters.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     ########################################
     # TESTS: in0 mcast grid != output grid #
@@ -256,6 +264,7 @@ parameters = {
             )
         ],
     },
+    "model_traced": model_traced_params,
 }
 
 # Add the rest of the parameters.
@@ -303,7 +312,6 @@ def run_matmul(
     output_dtype,
     input_layout,
     compute_kernel_config,
-) -> list:
     program_config.in0_block_w = in0_block_w
 
     if input_a_memory_config == TensorMemoryConfigs.CUSTOM_MEMORY_CONFIG:
@@ -404,23 +412,23 @@ def test_matmul(
 
 
 def run(
-    input_shapes,
-    program_config,
-    input_a_custom_memory_config,
-    batch_sizes,
-    batch_matrix_multiply,
-    in0_block_w,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
-    input_a_dtype,
-    input_b_dtype,
-    output_dtype,
-    input_layout,
-    compute_kernel_config,
+    input_shapes=None,
+    program_config=None,
+    input_a_custom_memory_config=None,
+    batch_sizes=None,
+    batch_matrix_multiply=None,
+    in0_block_w=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    output_dtype=None,
+    input_layout=None,
+    compute_kernel_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_matmul(
         device,
         input_shapes,
@@ -438,3 +446,4 @@ def run(
         input_layout,
         compute_kernel_config,
     )
+) -> list:

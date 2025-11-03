@@ -12,12 +12,20 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
+
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     mesh_device_fixture,
 )
 
 # fmt: off
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("conv2d")
+
 parameters = {
     "ttforge_sweep_conv2d": {
         "input_specs": [
@@ -521,7 +529,7 @@ parameters = {
             [2, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.ROW_MAJOR_LAYOUT), "dram", int(ttnn.float32)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.float32)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)]],
             [1, 1280, 3, 518, 518, 14, 14, 14, 14, 0, 0, 1, 1, 1, False, [int(ttnn.ROW_MAJOR_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)]], #Added from Issue 29981
        ],
-        "is_conv1d": [False], },
+        "is_conv1d": [False], },"model_traced": model_traced_params,
     }
 # fmt: on
 
@@ -530,12 +538,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def run(
-    input_specs,
-    is_conv1d=False,
-    *,
-    device,
-) -> list:
     return run_conv2d_short_sweep(input_specs, device)
 
 

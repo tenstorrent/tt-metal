@@ -15,10 +15,18 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 5
 
 # TODO: Consolidate tests for duplicate use cases into sweep with shapes
 # TODO: Missing coverage for Stable Diffusion matmul in: tests/ttnn/unit_tests/operations/test_matmul.py
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     "default": {
         "matmul_specs": [
@@ -77,6 +85,7 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -92,7 +101,6 @@ def run_matmul(
     input_b_dtype,
     output_dtype,
     input_layout,
-) -> list:
     batch_sizes, input_shapes, batch_matrix_multiply, create_program_config_specs = matmul_specs
 
     (core_grid, use_1d_systolic_array) = create_program_config_specs
@@ -186,6 +194,7 @@ def run(
     input_b_dtype,
     output_dtype,
     input_layout,
+    traced_config_name=None,
     *,
     device,
 ):

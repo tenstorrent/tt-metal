@@ -11,6 +11,14 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import (
+    MasterConfigLoader,
+    unpack_traced_config,
+    unpack_binary_traced_config,
+)
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -18,6 +26,10 @@ TIMEOUT = 30
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("add")
+
 parameters = {
     "suite_1": {
         "batch_sizes": [(1,)],
@@ -60,6 +72,7 @@ parameters = {
             )
         ],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -77,21 +90,22 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    batch_sizes,
-    height,
-    width,
-    broadcast,
-    input_a_dtype,
-    input_b_dtype,
-    input_a_layout,
-    input_b_layout,
-    input_b_memory_config,
-    input_a_memory_config,
-    output_memory_config,
+    batch_sizes=None,
+    height=None,
+    width=None,
+    broadcast=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    input_a_layout=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
+    input_a_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     input_shape_a = (*batch_sizes, height, width)
+) -> list:
     input_shape_b = (*batch_sizes, height, width)
     if broadcast == "hw":
         input_shape_b = (*batch_sizes, 1, 1)

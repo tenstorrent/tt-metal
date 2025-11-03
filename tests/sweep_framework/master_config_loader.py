@@ -1010,6 +1010,116 @@ def unpack_traced_config(
     return (None, None, None, None, None)
 
 
+def unpack_traced_config_dict(traced_config_name: str, use_defaults: bool = False) -> Optional[Dict[str, any]]:
+    """
+    Convenience function to unpack a traced config into a dictionary.
+    This is MORE FLEXIBLE than unpack_traced_config for operations with custom signatures.
+
+    Args:
+        traced_config_name: String name like "sigmoid_accurate_traced_0"
+        use_defaults: If True and config not found, returns default values instead of None
+
+    Returns:
+        Dictionary with keys: 'shape', 'dtype', 'layout', 'memory_config', 'output_memory_config'
+        or None if not found and use_defaults=False
+        or dict with default values if not found and use_defaults=True
+
+    Example:
+        ```python
+        def run(input_spec=None, traced_config_name=None, *, device):
+            if traced_config_name:
+                config = unpack_traced_config_dict(traced_config_name)
+                if config:
+                    # Construct input_spec from config
+                    input_spec = create_sharding_spec(config['shape'], ...)
+            # ... rest of function
+        ```
+    """
+    cfg = get_traced_config(traced_config_name)
+    if cfg:
+        # Check if it's binary - if so, return None to avoid confusion
+        if cfg.get("is_binary", False):
+            print(f"⚠️ Use unpack_binary_traced_config_dict() for binary operation configs")
+            return None
+        return {
+            "shape": cfg["shape"],
+            "dtype": cfg["dtype"],
+            "layout": cfg["layout"],
+            "memory_config": cfg["memory_config"],
+            "output_memory_config": cfg["output_memory_config"],
+        }
+
+    if use_defaults:
+        # Return sensible defaults
+        return {
+            "shape": [1, 32, 32],
+            "dtype": ttnn.bfloat16,
+            "layout": ttnn.TILE_LAYOUT,
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        }
+
+    return None
+
+
+def unpack_binary_traced_config_dict(traced_config_name: str, use_defaults: bool = False) -> Optional[Dict[str, any]]:
+    """
+    Convenience function to unpack a traced config for BINARY operations into a dictionary.
+    This is MORE FLEXIBLE than unpack_binary_traced_config for operations with custom signatures.
+
+    Args:
+        traced_config_name: String name like "add_traced_0"
+        use_defaults: If True and config not found, returns default values instead of None
+
+    Returns:
+        Dictionary with keys: 'input_shape', 'input_a_dtype', 'input_b_dtype', etc.
+        or None if not found and use_defaults=False
+        or dict with default values if not found and use_defaults=True
+
+    Example:
+        ```python
+        def run(input_spec=None, traced_config_name=None, *, device):
+            if traced_config_name:
+                config = unpack_binary_traced_config_dict(traced_config_name)
+                if config:
+                    # Construct input_spec from config
+                    input_spec = create_sharding_spec(config['input_shape'], ...)
+            # ... rest of function
+        ```
+    """
+    cfg = get_traced_config(traced_config_name)
+    if cfg:
+        # Check if it's actually binary
+        if not cfg.get("is_binary", False):
+            print(f"⚠️ Use unpack_traced_config_dict() for unary operation configs")
+            return None
+
+        # Return binary config
+        return {
+            "input_shape": {"self": cfg["shape_a"], "other": cfg["shape_b"]},
+            "input_a_dtype": cfg["dtype_a"],
+            "input_b_dtype": cfg["dtype_b"],
+            "input_a_layout": cfg["layout_a"],
+            "input_b_layout": cfg["layout_b"],
+            "input_a_memory_config": cfg["memory_config_a"],
+            "input_b_memory_config": cfg["memory_config_b"],
+        }
+
+    if use_defaults:
+        # Return sensible defaults
+        return {
+            "input_shape": {"self": [1, 32, 32], "other": [1, 32, 32]},
+            "input_a_dtype": ttnn.bfloat16,
+            "input_b_dtype": ttnn.bfloat16,
+            "input_a_layout": ttnn.TILE_LAYOUT,
+            "input_b_layout": ttnn.TILE_LAYOUT,
+            "input_a_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "input_b_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        }
+
+    return None
+
+
 def unpack_binary_traced_config(traced_config_name: str, use_defaults: bool = False) -> Tuple:
     """
     Convenience function to unpack a traced config for BINARY operations (like add, multiply).

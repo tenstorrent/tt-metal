@@ -556,8 +556,8 @@ def run(
     traced_config_name=None,
     *,
     device,
-) -> list:
     # Unpack traced config if provided (for model_traced suite)
+) -> list:
     if traced_config_name:
         (
             input_shape,

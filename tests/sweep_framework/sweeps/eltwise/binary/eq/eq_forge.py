@@ -12,12 +12,18 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
+
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("eq")
 
 parameters = {
     "xfail": {
@@ -35,6 +41,7 @@ parameters = {
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -52,49 +59,17 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    input_shape,
-    input_a_layout,
-    input_b_layout,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
+    input_shape=None,
+    input_a_layout=None,
+    input_b_layout=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
+)
 ) -> list:
-    torch.manual_seed(0)
-    if input_shape["input_dtype"] == "ttnn.bfloat16":
-        input_dtype = ttnn.bfloat16
-    elif input_shape["input_dtype"] == "ttnn.float32":
-        input_dtype = ttnn.float32
-    elif input_shape["input_dtype"] == "ttnn.int32":
-        input_dtype = ttnn.int32
-
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
-    )(input_shape["self"])
-    torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_dtype
-    )(input_shape["other"])
-
-    golden_function = ttnn.get_golden_function(ttnn.eq)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
-
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-
     start_time = start_measuring_time()
     result = ttnn.eq(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     # ToDo: Update it once the tensor layout support with rank < 2 is supported in mid of Jan

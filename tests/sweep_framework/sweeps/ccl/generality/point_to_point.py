@@ -14,6 +14,10 @@ from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
 NUM_DEVICES = ttnn.get_num_devices()
@@ -63,10 +67,14 @@ GENERALITY_PARAMETERS = {
 }
 
 
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("point_to_point")
+
 parameters = {
     "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
     "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
     "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
+    "model_traced": model_traced_params,
 }
 
 
@@ -127,18 +135,19 @@ def _get_tensors(input_shape, coord0, dtype, layout, device):
 
 
 def run(
-    mesh_shape_and_coords,
-    fabric_config,
-    input_shape,
-    num_links,
-    input_dtype,
-    layout,
-    num_iters,
-    topology,
+    mesh_shape_and_coords=None,
+    fabric_config=None,
+    input_shape=None,
+    num_links=None,
+    input_dtype=None,
+    layout=None,
+    num_iters=None,
+    topology=None,
+    traced_config_name=None,
     *,
     device,  # unused
-) -> list:
     logger.info(vars())
+) -> list:
 
     mesh_shape, (coord0, coord1) = mesh_shape_and_coords
 

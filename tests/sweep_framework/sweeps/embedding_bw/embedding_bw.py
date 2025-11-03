@@ -13,11 +13,18 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("embedding_bw")
+
 parameters = {
     "nightly": {
         "embedding_args": gen_shapes([1, 32, 32, 128], [4, 2080, 4128, 550], [1, 32, 32, 32], 32),
@@ -47,6 +54,7 @@ parameters = {
         "weight_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -70,22 +78,23 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    embedding_args,
-    input_dtype,
-    grad_dtype,
-    weight_dtype,
-    output_dtype,
-    input_layout,
-    grad_layout,
-    weight_layout,
-    input_memory_config,
-    grad_memory_config,
-    weight_memory_config,
-    output_memory_config,
+    embedding_args=None,
+    input_dtype=None,
+    grad_dtype=None,
+    weight_dtype=None,
+    output_dtype=None,
+    input_layout=None,
+    grad_layout=None,
+    weight_layout=None,
+    input_memory_config=None,
+    grad_memory_config=None,
+    weight_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     torch.manual_seed(0)
+) -> list:
 
     batch_size, seq_length, embeddings_dim, num_embeddings = embedding_args
 

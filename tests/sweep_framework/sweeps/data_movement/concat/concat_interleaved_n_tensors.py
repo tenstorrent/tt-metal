@@ -11,6 +11,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30  # formatting on host and torch CPU call are slow
 random.seed(0)
@@ -97,6 +101,10 @@ parameters_row_major_interleaved = {
     for n in range(4, 2, -1)
 }
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("concat")
+
 parameters = {**parameter_tiled_interleaved, **parameters_row_major_interleaved}
 print(f"parameter keys: {parameters.keys()}")
 
@@ -131,14 +139,14 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The run function must take the above-defined parameters as inputs.
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 def run(
-    concat_specs,
-    dtype,
-    layout,
-    input_mem_config,
-    output_mem_config,
+    concat_specs=None,
+    dtype=None,
+    layout=None,
+    input_mem_config=None,
+    output_mem_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     torch_input_tensors = []
     for i in range(0, concat_specs[0]):
         torch_input_tensors.append(torch_random(concat_specs[3][i], -0.1, 0.1, dtype=torch.bfloat16))

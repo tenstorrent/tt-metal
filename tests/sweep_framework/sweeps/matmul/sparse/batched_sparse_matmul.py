@@ -15,9 +15,17 @@ from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_ti
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 50
 
 # Parameters provided to the test vector generator are defined here.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     "gpt_traces": {
         "m": list(1 << x for x in range(5, 16)),
@@ -28,10 +36,10 @@ parameters = {
         "in1_dtype": [ttnn.bfloat4_b],
         "core_grid": [(5, 6)],
     },
+    "model_traced": model_traced_params,
 }
 
 
-def run_sparse_matmul(device, m, kn, num_experts, tile_h, tile_w, in1_dtype, core_grid) -> list:
     k, n = kn
     b, s = num_experts
     in0 = torch.randn((b, s, m, k), dtype=torch.bfloat16)
@@ -126,14 +134,15 @@ def test_sparse_matmul(device, m, kn, num_experts, tile_h, tile_w, in1_dtype, co
 
 
 def run(
-    m,
-    kn,
-    num_experts,
-    tile_h,
-    tile_w,
-    in1_dtype,
-    core_grid,
+    m=None,
+    kn=None,
+    num_experts=None,
+    tile_h=None,
+    tile_w=None,
+    in1_dtype=None,
+    core_grid=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_sparse_matmul(device, m, kn, num_experts, tile_h, tile_w, in1_dtype, core_grid)
+) -> list:

@@ -16,6 +16,10 @@ from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from loguru import logger
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -26,6 +30,10 @@ random.seed(0)
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("argmax")
+
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 8)
@@ -40,6 +48,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -134,8 +143,17 @@ def test_nightly(device, params):
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a mesh_device_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    input_shape, dim, input_a_dtype, output_dtype, input_layout, input_a_memory_config, output_memory_config, *, device
-) -> list:
+    input_shape=None,
+    dim=None,
+    input_a_dtype=None,
+    output_dtype=None,
+    input_layout=None,
+    input_a_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
+    *,
+    device,
     return run_argmax(
         input_shape, dim, input_a_dtype, output_dtype, input_layout, input_a_memory_config, output_memory_config, device
     )
+) -> list:

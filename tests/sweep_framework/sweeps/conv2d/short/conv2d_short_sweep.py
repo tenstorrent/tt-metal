@@ -12,6 +12,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
+
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.sweep_framework.sweep_utils.conv2d_common import (
     run_conv2d_short_sweep,
     run_conv1d_short_sweep,
@@ -20,6 +24,10 @@ from tests.sweep_framework.sweep_utils.conv2d_common import (
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 60
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("conv2d")
 
 parameters = {
     "short_sweep_suite_conv2d": {
@@ -1586,6 +1594,7 @@ parameters = {
         ],
         "is_conv1d": [True],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -1593,12 +1602,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def run(
-    input_specs,
-    is_conv1d=False,
-    *,
-    device,
-) -> list:
     if is_conv1d:
         return run_conv1d_short_sweep(input_specs, device)
     else:

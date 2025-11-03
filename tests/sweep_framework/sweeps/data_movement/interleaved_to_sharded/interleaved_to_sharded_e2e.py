@@ -13,15 +13,27 @@ import pytest
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 15
 TILE_HEIGHT = TILE_WIDTH = 32
 # seed for random
 random.seed(0)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("interleaved_to_sharded")
+
 parameters = {
     "nightly": {
         "shard_specs": [
-            {"shape": [1, 1, 1, 16], "shard_shape": None},
+            {
+                "shape": [1, 1, 1, 16],
+                "shard_shape": None,
+                "model_traced": model_traced_params,
+            },
             {"shape": [1, 1, 32, 16], "shard_shape": None},
             {"shape": [1, 1, 16, 32], "shard_shape": None},
             {"shape": [1, 1, 128, 32], "shard_shape": None},
@@ -101,6 +113,7 @@ def run(
     layout,
     input_buffer_type,
     output_buffer_type,
+    traced_config_name=None,
     *,
     device,
 ):

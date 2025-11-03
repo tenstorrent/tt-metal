@@ -13,7 +13,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import assert_equal, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
+
+
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.lt.Tensor.md
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("lt")
 
 parameters = {
     "nightly": {
@@ -26,21 +34,37 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
 def run(
-    input_shape_a,
-    input_shape_b,
-    input_a_dtype,
-    input_b_dtype,
-    input_a_layout,
-    input_b_layout,
-    input_a_memory_config,
-    input_b_memory_config,
+    input_shape_a=None,
+    input_shape_b=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    input_a_layout=None,
+    input_b_layout=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    traced_config_name=None,
     *,
     device,
+)
 ) -> list:
+    # Unpack traced config if provided (for model_traced suite)
+    if traced_config_name:
+        (
+            input_shape,
+            input_a_dtype,
+            input_b_dtype,
+            input_a_layout,
+            input_b_layout,
+            input_a_memory_config,
+            input_b_memory_config,
+        ) = unpack_binary_traced_config(traced_config_name)
+
+ list:
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(

@@ -13,8 +13,15 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
+
+
 # Ref: https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.div.Tensor.md
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("div")
 
 parameters = {
     "nightly": {
@@ -124,60 +131,24 @@ parameters = {
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
 def run(
-    input_specs,
-    input_a_dtype,
-    input_b_dtype,
-    input_a_layout,
-    input_b_layout,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
+    input_specs=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    input_a_layout=None,
+    input_b_layout=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
+)
 ) -> list:
-    torch.manual_seed(0)
-
-    input_shape = input_specs["shape"]
-    if len(input_shape) == 0:
-        torch_input_tensor_a = torch.empty([])
-    else:
-        torch_input_tensor_a = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-        )(input_shape)
-
-    other = input_specs["other"]
-    if isinstance(other, (int, float)):
-        torch_other_tensor = torch.tensor(other, dtype=torch.float32)
-    elif len(other) == 0:
-        torch_other_tensor = torch.empty([])
-    else:
-        torch_other_tensor = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-        )(other)
-
-    golden_function = ttnn.get_golden_function(ttnn.divide)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_other_tensor)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
-
-    input_tensor_b = ttnn.from_torch(
-        torch_other_tensor,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-
     start_time = start_measuring_time()
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

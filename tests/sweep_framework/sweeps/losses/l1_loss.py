@@ -14,6 +14,10 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 360
 
@@ -23,6 +27,10 @@ random.seed(0)
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("l1_loss")
+
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
@@ -37,6 +45,7 @@ parameters = {
         "input_prediction_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -45,19 +54,20 @@ parameters = {
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    input_shape,
-    reduction,
-    input_reference_dtype,
-    input_reference_layout,
-    input_reference_memory_config,
-    input_prediction_dtype,
-    input_prediction_layout,
-    input_prediction_memory_config,
-    output_memory_config,
+    input_shape=None,
+    reduction=None,
+    input_reference_dtype=None,
+    input_reference_layout=None,
+    input_reference_memory_config=None,
+    input_prediction_dtype=None,
+    input_prediction_layout=None,
+    input_prediction_memory_config=None,
+    output_memory_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     data_seed = random.randint(0, 20000000)
+) -> list:
     torch.manual_seed(data_seed)
 
     torch_input_reference_tensor = gen_func_with_cast_tt(

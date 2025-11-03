@@ -15,6 +15,10 @@ from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_ti
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -23,6 +27,10 @@ random.seed(0)
 # Parameters provided to the test vector generator,
 # defined as dict-type suites that contain the arguments to the run function as keys,
 # and lists of possible inputs as values.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("softmax")
+
 parameters = {
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
@@ -33,6 +41,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -43,9 +52,9 @@ def run_softmax(
     input_a_layout,
     input_a_memory_config,
     output_memory_config,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
@@ -82,10 +91,10 @@ def run(
     output_memory_config,
     *,
     device,
-) -> list:
     return run_softmax(
         input_shape, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config, device=device
     )
+) -> list:
 
 
 # Entry point for pytest.

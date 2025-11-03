@@ -17,6 +17,10 @@ from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from loguru import logger
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -27,6 +31,10 @@ random.seed(0)
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("argmax")
+
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 32)
@@ -66,6 +74,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -110,9 +119,9 @@ def run_argmax(
     input_layout,
     input_a_memory_config,
     output_memory_config,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
@@ -157,7 +166,6 @@ def run(
     output_memory_config,
     *,
     device,
-) -> list:
     return run_argmax(
         input_shape,
         dim,
@@ -168,6 +176,7 @@ def run(
         output_memory_config,
         device=device,
     )
+) -> list:
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters, invalidate_vector))

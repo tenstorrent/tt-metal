@@ -13,6 +13,10 @@ from typing import Optional, Tuple
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 15  # longer timeout since permute calls transpose recursively
 random.seed(0)
 
@@ -22,11 +26,16 @@ json_path = os.path.join(base_dir, "transpose_forge_processed.json")
 with open(json_path, "r") as f:
     processed_transpose_specs = json.load(f)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("transpose")
+
 parameters = {
     "traces": {
         "transpose_specs": processed_transpose_specs,  # use the processed specs
         "dtype": [ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -42,6 +51,7 @@ def run(
     transpose_specs,
     dtype,
     layout,
+    traced_config_name=None,
     *,
     device,
 ):

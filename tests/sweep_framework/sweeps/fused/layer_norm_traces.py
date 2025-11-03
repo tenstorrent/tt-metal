@@ -12,7 +12,15 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 15
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("layer_norm")
 
 parameters = {
     "default": {
@@ -105,6 +113,7 @@ parameters = {
             ((2, 7, 512), [512], 1e-05),
             ((920, 1, 256), [256], 1e-05),
         ],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -136,9 +145,4 @@ def test_layer_norm(device, params):
     run_layer_norm(device, params)
 
 
-def run(
-    params,
-    *,
-    device,
-) -> list:
     return run_layer_norm(device, params)

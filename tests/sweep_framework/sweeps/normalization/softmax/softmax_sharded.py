@@ -10,6 +10,10 @@ import torch
 import random
 import ttnn
 from tests.sweep_framework.sweep_utils.utils import sanitize_shape_rm
+
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config_dict
+
 from tests.sweep_framework.sweep_utils.sharding_utils import (
     gen_sharded_spec_unary,
     parse_sharding_spec,
@@ -29,11 +33,16 @@ random.seed(0)
 # Parameters provided to the test vector generator,
 # defined as dict-type suites that contain the arguments to the run function as keys,
 # and lists of possible inputs as values.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("softmax")
+
 parameters = {
     "xfail": {
         "input_spec": gen_sharded_spec_unary(16, max_tensor_size_per_core=20 * 1024, layouts=["TILE_LAYOUT"]),
         "input_a_dtype": [ttnn.bfloat16],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -56,7 +65,6 @@ def run_softmax_sharded(
     input_spec,
     input_a_dtype,
     device,
-) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
@@ -109,12 +117,25 @@ def run_softmax_sharded(
 
 # Entry point for the sweep framework.
 # Takes one test vector (as defined above) as the input.
-def run(
-    input_spec,
-    input_a_dtype,
-    *,
-    device,
-) -> list:
+    # Handle traced_config_name parameter (for model_traced suite)
+    # Use the dict unpack function for flexibility with custom signatures
+    if traced_config_name is not None:
+        config = unpack_traced_config_dict(traced_config_name)
+        if config:
+            # For model_traced, we need to construct input_spec from the config
+            # For now, create a simple non-sharded spec as fallback
+            # TODO: Implement proper sharding spec construction from traced config
+            input_spec = {
+                "input_shape": config["shape"],
+                "core_grid": (1, 1),  # Simple fallback
+                "sharding_strategy": "BLOCK",
+                "shard_orientation": "COL_MAJOR",
+                "tensor_hw_as_shard_shape": False,
+                "input_layout": config["layout"],
+                "shard_height_mul_of_32": True,
+            }
+            input_a_dtype = config["dtype"]
+
     return run_softmax_sharded(input_spec, input_a_dtype, device)
 
 

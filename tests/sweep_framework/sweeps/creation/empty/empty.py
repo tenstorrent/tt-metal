@@ -9,11 +9,18 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("empty")
+
 parameters = {
     "nightly": {
         "batch_sizes": [(1, 2), (3, 6)],
@@ -23,6 +30,7 @@ parameters = {
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -48,16 +56,17 @@ def check_output(torch_output_tensor, output_tensor):
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    batch_sizes,
-    height,
-    width,
-    input_dtype,
-    output_memory_config,
-    layout,
+    batch_sizes=None,
+    height=None,
+    width=None,
+    input_dtype=None,
+    output_memory_config=None,
+    layout=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     torch.manual_seed(0)
+) -> list:
 
     input_shape = (*batch_sizes, height, width)
 

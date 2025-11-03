@@ -4,12 +4,20 @@
 import ttnn
 import torch
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("cross_entropy_loss")
+
 parameters = {
     "suite_1": {
         "predictions_shape": [
             (3, 5),
         ],
-    }
+    },
+    "model_traced": model_traced_params,
 }
 
 
@@ -24,7 +32,6 @@ def cross_entropy_loss_ttnn(predictions, labels, reduction_constant):
     return final_loss
 
 
-def run(predictions_shape, device):
     torch.manual_seed(0)
     predictions = torch.randn(predictions_shape)
     target_indices = torch.empty(3, dtype=torch.long).random_(5)

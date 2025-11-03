@@ -13,7 +13,15 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 15
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("argmax")
 
 parameters = {
     "pytorch": {
@@ -22,6 +30,7 @@ parameters = {
         "dim": [-1],
         "dtype": [ttnn.float32, ttnn.bfloat16],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -60,13 +69,4 @@ def test_pytorch(device, height, width, dim, dtype, layout):
         logger.info(f"E2E Performance: {e2e_perf}")
 
 
-def run(
-    height,
-    width,
-    dim,
-    dtype,
-    layout,
-    *,
-    device,
-) -> list:
     return run_argmax(device, height, width, dim, dtype, layout)

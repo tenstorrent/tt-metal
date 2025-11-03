@@ -16,7 +16,19 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import (
+    MasterConfigLoader,
+    unpack_traced_config,
+    unpack_binary_traced_config,
+)
+
+
 TIMEOUT = 5
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
 
 parameters = {
     "default": {
@@ -34,6 +46,7 @@ parameters = {
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "core_grid": [None],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -54,7 +67,6 @@ def run_matmul(
     input_a_memory_config,
     output_memory_config,
     core_grid,
-) -> list:
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
     if batch_matrix_multiply:
@@ -131,23 +143,23 @@ def test_matmul(
 
 
 def run(
-    batch_sizes,
-    m_size,
-    k_size,
-    n_size,
-    batch_matrix_multiply,
-    input_a_dtype,
-    input_b_dtype,
-    output_dtype,
-    input_a_layout,
-    input_b_layout,
-    input_b_memory_config,
-    input_a_memory_config,
-    output_memory_config,
-    core_grid,
+    batch_sizes=None,
+    m_size=None,
+    k_size=None,
+    n_size=None,
+    batch_matrix_multiply=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    output_dtype=None,
+    input_a_layout=None,
+    input_b_layout=None,
+    input_b_memory_config=None,
+    input_a_memory_config=None,
+    output_memory_config=None,
+    core_grid=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_matmul(
         device,
         batch_sizes,
@@ -165,3 +177,4 @@ def run(
         output_memory_config,
         core_grid,
     )
+) -> list:

@@ -11,14 +11,26 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 10
 # seed for random
 random.seed(0)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("stack")
+
 parameters = {
     "nightly": {
         "stack_specs": [
-            {"tensors_shapes": [[0, 1], [0, 1], [0, 1], [0, 1]], "dim": 2},
+            {
+                "tensors_shapes": [[0, 1], [0, 1], [0, 1], [0, 1]],
+                "dim": 2,
+                "model_traced": model_traced_params,
+            },
             {"tensors_shapes": [[0, 2], [0, 2]], "dim": 2},
             {"tensors_shapes": [[0], [0], [0], [0]], "dim": 1},
             {"tensors_shapes": [[1, 1, 16, 16], [1, 1, 16, 16]], "dim": -1},
@@ -87,6 +99,7 @@ def run(
     split_specs,
     dtype,
     layout,
+    traced_config_name=None,
     *,
     device,
 ):

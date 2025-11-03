@@ -16,6 +16,10 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 5
 
 # Set up suites and specify batch_sizes, input_shapes, batch_matrix_multiply, program_config, and memory configs
@@ -23,6 +27,10 @@ TIMEOUT = 5
 # [1d in0 batched, bmm no mcast per_core_M > M, bmm no mcast per_core_M < M, 1d mcast in1 with height padding, 1d mcast in1, 1d mcast in0, 2d mcast, 2d mcast transposed, 2d mcast height/width sharded] x [specific L1 memory, dram memory] x [a=bfloat16, a=bfloat8_b] x [b=bfloat16, b=bfloat8_b] x [out=bfloat16, out=bfloat8_b]
 # 144 tests.
 # Use the first two categories for suites: 18 suites with 8 tests each.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     "matmul_1d_in0_batched": {
         "batch_sizes": [(16,)],
@@ -489,6 +497,7 @@ parameters = {
         "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     },
+    "model_traced": model_traced_params,
 }
 
 # Add the rest of the parameters.
@@ -517,7 +526,6 @@ def run_matmul(
     input_b_dtype,
     output_dtype,
     input_layout,
-) -> list:
     (m_size, k_size, n_size) = input_shapes
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
@@ -600,21 +608,21 @@ def test_matmul(
 
 
 def run(
-    batch_sizes,
-    input_shapes,
-    batch_matrix_multiply,
-    program_config,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
-    compute_kernel_config,
-    input_a_dtype,
-    input_b_dtype,
-    output_dtype,
-    input_layout,
+    batch_sizes=None,
+    input_shapes=None,
+    batch_matrix_multiply=None,
+    program_config=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    compute_kernel_config=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    output_dtype=None,
+    input_layout=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_matmul(
         device,
         batch_sizes,
@@ -630,3 +638,4 @@ def run(
         output_dtype,
         input_layout,
     )
+) -> list:

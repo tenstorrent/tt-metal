@@ -14,6 +14,14 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import (
+    MasterConfigLoader,
+    unpack_traced_config,
+    unpack_binary_traced_config,
+)
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -96,6 +104,10 @@ general = {
 }
 
 # Create parameter combinations for different test scenarios
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     # Matrix-matrix multiplication: (m, k) x (k, n) -> (m, n)
     "matrix_matrix": {
@@ -117,6 +129,7 @@ parameters = {
     "rank4_matrix": {
         "shapes": get_linear_shapes(4, 2),
     },
+    "model_traced": model_traced_params,
 }
 
 for p in parameters.values():
@@ -232,16 +245,11 @@ def test_linear(
     assert result, error_msg
 
 
-def run(
-    shapes,
-    transpose_a,
-    transpose_b,
-    *,
-    device,
-) -> tuple:
+def run(shapes=None, transpose_a=None, transpose_b=None, traced_config_name=None, *, device) -> tuple:
     return run_linear(
         device,
         shapes,
         transpose_a,
         transpose_b,
     )
+) -> list:

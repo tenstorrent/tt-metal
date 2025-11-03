@@ -12,14 +12,26 @@ import pytest
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 10
 # seed for random
 random.seed(0)
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("repeat")
+
 parameters = {
     "nightly": {
         "repeat_specs": [
-            {"shape": [1, 1, 1], "repeats": [1, 1, 1]},
+            {
+                "shape": [1, 1, 1],
+                "repeats": [1, 1, 1],
+                "model_traced": model_traced_params,
+            },
             {"shape": [1, 1, 2048, 2048], "repeats": [1, 1, 1, 1]},
             {"shape": [1, 1, 256], "repeats": [1, 1, 1]},
             {"shape": [1, 128, 256], "repeats": [1, 1, 1]},
@@ -66,6 +78,7 @@ def run(
     repeat_specs,
     dtype,
     layout,
+    traced_config_name=None,
     *,
     device,
 ):

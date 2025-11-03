@@ -11,6 +11,10 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.common.utility_functions import torch_random
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 TIMEOUT = 10
 # seed for random
 random.seed(0)
@@ -54,6 +58,9 @@ def parse_md_file_simple_no_regex(file_path):
     return view_specs
 
 
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("view")
+
 parameters = {
     "nightly": {
         "view_specs": parse_md_file_simple_no_regex(
@@ -61,6 +68,7 @@ parameters = {
         ),
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "dtype": [ttnn.bfloat16, ttnn.float32],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -76,6 +84,7 @@ def run(
     view_specs,
     layout,
     dtype,
+    traced_config_name=None,
     *,
     device,
 ):

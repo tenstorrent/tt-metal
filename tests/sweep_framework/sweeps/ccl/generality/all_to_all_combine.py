@@ -11,6 +11,9 @@ from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
 from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
@@ -56,6 +59,10 @@ GENERALITY_PARAMETERS = {
     "num_iters": [1],
 }
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("all_to_all_combine")
+
 parameters = {
     "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
     "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
@@ -77,6 +84,7 @@ parameters = {
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -107,22 +115,23 @@ def mesh_device_fixture():
 
 
 def run(
-    mesh_shape,
-    fabric_config,
-    input_shape,
-    experts,
-    select_experts_k,
-    local_reduce,
-    cluster_axis,
-    num_links,
-    input_dtype,
-    mem_config,
-    num_iters,
-    topology,
+    mesh_shape=None,
+    fabric_config=None,
+    input_shape=None,
+    experts=None,
+    select_experts_k=None,
+    local_reduce=None,
+    cluster_axis=None,
+    num_links=None,
+    input_dtype=None,
+    mem_config=None,
+    num_iters=None,
+    topology=None,
+    traced_config_name=None,
     *,
     device,  # unused
-) -> list:
     logger.info("STARTING SWEEP")
+) -> list:
 
     logger.info(vars())
 

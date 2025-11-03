@@ -14,6 +14,10 @@ from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 45
 
@@ -62,10 +66,15 @@ GENERALITY_PARAMETERS = {
 }
 
 # Define the parameter space for the sweep test
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("all_broadcast")
+
 parameters = {
     "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
     "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
     "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
+    "model_traced": model_traced_params,
 }
 
 
@@ -123,23 +132,24 @@ def _get_tensors(input_shape, mesh_shape, dtype, layout, device):
 
 
 def run(
-    mesh_shape,
-    fabric_config,
-    input_shape,
-    num_links,
-    cluster_axis,
-    input_dtype,
-    layout,
-    mem_config,
-    num_iters,
-    topology,
+    mesh_shape=None,
+    fabric_config=None,
+    input_shape=None,
+    num_links=None,
+    cluster_axis=None,
+    input_dtype=None,
+    layout=None,
+    mem_config=None,
+    num_iters=None,
+    topology=None,
+    traced_config_name=None,
     *,
     device,  # unused
-) -> list:
     """
     The main run function for the all_broadcast sweep test.
     """
     logger.info("STARTING All-Broadcast SWEEP")
+) -> list:
 
     with device_context(mesh_shape, fabric_config) as (device, device_err):
         if device_err is not None:

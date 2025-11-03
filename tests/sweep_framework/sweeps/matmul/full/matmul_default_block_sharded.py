@@ -14,6 +14,10 @@ import torch
 import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
+
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.ttnn.utils_for_testing import (
     get_per_core_size_and_num_cores,
     start_measuring_time,
@@ -42,6 +46,9 @@ def get_block_sharded_specs(
                 yield (batch_sizes, m_size, k_size, per_core_height, per_core_width, num_cores_height, num_cores_width)
 
 
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("matmul")
+
 parameters = {
     f"n_size_{n if n > 0 else 32}": {
         "block_sharded_specs": list(
@@ -64,7 +71,17 @@ parameters = {
         "input_layout": [ttnn.TILE_LAYOUT],
         "compute_kernel_config": [None],
     }
-    for n in range(0, 4096, 384)
+    ** {
+        f"n_{n}": {
+            "n": [n],
+            "input_dtype": [ttnn.bfloat16],
+            "output_dtype": [ttnn.bfloat16],
+            "input_layout": [ttnn.TILE_LAYOUT],
+            "compute_kernel_config": [None],
+        }
+        for n in range(0, 4096, 384)
+    },
+    "model_traced": model_traced_params,
 }
 print(f"parameter keys: {parameters.keys()}")
 
@@ -83,7 +100,6 @@ def run_matmul(
     output_dtype,
     input_layout,
     compute_kernel_config,
-) -> list:
     (
         batch_sizes,
         m_size,
@@ -195,21 +211,21 @@ def test_matmul(
 
 
 def run(
-    block_sharded_specs,
-    n_size,
-    transpose_mcast,
-    batch_matrix_multiply,
-    input_a_memory_config,
-    input_b_memory_config,
-    output_memory_config,
-    input_a_dtype,
-    input_b_dtype,
-    output_dtype,
-    input_layout,
-    compute_kernel_config,
+    block_sharded_specs=None,
+    n_size=None,
+    transpose_mcast=None,
+    batch_matrix_multiply=None,
+    input_a_memory_config=None,
+    input_b_memory_config=None,
+    output_memory_config=None,
+    input_a_dtype=None,
+    input_b_dtype=None,
+    output_dtype=None,
+    input_layout=None,
+    compute_kernel_config=None,
+    traced_config_name=None,
     *,
     device,
-) -> list:
     return run_matmul(
         device,
         block_sharded_specs,
@@ -225,3 +241,4 @@ def run(
         input_layout,
         compute_kernel_config,
     )
+) -> list:

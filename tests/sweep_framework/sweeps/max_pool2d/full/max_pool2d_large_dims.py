@@ -7,9 +7,17 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, mesh_device_fixture, invalidate_vector
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
+
 # Total test cases
 #   max_pool2d_full_sweep_suite_large_dims = 17 * 4 * 4 * 3 * 4 * 2 = 6528
 # There can be invalid test cases in here based on conditions in invalidate_vector.
+
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("max_pool2d")
 
 parameters = {
     "max_pool2d_full_sweep_suite_large_dims": {
@@ -28,6 +36,7 @@ parameters = {
             [3, 17, 503, 503],  # prime numbers for all
         ],
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "model_traced": model_traced_params,
     }
 }
 
@@ -39,6 +48,7 @@ def run(
     sharding,
     shape,
     dtype,
+    traced_config_name=None,
     *,
     device,
 ):

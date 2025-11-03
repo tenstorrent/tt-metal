@@ -8,6 +8,9 @@ import torch
 import random
 import ttnn
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_traced_config
+
 from tests.ttnn.utils_for_testing import (
     check_with_pcc,
     start_measuring_time,
@@ -26,10 +29,18 @@ random.seed(0)
 # List[Tensor] tensors = [<[1, 1056, 7, 7]>, <[1, 48, 7, 7]>],
 # int dim = 1
 
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("concat")
+
 parameters = {
     "nightly": {
         "concat_specs": [
-            {"dim": 1, "shapes": [[1, 1, 1024], [1, 196, 1024]]},
+            {
+                "dim": 1,
+                "shapes": [[1, 1, 1024], [1, 196, 1024]],
+                "model_traced": model_traced_params,
+            },
             {"dim": 1, "shapes": [[1, 1, 1024], [1, 49, 1024]]},
             {"dim": 1, "shapes": [[1, 1, 1280], [1, 1369, 1280]]},
             {"dim": -1, "shapes": [[1, 1, 16, 32], [1, 1, 16, 32]]},
@@ -4187,13 +4198,6 @@ def random_torch_tensor(dtype, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-def run(
-    concat_specs,
-    dtype,
-    layout,
-    *,
-    device,
-) -> list:
     torch_input_tensors = [random_torch_tensor(dtype, shape) for shape in concat_specs["shapes"]]
     torch_output_tensor = torch.concat(torch_input_tensors, dim=concat_specs["dim"])
 

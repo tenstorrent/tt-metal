@@ -10,6 +10,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
+# Import master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader import MasterConfigLoader, unpack_binary_traced_config
+
+
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
 
@@ -19,6 +23,10 @@ random.seed(0)
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
+
+loader = MasterConfigLoader()
+model_traced_params = loader.get_suite_parameters("polyval")
+
 parameters = {
     "nightly": {
         "batch_sizes": [(1, 2)],
@@ -30,6 +38,7 @@ parameters = {
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "coeff": [(3.6, 23.6, 1.7, 4.6), (9.4, 4.2, 3.3, 9.0)],
     },
+    "model_traced": model_traced_params,
 }
 
 
@@ -54,17 +63,32 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 # The runner will call this run function with each test vector, and the returned results from this function will be stored.
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
-    batch_sizes,
-    height,
-    width,
-    input_dtype,
-    input_memory_config,
-    output_memory_config,
-    layout,
-    coeff,
+    batch_sizes=None,
+    height=None,
+    width=None,
+    input_dtype=None,
+    input_memory_config=None,
+    output_memory_config=None,
+    layout=None,
+    coeff=None,
+    traced_config_name=None,
     *,
     device,
+)
 ) -> list:
+    # Unpack traced config if provided (for model_traced suite)
+    if traced_config_name:
+        (
+            input_shape,
+            input_a_dtype,
+            input_b_dtype,
+            input_a_layout,
+            input_b_layout,
+            input_a_memory_config,
+            input_b_memory_config,
+        ) = unpack_binary_traced_config(traced_config_name)
+
+ list:
     input_shape = (*batch_sizes, height, width)
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
