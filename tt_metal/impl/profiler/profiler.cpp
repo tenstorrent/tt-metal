@@ -48,6 +48,11 @@
 #include <tt-metalium/device_pool.hpp>
 #include "tt_cluster.hpp"
 
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
+
 namespace tt {
 
 namespace tt_metal {
@@ -2145,3 +2150,7 @@ bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rt
 }  // namespace tt_metal
 
 }  // namespace tt
+
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic pop
+#endif
