@@ -119,7 +119,7 @@ class Generator:
         prefill_seq_len=None,
         **kwargs,
     ):
-        # We are not appeding host/device here because we never do device sampling in prefill with TTT
+        # We are not appending host/device here because we never do device sampling in prefill with TTT
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
