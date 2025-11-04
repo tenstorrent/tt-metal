@@ -243,20 +243,31 @@ class FastOperationDocumenter(FunctionDocumenter):
 
                         # Check if this Returns section has meaningful content
                         returns_text = " ".join(returns_content)
-                        if (
-                            "ttnn.Tensor: the output tensor" in returns_text
-                            or "* **ttnn.Tensor**: the output tensor" in returns_text
-                        ):
-                            # Skip generic Returns sections - don't add anything
+
+                        # Only skip truly generic Returns sections that provide no useful information
+                        # Generic patterns: exact matches with minimal descriptive content
+                        is_truly_generic = returns_text.strip() in [
+                            "ttnn.Tensor: the output tensor",
+                            "ttnn.Tensor: the output tensor.",
+                            "* **ttnn.Tensor**: the output tensor",
+                            "* **ttnn.Tensor**: the output tensor.",
+                            "List of ttnn.Tensor: the output tensor",
+                            "List of ttnn.Tensor: the output tensor.",
+                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor",
+                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.",
+                        ]
+
+                        if is_truly_generic:
+                            # Skip truly generic Returns sections - don't add anything
                             pass
                         else:
-                            # Keep meaningful Returns sections as regular RST sections
+                            # Keep ALL other Returns sections (any detailed description is meaningful)
                             new_lines.append(line)  # Keep the "Returns:" header
                             # Add the content lines as-is
                             for content_line in returns_content:
                                 if content_line.strip():
                                     new_lines.append(f"    {content_line}")
-                        continue
+                            continue
                     new_lines.append(line)
                     continue
 
@@ -385,20 +396,31 @@ class OperationDocumenter(FunctionDocumenter):
 
                         # Check if this Returns section has meaningful content
                         returns_text = " ".join(returns_content)
-                        if (
-                            "ttnn.Tensor: the output tensor" in returns_text
-                            or "* **ttnn.Tensor**: the output tensor" in returns_text
-                        ):
-                            # Skip generic Returns sections - don't add anything
+
+                        # Only skip truly generic Returns sections that provide no useful information
+                        # Generic patterns: exact matches with minimal descriptive content
+                        is_truly_generic = returns_text.strip() in [
+                            "ttnn.Tensor: the output tensor",
+                            "ttnn.Tensor: the output tensor.",
+                            "* **ttnn.Tensor**: the output tensor",
+                            "* **ttnn.Tensor**: the output tensor.",
+                            "List of ttnn.Tensor: the output tensor",
+                            "List of ttnn.Tensor: the output tensor.",
+                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor",
+                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.",
+                        ]
+
+                        if is_truly_generic:
+                            # Skip truly generic Returns sections - don't add anything
                             pass
                         else:
-                            # Keep meaningful Returns sections as regular RST sections
+                            # Keep ALL other Returns sections (any detailed description is meaningful)
                             new_lines.append(line)  # Keep the "Returns:" header
                             # Add the content lines as-is
                             for content_line in returns_content:
                                 if content_line.strip():
                                     new_lines.append(f"    {content_line}")
-                        continue
+                            continue
                     new_lines.append(line)
                     continue
 
