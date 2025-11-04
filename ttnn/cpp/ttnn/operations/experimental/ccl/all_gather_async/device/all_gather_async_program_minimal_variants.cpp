@@ -355,22 +355,22 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
             const auto& mux_core = all_cores[core_id++];
 
             if (mux_connection_valid(dir)) {
-                mux_core_ranges.push_back(CoreRange(mux_core));
+                mux_core_ranges.emplace_back(mux_core);
             }
 
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 const auto& worker_core = all_cores[core_id++];
 
                 if (worker == 0) {
-                    termination_master_core_ranges.push_back(worker_core);
+                    termination_master_core_ranges.emplace_back(worker_core);
                 }
 
                 if (dir) {
-                    sender_forward_core_ranges.insert(CoreRange(worker_core));
+                    sender_forward_core_ranges.emplace(worker_core);
                 } else {
-                    sender_backward_core_ranges.insert(CoreRange(worker_core));
+                    sender_backward_core_ranges.emplace(worker_core);
                 }
-                sender_worker_core_ranges.push_back(CoreRange(worker_core));
+                sender_worker_core_ranges.emplace_back(worker_core);
             }
         }
     }
