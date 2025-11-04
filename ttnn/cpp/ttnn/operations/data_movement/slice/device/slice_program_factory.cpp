@@ -1005,7 +1005,8 @@ operation::ProgramWithCallbacks slice_multi_core_with_tensor_args(
         case Layout::TILE: return slice_tile_multi_core_tensor_args(a, start_tensor, end_tensor, output);
         case Layout::ROW_MAJOR:
             // For now, only support TILE layout with tensor args
-            TT_FATAL(false, "ROW_MAJOR layout with tensor args not implemented yet");
+            TT_FATAL(
+                false, "ROW_MAJOR layout is not supported with tensor args. Only TILE layout is currently supported.");
         default: TT_ASSERT(false, "Unsupported Layout");
     }
     return {};
