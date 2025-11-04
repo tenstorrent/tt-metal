@@ -15,7 +15,7 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_concat(py::module& module) {
-    const auto doc = R"doc(
+    const auto doc = R"doc(Concatenates :attr:`tensors` in the given :attr:`dim`.
 
 Args:
     input_tensor (List of ttnn.Tensor): the input tensors.

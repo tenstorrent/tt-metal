@@ -109,7 +109,8 @@ void bind_binary_operation(
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
-        R"doc(
+        R"doc({2}
+
         .. math::
             {3}
 
@@ -1021,8 +1022,7 @@ void bind_binary_composite_overload(
         "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
     const std::string& note = "") {
     auto doc = fmt::format(
-        R"doc(
-        {2}
+        R"doc({2}
 
         .. math::
             \mathrm{{output\_tensor}} = \verb|{0}|(\mathrm{{input\_tensor\_a,input\_tensor\_b}})
@@ -1526,8 +1526,7 @@ void bind_binary_overload_operation(
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
-        R"doc(
-        {2}
+        R"doc({2}
 
         .. math::
             {3}

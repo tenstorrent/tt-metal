@@ -171,35 +171,6 @@ class FastOperationDocumenter(FunctionDocumenter):
     directivetype = "function"
     priority = FunctionDocumenter.priority + 10
 
-    def format_signature(self, **kwargs: Any) -> str:
-        docstrings = self.get_doc()
-        if len(docstrings) == 0:
-            return "(*args, **kwargs)"
-
-        # get_doc() returns list of lists, join the first one
-        doc_to_parse = "\n".join(docstrings[0])
-
-        if not doc_to_parse:
-            return "(*args, **kwargs)"
-
-        try:
-            lines = inspect.cleandoc(doc_to_parse)
-            parser = DocstringParser(lines)
-            parser.parse()
-
-            # If we have args or returns, construct the signature
-            if parser.args or parser.kwargs or parser.returns:
-                return parser.construct_signature()
-        except Exception as e:
-            # If parsing fails, fall back to generic signature
-            pass
-
-        return "(*args, **kwargs)"
-
-    @classmethod
-    def can_document_member(cls, member, membername, isattr, parent):
-        return isinstance(member, ttnn.decorators.FastOperation)
-
     def get_doc(self):
         """Override get_doc to transform bullet list format to Sphinx-compatible format."""
         docstrings = super().get_doc()
@@ -214,11 +185,6 @@ class FastOperationDocumenter(FunctionDocumenter):
         for docstring_lines in docstrings:
             new_lines = []
             current_section = None
-
-            # Detect if this is a binary op by checking for distinctive content
-            is_binary_op = any(
-                "Binary Elementwise Operations" in line or "Broadcasting" in line for line in docstring_lines
-            )
 
             for line in docstring_lines:
                 # Check if this is a section header
@@ -273,10 +239,7 @@ class FastOperationDocumenter(FunctionDocumenter):
                     continue
 
                 # Only transform if we're in a Sphinx-recognized field
-                # For binary ops, skip Args and Keyword args to keep bullets
-                if current_section in sphinx_fields and not (
-                    is_binary_op and current_section in {"Args", "Keyword args"}
-                ):
+                if current_section in sphinx_fields:
                     # Check for parameter format: "* **name** (type): description"
                     match_param = re.match(r"^(\s*)\*\s+\*\*(\w+)\*\*\s+\(([^)]+)\):\s*(.*)$", line)
                     if match_param:
@@ -314,6 +277,35 @@ class FastOperationDocumenter(FunctionDocumenter):
             transformed.append(new_lines)
 
         return transformed
+
+    def format_signature(self, **kwargs: Any) -> str:
+        docstrings = self.get_doc()
+        if len(docstrings) == 0:
+            return "(*args, **kwargs)"
+
+        # get_doc() returns list of lists, join the first one
+        doc_to_parse = "\n".join(docstrings[0])
+
+        if not doc_to_parse:
+            return "(*args, **kwargs)"
+
+        try:
+            lines = inspect.cleandoc(doc_to_parse)
+            parser = DocstringParser(lines)
+            parser.parse()
+
+            # If we have args or returns, construct the signature
+            if parser.args or parser.kwargs or parser.returns:
+                return parser.construct_signature()
+        except Exception as e:
+            # If parsing fails, fall back to generic signature
+            pass
+
+        return "(*args, **kwargs)"
+
+    @classmethod
+    def can_document_member(cls, member, membername, isattr, parent):
+        return isinstance(member, ttnn.decorators.FastOperation)
 
 
 class OperationDocumenter(FunctionDocumenter):
@@ -365,11 +357,6 @@ class OperationDocumenter(FunctionDocumenter):
             new_lines = []
             current_section = None
 
-            # Detect if this is a binary op by checking for distinctive content
-            is_binary_op = any(
-                "Binary Elementwise Operations" in line or "Broadcasting" in line for line in docstring_lines
-            )
-
             for line in docstring_lines:
                 # Check if this is a section header
                 section_match = re.match(r"^\s*(\w[\w\s]*):\s*$", line)
@@ -423,10 +410,7 @@ class OperationDocumenter(FunctionDocumenter):
                     continue
 
                 # Only transform if we're in a Sphinx-recognized field
-                # For binary ops, skip Args and Keyword args to keep bullets
-                if current_section in sphinx_fields and not (
-                    is_binary_op and current_section in {"Args", "Keyword args"}
-                ):
+                if current_section in sphinx_fields:
                     # Check for parameter format: "* **name** (type): description"
                     match_param = re.match(r"^(\s*)\*\s+\*\*(\w+)\*\*\s+\(([^)]+)\):\s*(.*)$", line)
                     if match_param:

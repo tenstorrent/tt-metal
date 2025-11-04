@@ -17,9 +17,7 @@
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
     auto docstring =
-        R"doc(
-        Returns cumulative product of `input` along dimension `dim`
-        For a given `input` of size N, the `output` will also contain N elements and be such that:
+        R"doc(Returns cumulative product of `input` along dimension `dim`. For a given `input` of size N, the `output` will also contain N elements and be such that:
 
         .. math::
             \mathrm{{output}}_i = \mathrm{{input}}_1 \times \mathrm{{input}}_2 \times \cdots \times \mathrm{{input}}_i
