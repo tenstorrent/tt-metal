@@ -323,10 +323,10 @@ RunTimeOptions::RunTimeOptions() {
         this->enable_2_erisc_mode_with_fabric = true;
     }
 
-    // if (getenv("TT_METAL_MULTI_AERISC")) {
-    log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
-    this->enable_2_erisc_mode = true;
-    // }
+    if (getenv("TT_METAL_DISABLE_MULTI_AERISC")) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode");
+        this->enable_2_erisc_mode = false;
+    }
 
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;

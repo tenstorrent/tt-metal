@@ -62,7 +62,7 @@ static constexpr float INF_BH = 1.7014e+38;
 namespace tt::tt_metal::blackhole {
 bool is_2_erisc_mode() {
     // rtoptions not included in here due to circular dependency
-    return true;  // getenv("TT_METAL_MULTI_AERISC") != nullptr;
+    return getenv("TT_METAL_DISABLE_MULTI_AERISC") == nullptr;
 }
 }  // namespace tt::tt_metal::blackhole
 

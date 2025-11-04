@@ -199,7 +199,7 @@ class RunTimeOptions {
     bool enable_2_erisc_mode_with_fabric = false;
 
     // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
-    bool enable_2_erisc_mode = false;
+    bool enable_2_erisc_mode = true;
 
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
