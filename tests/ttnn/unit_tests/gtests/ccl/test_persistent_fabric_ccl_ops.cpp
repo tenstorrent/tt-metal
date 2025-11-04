@@ -71,7 +71,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
                 .mesh_shape_override = MeshShape{1, num_devices}}),
         *test_fixture.mesh_device_);
 
-    auto output_tensor = ttnn::reduce_scatter(input_mesh_tensor, dim);
+    auto output_tensor = ttnn::reduce_scatter(input_mesh_tensor, dim, 1);
 
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
