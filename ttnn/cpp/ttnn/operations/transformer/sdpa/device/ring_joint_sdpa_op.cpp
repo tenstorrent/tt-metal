@@ -232,7 +232,7 @@ std::vector<TensorSpec> RingJointScaledDotProductAttention::compute_output_specs
         TensorSpec(
             joint_input.logical_shape(),
             TensorLayout(joint_input.dtype(), PageConfig(Layout::TILE), output_mem_config)),
-        TensorSpec(lse_shape, TensorLayout(input.dtype(), PageConfig(Layout::TILE), output_mem_config))};
+        TensorSpec(lse_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::MeshWorkloadWithCallbacks RingJointScaledDotProductAttention::create_mesh_workload(

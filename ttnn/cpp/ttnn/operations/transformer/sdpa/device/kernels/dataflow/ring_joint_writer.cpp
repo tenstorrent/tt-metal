@@ -9,6 +9,19 @@
 #include <tt-metalium/constants.hpp>
 #include "fused_op_receiver.hpp"
 
+#include "debug/dprint.h"
+
+inline void print_full_tile_2(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint8_t r = 0; r < 32; ++r) {
+        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
+        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
+        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
+               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -63,10 +76,13 @@ void kernel_main() {
     constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_in);
+    DPRINT << "tile_bytes:" << tile_bytes << ENDL();
+    DPRINT << "lse_tile_bytes:" << lse_tile_bytes << ENDL();
 
     const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
-    const auto lse_writer = TensorAccessor(lse_args, lse_addr, tile_bytes);
+    const auto lse_writer = TensorAccessor(lse_args, lse_addr, lse_tile_bytes);
 
     const auto output_tile_logical = TensorTileShape(B, NH, local_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, logical_Lt, DHt);
@@ -127,6 +143,8 @@ void kernel_main() {
             if (ring_iter > 0) {
                 // Read previous output for this Q chunk
                 read_block(cat_out_generator, dst_slice, cb_prev_out, tile_bytes, barrier_threshold, false);
+                // cb_wait_front(cb_prev_out, 1);
+                // print_full_tile_2(cb_prev_out);
 
                 // Read previous LSE for this Q chunk
                 cb_reserve_back(cb_lse_in, Sq_chunk_t);
@@ -136,12 +154,14 @@ void kernel_main() {
                 for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                     noc_async_read_tile(lse_tile_id, lse_writer, lse_addr);
                     lse_tile_id++;
-                    lse_addr += tile_bytes;
+                    lse_addr += lse_tile_bytes;
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_lse_in, Sq_chunk_t);
             }
 
+            // cb_wait_front(cb_out, 1);
+            // print_full_tile_2(cb_out);
             write_block(cat_out_generator, dst_slice, cb_out, tile_bytes, barrier_threshold);
 
             cb_wait_front(cb_lse_out, Sq_chunk_t);
@@ -151,7 +171,7 @@ void kernel_main() {
             for (uint32_t i = lse_seq_start; i < lse_seq_end; i++) {
                 noc_async_write_tile(lse_tile_id, lse_writer, lse_addr);
                 lse_tile_id++;
-                lse_addr += tile_bytes;
+                lse_addr += lse_tile_bytes;
             }
             noc_async_writes_flushed();
             cb_pop_front(cb_lse_out, Sq_chunk_t);

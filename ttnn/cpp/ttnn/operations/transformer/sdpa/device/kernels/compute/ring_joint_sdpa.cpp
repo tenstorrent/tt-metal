@@ -11,6 +11,9 @@
 #include "compute_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
+
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -100,6 +103,7 @@ void MAIN {
             uint32_t alias_mm2_cur_out = cb_out_im_B;
 
             cb_wait_front(cb_q_in, q_chunk_tiles);
+            // UNPACK(tt::compute::common::print_full_tile(cb_q_in, 0));
 
             for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
                 if (k_chunk >= global_logical_NK_chunks && k_chunk < global_padded_NK_chunks) {
@@ -157,8 +161,14 @@ void MAIN {
                  */
                 sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
                     alias_cur_max, alias_cur_sum);
+                // cb_wait_front(alias_cur_max, 1);
+                // UNPACK(tt::compute::common::print_full_tile(alias_cur_max, 0));
+                // cb_wait_front(alias_cur_sum, 1);
+                // UNPACK(tt::compute::common::print_full_tile(alias_cur_sum, 0));
 
                 cb_wait_front(cb_qk_im, qk_chunk_tiles);
+                // UNPACK(tt::compute::common::print_full_tile(cb_qk_im, 0));
+
                 /* OUT_IM = QK @ V_CHUNK */
                 matmul_blocks(
                     cb_qk_im,
@@ -178,20 +188,30 @@ void MAIN {
                 cb_pop_front(cb_qk_im, qk_chunk_tiles);
                 reconfig_data_format(alias_prev_max, alias_cur_max);
 
+                // cb_wait_front(alias_mm2_cur_out, 1);
+                // UNPACK(tt::compute::common::print_full_tile(alias_mm2_cur_out, 0));
+
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk > iter_k_chunk_start) {
                     /* cb_exp_max_diff = torch.exp(cb_prev_max - cb_cur_max) */
                     sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    // cb_wait_front(cb_exp_max_diff, 1);
+                    // UNPACK(tt::compute::common::print_full_tile(cb_exp_max_diff, 0));
                     cb_pop_front(alias_prev_max, Sq_chunk_t);
                     /* cb_prev_sum *= cb_exp_max_diff */
                     mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                    // cb_wait_front(alias_prev_sum, 1);
+                    // UNPACK(tt::compute::common::print_full_tile(alias_prev_sum, 0));
 
                     /* cb_cur_sum += cb_prev_sum */
                     add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+                    // cb_wait_front(alias_cur_sum, 1);
+                    // UNPACK(tt::compute::common::print_full_tile(alias_cur_sum, 0));
 
                     /* cb_out_accumulate_im *= cb_exp_max_diff */
-
                     mul_block_bcast_cols<Sq_chunk_t, DHt>(alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, true);
+                    // cb_wait_front(alias_mm2_prev_out, 1);
+                    // UNPACK(tt::compute::common::print_full_tile(alias_mm2_prev_out, 0));
                 }
 
                 // Swap ping-pong buffers
@@ -200,20 +220,45 @@ void MAIN {
                 std::swap(alias_prev_max, alias_cur_max);
             }
 
+            // cb_wait_front(cb_col_identity, 1);
+            // UNPACK(tt::compute::common::print_full_tile(cb_col_identity, 0));
+            /*DPRINT_UNPACK({ DPRINT << "CB_COL:" << TileSlice(cb_col_identity, 0, SliceRange{
+                    .h0=0, .h1=1, .hs=1,
+                    .w0=0, .w1=32, .ws=1
+                    }, true, false) << ENDL(); });*/
+            // cb_wait_front(alias_prev_sum, 1);
+            // UNPACK(tt::compute::common::print_full_tile(alias_prev_sum, 0));
+
             // Calculate current LSE
             // Use alias_cur_max as intermediate buffer.
             matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
 
+            // cb_wait_front(alias_prev_sum, 1);
+            // UNPACK(tt::compute::common::print_full_tile(alias_prev_sum, 0));
+
             log_block(alias_prev_sum, alias_cur_max, Sq_chunk_t);
+
+            // cb_wait_front(alias_cur_max, 1);
+            // UNPACK(tt::compute::common::print_full_tile(alias_cur_max, 0));
 
             // Scale prev_max by scale_fp32
             mul_block_bcast_scalar_inplace<cb_scale_in, Sq_chunk_t>(alias_prev_max);
             add_block_inplace(alias_prev_max, alias_cur_max, Sq_chunk_t);
 
+            // cb_wait_front(alias_prev_max, 1);
+            // UNPACK(tt::compute::common::print_full_tile(alias_prev_max, 0));
+
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
             /* cb_out_accumulate_im *= cb_cur_sum */
             mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum);
+
+            // if(ring_iter == 1)
+            //{
+            //   cb_wait_front(alias_mm2_prev_out, 1);
+            //   UNPACK(tt::compute::common::print_full_tile(alias_mm2_prev_out, 0));
+            // }
+
             if (ring_iter > 0) {
                 // Update output according to previous and current LSE
                 /**
@@ -223,6 +268,15 @@ void MAIN {
                  */
                 cb_wait_front(cb_lse_in, Sq_chunk_t);
                 cb_wait_front(cb_prev_out, out_chunk_tiles);
+                /*if(ring_iter == 1)
+                {
+                  UNPACK(tt::compute::common::print_full_tile(cb_prev_out, 0));
+                  //UNPACK(tt::compute::common::print_full_tile(cb_lse_in, 0));
+                  //DPRINT_UNPACK({ DPRINT << "LS_IN_COL:" << TileSlice(cb_lse_in, 0, SliceRange{
+                  //        .h0=0, .h1=32, .hs=1,
+                  //        .w0=0, .w1=1, .ws=1
+                  //        }, true, false) << ENDL(); });
+                }*/
 
                 uint32_t alias_cur_lse = alias_prev_max;      // full
                 uint32_t alias_sig = alias_cur_max;           // empty
@@ -233,11 +287,30 @@ void MAIN {
                 sigmoid_sub(alias_cur_lse, cb_lse_in, alias_sig, Sq_chunk_t);
 
                 // alias_sub = cb_prev_out - alias_cur_out
+                reconfig_data_format(cb_prev_out, alias_cur_out);
                 sub_block(cb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
-                // alias_sub *= alias_sig
+                // if(ring_iter == 1)
+                //{
+                //   cb_wait_front(alias_sub, 1);
+                //   UNPACK(tt::compute::common::print_full_tile(alias_sub, 0));
+                // }
+                //  alias_sub *= alias_sig
+                reconfig_data_format(alias_sub, alias_sig);
                 mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
+                /*if(ring_iter == 1)
+                {
+                  cb_wait_front(alias_sub, 1);
+                  UNPACK(tt::compute::common::print_full_tile(alias_sub, 0));
+                }*/
                 // cb_out = cb_prev_out - alias_sub
+                reconfig_data_format(cb_prev_out, alias_sub);
+                pack_reconfig_data_format(cb_out);
                 sub_block(cb_prev_out, alias_sub, cb_out, out_chunk_tiles);
+                /*if(ring_iter == 1)
+                {
+                  cb_wait_front(cb_out, 1);
+                  UNPACK(tt::compute::common::print_full_tile(cb_out, 0));
+                }*/
                 cb_pop_front(cb_prev_out, out_chunk_tiles);
                 cb_pop_front(alias_cur_out, out_chunk_tiles);
                 cb_pop_front(alias_sub, out_chunk_tiles);
@@ -245,17 +318,58 @@ void MAIN {
                 // alias_sig = sigmoid(cb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // cb_lse_out = cb_lse_in - alias_cur_lse
+                // if(ring_iter == 1)
+                //{
+                // cb_wait_front(cb_lse_in, 1);
+                // DPRINT_UNPACK({ DPRINT << "LS_IN_COL:" << TileSlice(cb_lse_in, 0, SliceRange{
+                //        .h0=0, .h1=32, .hs=1,
+                //        .w0=0, .w1=1, .ws=1
+                //        }, true, false) << ENDL(); });
+                // cb_wait_front(alias_cur_lse, 1);
+                // UNPACK(tt::compute::common::print_full_tile(alias_cur_lse, 0));
+                //}
+                pack_reconfig_data_format(alias_sig);
+                reconfig_data_format(cb_lse_in, alias_cur_lse);
                 logsigmoid_sub(cb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
+                /*if(ring_iter == 1)
+                {
+                  cb_wait_front(alias_sig, 1);
+                  UNPACK(tt::compute::common::print_full_tile(alias_sig, 0)); //.
+                  }*/
                 sub_block(cb_lse_in, alias_sig, cb_lse_out, Sq_chunk_t);
+                /*if(ring_iter == 1)
+                {
+                  cb_wait_front(cb_lse_out, 1);
+                  DPRINT_UNPACK({ DPRINT << "LS_OUT_COL:" << TileSlice(cb_lse_out, 0, SliceRange{
+                          .h0=0, .h1=32, .hs=1,
+                          .w0=0, .w1=1, .ws=1
+                          }, true, false) << ENDL(); });
+                          }*/
                 cb_pop_front(alias_sig, Sq_chunk_t);
                 cb_pop_front(alias_cur_lse, Sq_chunk_t);
                 cb_pop_front(cb_lse_in, Sq_chunk_t);
-
             } else {
                 pack_reconfig_data_format(cb_out);
                 copy_block(alias_mm2_prev_out, cb_out, out_chunk_tiles);
 
+                // cb_wait_front(cb_out, 1);
+                // UNPACK(tt::compute::common::print_full_tile(cb_out, 0));
+                // cb_wait_front(alias_prev_max, 1);
+                // UNPACK(tt::compute::common::print_full_tile(alias_prev_max, 0));
+
+                pack_reconfig_data_format(cb_lse_out);
                 copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
+
+                /*cb_wait_front(cb_lse_out, 1);
+                //UNPACK(tt::compute::common::print_full_tile(cb_lse_out, 0));
+                DPRINT_UNPACK({ DPRINT << "LS_COL:" << TileSlice(cb_lse_out, 0, SliceRange{
+                        .h0=0, .h1=32, .hs=1,
+                        .w0=0, .w1=1, .ws=1
+                      }, true, false) << ENDL(); });
+                DPRINT_UNPACK({ DPRINT << "LS_ROW:" << TileSlice(cb_lse_out, 0, SliceRange{
+                        .h0=0, .h1=1, .hs=1,
+                        .w0=0, .w1=32, .ws=1
+                        }, true, false) << ENDL(); });*/
             }
 
             cb_pop_front(cb_q_in, q_chunk_tiles);
