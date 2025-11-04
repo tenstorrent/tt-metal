@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+import math
 
 from models.common.utility_functions import (
     _nearest_y,
@@ -125,7 +126,12 @@ def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, paddin
         padding=list(padding),
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99)
+    if input_dtype == ttnn.bfloat8_b:
+        threshold = 5e-4 * math.log(batch_size * channels * height * width, 2) + 1e-3
+        diff = torch.abs(torch_output_tensor - tt_output_tensor) / torch_output_tensor.abs().mean()
+        assert torch.all(diff < threshold), f"Max diff: {diff.max()}, Threshold: {threshold} "
+    else:
+        torch.equal(torch_output_tensor, tt_output_tensor)
 
 
 def pad_and_fold_with_permute_and_reshape_on_device(
