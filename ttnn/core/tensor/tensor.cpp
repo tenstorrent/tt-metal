@@ -900,8 +900,8 @@ std::optional<TensorPreparedConversion> prepare_tensor_conversion(
         // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
         memory_config.is_sharded() ||
         // Sharded tensor handling and on-device type-casting cannot be done with the regular strategy
-        (optional_tile.has_value() && ((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
-         ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))
+        (optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
+                                       ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0)))
         // on-device tiling operation expects 32x32 row
     ) {
         return std::nullopt;
