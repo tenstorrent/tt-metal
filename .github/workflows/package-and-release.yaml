@@ -12,12 +12,12 @@ on:
         required: false
         default: "dev"
         type: string
-      force_bump_type:
+      force-bump-type:
         description: "Force a specific bump type instead of auto-detecting from commits. Options: 'major', 'minor', 'patch', 'none'."
         required: false
         default: ""
         type: string
-      ignore_commits:
+      ignore-commits:
         description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps"
         required: false
         default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9"
@@ -108,8 +108,8 @@ jobs:
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
       tag-type: ${{ needs.release-precheck.outputs.tag-type }}
-      force_bump_type: ${{ inputs.force_bump_type }}
-      ignore_commits: ${{ inputs.ignore_commits }}
+      force-bump-type: ${{ inputs.force-bump-type }}
+      ignore-commits: ${{ inputs.ignore-commits }}
       dry-run: ${{ inputs.dry-run || false }}
 
 
