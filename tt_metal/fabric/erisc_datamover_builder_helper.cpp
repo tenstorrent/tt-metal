@@ -121,7 +121,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
         TT_ASSERT(local_link_cores.size() == remote_link_cores.size());
         // set edm types based on topology and device ids.
-        bool dateline = false;
+        [[maybe_unused]] bool dateline = false;
         auto src_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
         auto dest_device_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
         if (topology == Topology::Ring) {

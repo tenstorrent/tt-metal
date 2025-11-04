@@ -554,7 +554,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
                 cores_str += "(" + std::to_string(core.x) + "," + std::to_string(core.y) + ")";
             }
 
-            CoreCoord reducer_core = {
+            [[maybe_unused]] CoreCoord reducer_core = {
                 reducer_core_ids[group_id] % grid_size.x, reducer_core_ids[group_id] / grid_size.x};
 
             log_debug(

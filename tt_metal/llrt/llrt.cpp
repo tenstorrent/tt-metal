@@ -277,7 +277,7 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
 void wait_until_cores_done(
     tt::ChipId device_id, int run_state, std::unordered_set<CoreCoord>& not_done_phys_cores, int timeout_ms) {
     // poll the cores until the set of not done cores is empty
-    int loop_count = 1;
+    [[maybe_unused]] int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();

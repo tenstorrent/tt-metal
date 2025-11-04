@@ -775,8 +775,6 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());          // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
 
-    tt_metal::Buffer* bias_buffer = nullptr;
-    tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
         TT_FATAL(
@@ -785,10 +783,6 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             c.storage_type());
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
-
-        bias_buffer = c.buffer();
-
-        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
     tt_metal::IDevice* device = a.device();
