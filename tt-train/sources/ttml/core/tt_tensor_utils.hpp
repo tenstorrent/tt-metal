@@ -51,7 +51,7 @@ template <class T = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
     ttnn::distributed::MeshDevice* device,
     ttnn::Layout layout = ttnn::Layout::TILE,
     const ttnn::distributed::TensorToMesh* mesh_mapper = nullptr) {
-    auto shape = ttnn::experimental::xtensor::get_shape_from_xarray(buffer);
+    auto shape = tt::tt_metal::experimental::xtensor::get_shape_from_xarray(buffer);
     auto buffer_view = xtensor_to_span(buffer);
     return from_vector<T, TensorType>(
         std::vector<T>(buffer_view.begin(), buffer_view.end()), shape, device, layout, mesh_mapper);
