@@ -4,10 +4,9 @@ TT-SMI
 Tenstorrent System Management Interface (TT-SMI) is a command line utility
 to interact with all Tenstorrent devices on host.
 
-Main objective of TT-SMI is to provide a simple and easy to use interface
-to collect and display device, telemetry and firmware information.
+TT-SMI provides a simple and easy-to-use interface to collect and display device, telemetry and firmware information.
 
-In addition user can issue Grayskull board Tensix core reset.
+In addition users can issue Grayskull board Tensix core reset.
 
 Official Repository
 --------
@@ -17,7 +16,7 @@ https://github.com/tenstorrent/tt-smi/
 Getting Started
 --------
 
-Build and editing instruction are as follows -
+Build and editing instruction are as follows:
 
 Building from Git
 --------
@@ -31,10 +30,10 @@ Install and source rust for the luwen library:
 
 Optional
 --------
-Generate and source a python environment.  This is useful not only to isolate
-your environment, but potentially easier to debug and use.  This environment
+Generate and source a python environment. This is useful not only to isolate
+your environment, but potentially easier to debug and use. This environment
 can be shared if you want to use a single environment for all your Tenstorrent
-tools
+tools.
 
 .. code-block::
 
