@@ -283,7 +283,12 @@ class WanTransformer3DModel:
         self.is_fsdp = is_fsdp
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
         self.model_type = model_type
+
         assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
+        if model_type == "i2v":
+            in_channels = 36
+        else:
+            assert in_channels == 16, "in_channels must be 16 for t2v"
 
         self.patch_size = patch_size
         self.dim = dim
@@ -564,7 +569,7 @@ class WanTransformer3DModel:
 
         # Concatenate spatial and y along the channel dimension
         if self.model_type == "i2v":
-            spatial = ttnn.concat([spatial, y], dim=1)
+            spatial = torch.cat([spatial, y], dim=1)
 
         spatial_1BNI, N = self.preprocess_spatial_input(spatial)
 

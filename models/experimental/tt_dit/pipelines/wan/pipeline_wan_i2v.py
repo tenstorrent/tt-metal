@@ -7,10 +7,13 @@
 import html
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import numpy as np
+import PIL
 import ftfy
 import regex as re
 import time
 import torch
+import torchvision.transforms.functional as TF
 from transformers import AutoTokenizer, UMT5EncoderModel
 
 from diffusers.callbacks import MultiPipelineCallbacks, PipelineCallback
@@ -81,7 +84,7 @@ def prompt_clean(text):
     return text
 
 
-class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
+class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
     r"""
     Pipeline for text-to-video generation using Wan.
 
@@ -210,11 +213,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
+            model_type="i2v",
         )
 
         if self.use_cache:
             cache_path = get_and_create_cache_path(
-                model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                model_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
                 subfolder="transformer",
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
@@ -252,11 +256,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             ccl_manager=self.dit_ccl_manager,
             parallel_config=self.parallel_config,
             is_fsdp=True,
+            model_type="i2v",
         )
 
         if self.use_cache:
             cache_path = get_and_create_cache_path(
-                model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+                model_name="Wan-AI/Wan2.2-I2V-A14B-Diffusers",
                 subfolder="transformer_2",
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
@@ -321,9 +326,49 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         return prompt_embeds
 
+    def prepare_image(
+        self,
+        image: PIL.Image.Image,
+        num_frames: int = 81,
+        max_area: int = 720 * 1280,
+    ):
+        logger.info(f"Preparing image: {image.size}")
+        vae_stride = (4, 8, 8)
+        patch_size = (1, 2, 2)
+
+        img = TF.to_tensor(image).sub_(0.5).div_(0.5)
+
+        F = num_frames
+        h, w = img.shape[1:]
+        aspect_ratio = h / w
+        lat_h = round(np.sqrt(max_area * aspect_ratio) // vae_stride[1] // patch_size[1] * patch_size[1])
+        lat_w = round(np.sqrt(max_area / aspect_ratio) // vae_stride[2] // patch_size[2] * patch_size[2])
+        h = lat_h * vae_stride[1]
+        w = lat_w * vae_stride[2]
+
+        msk = torch.ones(1, F, lat_h, lat_w)
+        msk[:, 1:] = 0
+        msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
+        msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
+        msk = msk.transpose(1, 2)[0]
+
+        y = self.vae.encode(
+            torch.concat(
+                [
+                    torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
+                    torch.zeros(3, F - 1, h, w),
+                ],
+                dim=1,
+            ).unsqueeze(0)
+        )[0]
+        y = torch.concat([msk, y])
+        logger.info(f"Finished preparing image: {y.shape}")
+        return y
+
     def encode_prompt(
         self,
         prompt: Union[str, List[str]],
+        image: PIL.Image.Image = None,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         do_classifier_free_guidance: bool = True,
         num_videos_per_prompt: int = 1,
@@ -339,6 +384,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         Args:
             prompt (`str` or `List[str]`, *optional*):
                 prompt to be encoded
+            image (`PIL.Image.Image`, *optional*):
+                Image to be encoded.
             negative_prompt (`str` or `List[str]`, *optional*):
                 The prompt or prompts not to guide the image generation. If not defined, one has to pass
                 `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
@@ -508,6 +555,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
+        image: PIL.Image.Image = None,
         negative_prompt: Union[str, List[str]] = None,
         height: int = 480,
         width: int = 832,
@@ -687,6 +735,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
+        y = self.prepare_image(image)
 
         # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -727,6 +776,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
                 # latent_model_input = latents.to(transformer_dtype)
                 latent_model_input = latents.clone()
+                tt_y = y.clone()
                 if self.config.expand_timesteps:
                     # seq_len: num_latent_frames * latent_height//2 * latent_width//2
                     temp_ts = (mask[0][0][:, ::2, ::2] * t).flatten()
@@ -747,6 +797,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     spatial=latent_model_input,
                     timestep=timestep,
                     prompt=prompt_embeds,
+                    y=tt_y,
                     # attention_kwargs=attention_kwargs,
                     # return_dict=False,
                 )
@@ -757,6 +808,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                         spatial=latent_model_input,
                         timestep=timestep,
                         prompt=negative_prompt_embeds,
+                        y=tt_y,
                         # attention_kwargs=attention_kwargs,
                         # return_dict=False,
                     )
