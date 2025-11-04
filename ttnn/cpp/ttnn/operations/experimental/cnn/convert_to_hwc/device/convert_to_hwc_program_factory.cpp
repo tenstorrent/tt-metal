@@ -246,6 +246,34 @@ std::vector<std::vector<BatchTransferInstruction>> group_by_destination_core(
         log_info(tt::LogType::LogAlways, "dst={}, src={}", transfer.dst_core_idx, transfer.src_core_idx);
         output[transfer.dst_core_idx].push_back(transfer);
     }
+    // Ensure transfers for each destination core are ordered by destination offset
+    // This guarantees segments are consumed in BHW order across source cores.
+    for (auto& per_core_transfers : output) {
+        std::sort(
+            per_core_transfers.begin(),
+            per_core_transfers.end(),
+            [](const BatchTransferInstruction& a, const BatchTransferInstruction& b) {
+                if (a.dst_offset == b.dst_offset) {
+                    // Stable tie-breaker to keep deterministic order across sources
+                    if (a.src_core_idx == b.src_core_idx) {
+                        return a.src_offset < b.src_offset;
+                    }
+                    return a.src_core_idx < b.src_core_idx;
+                }
+                return a.dst_offset < b.dst_offset;
+            });
+    }
+    // Debug: print sorted dst_offsets per destination core
+    for (int core = 0; core < num_output_cores; core++) {
+        std::string offsets;
+        for (size_t i = 0; i < output[core].size(); i++) {
+            offsets += std::to_string(output[core][i].dst_offset);
+            if (i + 1 < output[core].size()) {
+                offsets += ",";
+            }
+        }
+        log_info(tt::LogType::LogAlways, "dst_core={} sorted dst_offsets=[{}]", core, offsets);
+    }
     return output;
 }
 
