@@ -26,6 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
+# TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {"10": 0.995, "50": 0.993}
 
 
@@ -40,6 +41,8 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
     strength = 0.3
     aesthetic_score = 6.0
     negative_aesthetic_score = 2.5
+
+    # TODO: change run_tt_denoising to incorporate guidance_rescale logic
     guidance_rescale = 0.0
     denoising_start = 0.8
 

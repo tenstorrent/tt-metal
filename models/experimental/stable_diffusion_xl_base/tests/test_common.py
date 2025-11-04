@@ -9,6 +9,7 @@ import torch
 import inspect
 from typing import List, Optional, Union
 
+from transformers import CLIPTextModelWithProjection
 from ttnn.distributed.distributed import ConcatMeshToTensor
 from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
@@ -191,7 +192,7 @@ def batch_encode_prompt_on_device(
     """
     prompt = [prompt] if isinstance(prompt, str) else prompt
 
-    prompt_2 = prompt or prompt_2
+    prompt_2 = prompt_2 or prompt
     prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
 
     num_devices = ttnn_device.get_num_devices()
@@ -218,10 +219,16 @@ def batch_encode_prompt_on_device(
     else:
         batch_size = prompt_embeds.shape[0]
 
-    only_with_projection = tt_text_encoder is None
+    torch_encoders = (
+        [pipeline.text_encoder, pipeline.text_encoder_2]
+        if pipeline.text_encoder is not None
+        else [pipeline.text_encoder_2]
+    )
     # Define tokenizers and text encoders
-    tokenizers = [pipeline.tokenizer, pipeline.tokenizer_2] if not only_with_projection else [pipeline.tokenizer_2]
-    text_encoders = [tt_text_encoder, tt_text_encoder_2] if not only_with_projection else [tt_text_encoder_2]
+    tokenizers = (
+        [pipeline.tokenizer, pipeline.tokenizer_2] if pipeline.text_encoder is not None else [pipeline.tokenizer_2]
+    )
+    text_encoders = [tt_text_encoder, tt_text_encoder_2] if pipeline.text_encoder is not None else [tt_text_encoder_2]
 
     if prompt_embeds is None:
         prompt_2 = prompt_2 or prompt
@@ -230,7 +237,10 @@ def batch_encode_prompt_on_device(
         prompt_embeds_list = []
         prompts = [prompt, prompt_2]
 
-        for ind, (prompt, tokenizer, text_encoder) in enumerate(zip(prompts, tokenizers, text_encoders)):
+        for ind, (prompt, tokenizer, text_encoder, torch_encoder) in enumerate(
+            zip(prompts, tokenizers, text_encoders, torch_encoders)
+        ):
+            with_projection = isinstance(torch_encoder, CLIPTextModelWithProjection)
             text_inputs = tokenizer(
                 prompt,
                 padding="max_length",
@@ -259,9 +269,7 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
 
-            tt_sequence_output, tt_pooled_output = text_encoder(
-                tt_tokens, ttnn_device, with_projection=(ind > 0) or only_with_projection
-            )
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, with_projection=with_projection)
 
             tt_sequence_output_torch = ttnn.to_torch(
                 tt_sequence_output[-2],
@@ -276,7 +284,7 @@ def batch_encode_prompt_on_device(
             # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
             # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
             # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)
-            if ind == 0 and not only_with_projection:
+            if not with_projection:
                 tt_pooled_prompt_embeds = ttnn.to_torch(
                     tt_sequence_output[-1],
                     mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
@@ -329,7 +337,11 @@ def batch_encode_prompt_on_device(
             uncond_tokens = [negative_prompt, negative_prompt_2]
 
         negative_prompt_embeds_list = []
-        for ind, (negative_prompt, tokenizer, text_encoder) in enumerate(zip(uncond_tokens, tokenizers, text_encoders)):
+        for ind, (negative_prompt, tokenizer, text_encoder, torch_encoder) in enumerate(
+            zip(uncond_tokens, tokenizers, text_encoders, torch_encoders)
+        ):
+            with_projection = isinstance(torch_encoder, CLIPTextModelWithProjection)
+
             max_length = prompt_embeds.shape[1]
             uncond_input = tokenizer(
                 negative_prompt,
@@ -347,7 +359,7 @@ def batch_encode_prompt_on_device(
                 mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
             )
             tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(
-                tt_tokens, ttnn_device, with_projection=(ind > 0)
+                tt_tokens, ttnn_device, with_projection=with_projection
             )
             tt_sequence_output_neg_torch = ttnn.to_torch(
                 tt_sequence_output_neg[-2],
@@ -362,7 +374,7 @@ def batch_encode_prompt_on_device(
             # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
             # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
             # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)            # We are only ALWAYS interested in the pooled output of the final text encoder
-            if ind == 0 and not only_with_projection:
+            if not with_projection:
                 tt_pooled_prompt_embeds = (
                     ttnn.to_torch(
                         tt_sequence_output_neg[-1],

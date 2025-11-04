@@ -25,6 +25,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
+# TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {"10": 0.862, "50": 0.894}
 
 

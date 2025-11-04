@@ -24,7 +24,6 @@ def test_timesteps(device, input_shape, module_path, num_channels, is_ci_env, re
         local_files_only=is_ci_env,
     )
     unet.eval()
-    state_dict = unet.state_dict()
 
     torch_timesteps = eval("unet." + module_path)
     assert torch_timesteps is not None, f"{module_path} is not a valid UNet module"
