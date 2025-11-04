@@ -48,4 +48,3 @@ def test_tilize_fp32_truncation(device, shape, use_multicore):
     input_tensor = ttnn.tilize(input_tensor, use_multicore=use_multicore)
     output_tensor = ttnn.to_torch(input_tensor)
     assert torch.allclose(input_a, output_tensor)
-    print(output_tensor)
