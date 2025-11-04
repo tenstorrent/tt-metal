@@ -21,7 +21,7 @@ from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
-from ttexalens.firmware import ELF
+from ttexalens.elf import MemoryAccess
 
 
 script_config = ScriptConfig(
@@ -44,23 +44,15 @@ class DumpWaitGlobalsData:
     is_h_variant: int | None = triage_field("is_h_variant")
 
 
-def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_reader) -> int | None:
+def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
     """Resolve and read an integer symbol value from the kernel ELF using the provided mem_reader.
 
     Returns None if the symbol cannot be read.
     """
     try:
-        return int(elf_obj.get_global(symbol, mem_reader).get_value())
+        return int(elf_obj.get_global(symbol, mem_access).read_value())
     except Exception:
         return None
-
-
-def _get_mem_reader(location: OnChipCoordinate, risc_name: str):
-    """Get a mem_reader for the given RISC at the location, falling back to default if needed."""
-    try:
-        return ELF.get_mem_reader(location, risc_name)
-    except Exception:
-        return ELF.get_mem_reader(location)
 
 
 def read_wait_globals(
@@ -80,17 +72,19 @@ def read_wait_globals(
     assert dispatcher_core_data.kernel_name is not None
 
     kernel_elf = elf_cache[dispatcher_core_data.kernel_path]
-    mem_reader = _get_mem_reader(location, risc_name)
+    loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
     # Inline: read wait-related globals directly from ELF
-    last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", mem_reader)
-    last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", mem_reader)
-    last_event = _read_symbol_value(kernel_elf, "last_event", mem_reader)
-    circular_buffer_fence = _read_symbol_value(kernel_elf, "cb_fence", mem_reader)
-    command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", mem_reader)
+    last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", loc_mem_access)
+    last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access)
+    last_event = _read_symbol_value(kernel_elf, "last_event", loc_mem_access)
+    circular_buffer_fence = _read_symbol_value(kernel_elf, "cb_fence", loc_mem_access)
+    command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access)
 
-    def get_const_value(name: str):
+    def get_const_value(name: str) -> int | None:
         try:
-            return kernel_elf.get_constant(name)
+            value = kernel_elf.get_constant(name)
+            assert isinstance(value, int)
+            return value
         except Exception:
             return None
 
