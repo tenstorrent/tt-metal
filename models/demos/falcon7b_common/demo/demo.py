@@ -540,9 +540,6 @@ def run_falcon_demo_kv(
     if galaxy_type:
         run_type += f"_{galaxy_type}"
 
-    data_parallel = 1
-    tensor_parallel = num_devices // data_parallel
-    config_params = configuration.to_dict() | {"data_parallel": data_parallel, "tensor_parallel": tensor_parallel}
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
@@ -550,7 +547,7 @@ def run_falcon_demo_kv(
         ml_model_type="llm",
         num_layers=num_layers,
         batch_size=batch_size,
-        config_params=config_params,
+        config_params={"data_parallel": num_devices, "tensor_parallel": 1},
         precision=f"prefill[{model_config_strs_prefill_decode[0]}]_decode[{model_config_strs_prefill_decode[1]}]",
         input_sequence_length=num_input_tokens,
         output_sequence_length=1 if perf_mode else output_token_index + 1,
