@@ -327,32 +327,43 @@ void kernel_main() {
 
     uint16_t bf16_p = static_cast<uint16_t>(p & 0xFFFF);
     uint32_t cum_prob = 0;
-    bool cutoff_found = false;
+    uint32_t kept_tokens = 0;
+    bool cutoff_found_in_phase_0 = false;
+    bool cutoff_found_in_phase_1 = false;
     uint32_t top_p_cutoff = end_id_local_phase_1;  // Default to all tokens
     for (uint32_t i = start_id_local_phase_0; i < end_id_local_phase_0; ++i) {
         cum_prob = bfloat16_add(cum_prob, local_values[i]);
         if (bfloat16_greater(cum_prob, bf16_p)) {
             top_p_cutoff = i + 1;  // Include this token in the top-p set
-            cutoff_found = true;
+            cutoff_found_in_phase_0 = true;
+            kept_tokens = top_p_cutoff - start_id_local_phase_0;
             break;
         }
     }
-    if (!cutoff_found) {
+    if (!cutoff_found_in_phase_0) {
+        kept_tokens = 16;
         for (uint32_t i = start_id_local_phase_1; i < end_id_local_phase_1; ++i) {
             // cum sum of local values
             cum_prob = bfloat16_add(cum_prob, local_values[i]);
             if (bfloat16_greater(cum_prob, bf16_p)) {
                 top_p_cutoff = i + 1;
+                kept_tokens += top_p_cutoff - start_id_local_phase_1;
+                cutoff_found_in_phase_1 = true;
                 break;
             }
         }
     }
     // adjust phase indices
-    end_id_local_phase_1 = start_id_local_phase_1 + (top_p_cutoff - 16);
-    if (top_p_cutoff <= 16) {
-        end_id_local_phase_0 = start_id_local_phase_0 + top_p_cutoff;
+    if (cutoff_found_in_phase_0) {
+        // skip last 16 tokens since cutoff found in phase 0
         start_id_local_phase_1 = end_id_local_phase_0;
         end_id_local_phase_1 = end_id_local_phase_0;
+        // adjust phase 0 to only keep the tokens that are in the top-p set
+        end_id_local_phase_0 = start_id_local_phase_0 + kept_tokens;
+    } else if (cutoff_found_in_phase_1) {
+        // in case cutoff not found in phase 0, but in phase 1,
+        // keep all tokens in phase 0 and part of tokens in phase 1 which is (kept_tokens - 16)
+        end_id_local_phase_1 = start_id_local_phase_1 + (kept_tokens - 16);
     }
 
     uint32_t cum_sum = 0;
