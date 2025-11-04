@@ -529,7 +529,7 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     bool is_narrow = is_narrow_shape(height, width);
     bool is_wide = false;
     bool is_tall = false;
-    if (all_dram_interleaved && is_narrow) {
+    if (is_narrow) {
         is_wide = width > height;
         is_tall = !is_wide;
     }
