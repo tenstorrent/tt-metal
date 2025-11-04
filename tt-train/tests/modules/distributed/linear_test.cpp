@@ -461,10 +461,6 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
-
-    auto ones_grad = ttnn::ones_like(output->get_value());
-    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
-    output->set_grad(ones_grad);
     output->backward();
 
     auto row_parallel_output_xtensor =
@@ -497,10 +493,11 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     EXPECT_TRUE(
         xt::allclose(replicate_output_xtensor[1], row_parallel_output_xtensor[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
+    xt::xarray<float> row_parallel_input_gradients_combined = row_parallel_input_gradients[0] + row_parallel_input_gradients[1];
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[0], row_parallel_input_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[0], row_parallel_input_gradients_combined, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_input_gradients[1], row_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_input_gradients[1], row_parallel_input_gradients_combined, /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
         replicate_layer_weight_gradients[0], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
