@@ -38,13 +38,13 @@ uint32_t _start() {
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        noc_local_state_init(NOC_INDEX);
+        // noc_local_state_init(NOC_INDEX); //TODO revisit this
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    asm("FENCE.i");
+    // asm("FENCE.i"); // TODO revisit once TT-SIM implemetnsor we run several kernels
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
