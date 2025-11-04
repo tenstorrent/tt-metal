@@ -116,6 +116,7 @@ struct EthernetConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+    NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
 };
 
 // These are only used in op_profiler, are unstable and have not been designed for general use.

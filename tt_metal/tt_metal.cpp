@@ -1094,19 +1094,47 @@ KernelHandle CreateEthernetKernel(
         "cores because both NOCs are in use!",
         kernel->name());
 
-    // Due to conflict with eth fw using noc0 at the same time, ensure each risc only uses their own noc
-    // https://github.com/tenstorrent/tt-metal/issues/25058
-    // E.g., risc0 -> noc0, risc1 -> noc1
-    if (config.processor != DataMovementProcessor::RISCV_0 && config.eth_mode != Eth::IDLE &&
-        !tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+    //
+    // Valid configurations for Blackhole ERISC
+    //
+    // Single erisc mode
+    // - Dedicated NOC1
+    // - Dynamic NOC
+    //
+    // Dual erisc mode
+    // - Dedicated ERISC0 NOC0, ERISC1 NOC1
+    // - Dynamic NOC
+    //
+    if (!tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
+        config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+            TT_FATAL(
+                static_cast<uint32_t>(config.noc) == static_cast<uint32_t>(config.processor),
+                "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+                "cores because NOC {} is not supported for processor {}. Set NOC to match the processor or use Dynamic "
+                "NOC mode.",
+                kernel->name(),
+                config.noc,
+                config.processor);
+        } else {
+            TT_FATAL(
+                config.noc == NOC::NOC_1,
+                "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
+                "cores because NOC {} is not supported for processor {}. Set NOC to NOC_1 or use Dynamic NOC mode.",
+                kernel->name(),
+                config.noc,
+                config.processor);
+        }
+    }
+
+    if (tt::tt_metal::MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+        // Dynamic NOC is not supported with this configuration
         TT_FATAL(
-            static_cast<uint32_t>(config.noc) == static_cast<uint32_t>(config.processor),
+            config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC,
             "EthernetKernel creation failure: Cannot create data movement kernels for {} across specified "
-            "cores because NOC {} is not supported for processor {}. Dynamic NOC is not supported for Ethernet "
-            "kernels.",
+            "cores because NOC Mode {} is not supported on this platform",
             kernel->name(),
-            config.noc,
-            config.processor);
+            config.noc_mode);
     }
     return program.impl().add_kernel(kernel, eth_core_type);
 }

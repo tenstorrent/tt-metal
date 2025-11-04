@@ -441,7 +441,13 @@ KernelGroup::KernelGroup(
         }
         auto class_id = kernel->dispatch_class();
 
-        if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
+        // Dynamic NOC assignment is supported on TENSIX cores and Eth cores which are shared with a base firmware
+        const bool is_tensix_core =
+            hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX;
+        const bool is_supported_eth_core =
+            hal.get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::ACTIVE_ETH &&
+            !hal.get_eth_fw_is_cooperative();
+        if (is_tensix_core || is_supported_eth_core) {
             // The code below sets the brisc_noc_id for use by the device firmware
             // Use 0 if neither brisc nor ncrisc specify a noc
             if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
