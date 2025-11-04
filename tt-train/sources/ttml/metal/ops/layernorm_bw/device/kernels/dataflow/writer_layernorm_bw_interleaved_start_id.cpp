@@ -12,8 +12,6 @@ constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_11;   // dbeta component
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
-constexpr uint32_t onetile = 1;
-
 template <typename AddrGen>
 inline void write_cb_block_to_dram(
     uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t block_size, uint32_t tile_bytes) {

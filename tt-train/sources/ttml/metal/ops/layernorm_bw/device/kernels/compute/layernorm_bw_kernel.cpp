@@ -52,16 +52,15 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
-inline void zero_dst_reg(uint32_t i) {
-    float zero = 0.0f;
-    fill_tile_int(i, zero);
+inline void zero_dst_reg(const uint32_t i) {
+    constexpr float zero = 0.0f;
     fill_tile(i, zero);
 }
 
 // Compute x_hat = (input - mean) * rstd
 // input is in cb_input_idx, mean is in cb_mean_idx (broadcasted), rstd is in cb_rstd_idx (broadcasted)
 // result is stored in cb_x_hat_idx
-inline void compute_x_hat_preprocessing(uint32_t num_tiles) {
+inline void compute_x_hat_preprocessing(const uint32_t num_tiles) {
     // mean and rstd are already broadcasted across the row
     reconfig_data_format(cb_input_idx, cb_input_idx);
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx += block_size) {
@@ -69,8 +68,8 @@ inline void compute_x_hat_preprocessing(uint32_t num_tiles) {
         tile_regs_acquire();
 
         for (uint32_t block_idx = 0; block_idx < current_block_size; ++block_idx) {
-            uint32_t x_hat_reg = block_idx;
-            uint32_t temp_reg = x_hat_reg + 1;
+            const uint32_t x_hat_reg = block_idx;
+            const uint32_t temp_reg = x_hat_reg + 1;
 
             // Load input tile
             copy_tile_init(cb_input_idx);
@@ -111,6 +110,8 @@ inline void compute_dy_gamma_sum(const uint32_t row) {
     const uint32_t sum_register = 0U;
     const uint32_t working_register = 1U;
     const uint32_t temp_register = 2U;
+
+    tile_regs_acquire();
 
     zero_dst_reg(sum_register);
 
@@ -185,7 +186,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
 
     reconfig_data_format(cb_dL_out_idx, cb_dL_out_idx);
     for (uint32_t col = 0; col < Wt; ++col) {
-        auto target_register = (col == 0) ? sum_register : working_register;
+        const uint32_t target_register = (col == 0) ? sum_register : working_register;
 
         // compute dy * gamma for dy_gamma_xnorm
         zero_dst_reg(target_register);
@@ -356,7 +357,7 @@ inline void compute_dy_gamma_xnorm_sum(const uint32_t row) {
             if (global_col + 1 > Wt) {
                 break;
             }
-            auto target_register = (global_col == 0) ? sum_register : working_register;
+            const uint32_t target_register = (global_col == 0) ? sum_register : working_register;
 
             // Load x_normalized (x_hat)
             copy_tile_init(cb_x_hat_idx);
