@@ -8,6 +8,7 @@ import pytest
 import os
 import math
 from models.experimental.oft.reference.oftnet import OftNet
+from models.experimental.oft.tt.model_configs import ModelOptimizations
 from models.experimental.oft.tt.tt_oftnet import TTOftNet
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock
 from models.experimental.oft.tests.common import GRID_RES, GRID_SIZE, GRID_HEIGHT, Y_OFFSET, H_PADDED, W_PADDED
@@ -18,7 +19,7 @@ from models.experimental.oft.reference.utils import get_abs_and_relative_error
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.oft.tt.model_preprocessing import create_OFT_model_parameters
-from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
+from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
 
@@ -27,8 +28,8 @@ from loguru import logger
     "input_image_path, calib_path",
     [
         (
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.jpg")),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "../resources/000013.txt")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.jpg")),
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "../../resources/000013.txt")),
         )
     ],
 )
@@ -36,10 +37,10 @@ from loguru import logger
     "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.bfloat16, False, 0.808, 0.896, 0.998, 0.915),
-       ( torch.bfloat16,  True, 0.821, 0.967, 0.999, 0.937),
-       ( torch.float32, False, 0.923, 0.982, 0.999, 0.943),
-       ( torch.float32,  True, 0.918, 0.885, 0.998, 0.942)
+       ( torch.bfloat16, False, 0.84, 0.889, 0.998, 0.904),
+       ( torch.bfloat16,  True, 0.862, 0.964, 0.999, 0.894),
+       ( torch.float32, False, 0.905, 0.979, 0.999, 0.928),
+       ( torch.float32,  True, 0.916, 0.881, 0.998, 0.918)
     ],
     # fmt: on
     ids=[
@@ -62,6 +63,7 @@ def test_oftnet(
     model_location_generator,
 ):
     skip_if_not_blackhole_20_cores(device)
+    device.disable_and_clear_program_cache()  # test hangs without this line on P150
     torch.manual_seed(42)
 
     # OFT configuration based on real model parameters
@@ -80,7 +82,9 @@ def test_oftnet(
     )
 
     ref_model = load_checkpoint(ref_model, model_location_generator)
-    parameters = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
+    state_dict = create_OFT_model_parameters(ref_model, (input_tensor, calib, grid), device=device)
+    model_opt = ModelOptimizations()
+    model_opt.apply(state_dict)
 
     tt_input = input_tensor.permute((0, 2, 3, 1))
     tt_input = ttnn.from_torch(tt_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -90,8 +94,8 @@ def test_oftnet(
     # with torch.inference_mode():
     tt_module = TTOftNet(
         device,
-        parameters,
-        parameters.conv_args,
+        state_dict,
+        state_dict.layer_args,
         TTBasicBlock,
         [2, 2, 2, 2],
         ref_model.mean,
@@ -154,7 +158,7 @@ def test_oftnet(
 
         all_passed.append(passed)
         special_char = "✅" if passed else "❌"
-        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {exp_pcc=}, {abs=:.3f}, {rel=:.3f}")
         if passed and float(pcc) - exp_pcc > 0.001:
             logger.warning(
                 f"⚠️  Output {i} {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."
