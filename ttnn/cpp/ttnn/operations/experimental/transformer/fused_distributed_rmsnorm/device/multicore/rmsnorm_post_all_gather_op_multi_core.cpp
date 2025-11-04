@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/rmsnorm_post_all_gather_op.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/math.hpp"

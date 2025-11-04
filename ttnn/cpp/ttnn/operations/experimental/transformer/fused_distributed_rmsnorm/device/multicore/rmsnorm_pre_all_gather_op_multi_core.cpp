@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.hpp"
+#include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
