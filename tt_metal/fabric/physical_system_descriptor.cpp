@@ -46,7 +46,7 @@ std::string get_mobo_name() {
 }
 
 TrayID get_tray_id_for_chip(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    tt::umd::Cluster& cluster,
     ChipId chip_id,
     const std::string& mobo_name,
     bool using_mock_cluster_desc) {
@@ -67,8 +67,8 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
-    auto cluster_desc = cluster->get_cluster_description();
+    tt::umd::Cluster& cluster, ChipId chip_id, bool using_mock_cluster_desc) {
+    auto cluster_desc = cluster.get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
         constexpr std::string_view ubb_mobo_name = "S7T-MB";
@@ -232,8 +232,11 @@ void PhysicalSystemDescriptor::clear() {
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
 
+    TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD driver reference in order to run discovery");
+    tt::umd::Cluster& cluster = *cluster_;
+
     if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
-        cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster_->get_cluster_description());
+        cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
     } else {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
         // Otherwise, we use the existing cluster descriptor, which may be stale with respect to the state of
@@ -254,7 +257,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
         auto [tray_id, asic_location] =
-            get_asic_position(cluster_, src_chip_id, target_device_type_ != TargetDevice::Silicon);
+            get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -785,6 +788,9 @@ AsicID PhysicalSystemDescriptor::get_asic_id(
 }
 
 LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() const {
+    TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD driver reference in order to query Ethernet metrics");
+    tt::umd::Cluster& cluster = *cluster_;
+
     const auto& local_asics = get_asics_connected_to_host(my_host_name());
     const auto& local_asic_graph = get_asic_topology(my_host_name());
     std::unordered_map<AsicID, std::unordered_map<uint8_t, EthernetMetrics>> local_ethernet_metrics;
@@ -807,20 +813,20 @@ LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() co
 
                 auto src_eth_chan = eth_connection.src_chan;
                 auto src_chip_id = get_chip_id_for_asic(asic);
-                const auto& soc_desc = cluster_->get_soc_descriptor(src_chip_id);
+                const auto& soc_desc = cluster.get_soc_descriptor(src_chip_id);
                 const auto& translated_eth_core =
                     soc_desc.get_eth_core_for_channel(src_eth_chan, CoordSystem::TRANSLATED);
 
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &retrain_count_val, src_chip_id, translated_eth_core, retrain_count_addr, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &crc_error_val, src_chip_id, translated_eth_core, crc_addr, sizeof(uint32_t));
-                cluster_->read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(&corr_val_hi, src_chip_id, translated_eth_core, corr_addr, sizeof(uint32_t));
+                cluster.read_from_device(
                     &corr_val_lo, src_chip_id, translated_eth_core, corr_addr + 4, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &uncorr_val_hi, src_chip_id, translated_eth_core, uncorr_addr, sizeof(uint32_t));
-                cluster_->read_from_device(
+                cluster.read_from_device(
                     &uncorr_val_lo, src_chip_id, translated_eth_core, uncorr_addr + 4, sizeof(uint32_t));
 
                 local_ethernet_metrics[asic][src_eth_chan] = {
