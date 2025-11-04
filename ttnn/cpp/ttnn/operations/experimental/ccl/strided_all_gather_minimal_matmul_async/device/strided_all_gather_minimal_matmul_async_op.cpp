@@ -29,28 +29,27 @@ StridedAllGatherMinimalMatmulAsync create_strided_all_gather_minimal_matmul_asyn
 }  // namespace strided_all_gather_minimal_matmul_async_detail
 }  // namespace ccl
 
-void StridedAllGatherMinimalMatmulAsync::validate_with_output_tensors(
+void StridedAllGatherMinimalMatmulAsync::validate(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
-    const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
     TT_ASSERT(
         input_tensors.size() == 2, "StridedAllGatherMinimalMatmulAsync requires 2 input tensors: [input, weight]");
     auto& input_tensor = input_tensors[0];
-    auto& weight_tensor = input_tensors[1];
+    // auto& weight_tensor = input_tensors[1];
 
     TT_FATAL(
         std::all_of(
             input_tensors.begin(), input_tensors.end(), [](const auto& t) { return t.logical_shape().rank() == 4; }),
         "StridedAllGatherMinimalMatmulAsync requires input tensors to be of rank 4");
 
-    if (output_tensors[0].has_value()) {
-        auto& strided_all_gather_output_tensor = output_tensors.at(0).value();
-        // All Gather validate
-        this->strided_all_gather_async_struct.validate_with_output_tensors(
-            {input_tensor}, {strided_all_gather_output_tensor});
-        // Matmul validate
-        this->matmul_struct.validate({strided_all_gather_output_tensor, weight_tensor}, optional_input_tensors);
-    }
+    // if (output_tensors[0].has_value()) {
+    //     auto& strided_all_gather_output_tensor = output_tensors.at(0).value();
+    //     // All Gather validate
+    //     this->strided_all_gather_async_struct.validate_with_output_tensors(
+    //         {input_tensor}, {strided_all_gather_output_tensor});
+    //     // Matmul validate
+    //     this->matmul_struct.validate({strided_all_gather_output_tensor, weight_tensor}, optional_input_tensors);
+    // }
 
     // All Gather Matmul validate
     TT_FATAL(
@@ -151,7 +150,7 @@ tt::tt_metal::operation::ProgramWithCallbacks StridedAllGatherMinimalMatmulAsync
 
         /* Matmul Params */
         optional_input_tensors[0],  // Bias
-        this->matmul_struct.fused_activation.value(),
+        this->matmul_struct.fused_activation,
         this->matmul_struct.config.value(),
         this->matmul_struct.compute_kernel_config);
 }
@@ -209,7 +208,6 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<operations::unary::UnaryWithParam> fused_activation,
     const std::optional<const minimal_matmul::MinimalMatmulConfig> config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<const ttnn::CoreGrid> core_grid,
     std::optional<uint32_t> tiles_per_chunk,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
@@ -237,20 +235,15 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
         tiles_per_chunk,
         num_workers_per_link,
         num_buffers_per_channel,
-        core_grid->y,
+        config->compute_with_storage_grid_size.y,
         config->M_block_size,
         config->K_block_size);
 
-    // Create the all gather output tensor used as input (activation) to the matmul
-    ttnn::Tensor strided_all_gather_out_tensor =
-        strided_all_gather_async_struct.create_output_tensors({input_tensor})[0];
+    // // Create the all gather output tensor used as input (activation) to the matmul
+    // ttnn::Tensor strided_all_gather_out_tensor =
+    //     strided_all_gather_async_struct.create_output_tensors({input_tensor})[0];
 
     /* Matmul setup */
-    std::optional<CoreCoord> user_core_coord;
-    if (core_grid.has_value()) {
-        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
-    }
-
     operations::experimental::minimal_matmul::MinimalMatmulOp matmul_struct =
         operations::experimental::minimal_matmul::MinimalMatmulOp{
             .config = config,
@@ -269,7 +262,8 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
                 strided_all_gather_core_grid_offset,
                 devices),
         {input_tensor, weight_tensor},
-        optional_input_tensors);
+        optional_input_tensors,
+        {});
 }
 
 }  // namespace ccl
