@@ -26,7 +26,6 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    std::cout << "PFPFPFPFPFPFPFPFPF" << std::endl;
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -61,16 +60,17 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     create_cb(program, input_tensor.dtype(), IntImgCB::START, total_core_range_set, TILES_PER_CB);
     create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, total_core_range_set, TILES_PER_CB);
     create_cb(program, input_tensor.dtype(), IntImgCB::ACC, total_core_range_set, TILES_PER_CB);
+    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_AXIS_3, total_core_range_set, TILES_PER_CB);
     create_cb(
         program, input_tensor.dtype(), IntImgCB::BEFORE_ADDER_PROPAGATION_STAGE, total_core_range_set, TILES_PER_CB);
     create_cb(program, input_tensor.dtype(), IntImgCB::OUTPUT, total_core_range_set, TILES_PER_CB);
     create_cb(program, input_tensor.dtype(), IntImgCB::TO_BOT_STAGE_TILE, total_core_range_set, TILES_PER_CB);
-    create_cb(
-        program,
-        input_tensor.dtype(),
-        IntImgCB::FROM_TOP_STAGE_TILE,
-        total_core_range_set,
-        TILES_PER_CB);  // TODO(jbbieniekTT): obligatory?
+    // create_cb(
+    //     program,
+    //     input_tensor.dtype(),
+    //     IntImgCB::FROM_TOP_STAGE_TILE,
+    //     total_core_range_set,
+    //     TILES_PER_CB);  // TODO(jbbieniekTT): obligatory?
     create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_0, total_core_range_set, TILES_PER_CB);
     create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, total_core_range_set, TILES_PER_CB);
 
@@ -87,10 +87,11 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
         static_cast<uint32_t>(IntImgCB::START),
         static_cast<uint32_t>(IntImgCB::INPUT),
         static_cast<uint32_t>(IntImgCB::ACC),
+        static_cast<uint32_t>(IntImgCB::CUMSUM_AXIS_3),
         static_cast<uint32_t>(IntImgCB::BEFORE_ADDER_PROPAGATION_STAGE),
         static_cast<uint32_t>(IntImgCB::OUTPUT),
         static_cast<uint32_t>(IntImgCB::TO_BOT_STAGE_TILE),
-        static_cast<uint32_t>(IntImgCB::FROM_TOP_STAGE_TILE),
+        // static_cast<uint32_t>(IntImgCB::FROM_TOP_STAGE_TILE),
         static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER_0),
         static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER_1),
         tile_height,
@@ -239,6 +240,9 @@ void IntImgProgramFactory::set_runtime_args(
                     const uint32_t starting_row_chunk_for_core_set_along_height =
                         per_core_set_work_def.starting_row_chunk_per_core_set_along_height +
                         (y - start_y) * per_core_set_work_def.row_chunks_per_core_along_channels;
+                    std::cout << "X/Y/start_channel/start_height: " << x << "/" << y << "/"
+                              << starting_row_chunk_for_core_set_along_channels << "/"
+                              << starting_row_chunk_for_core_set_along_height << std::endl;
 
                     std::vector<uint32_t> runtime_args{
                         input_buffer_address,

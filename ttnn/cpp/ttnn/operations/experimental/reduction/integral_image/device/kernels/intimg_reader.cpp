@@ -40,6 +40,7 @@ FORCE_INLINE void pass_input_tile_to_compute(
     const uint32_t read_tile_id =
         get_tile_id(num_tiles_in_column, num_tiles_along_channels, row_tile_stride, channels_tile_i, column_tile_i);
     load_to_cb(cb_input, input_addr_gen, read_tile_id);
+    DPRINT << "SENT:: " << read_tile_id << ENDL();
     // DPRINT << "inner_tile_stride/block_depth: " << inner_tile_stride << "/" << block_depth << ENDL();
     // DPRINT << "sending tile id " << read_tile_id << ENDL();
     // }
@@ -116,8 +117,10 @@ void kernel_main() {
              ++column_tile_i) {
             // produce: start_cb
             // prepare_start_tile_for_cumsum(ctas.start_cb, zero_tile_addr_gtor);
+            DPRINT << "channels_slice/column_tile: " << channels_tile_i << "/" << column_tile_i << ENDL();
             prepare_start_tile_for_cumsum<input_number_type>(ctas.start_cb);
             for (uint32_t row_tile_i = 0; row_tile_i < ctas.input_depth; ++row_tile_i) {
+                DPRINT << "SEND " << row_tile_i << ENDL();
                 pass_input_tile_to_compute(
                     input_addr_gtor,
                     ctas.input_cb,
@@ -126,7 +129,8 @@ void kernel_main() {
                     row_tile_i,
                     ctas.num_tiles_along_height,
                     ctas.num_tiles_along_channels);
-                if (column_tile_i > 0) {
+                if (column_tile_i >
+                    0) {  // the assumption for Nov 4th 25 is that there is no more than one column tile per core
                     get_tile_from_upper_core_writer(
                         upper_core_x, upper_core_y, top_semaphore_id, bot_semaphore_id, ctas.axis_3_buffer_0_cb);
                     spawn_adder_tile_from_broadcasting_last_tile_and_pass_to_compute<input_number_type>(

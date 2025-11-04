@@ -137,10 +137,11 @@ struct IntImgCTAs {
     const uint32_t start_cb;
     const uint32_t input_cb;
     const uint32_t acc_cb;
+    const uint32_t cumsum_axis_3;
     const uint32_t before_adder_propagation_stage_cb;
     const uint32_t output_cb;
     const uint32_t to_bot_tile_cb;
-    const uint32_t from_top_tile_cb;
+    // const uint32_t from_top_tile_cb;
     const uint32_t axis_3_buffer_0_cb;
     const uint32_t axis_3_buffer_1_cb;  // dual channel communication with the writer kernel is comprehensive and
                                         // properly synchronizes writer and compute kernels.

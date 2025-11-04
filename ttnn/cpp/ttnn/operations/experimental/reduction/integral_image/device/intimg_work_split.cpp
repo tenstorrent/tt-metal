@@ -16,10 +16,10 @@ CoreRangeSet generate_max_core_range_set(
     const std::size_t num_slices_along_channels = (num_channels + tile_width - 1) / tile_width;
     const std::size_t num_blocks_in_column = (input_height + tile_height - 1) / tile_height;
 
-    const uint32_t engaged_cores_along_channels = std::min(num_slices_along_channels, core_grid_size.x);
-    const uint32_t engaged_cores_along_rows = std::min(num_blocks_in_column, core_grid_size.y);
-    const uint32_t END_X = engaged_cores_along_channels - 1;
-    const uint32_t END_Y = engaged_cores_along_rows - 1;
+    const uint32_t engaged_cores_along_channels = std::min(num_slices_along_channels, core_grid_size.y);
+    const uint32_t engaged_cores_along_rows = std::min(num_blocks_in_column, core_grid_size.x);
+    const uint32_t END_X = engaged_cores_along_rows - 1;
+    const uint32_t END_Y = engaged_cores_along_channels - 1;
 
     std::cout << __FUNCTION__ << std::endl
               << num_channels << std::endl
@@ -106,12 +106,31 @@ IntImgPerCoreSetWorkSplit split_intimg_work_to_cores(
     const bool top_left_core_set_engaged =
         (row_chunks_along_channels > 0) && (row_chunks_along_height > 0);  // should be always true
     const bool top_right_core_set_engaged =
-        (row_chunks_along_channels > cores_along_channels) && (left_cores_end_x < (cores_along_channels - 1));
+        (row_chunks_along_height > cores_along_height) && (left_cores_end_x < (cores_along_height - 1));
     const bool bottom_left_core_set_engaged =
-        (row_chunks_along_height > cores_along_height) && (top_cores_end_y < (cores_along_height - 1));
+        (row_chunks_along_channels > cores_along_channels) && (top_cores_end_y < (cores_along_channels - 1));
     const bool bottom_right_core_set_engaged = top_right_core_set_engaged && bottom_left_core_set_engaged;
     /*
-
+8
+3
+4
+3
+2
+3
+2
+3
+4
+3
+2
+0
+1
+0
+6
+2
+1
+1
+0
+0
     */
     std::cout << __FUNCTION__ << std::endl
               << row_chunks_along_channels << std::endl
