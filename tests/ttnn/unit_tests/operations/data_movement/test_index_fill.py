@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+#
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
@@ -10,6 +10,8 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 
 def run_index_fill_test(shape, dim, value, dtype, device):
+    torch.manual_seed(2025)
+
     if len(shape) - 1 < dim:
         pytest.skip("Given dim is higher than tensor rank")
 
@@ -26,10 +28,9 @@ def run_index_fill_test(shape, dim, value, dtype, device):
     ttnn_output = ttnn.index_fill(tt_input, dim, tt_index, value)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert assert_equal(ttnn_output, torch_output)
+    assert_equal(ttnn_output, torch_output)
 
 
-@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -41,36 +42,13 @@ def run_index_fill_test(shape, dim, value, dtype, device):
         [41, 21, 33, 34],  # not multiple of 32,
     ],
 )
-@pytest.mark.parametrize(
-    "dim",
-    [
-        0,
-        1,
-        2,
-        3,
-    ],
-)
-@pytest.mark.parametrize(
-    "value",
-    [
-        2.5,
-        1.72,
-    ],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        torch.float32,
-        torch.bfloat16,
-    ],
-)
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("value", [2.5, 1.72])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_index_fill_float(shape, dim, value, dtype, device):
-    torch.manual_seed(2024)
-
     run_index_fill_test(shape, dim, value, dtype, device)
 
 
-@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -82,29 +60,13 @@ def test_index_fill_float(shape, dim, value, dtype, device):
         [13, 15, 22, 13],  # not multiple of 32
     ],
 )
-@pytest.mark.parametrize(
-    "dim",
-    [
-        0,
-        1,
-        2,
-        3,
-    ],
-)
-@pytest.mark.parametrize(
-    "value",
-    [
-        15,
-        12,
-    ],
-)
-def test_index_fill_int(shape, dim, value, device):
-    torch.manual_seed(2024)
-
-    run_index_fill_test(shape, dim, value, torch.int32, device)
+@pytest.mark.parametrize("dim", [0, 1, 2, 3])
+@pytest.mark.parametrize("value", [15, 12])
+@pytest.mark.parametrize("dtype", [torch.int32])
+def test_index_fill_int(shape, dim, value, dtype, device):
+    run_index_fill_test(shape, dim, value, dtype, device)
 
 
-@pytest.mark.skip("Test case failing assert_equal() - see #22482")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -116,20 +78,9 @@ def test_index_fill_int(shape, dim, value, device):
         [13, 15, 22, 13],  # not multiple of 32
     ],
 )
-@pytest.mark.parametrize(
-    "dim",
-    [
-        0,
-    ],
-)
-@pytest.mark.parametrize(
-    "value",
-    [
-        2002,
-    ],
-)
+@pytest.mark.parametrize("dim", [0])
+@pytest.mark.parametrize("value", [2002])
 def test_index_fill_callback(shape, dim, value, device):
-    torch.manual_seed(2024)
     for i in range(2):
         run_index_fill_test(shape, dim, value, torch.int32, device)
         if i == 0:
@@ -137,5 +88,3 @@ def test_index_fill_callback(shape, dim, value, device):
             assert num_program_cache_entries > 0
         else:
             assert device.num_program_cache_entries() == num_program_cache_entries
-        torch_dummy = torch.randn([32, 32])
-        tt_dummy = ttnn.from_torch(torch_dummy, device=device)
