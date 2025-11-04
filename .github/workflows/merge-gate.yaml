@@ -256,6 +256,7 @@ jobs:
       product: tt-nn
 
   ttsim-unit-tests:
+    if: ${{ github.event_name != 'pull_request' }}
     needs: build
     secrets: inherit
     strategy:
