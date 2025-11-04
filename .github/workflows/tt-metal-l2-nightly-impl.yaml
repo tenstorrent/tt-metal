@@ -300,7 +300,9 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly sdxl tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest -n auto models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: |
+          pytest -n auto models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+          pytest -n auto models/experimental/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - name: ttnn nightly sdxl demo cfg parallel test (N300 only)
         if: ${{ inputs.runner-label == 'N300' }}
         timeout-minutes: ${{ inputs.timeout }}
