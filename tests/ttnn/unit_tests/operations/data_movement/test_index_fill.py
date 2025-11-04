@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 def run_index_fill_test(shape, dim, value, dtype, device):
     torch.manual_seed(2025)
 
-    if len(shape) - 1 < dim:
+    if dim > len(shape) - 1:
         pytest.skip("Given dim is higher than tensor rank")
 
     if dtype == torch.int32:
@@ -24,11 +24,10 @@ def run_index_fill_test(shape, dim, value, dtype, device):
 
     tt_input = ttnn.from_torch(torch_input, device=device)
     tt_index = ttnn.from_torch(torch_index, device=device)
+    tt_output = ttnn.index_fill(tt_input, dim, tt_index, value)
+    tt_output = ttnn.to_torch(tt_output)
 
-    ttnn_output = ttnn.index_fill(tt_input, dim, tt_index, value)
-    ttnn_output = ttnn.to_torch(ttnn_output)
-
-    assert_equal(ttnn_output, torch_output)
+    assert_equal(tt_output, torch_output)
 
 
 @pytest.mark.parametrize(
