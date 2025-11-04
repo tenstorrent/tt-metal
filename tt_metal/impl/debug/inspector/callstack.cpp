@@ -23,6 +23,7 @@
 #include <execinfo.h>
 #include <cxxabi.h>
 #include <sstream>
+#include <iostream>
 #include <filesystem>
 #include <vector>
 
@@ -78,17 +79,19 @@ std::string get_python_callstack() {
     }
 
     PyGILState_STATE gstate = dyn_PyGILState_Ensure();
-    std::string result;  // Store result to return after releasing GIL
+    std::stringstream result;  // Store result to return after releasing GIL
 
     // Keep track of frames we need to clean up
     std::vector<PyFrameObject*> frames_to_clean;
 
     try {
         PyFrameObject* frame = dyn_PyEval_GetFrame();  // Borrowed reference
+        int frame_count = 0;
+        const int max_frames = 20;
 
         if (frame != nullptr) {
-            // Traverse up the stack to find the first user frame
-            while (frame != nullptr) {
+            // Traverse up the stack to collect user frames
+            while (frame != nullptr && frame_count < max_frames) {
                 PyCodeObject* code = dyn_PyFrame_GetCode(frame);
                 if (code != nullptr) {
                     // Use PyObject_GetAttrString for thread-safe access to co_filename
@@ -119,23 +122,30 @@ std::string get_python_callstack() {
                                     relative_path = filepath.filename().string();
                                 }
 
-                                std::stringstream ss;
-                                ss << relative_path << ":" << lineno;
-                                result = ss.str();
+                                // Add frame with numbering
+                                if (frame_count > 0) {
+                                    result << " ";
+                                }
+                                result << "#" << frame_count << " " << relative_path << ":" << lineno;
+                                frame_count++;
 
                                 // Clean up the filename object
                                 if (dyn_Py_DecRef) {
                                     dyn_Py_DecRef(filename_obj);
                                 }
 
-                                // Found user frame, exit
-                                break;
+                                // Continue to collect more frames (no break here)
+                            } else {
+                                // Clean up the filename object for skipped frames too
+                                if (dyn_Py_DecRef) {
+                                    dyn_Py_DecRef(filename_obj);
+                                }
                             }
-                        }
-
-                        // Always clean up the filename object
-                        if (dyn_Py_DecRef) {
-                            dyn_Py_DecRef(filename_obj);
+                        } else {
+                            // Always clean up the filename object
+                            if (dyn_Py_DecRef && filename_obj) {
+                                dyn_Py_DecRef(filename_obj);
+                            }
                         }
                     }
                 }
@@ -186,7 +196,7 @@ std::string get_python_callstack() {
     }
 
     dyn_PyGILState_Release(gstate);
-    return result;
+    return result.str();
 #endif
     return "";  // Return empty string if Python callstack not available
 }
@@ -200,12 +210,13 @@ std::string get_cpp_callstack() {
         if (symbols != nullptr) {
             std::stringstream callstack;
             int valid_frames = 0;
+            const int max_frames = 20;
 
             // Skip the first 3 frames (this function, get_callstack, and track_operation)
-            for (int i = 3; i < nptrs && i < 15 && valid_frames < 5; ++i) {
+            for (int i = 3; i < nptrs && i < 64 && valid_frames < max_frames; ++i) {
                 std::string symbol_str(symbols[i]);
 
-                // Skip internal Inspector frames
+                // Skip internal Inspector frames only (keep decorator frames for now to debug)
                 if (symbol_str.find("Inspector::") != std::string::npos ||
                     symbol_str.find("inspector::") != std::string::npos ||
                     symbol_str.find("get_callstack") != std::string::npos ||
@@ -215,16 +226,16 @@ std::string get_cpp_callstack() {
                     continue;
                 }
 
-                // Try to parse the symbol to extract function name
-                // Format varies by platform, typically:
-                // ./executable(function+0x123) [0xaddr]
-                // or /path/to/lib.so(_ZN...) [0xaddr]
-                // or sometimes just: /path/to/lib.so [0xaddr]
-                size_t start = symbol_str.find('(');
-                size_t end = symbol_str.find(')', start);
-
+                // Use the actual address from buffer[i] for addr2line resolution.
+                // Format the address as hex for dump_ops.py to resolve later.
+                // We'll extract the binary path from the symbol string.
                 std::string func_info;
                 bool found_function = false;
+
+                // First, try to extract the binary path from the symbol string
+                // Format: /path/to/binary(function+offset) [0xaddr]
+                size_t start = symbol_str.find('(');
+                size_t end = symbol_str.find(')', start);
 
                 if (start != std::string::npos && end != std::string::npos && end > start + 1) {
                     // Extract everything between ( and )
@@ -235,8 +246,11 @@ std::string get_cpp_callstack() {
                     std::string mangled =
                         (plus_pos != std::string::npos) ? mangled_with_offset.substr(0, plus_pos) : mangled_with_offset;
 
+                    // Check if this is just an offset (e.g., "+0x1234") without a function name
+                    bool is_just_offset = (!mangled.empty() && mangled[0] == '+');
+
                     // Try to demangle if it looks like a C++ mangled name
-                    if (!mangled.empty() && mangled[0] == '_' && mangled[1] == 'Z') {
+                    if (!is_just_offset && !mangled.empty() && mangled[0] == '_' && mangled[1] == 'Z') {
                         int status = 0;
                         char* demangled = abi::__cxa_demangle(mangled.c_str(), nullptr, nullptr, &status);
 
@@ -262,14 +276,39 @@ std::string get_cpp_callstack() {
 
                             found_function = true;
                         }
-                    } else if (!mangled.empty()) {
-                        // Use the unmangled name as-is
-                        func_info = mangled;
-                        found_function = true;
+                    } else if (!is_just_offset && !mangled.empty()) {
+                        // We found a recognizable function name (like "main" or C++ mangled name)
+                        // Try to demangle it even if it doesn't start with _Z (might be partial mangling)
+                        int status = 0;
+                        char* demangled = abi::__cxa_demangle(mangled.c_str(), nullptr, nullptr, &status);
+
+                        if (status == 0 && demangled) {
+                            // Successfully demangled
+                            func_info = std::string(demangled);
+                            free(demangled);
+
+                            // Simplify: just keep the function name, strip parameters and templates
+                            size_t paren = func_info.find('(');
+                            if (paren != std::string::npos) {
+                                func_info = func_info.substr(0, paren);
+                            }
+                            size_t template_pos = func_info.find('<');
+                            if (template_pos != std::string::npos) {
+                                func_info = func_info.substr(0, template_pos);
+                            }
+
+                            found_function = true;
+                        } else {
+                            // Not a mangled name, use as-is (e.g., "main", "perform_final_add")
+                            func_info = mangled;
+                            found_function = true;
+                        }
                     }
+                    // If is_just_offset is true, found_function stays false and we'll use the binary path below
                 }
 
-                // If we couldn't extract a function name, try to get the binary name at least
+                // If we extracted a function name, format as [binary(function+offset)]
+                // If we couldn't extract a function name, format as [binary(+offset)]
                 if (!found_function) {
                     size_t path_end = symbol_str.find('[');
                     if (path_end != std::string::npos) {
@@ -277,11 +316,9 @@ std::string get_cpp_callstack() {
                         // Trim whitespace
                         path.erase(path.find_last_not_of(" \t") + 1);
 
-                        // Extract the binary path and offset separately
-                        // Format: /path/to/binary(+0xoffset)
+                        // Extract just the binary path (before the parenthesis)
                         size_t paren_pos = path.find('(');
                         std::string binary_part = (paren_pos != std::string::npos) ? path.substr(0, paren_pos) : path;
-                        std::string offset_part = (paren_pos != std::string::npos) ? path.substr(paren_pos) : "";
 
                         // Make the binary path relative to current working directory for addr2line
                         std::filesystem::path binary_path(binary_part);
@@ -298,24 +335,83 @@ std::string get_cpp_callstack() {
                             relative_path = binary_path.filename().string();
                         }
 
-                        func_info = "[" + relative_path + offset_part + "]";
+                        // Use the actual address from buffer[i] and convert to file offset
+                        // For PIE executables and shared libraries, we need to subtract the base load address
+                        Dl_info dl_info;
+                        std::stringstream addr_stream;
+                        if (dladdr(buffer[i], &dl_info) && dl_info.dli_fbase != nullptr) {
+                            // Calculate offset from module base address
+                            uintptr_t offset =
+                                reinterpret_cast<uintptr_t>(buffer[i]) - reinterpret_cast<uintptr_t>(dl_info.dli_fbase);
+                            addr_stream << "(+0x" << std::hex << offset << ")";
+                        } else {
+                            // Fallback to absolute address if dladdr fails
+                            addr_stream << "(+0x" << std::hex << reinterpret_cast<uintptr_t>(buffer[i]) << ")";
+                        }
+                        std::string addr_str = addr_stream.str();
+
+                        func_info = "[" + relative_path + addr_str + "]";
                     } else {
                         continue;  // Skip this frame if we can't extract any info
                     }
                 }
 
-                // Append the function info to callstack
-                if (!func_info.empty()) {
-                    if (valid_frames > 0) {
-                        callstack << " <- ";
+                // Append the function info to callstack with frame numbering
+                // If we have a function name but also want address info for resolution
+                if (!func_info.empty() && found_function) {
+                    // We have a function name - also include binary+offset for addr2line resolution
+                    size_t path_end = symbol_str.find('[');
+                    if (path_end != std::string::npos) {
+                        std::string path = symbol_str.substr(0, path_end);
+                        path.erase(path.find_last_not_of(" \t") + 1);
+
+                        size_t paren_pos = path.find('(');
+                        std::string binary_part = (paren_pos != std::string::npos) ? path.substr(0, paren_pos) : path;
+
+                        std::filesystem::path binary_path(binary_part);
+                        std::string relative_path;
+                        try {
+                            std::filesystem::path cwd = std::filesystem::current_path();
+                            if (binary_path.is_absolute()) {
+                                relative_path = std::filesystem::relative(binary_path, cwd).string();
+                            } else {
+                                relative_path = binary_path.string();
+                            }
+                        } catch (...) {
+                            relative_path = binary_path.filename().string();
+                        }
+
+                        // Format as: function [binary(+offset)]
+                        Dl_info dl_info;
+                        std::stringstream addr_stream;
+                        if (dladdr(buffer[i], &dl_info) && dl_info.dli_fbase != nullptr) {
+                            uintptr_t offset =
+                                reinterpret_cast<uintptr_t>(buffer[i]) - reinterpret_cast<uintptr_t>(dl_info.dli_fbase);
+                            addr_stream << "(+0x" << std::hex << offset << ")";
+                        } else {
+                            addr_stream << "(+0x" << std::hex << reinterpret_cast<uintptr_t>(buffer[i]) << ")";
+                        }
+
+                        if (valid_frames > 0) {
+                            callstack << " ";
+                        }
+                        callstack << "#" << valid_frames << " " << func_info << " [" << relative_path
+                                  << addr_stream.str() << "]";
+                        valid_frames++;
                     }
-                    callstack << func_info;
+                } else if (!func_info.empty()) {
+                    // No function name, just address
+                    if (valid_frames > 0) {
+                        callstack << " ";
+                    }
+                    callstack << "#" << valid_frames << " " << func_info;
                     valid_frames++;
                 }
             }
 
             free(symbols);
-            return callstack.str();
+            std::string result = callstack.str();
+            return result;
         }
     }
 

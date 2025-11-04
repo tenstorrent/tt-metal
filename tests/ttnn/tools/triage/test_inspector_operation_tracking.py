@@ -347,7 +347,7 @@ def parse_dump_ops_table(dump_output: str) -> list:
     Returns list of parsed operations, each with:
     - device_core: str (e.g., "0 / 0,0")
     - operation: str (e.g., "ttnn::add")
-    - callstack: str (file/line or addresses)
+    - callstack: str (file/line or addresses) - reconstructed from multi-line frames
     - has_arguments: bool
     """
     import re
@@ -357,17 +357,30 @@ def parse_dump_ops_table(dump_output: str) -> list:
 
     # Find table content between header and footer
     in_table = False
+    current_op = None
+    callstack_frames = []
+    in_arguments_section = False  # Track if we're in arguments vs callstack
+
     for i, line in enumerate(lines):
         # Look for separator line with dashes after header
         if "├────" in line or "│ Dev/Core" in line:
             in_table = True
             continue
         if "╰────" in line:
+            # Finalize last operation if any
+            if current_op and callstack_frames:
+                current_op["callstack"] = " ".join(callstack_frames)
             break
 
         if in_table and "│" in line:
             # Parse table row: │ Dev/Core │ Operation │ Callstack/Args │
-            parts = [p.strip() for p in line.split("│") if p.strip()]
+            # Don't filter out empty parts - continuation rows have empty first two columns
+            parts = [p.strip() for p in line.split("│")]
+            # Remove first and last (empty before first │ and after last │)
+            if len(parts) > 0 and parts[0] == "":
+                parts = parts[1:]
+            if len(parts) > 0 and parts[-1] == "":
+                parts = parts[:-1]
 
             if len(parts) >= 3:
                 device_core = parts[0]
@@ -377,22 +390,54 @@ def parse_dump_ops_table(dump_output: str) -> list:
                 # Validate device/core format: "N / X,Y" or just operation continuation
                 device_core_pattern = r"^\d+\s*/\s*\d+,\d+$"
                 if re.match(device_core_pattern, device_core):
-                    # New operation row
+                    # Finalize previous operation if any
+                    if current_op and callstack_frames:
+                        current_op["callstack"] = " ".join(callstack_frames)
+                        callstack_frames = []
+
+                    # New operation row - reset state
+                    in_arguments_section = False
                     current_op = {
                         "device_core": device_core,
                         "operation": operation,
-                        "callstack": callstack_args,
+                        "callstack": "",
                         "has_arguments": False,
                     }
 
+                    # Check if this is the start of callstack section
+                    if callstack_args == "Callstack:":
+                        # Frames will be on subsequent lines
+                        pass
+                    elif callstack_args.startswith("Callstack:"):
+                        # Old single-line format or first frame inline
+                        current_op["callstack"] = callstack_args.replace("Callstack:", "").strip()
+                    else:
+                        current_op["callstack"] = callstack_args
+
                     # Check if this row or subsequent rows contain arguments
                     # Look ahead for "Arguments:" marker
-                    for j in range(i, min(i + 10, len(lines))):
+                    for j in range(i, min(i + 30, len(lines))):  # Increased range for multi-line callstacks
                         if "Arguments:" in lines[j]:
                             current_op["has_arguments"] = True
                             break
 
                     operations.append(current_op)
+
+                elif current_op and "Arguments:" in callstack_args:
+                    # We've moved to the arguments section - finalize callstack
+                    if callstack_frames:
+                        current_op["callstack"] = " ".join(callstack_frames)
+                        callstack_frames = []
+                    in_arguments_section = True
+
+                elif current_op and "·" in callstack_args and not in_arguments_section:
+                    # This is a callstack frame (bullet point line in continuation row)
+                    # Only collect if we're NOT in arguments section yet
+                    # The device_core and operation columns are empty (just whitespace)
+                    # Strip bullet and whitespace, extract the frame
+                    frame = callstack_args.replace("·", "").strip()
+                    if frame:
+                        callstack_frames.append(frame)
 
     return operations
 
@@ -438,13 +483,24 @@ def verify_dump_ops_table(
 
             # 4. Validate callstack format based on type
             if callstack_type == "python":
-                # Should have file path with line number (e.g., "run_operation_chain.py:61")
-                if not re.search(r"\.py:\d+", op["callstack"]):
-                    pytest.fail(f"Python callstack should contain '.py:LINE_NUMBER' format. " f"Got: {op['callstack']}")
+                # Should have frame numbers and file path with line number
+                # Format: "#0 test.py:42" or "#0 test.py:42 #1 main.py:10 ..."
+                if not re.search(r"#\d+ .+\.py:\d+", op["callstack"]):
+                    pytest.fail(
+                        f"Python callstack should contain frame numbers with '.py:LINE_NUMBER' format. "
+                        f"Expected pattern like '#0 file.py:42'. Got: {op['callstack']}"
+                    )
             elif callstack_type == "cpp":
-                # Should have function addresses or resolved symbols
+                # Should have frame numbers with function addresses or resolved symbols
+                # Format: "#0 func [binary(+0x123)]" or "#0 file.cpp:42"
+                has_frame_numbers = re.search(r"#\d+ ", op["callstack"])
                 has_addresses = "+0x" in op["callstack"]
                 has_resolved_symbols = ".cpp:" in op["callstack"]
+
+                if not has_frame_numbers:
+                    pytest.fail(
+                        f"C++ callstack should contain frame numbers (e.g., '#0 func'). " f"Got: {op['callstack']}"
+                    )
 
                 if allow_no_line_numbers:
                     # For stripped binaries: just check for addresses

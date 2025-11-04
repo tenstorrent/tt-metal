@@ -99,12 +99,7 @@ struct registered_operation_t {
 
 private:
     template <typename... args_t>
-    auto traced_invoke(args_t&&... args) const {
-        log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-
-        // Capture operation start for tracking
-        ttnn::CoreIDs::instance().clear_first_assigned_device_operation_id();
-
+    std::string serialize_arguments(args_t&&... args) const {
         // Capture and serialize arguments
         std::string arguments;
         if constexpr (sizeof...(args) > 0) {
@@ -119,9 +114,16 @@ private:
                 oss << serialized[i];
             }
             arguments = oss.str();
-        } else {
-            arguments = "";
         }
+        return arguments;
+    }
+
+    template <typename... args_t>
+    auto traced_invoke(args_t&&... args) const {
+        log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+
+        // Capture operation start for tracking
+        ttnn::CoreIDs::instance().clear_first_assigned_device_operation_id();
 
         tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
@@ -131,6 +133,7 @@ private:
         auto device_op_id = ttnn::CoreIDs::instance().get_first_assigned_device_operation_id();
 
         // Track the operation
+        auto arguments = serialize_arguments(args...);
         tt::tt_metal::Inspector::track_operation(
             device_op_id > 0 ? std::optional{device_op_id} : std::nullopt,
             std::string{cpp_fully_qualified_name},

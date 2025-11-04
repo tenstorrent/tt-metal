@@ -12,10 +12,15 @@ target_link_libraries(run_operation_chain_cpp PRIVATE TTNN::CPP)
 # Include project tests directory
 target_include_directories(run_operation_chain_cpp PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 
-# Ensure debug symbols for callstack resolution
+# Ensure debug symbols and NO optimization for callstack resolution
+# Use -O0 (no optimization) to completely prevent inlining that would hide
+# the actual call sites in backtraces. Even with -O1, template functions from
+# decorators.hpp get inlined into user code, making it impossible to see where
+# operations were invoked. -O0 is required to preserve all function calls.
 target_compile_options(
     run_operation_chain_cpp
     PRIVATE
         -g
+        -O0
         -fno-omit-frame-pointer
 )

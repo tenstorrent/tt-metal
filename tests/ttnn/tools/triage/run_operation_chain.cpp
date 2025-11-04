@@ -29,6 +29,37 @@
 
 using namespace tt::tt_metal;
 
+// Step 4: Add scalar to result (this is where the hang will occur in the test)
+// Use noinline attribute to ensure this function is not inlined so we can see it in the callstack
+tt::tt_metal::Tensor perform_final_add(const tt::tt_metal::Tensor& input) {
+    std::cout << "Step 4: result3 + 1.2" << std::endl;
+    return ttnn::add(input, 1.2f);
+}
+
+// Step 3: Subtract tensor_c and then perform final add
+tt::tt_metal::Tensor perform_subtract_and_add(const tt::tt_metal::Tensor& input, const tt::tt_metal::Tensor& tensor_c) {
+    std::cout << "Step 3: result2 - tensor_c" << std::endl;
+    auto result3 = ttnn::subtract(input, tensor_c);
+    return perform_final_add(result3);
+}
+
+// Steps 1-2: Multiply operations, then call subtract and add
+tt::tt_metal::Tensor perform_operation_chain(
+    const tt::tt_metal::Tensor& tensor_a, const tt::tt_metal::Tensor& tensor_b, const tt::tt_metal::Tensor& tensor_c) {
+    std::cout << "=== Starting operation chain ===" << std::endl;
+
+    // Operation 1: multiply tensor_a by scalar 2.5 (matching Python: ttnn.mul(tensor_a, 2.5))
+    std::cout << "Step 1: tensor_a * 2.5" << std::endl;
+    auto result1 = ttnn::multiply(tensor_a, 2.5f);
+
+    // Operation 2: multiply result1 and tensor_b (matching Python: ttnn.mul(result1, tensor_b))
+    std::cout << "Step 2: result1 * tensor_b" << std::endl;
+    auto result2 = ttnn::multiply(result1, tensor_b);
+
+    // Continue with subtract and add operations
+    return perform_subtract_and_add(result2, tensor_c);
+}
+
 int main() {
     // Set up environment for inspector
     setenv("TT_METAL_INSPECTOR_LOG_PATH", "generated/inspector", 1);
@@ -58,23 +89,8 @@ int main() {
         tensor_b = tensor_b.to_layout(Layout::TILE).to_device(device);
         tensor_c = tensor_c.to_layout(Layout::TILE).to_device(device);
 
-        std::cout << "=== Starting operation chain ===" << std::endl;
-
-        // Operation 1: multiply tensor_a by scalar 2.5 (matching Python: ttnn.mul(tensor_a, 2.5))
-        std::cout << "Step 1: tensor_a * 2.5" << std::endl;
-        auto result1 = ttnn::multiply(tensor_a, 2.5f);
-
-        // Operation 2: multiply result1 and tensor_b (matching Python: ttnn.mul(result1, tensor_b))
-        std::cout << "Step 2: result1 * tensor_b" << std::endl;
-        auto result2 = ttnn::multiply(result1, tensor_b);
-
-        // Operation 3: subtract tensor_c from result2 (matching Python: ttnn.subtract(result2, tensor_c))
-        std::cout << "Step 3: result2 - tensor_c" << std::endl;
-        auto result3 = ttnn::subtract(result2, tensor_c);
-
-        // Operation 4: add scalar 1.2 to result3 (matching Python: ttnn.add(result3, 1.2))
-        std::cout << "Step 4: result3 + 1.2" << std::endl;
-        auto final_result = ttnn::add(result3, 1.2f);
+        // Perform the full operation chain
+        auto final_result = perform_operation_chain(tensor_a, tensor_b, tensor_c);
 
         std::cout << "=== Operation chain complete ===" << std::endl;
 

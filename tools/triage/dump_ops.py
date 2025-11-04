@@ -443,32 +443,29 @@ def resolve_cpp_callstack(callstack: str) -> str:
     for binary, offset in matches:
         binary = binary.strip()
 
-        # Try to resolve using addr2line with -i flag for inline frames
+        # Try to resolve using addr2line
         try:
             result = subprocess.run(
-                [addr2line_cmd, "-e", binary, "-f", "-C", "-i", offset], capture_output=True, text=True, timeout=1
+                [addr2line_cmd, "-e", binary, "-f", "-C", offset], capture_output=True, text=True, timeout=1
             )
 
             if result.returncode == 0:
                 lines = result.stdout.strip().split("\n")
 
-                # With -i flag, we get pairs of (function, location) for each inline frame
-                # Parse all frames and find the most relevant user code
-                best_location = None
-                for i in range(0, len(lines), 2):
-                    if i + 1 >= len(lines):
-                        break
-
-                    # function = lines[i]  # Not currently used, but available if needed
-                    location = lines[i + 1]
+                # Without -i flag, we get a single pair of (function, location)
+                if len(lines) >= 2:
+                    function_name = lines[0]
+                    location = lines[1]
 
                     # Check if we got valid debug info (not "??")
                     if location != "??:?" and location != "??:0":
                         # Skip standard library and internal framework code
                         if any(skip in location for skip in ["/include/c++/", "/bits/", "/spdlog/", "/reflect"]):
+                            # Fallback to original format
+                            resolved_parts.append(f"[{binary}(+{offset})]")
                             continue
 
-                        # This looks like user code - keep it as the best match
+                        # Format the location nicely
                         if "/" in location:
                             # Get relative path from tests/ or common location
                             for prefix in ["/tests/", "/ttnn/", "/tt_metal/"]:
@@ -479,12 +476,8 @@ def resolve_cpp_callstack(callstack: str) -> str:
                                 # Just use the filename
                                 location = location.split("/")[-1]
 
-                        best_location = location
-                        break  # Found user code, use this frame
-
-                if best_location:
-                    resolved_parts.append(f"{best_location}")
-                    continue
+                        resolved_parts.append(f"{location}")
+                        continue
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
             pass
 
@@ -880,7 +873,63 @@ def dump_ops(
                 if callstack:
                     # Try to resolve C++ addresses to source locations if debug symbols are available
                     resolved_callstack = resolve_cpp_callstack(callstack)
-                    callstack_args_lines.append(f"Callstack: {resolved_callstack}")
+
+                    # Parse and format callstack frames - each frame on its own line
+                    # Expected format: "#0 file.py:42 #1 file.py:81" or "#0 func [binary(+0x123)] #1 ..."
+                    # Also handle old format: "func1 <- func2 <- func3"
+                    import re
+
+                    frame_pattern = r"#\d+\s+[^#]+"
+                    frames = re.findall(frame_pattern, resolved_callstack)
+
+                    if frames:
+                        # New numbered format - filter out decorator frames and runtime startup code
+                        # Keep only user code and meaningful library frames
+                        def is_unhelpful_frame(frame):
+                            """Check if frame is internal decorator or runtime startup code"""
+                            # Filter out decorator template frames
+                            if "decorators.hpp" in frame:
+                                return True
+                            # Filter out C runtime startup code
+                            if any(pattern in frame for pattern in ["_start", "__libc_start_main", "libc.so.6"]):
+                                return True
+                            # Filter out unresolved frames from the binary itself (startup code)
+                            # These look like: [build/test/.../binary(+0x12345)]
+                            if "run_operation_chain_cpp(+" in frame and ".cpp:" not in frame:
+                                return True
+                            return False
+
+                        filtered_frames = [f for f in frames if not is_unhelpful_frame(f)]
+                        if filtered_frames:
+                            callstack_args_lines.append("Callstack:")
+                            for frame in filtered_frames:
+                                # Add with two-space indent so triage framework renders as bullet point
+                                callstack_args_lines.append(f"  {frame.strip()}")
+                    elif "<-" in resolved_callstack:
+                        # Old format with <- separator - split and number frames, filter unhelpful frames
+                        def is_unhelpful_frame_old(frame):
+                            """Check if frame is internal decorator or runtime startup code"""
+                            # Filter out decorator template frames
+                            if "decorators.hpp" in frame:
+                                return True
+                            # Filter out C runtime startup code
+                            if any(pattern in frame for pattern in ["_start", "__libc_start_main", "libc.so.6"]):
+                                return True
+                            # Filter out unresolved binary frames
+                            if "run_operation_chain_cpp(+" in frame and ".cpp:" not in frame:
+                                return True
+                            return False
+
+                        old_frames = [
+                            f.strip() for f in resolved_callstack.split("<-") if not is_unhelpful_frame_old(f)
+                        ]
+                        if old_frames:
+                            callstack_args_lines.append("Callstack:")
+                            for i, frame in enumerate(old_frames):
+                                callstack_args_lines.append(f"  #{i} {frame}")
+                    else:
+                        # Single frame or unparseable format - show as single line
+                        callstack_args_lines.append(f"Callstack: {resolved_callstack}")
 
                 # Add arguments based on mode
                 if args:
