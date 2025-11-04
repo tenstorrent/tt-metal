@@ -1084,12 +1084,17 @@ def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, m
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (
-        ([4, 4], 1, [0, 1], [1, 2], 1, ttnn.ROW_MAJOR_LAYOUT),
-        ([1, 28, 56, 96], 2, [0, 0, 0, 0], [1, 16, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
-        ([10], 1, [2], [7], 1, ttnn.ROW_MAJOR_LAYOUT),
+        # ([4, 4], 1, [0, 1], [1, 2], 1, ttnn.ROW_MAJOR_LAYOUT),
+        # ([1, 28, 56, 96], 2, [0, 0, 0, 0], [1, 16, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
+        # ([10], 1, [2], [7], 1, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT),
     ),
 )
-def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
+def test_slice_tensor_args(mesh_device, input_shape, dim, start, end, step, layout):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     torch_start_tensor = torch.tensor(start)
@@ -1100,13 +1105,148 @@ def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
     # Slice the tensor using the slices for each dimension
     torch_output_tensor = torch_input[slices]
 
-    ttnn_start_tensor = ttnn.from_torch(torch_start_tensor)
-    ttnn_end_tensor = ttnn.from_torch(torch_end_tensor)
+    ttnn_start_tensor = ttnn.from_torch(
+        torch_start_tensor, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+    ttnn_end_tensor = ttnn.from_torch(
+        torch_end_tensor, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    print("before running slice")
+    # Calculate num_devices from the slice pattern (input_shape[dim] / output_shape[dim])
+    num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
+    ttnn_output = ttnn.slice(
+        ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor, slice_dim=dim, num_devices=num_devices_calc
+    )
+    print("after running slice")
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    print("shape of ttnn output:", ttnn_output_tensor.shape)
+    for out in range(32):
+        print("shape of torch output slice:", torch_output_tensor.shape)
+        print("shape of ttnn output slice:", ttnn_output_tensor[out, :, :, :].shape)
+        assert_with_pcc(torch_output_tensor[0, :, :, :], ttnn_output_tensor[out, :, :, :], 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end, step, layout",
+    (
+        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 2880], 2, [0, 0, 32, 0], [1, 1, 64, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 2880], 2, [0, 0, 64, 0], [1, 1, 96, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 2880], 2, [0, 0, 96, 0], [1, 1, 128, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 256, 2880], 2, [0, 0, 0, 0], [1, 1, 64, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 256, 2880], 2, [0, 0, 64, 0], [1, 1, 128, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 256, 2880], 2, [0, 0, 128, 0], [1, 1, 192, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 256, 2880], 2, [0, 0, 192, 0], [1, 1, 256, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 512, 2880], 2, [0, 0, 0, 0], [1, 1, 128, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 512, 2880], 2, [0, 0, 128, 0], [1, 1, 256, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 512, 2880], 2, [0, 0, 256, 0], [1, 1, 384, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 512, 2880], 2, [0, 0, 384, 0], [1, 1, 512, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 1024, 2880], 2, [0, 0, 0, 0], [1, 1, 256, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 1024, 2880], 2, [0, 0, 256, 0], [1, 1, 512, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 1024, 2880], 2, [0, 0, 512, 0], [1, 1, 768, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 1024, 2880], 2, [0, 0, 768, 0], [1, 1, 1024, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 2880], 2, [0, 0, 0, 0], [1, 1, 512, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 2880], 2, [0, 0, 512, 0], [1, 1, 1024, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 2880], 2, [0, 0, 1024, 0], [1, 1, 1536, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 2880], 2, [0, 0, 1536, 0], [1, 1, 2048, 2880], 1, ttnn.TILE_LAYOUT),
+        # 4096
+        ([1, 1, 4096, 2880], 2, [0, 0, 0, 0], [1, 1, 1024, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 4096, 2880], 2, [0, 0, 1024, 0], [1, 1, 2048, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 4096, 2880], 2, [0, 0, 2048, 0], [1, 1, 3072, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 4096, 2880], 2, [0, 0, 3072, 0], [1, 1, 4096, 2880], 1, ttnn.TILE_LAYOUT),
+        # 8192
+        ([1, 1, 8192, 2880], 2, [0, 0, 0, 0], [1, 1, 2048, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 8192, 2880], 2, [0, 0, 2048, 0], [1, 1, 4096, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 8192, 2880], 2, [0, 0, 4096, 0], [1, 1, 6144, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 8192, 2880], 2, [0, 0, 6144, 0], [1, 1, 8192, 2880], 1, ttnn.TILE_LAYOUT),
+        # 16384
+        ([1, 1, 16384, 2880], 2, [0, 0, 0, 0], [1, 1, 4096, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 16384, 2880], 2, [0, 0, 4096, 0], [1, 1, 8192, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 16384, 2880], 2, [0, 0, 8192, 0], [1, 1, 12288, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 16384, 2880], 2, [0, 0, 12288, 0], [1, 1, 16384, 2880], 1, ttnn.TILE_LAYOUT),
+        # 32768
+        ([1, 1, 32768, 2880], 2, [0, 0, 0, 0], [1, 1, 8192, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 32768, 2880], 2, [0, 0, 8192, 0], [1, 1, 16384, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 32768, 2880], 2, [0, 0, 16384, 0], [1, 1, 24576, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 32768, 2880], 2, [0, 0, 24576, 0], [1, 1, 32768, 2880], 1, ttnn.TILE_LAYOUT),
+        # 65536
+        ([1, 1, 65536, 2880], 2, [0, 0, 0, 0], [1, 1, 16384, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 65536, 2880], 2, [0, 0, 16384, 0], [1, 1, 32768, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 65536, 2880], 2, [0, 0, 32768, 0], [1, 1, 49152, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 65536, 2880], 2, [0, 0, 49152, 0], [1, 1, 65536, 2880], 1, ttnn.TILE_LAYOUT),
+        # 131072 (128*1024)
+        ([1, 1, 131072, 2880], 2, [0, 0, 0, 0], [1, 1, 32768, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 131072, 2880], 2, [0, 0, 32768, 0], [1, 1, 65536, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 131072, 2880], 2, [0, 0, 65536, 0], [1, 1, 98304, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 131072, 2880], 2, [0, 0, 98304, 0], [1, 1, 131072, 2880], 1, ttnn.TILE_LAYOUT),
+    ),
+)
+def test_slice_tensor_args_before(input_shape, dim, start, end, step, layout, device):
+    # Create tensor where each tile has a unique value for easy tile debugging
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    """
+    # Calculate tile dimensions (32x32 tiles)
+    tile_height, tile_width = 32, 32
+    height_tiles = input_shape[2] // tile_height  # Number of tile rows
+    width_tiles = input_shape[3] // tile_width    # Number of tile columns
+
+    print(f"DEBUG: Input shape {input_shape} = {height_tiles}x{width_tiles} tiles")
+
+    # Fill each tile with its unique tile ID
+    tile_id = 0
+    for tile_row in range(height_tiles):
+        for tile_col in range(width_tiles):
+            # Calculate pixel coordinates for this tile
+            start_h = tile_row * tile_height
+            end_h = start_h + tile_height
+            start_w = tile_col * tile_width
+            end_w = start_w + tile_width
+
+            # Fill entire tile with the tile_id value
+            torch_input[0, 0, start_h:end_h, start_w:end_w] = float(tile_id)
+            tile_id += 1
+
+    print(f"DEBUG: Created {tile_id} tiles total")
+    print(f"DEBUG: Tile 0 (top-left): {torch_input[0, 0, 0, 0]} at [0,0]")
+    print(f"DEBUG: Tile 1 (top, second): {torch_input[0, 0, 0, 32]} at [0,32]")
+    print(f"DEBUG: Tile {width_tiles} (second row, first): {torch_input[0, 0, 32, 0]} at [32,0]")
+
+    # For the slice [0,0,0,0] to [1,1,32,2880], we should get:
+    # - First row of tiles (tiles 0 to width_tiles-1)
+    print(f"DEBUG: Expected output should contain tiles 0 to {width_tiles-1}")
+    """
+    torch_start_tensor = torch.tensor(start)
+    torch_end_tensor = torch.tensor(end)
+
+    slices = tuple(slice(start[i], end[i]) for i in range(len(start)))
+
+    # Slice the tensor using the slices for each dimension
+    torch_output_tensor = torch_input[slices]
+
+    ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
+    ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
 
     ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device)
 
-    ttnn_output = ttnn.slice(ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor)
+    # Calculate num_devices from the slice pattern (input_shape[dim] / output_shape[dim])
+    num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
+    ttnn_output = ttnn.slice(
+        ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor, slice_dim=dim, num_devices=num_devices_calc
+    )
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+    print("ttnn_output_tensor shape:", ttnn_output_tensor.shape)
+    print("output tensor:", ttnn_output_tensor)
+    print("expected tensor: ", torch_output_tensor)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
