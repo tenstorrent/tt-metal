@@ -396,9 +396,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         total_tiles_writer1,
         output_stride_sticks);
 
-    uint32_t block_start_semaphore_id = tt::tt_metal::CreateSemaphore(program, l1_input_core_grid, 0);
-    uint32_t block_end_semaphore_id = tt::tt_metal::CreateSemaphore(program, l1_input_core_grid, 0);
-
     const auto dram_input_cores = corerange_to_cores(
         a.shard_spec()->grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     const auto remote_core_type = a.buffer()->core_type();
@@ -435,6 +432,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t num_sticks_block_size_kernel_0 = total_num_sticks_kernel_0;
     const uint32_t num_sticks_block_size_kernel_1 = total_num_sticks_kernel_1;
 
+    // If there is only one HW tile we shouldn't stride the output copies because only one writer is working
+    const uint32_t output_addr_stride =
+        l1_input_shard_width != TILE_HEIGHT ? output_stride_sticks * output_shard_width * input_element_size : 0;
+
     log_info(
         tt::LogType::LogAlways,
         "convert_to_hwc: Kernel work split - kernel0_sticks={} (block_size={}), kernel1_sticks={} (block_size={})",
@@ -442,6 +443,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         num_sticks_block_size_kernel_0,
         total_num_sticks_kernel_1,
         num_sticks_block_size_kernel_1);
+    log_info(tt::LogType::LogAlways, "output_addr_stride = {}", output_addr_stride);
 
     std::vector<uint32_t> writer_compile_time_args0 = {
         cb_full_input_id,
@@ -461,8 +463,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         total_num_sticks_kernel_0,
         num_sticks_block_size_kernel_0,
         batch_size,
-        block_start_semaphore_id,
-        block_end_semaphore_id};
+        output_addr_stride};
+
     log_info(tt::LogType::LogAlways, "convert_to_hwc: writer_compile_time_args0 = {}", writer_compile_time_args0);
 
     std::vector<uint32_t> writer_compile_time_args1 = {
@@ -483,8 +485,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         total_num_sticks_kernel_1,
         num_sticks_block_size_kernel_1,
         batch_size,
-        block_start_semaphore_id,
-        block_end_semaphore_id};
+        output_addr_stride};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: writer_compile_time_args1 = {}", writer_compile_time_args1);
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -616,6 +617,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     log_info(tt::LogType::LogAlways, "convert_to_hwc: Program creation complete");
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}
+}  // namespace ttnn::operations::experimental::cnn::detail
 
 }  // namespace ttnn::operations::experimental::cnn::detail

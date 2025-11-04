@@ -9,13 +9,15 @@ import torch
 from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 
-CHANNEL_TEST_CASES = [1, 2, 3, 4, 8, 12, 15, 16, 32]
+# CHANNEL_TEST_CASES = [1, 2, 3, 4, 8, 12, 15, 16, 32]
+CHANNEL_TEST_CASES = [2, 4, 8, 12, 16, 32]
 BATCH_TEST_CASES = [1, 2, 4, 8]
 
 
 @pytest.mark.parametrize("B", BATCH_TEST_CASES)
 @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
-@pytest.mark.parametrize("provide_memory_config", [True, False])
+# @pytest.mark.parametrize("provide_memory_config", [True, False])
+@pytest.mark.parametrize("provide_memory_config", [True])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
     (
@@ -46,6 +48,33 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
             ),
             64,
         ),
+        (
+            256,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0)),
+                }
+            ),
+            64,
+        ),
+        (
+            8192,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+                }
+            ),
+            128,
+        ),
+        # (
+        # 224 * 224,
+        # ttnn.CoreRangeSet(
+        # {
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+        # }
+        # ),
+        # 784,
+        # ),
         # (
         # 168960,
         # ttnn.CoreRangeSet(

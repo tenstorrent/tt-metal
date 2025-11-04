@@ -87,6 +87,7 @@ void kernel_main() {
     constexpr uint32_t input_sticks_per_core = get_compile_time_arg_val(14);
     constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(15);
     constexpr uint32_t input_num_blocks = get_compile_time_arg_val(16);
+    constexpr uint32_t l1_write_output_addr_stride = get_compile_time_arg_val(17);
 
     const uint32_t x = NOC_X(my_x[0]);
     const uint32_t y = NOC_Y(my_y[0]);
@@ -98,7 +99,6 @@ void kernel_main() {
 
     constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
 
-    constexpr uint32_t l1_write_addr_stride = output_stride_sticks * channel_size;
     constexpr uint32_t initial_l1_write_addr_offset = initial_l1_write_stick_offset * channel_size;
 
     const uint32_t base_l1_write_addr = get_write_ptr(cb_out) + initial_l1_write_addr_offset;
@@ -135,8 +135,8 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_pop_front(cb_in_transpose, 1);
 
-            // stride by a number of sticks when splitting writers across cores
-            l1_output_write_addr += l1_write_addr_stride;
+            // Stride by a number of sticks when splitting writers across cores
+            l1_output_write_addr += l1_write_output_addr_stride;
         }
     }
 }
