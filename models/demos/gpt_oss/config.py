@@ -73,7 +73,9 @@ class MeshConfig:
         # Optional performance padding (caller specifies, no magic numbers)
         padded = False
         if pad_size and tensor.shape[-2] >= 32:
-            tensor = ttnn.pad(tensor, [(0, 0), (0, 0), (0, 0), (0, pad_size)], 0)
+            tensor_padded = ttnn.pad(tensor, [(0, 0), (0, 0), (0, 0), (0, pad_size)], 0)
+            tensor.deallocate(True)
+            tensor = tensor_padded
             padded = True
 
         # Reduce-scatter along TP axis
@@ -103,9 +105,29 @@ class MeshConfig:
 
         # Remove padding if applied
         if padded:
-            gathered = gathered[:, :, :, :-pad_size]
+            gathered_sliced = gathered[:, :, :, :-pad_size]
+            gathered.deallocate(True)
+            gathered = gathered_sliced
 
         return gathered
+
+    def allgather(self, tensor, ccl_manager, memory_config=None, axis=0, dim=3):
+        if self.tp <= 1:
+            return tensor
+
+        memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
+
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            dim=dim,
+            cluster_axis=axis,
+            mesh_device=ccl_manager.mesh_device,
+            topology=ccl_manager.topology,
+            multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=memory_config,
+            barrier_semaphore=ccl_manager.get_barrier_semaphore(),
+        )
 
     def __repr__(self):
         return f"MeshConfig({self.mesh_shape}, TP={self.tp}@axis{self.tp_axis}, DP={self.dp}, EP={self.ep}@axis{self.ep_axis})"

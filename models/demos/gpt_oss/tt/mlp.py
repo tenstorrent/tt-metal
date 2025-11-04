@@ -49,5 +49,7 @@ class MLP:
     def __call__(self, hidden_states):
         """Forward pass: route -> experts"""
         router_scores, router_indices, router_logits = self.router(hidden_states)
+        router_logits.deallocate()
+        router_indices.deallocate()
         expert_output = self.experts(hidden_states, router_scores)
         return expert_output, router_scores
