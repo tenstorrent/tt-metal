@@ -115,15 +115,6 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
     for (uint32_t i = 0; i < cols * rows; i++) {
         copy_tile(in0_cb, i, i);
     }
-    // copy_tile(in0_cb, 0, 0);
-    // copy_tile(in0_cb, 2, 2);
-    // copy_tile(in0_cb, 4, 4);
-    // copy_tile(in0_cb, 6, 6);
-
-    // copy_tile(in0_cb, 1, 1);
-    // copy_tile(in0_cb, 3, 3);
-    // copy_tile(in0_cb, 5, 5);
-    // copy_tile(in0_cb, 7, 7);
 
     tile_regs_wait();  // pack thread waits for math thread to finish
 
@@ -133,15 +124,9 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
         sfpu_reduce_max_sdpa(i, rows, static_cast<int>(VectorMode::RC_custom));
     }
 
-    // sfpu_reduce_max_sdpa(0, 4, static_cast<int>(VectorMode::RC_custom));
-
-    // sfpu_reduce_max_sdpa(1, 4, static_cast<int>(VectorMode::RC_custom));
-
     for (uint32_t i = 0; i < cols; i++) {
         pack_tile(i, out_cb, i);
     }
-    // pack_tile(0, out_cb, 0);
-    // pack_tile(1, out_cb, 1);
 
     release_dst();
 

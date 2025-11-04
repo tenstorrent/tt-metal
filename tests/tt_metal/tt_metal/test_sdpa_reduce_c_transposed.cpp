@@ -374,8 +374,8 @@ int main(int argc, char** argv) {
     /**
      * Parameters to sweep over for correctness.
      */
-    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4};  // rows
-    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4};  // cols
+    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4, 8};  // rows
+    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4, 8};  // cols
     std::vector<bool> fp32_dest_acc_ens = {false};  //, true};
     std::vector<bool> do_eltwise = {false};         //, true};
     /**
