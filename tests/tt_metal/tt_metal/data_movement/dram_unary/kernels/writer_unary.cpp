@@ -61,13 +61,21 @@ void kernel_main() {
     // volatile tt_l1_ptr std::uint32_t* axi_data_ptr = (volatile tt_l1_ptr uint32_t*)(0x100000);
     // *axi_data_ptr = axi_disabled_data;
 
-    uint64_t axi_disabled_addr = 0x100FC109400;
-    uint64_t axi_disabled_addr_noc = get_noc_addr_from_bank_id<dram>(dram_channel, axi_disabled_addr);
-    // uint32_t axi_disabled_data = 0x00006005;
-    uint32_t axi_disabled_data = 0x3;
-    volatile tt_l1_ptr std::uint32_t* axi_data_ptr = (volatile tt_l1_ptr uint32_t*)(0x100000);
-    *axi_data_ptr = axi_disabled_data;
-    noc_async_write(0x100000, axi_disabled_addr_noc, 4);
+    uint64_t mc_base5_addr = 0x100FC109400;
+    uint64_t mc_base5_addr_noc = get_noc_addr_from_bank_id<dram>(dram_channel, mc_base5_addr);
+    uint32_t mc_base5_data = 0x3;
+    volatile tt_l1_ptr std::uint32_t* mc_base5_data_ptr = (volatile tt_l1_ptr uint32_t*)(0x100000);
+    *mc_base5_data_ptr = mc_base5_data;
+    noc_async_write(0x100000, mc_base5_addr_noc, 4);
+    noc_async_write_barrier();
+
+    uint64_t mc_base2_addr = 0x100FC1046A8;
+    uint64_t mc_base2_addr_noc = get_noc_addr_from_bank_id<dram>(dram_channel, mc_base2_addr);
+    uint32_t mc_base2_data = 0x1;
+    volatile tt_l1_ptr std::uint32_t* mc_base2_data_ptr = (volatile tt_l1_ptr uint32_t*)(0x100000);
+    *mc_base2_data_ptr = mc_base2_data;
+    noc_async_write(0x100000, mc_base2_addr_noc, 4);
+    noc_async_write_barrier();
 
     {
         DeviceZoneScopedN("RISCV0");
