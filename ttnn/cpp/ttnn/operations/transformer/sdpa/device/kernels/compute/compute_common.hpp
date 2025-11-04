@@ -152,16 +152,15 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
     copy_tile(in0_cb, 5, 5);
     copy_tile(in0_cb, 7, 7);
 
-    PACK((llk_packer_wait_for_math_done()));
+    // PACK((llk_packer_wait_for_math_done()));
+    tile_regs_wait();
 
     sfpu_reduce_max_sdpa_init();
 
-    PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0)));
     sfpu_reduce_max_sdpa(0, 4, static_cast<int>(VectorMode::RC_custom));
 
-    PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(1)));
     sfpu_reduce_max_sdpa(1, 4, static_cast<int>(VectorMode::RC_custom));
-    PACK((_llk_math_eltwise_unary_sfpu_done_()));
+    // PACK((_llk_math_eltwise_unary_sfpu_done_()));
 
     pack_tile(0, out_cb, 0);
     pack_tile(1, out_cb, 1);

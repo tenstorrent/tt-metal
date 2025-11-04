@@ -22,7 +22,9 @@ inline void llk_math_sfpu_reduce_max_sdpa(
     //     vector_mode,
     //     1  /* block_height  (for plain testing 1 -> for sdpa implementation 4) */);
 
+    _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(dst_index);
     ckernel::sfpu::_calculate_reduce_sdpa_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(block_height);
+    _llk_math_eltwise_unary_sfpu_done_();
 }
 
 }  // namespace ckernel
