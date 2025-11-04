@@ -24,6 +24,7 @@
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "common_test_utils.hpp"
+#include "ttnn/operations/conv/conv_types.hpp"
 
 namespace ttnn {
 namespace operations {

@@ -261,6 +261,7 @@ tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() {
 }
 
 const tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() const {
+    printf("lazy_tensor_->is_materialized(): %d\n", lazy_tensor_->is_materialized());
     TT_FATAL(lazy_tensor_->is_materialized(), "Tensor is not materialized");
     return lazy_tensor_->materialized_tensor();
 }
