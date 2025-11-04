@@ -215,7 +215,7 @@ tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolut
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/data_movement/test_slice_for_conv.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_slice_for_conv.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 /tests/ttnn/**/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 /tests/ttnn/**/unit_tests/operations/reduce/ @tenstorrent/metalium-developers-external-experience @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-codeowners-large-changes
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience @tenstorrent/metalium-codeowners-large-changes
@@ -314,7 +314,6 @@ models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat @tenstorr
 models/experimental/oft @bjanjicTT @mbezuljTT @pavlepopovic @ianastasijevicTT @ddjekicTT @njovanovicTT
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @bjanjicTT @ddjekicTT @njovanovicTT
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-codeowners-large-changes
-models/experimental/stable_diffusion_xl_refiner @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-codeowners-large-changes
 models/demos/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolov8s_world @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolov10x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes

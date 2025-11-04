@@ -92,8 +92,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
@@ -181,8 +181,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
@@ -320,8 +320,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
@@ -395,8 +395,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
