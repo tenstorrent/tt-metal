@@ -1064,7 +1064,7 @@ jobs:
     needs:
       - ttnn-homogenize-run-result
       - ttnn-run-single-sweep
-    if: ${{ !cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' && needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
+    if: ${{ !cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' || needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
