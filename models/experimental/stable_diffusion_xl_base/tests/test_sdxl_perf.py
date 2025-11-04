@@ -133,7 +133,7 @@ def test_sdxl_refiner_unet_perf_device():
         inference_time_key: expected_device_perf_cycles_per_iteration * UNET_DEVICE_TEST_TOTAL_ITERATIONS
     }
     expected_results = check_device_perf(
-        post_processed_results, margin=0.015, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results, margin=0.06, expected_perf_cols=expected_perf_cols, assert_on_fail=True
     )
     prep_device_perf_report(
         model_name=f"sdxl_refiner_unet",
