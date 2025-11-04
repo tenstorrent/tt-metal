@@ -538,6 +538,7 @@ def test_multimodal_demo_text(
             # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
             # This wide tolerance is necessary to avoid spurious test failures until CI infrastructure is stabilized or performance variance is reduced.
             ("T3K", "Llama-3.2-90B", 1): (3, 4.17),
+        }
 
         perf_targets = {}
         if run_config in targets_prefill_tok_s:
