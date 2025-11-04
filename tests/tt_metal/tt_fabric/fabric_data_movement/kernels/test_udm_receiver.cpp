@@ -20,6 +20,11 @@ constexpr uint32_t num_packets = get_compile_time_arg_val(6);
 constexpr uint32_t time_seed_init = get_compile_time_arg_val(7);
 constexpr uint32_t req_notification_size_bytes = get_compile_time_arg_val(8);
 
+/*
+ * This test kernel is a kernel to test the functionality that will be implemented in a fabric relay kernel.
+ * The relay kernel would handle read/write acknowledgement and related functionality, so  the building
+ * blocks can be tested without requiring full integration/deployment into fabric
+ */
 void kernel_main() {
     // TODO: move this into fw once consolidated
     tt::tt_fabric::udm::fabric_local_state_init();
