@@ -281,7 +281,7 @@ private:
      * @param host_name_to_mesh_rank Mapping of host names to mesh ranks
      */
     void populate_fabric_node_id_to_asic_id_mappings(
-        const MeshId mesh_id,
+        MeshId mesh_id,
         const PhysicalAdjacencyMap& adjacency_map_physical,
         const LogicalAdjacencyMap& adjacency_map_logical,
         const std::unordered_map<tt::tt_metal::AsicID, MeshHostRankId>& asic_id_to_mesh_rank,
