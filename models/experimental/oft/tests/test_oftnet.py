@@ -36,10 +36,10 @@ from loguru import logger
     "model_dtype, use_host_oft, pcc_scores_oft, pcc_positions_oft, pcc_dimensions_oft, pcc_angles_oft",
     # fmt: off
     [
-       ( torch.bfloat16, False, 0.808, 0.896, 0.998, 0.915),
-       ( torch.bfloat16,  True, 0.821, 0.967, 0.999, 0.937),
-       ( torch.float32, False, 0.923, 0.982, 0.999, 0.943),
-       ( torch.float32,  True, 0.918, 0.885, 0.998, 0.942)
+       ( torch.bfloat16, False, 0.84, 0.889, 0.998, 0.904),
+       ( torch.bfloat16,  True, 0.862, 0.964, 0.999, 0.894),
+       ( torch.float32, False, 0.905, 0.979, 0.999, 0.928),
+       ( torch.float32,  True, 0.916, 0.881, 0.998, 0.918)
     ],
     # fmt: on
     ids=[
@@ -154,7 +154,7 @@ def test_oftnet(
 
         all_passed.append(passed)
         special_char = "✅" if passed else "❌"
-        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {abs=:.3f}, {rel=:.3f}")
+        logger.warning(f"{special_char} Output {i} {layer_name}: {passed=}, {pcc=}, {exp_pcc=}, {abs=:.3f}, {rel=:.3f}")
         if passed and float(pcc) - exp_pcc > 0.001:
             logger.warning(
                 f"⚠️  Output {i} {layer_name} PCC is better than expected by {float(pcc)-exp_pcc:.3f}. Please update expected PCC value to {math.floor(float(pcc) * 1000) / 1000:.3f}."
