@@ -5,10 +5,11 @@
 
 set -e
 
-TT_SMI_VERSION="3.0.34"
-TT_SMI_WHEEL="tt_smi-${TT_SMI_VERSION}-py3-none-any.whl"
+# Source centralized version configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=.github/scripts/versions.sh
+source "${SCRIPT_DIR}/versions.sh"
 
-wget -O ${TT_SMI_WHEEL} \
-    https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/${TT_SMI_WHEEL} || exit 1
-pip install --no-cache-dir ${TT_SMI_WHEEL}
-rm ${TT_SMI_WHEEL}
+wget -O "${TT_SMI_WHEEL}" "${TT_SMI_URL}" || exit 1
+pip install --no-cache-dir "${TT_SMI_WHEEL}"
+rm "${TT_SMI_WHEEL}"

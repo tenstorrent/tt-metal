@@ -10,6 +10,7 @@ COPY tests/requirements.txt /tmp/requirements_tests.txt
 COPY .github/scripts/install-tests-dependencies.sh \
      .github/scripts/install-exalens.sh \
      .github/scripts/install-smi.sh \
+     .github/scripts/versions.sh \
      /tmp/scripts/
 
 # Install all dependencies in a single layer and clean up
