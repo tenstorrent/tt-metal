@@ -232,10 +232,6 @@ To call the correct board dev ID for the reset, run the TT-SMI board list functi
 
 The output includes a list of all boards on host and all boards that can be reset.
 
-To find the correct board dev ID to call the reset on, use the TT-SMI board list function: ``tt-smi -ls`` or ``tt-smi --list`` The dev ID listed is the same as found on: ``/dev/tenstorrent/<dev pci id>``
-
-The output includes a list of all boards on host and all boards that can be reset.
-
 .. code-block::
 
     $ tt-smi -ls
