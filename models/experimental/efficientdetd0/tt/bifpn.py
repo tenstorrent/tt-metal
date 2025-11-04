@@ -365,7 +365,9 @@ class TtBiFPN:
         # Update p4_in and p5_in for bottom-up path if first_time
         if self.first_time:
             p4_in = self.p4_down_channel_2(p4)
+            p4_in = ttnn.to_memory_config(p4_in, ttnn.DRAM_MEMORY_CONFIG)
             p5_in = self.p5_down_channel_2(p5)
+            p5_in = ttnn.to_memory_config(p5_in, ttnn.DRAM_MEMORY_CONFIG)
 
         # Bottom-up pathway with weighted attention
 
