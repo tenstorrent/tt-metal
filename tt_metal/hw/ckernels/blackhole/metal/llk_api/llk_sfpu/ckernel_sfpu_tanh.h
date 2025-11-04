@@ -25,10 +25,12 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     // Compute numerator and denominator of continued fraction using Horner's method
     sfpi::vFloat x2 = x * x;
     sfpi::vFloat numerator = x * (135135.f + x2 * (17326.f + x2 * (378.f + x2)));
-    sfpi::vFloat denominator = 135135.f + x2 * (62370.f + x2 * (3150.f + 28.f * x2));
 
-    sfpi::vFloat result = ckernel::sfpu::_sfpu_reciprocal_<2>(denominator);
-    result = result * numerator;
+    // constexpr float denominator_coefs[] = {28.f, 3150.f, 62370.f, 135135.f};
+    constexpr float denominator_coefs[] = {135135.f, 62370.f, 3150.f, 28.f};
+    sfpi::vFloat denominator = PolynomialEvaluator<4, sfpi::vFloat, float>::eval(denominator_coefs, x2);
+
+    sfpi::vFloat result = numerator * ckernel::sfpu::_sfpu_reciprocal_<2>(denominator);
 
     // The limits of the continued fraction is +inf.
     // Since tanh(x) -> +inf, we clamp output to 1.0
@@ -49,6 +51,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(x) = -tanh(x)
     sfpi::vFloat val = sfpi::setsgn(x, 0);  // set positive
 
+    // Polynomial coefficients found using Sollya
     // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
     // (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
     // (5.876733921468257904052734375e-3))))));
