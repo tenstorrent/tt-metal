@@ -9,6 +9,10 @@ inputs:
     description: "Force a specific bump type instead of auto-detecting from commits. Options: 'major', 'minor', 'patch', 'none'. If set, overrides commit message analysis."
     required: false
     default: ""
+  ignore-commits:
+    description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps (e.g., 'abc1234567890abcdef,def5678901234abcdef')"
+    required: false
+    default: ""
 outputs:
   latest_semver:
     description: 'The latest semver tag found'
@@ -47,6 +51,7 @@ runs:
       run: |
         latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
         force_bump="${{ inputs.force-bump-type }}"
+        ignore_commits="${{ inputs.ignore-commits }}"
 
         # Check if a forced bump type is provided
         if [ -n "$force_bump" ]; then
@@ -55,14 +60,38 @@ runs:
         else
           echo "Analyzing commits since $latest_tag"
 
-          # Get commit messages since the latest tag
+          # Get commit messages and SHAs since the latest tag
           if [ "$latest_tag" = "v0.0.0" ]; then
             # If no previous tag, analyze all commits
-            commits=$(git log --oneline --pretty=format:"%s")
+            all_commits=$(git log --oneline --pretty=format:"%H|%s")
           else
             # Get commits since the latest tag
-            commits=$(git log ${latest_tag}..HEAD --oneline --pretty=format:"%s")
+            all_commits=$(git log ${latest_tag}..HEAD --oneline --pretty=format:"%H|%s")
           fi
+
+          # Filter out ignored commits by SHA
+          filtered_commits="$all_commits"
+          if [ -n "$ignore_commits" ]; then
+            echo "Filtering out ignored commit SHAs: $ignore_commits"
+
+            # Convert comma-separated list to array
+            IFS=',' read -ra IGNORE_ARRAY <<< "$ignore_commits"
+
+            for ignore_sha in "${IGNORE_ARRAY[@]}"; do
+              # Trim whitespace
+              ignore_sha=$(echo "$ignore_sha" | xargs)
+              echo "Filtering out commit SHA: $ignore_sha"
+
+              # Filter by SHA (supports both full and short SHAs)
+              filtered_commits=$(echo "$filtered_commits" | grep -v "^$ignore_sha" || true)
+            done
+          fi
+
+          # Extract just the commit messages for analysis
+          commits=$(echo "$filtered_commits" | cut -d'|' -f2)
+
+          echo "Commits to analyze:"
+          echo "$commits"
 
           # Check for version bump indicators
           bump_type="none"
