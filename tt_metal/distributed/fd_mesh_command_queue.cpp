@@ -9,6 +9,7 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -513,6 +514,13 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
+
+    // Barrier across all hosts of the mesh
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
+        mesh_device_->get_view().mesh_id());
+    if (*(distributed_context->size()) > 1) {
+        distributed_context->barrier();
+    }
 }
 
 void FDMeshCommandQueue::write_shard_to_device(
