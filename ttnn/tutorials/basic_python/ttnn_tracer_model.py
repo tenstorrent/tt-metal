@@ -55,7 +55,7 @@ def main():
         # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
         cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
         if cache_dir is not None:
-            model_location = Path(cache_dir) / Path("google_bert_model")
+            model_location = Path(cache_dir) / Path("config_google_bert.json")
 
         # Load model weights (download if cache_dir was not set)
         config = transformers.BertConfig.from_pretrained(model_location)
@@ -69,7 +69,7 @@ def main():
         # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
         cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
         if cache_dir is not None:
-            config_location = Path(cache_dir) / Path("ttnn_bert_config")
+            config_location = Path(cache_dir) / Path("config_ttnn_bert.json")
 
         # Load config (download if cache_dir was not set)
         config = transformers.BertConfig.from_pretrained(config_location)
@@ -84,7 +84,7 @@ def main():
         # If TTNN_TUTORIALS_MODELS_TRACER_PATH is set, use it as the cache directory to avoid requests to Hugging Face
         cache_dir = os.getenv("TTNN_TUTORIALS_MODELS_TRACER_PATH")
         if cache_dir is not None:
-            model_location = Path(cache_dir) / Path("ttnn_bert_model")
+            model_location = Path(cache_dir)
 
         # Load model weights (download if cache_dir was not set)
         model = transformers.BertForQuestionAnswering.from_pretrained(model_location, config=config).eval()
