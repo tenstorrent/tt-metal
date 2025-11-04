@@ -38,13 +38,46 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           days: ${{ github.event.inputs.days || 15 }}
+          workflow_ids: |
+            [
+              ".github/workflows/all-post-commit-workflows.yaml",
+              ".github/workflows/blackhole-post-commit.yaml",
+              ".github/workflows/blackhole-nightly-tests.yaml",
+              ".github/workflows/blackhole-demo-tests.yaml",
+              ".github/workflows/galaxy-profiler-tests.yaml",
+              ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
+              ".github/workflows/galaxy-deepseek-tests.yaml",
+              ".github/workflows/galaxy-model-perf-tests.yaml",
+              ".github/workflows/galaxy-demo-tests.yaml",
+              ".github/workflows/galaxy-unit-tests.yaml",
+              ".github/workflows/galaxy-frequent-tests.yaml",
+              ".github/workflows/galaxy-stress-tests.yaml",
+              ".github/workflows/galaxy-nightly-tests.yaml",
+              ".github/workflows/galaxy-quick.yaml",
+              ".github/workflows/t3000-model-perf-tests.yaml",
+              ".github/workflows/t3000-nightly-tests.yaml",
+              ".github/workflows/t3000-frequent-tests.yaml",
+              ".github/workflows/t3000-profiler-tests.yaml",
+              ".github/workflows/t3000-perplexity-tests.yaml",
+              ".github/workflows/t3000-demo-tests.yaml",
+              ".github/workflows/t3000-unit-tests.yaml",
+              ".github/workflows/fast-dispatch-frequent-tests.yaml",
+              ".github/workflows/perf-device-models.yaml",
+              ".github/workflows/perf-models.yaml",
+              ".github/workflows/fast-dispatch-full-regressions-and-models.yaml",
+              ".github/workflows/single-card-demo-tests.yaml",
+              ".github/workflows/tt-metal-l2-nightly.yaml",
+              ".github/workflows/ttnn-run-sweeps.yaml",
+              ".github/workflows/vllm-nightly-tests.yaml",
+              ".github/workflows/metal-run-microbenchmarks.yaml",
+              ".github/workflows/apc-nightly-debug.yaml"
+            ]
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
               {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
               {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
-              {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
-              {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
+              {"display": "Galaxy prefix", "wkflw_prefix": "(Galaxy)"},
               {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
               {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
               {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
