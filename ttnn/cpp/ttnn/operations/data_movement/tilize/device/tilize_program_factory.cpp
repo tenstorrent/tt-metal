@@ -19,7 +19,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement::detail {
 
 operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& output) {
-    std::cout << "testing single core interleaved tilize" << std::endl;  // --- IGNORE ---
     tt::tt_metal::Program program{};
 
     CoreRange core({0, 0}, {0, 0});
@@ -163,7 +162,6 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor& output) {
-    std::cout << "testing multicore block interleaved tilize" << std::endl;  // --- IGNORE ---
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
@@ -491,8 +489,6 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
         }
     }
 
-    std::cout << "testing multicore interleaved tilize" << std::endl;  // --- IGNORE ---
-
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, ntiles_per_block, input_cb_data_format);
 
     auto [output_cb_index, _] = create_cb(
@@ -639,7 +635,6 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 }
 
 operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, Tensor& output) {
-    std::cout << "testing multicore sharded tilize" << std::endl;  // --- IGNORE ---
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
