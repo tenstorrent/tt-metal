@@ -26,7 +26,6 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
     sfpi::vFloat x2 = x * x;
     sfpi::vFloat numerator = x * (135135.f + x2 * (17326.f + x2 * (378.f + x2)));
 
-    // constexpr float denominator_coefs[] = {28.f, 3150.f, 62370.f, 135135.f};
     constexpr float denominator_coefs[] = {135135.f, 62370.f, 3150.f, 28.f};
     sfpi::vFloat denominator = PolynomialEvaluator<4, sfpi::vFloat, float>::eval(denominator_coefs, x2);
 
