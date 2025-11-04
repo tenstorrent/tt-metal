@@ -62,11 +62,11 @@ int main() {
         std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Run 1
-        RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT);
+        RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT * 10000);
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         // Run 2
-        RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT);
+        RunCustomCycle(mesh_device, PROFILER_OP_SUPPORT_COUNT * 10000);
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         pass &= mesh_device->close();

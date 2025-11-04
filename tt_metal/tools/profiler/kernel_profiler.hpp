@@ -305,7 +305,7 @@ __attribute__((noinline)) void finish_profiler() {
 
             uint32_t dram_offset = 0;
             uint32_t send_size = 0;
-            if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+            if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC / 10) {
                 dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                   PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
                               hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
@@ -351,6 +351,7 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
+    return;
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
@@ -595,10 +596,7 @@ __attribute__((noinline)) void trace_only_init() {
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
 
-#define DeviceZoneScopedN(name)                                                \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScope<hash> zone = kernel_profiler::profileScope<hash>();
+#define DeviceZoneScopedN(name)
 
 #define DeviceTimestampedData(name, data)                                          \
     {                                                                              \

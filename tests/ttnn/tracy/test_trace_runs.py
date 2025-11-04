@@ -36,7 +36,7 @@ def test_with_ops(device):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
-    for i in range(5):
+    for i in range(5000):
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
 
@@ -149,11 +149,11 @@ def test_with_ops_trace_with_non_trace(device):
         ttnn.end_trace_capture(device, tid, cq_id=0)
         trace_ids.append(tid)
 
-    for _ in range(2):
+    for _ in range(20):
         for tid in trace_ids:
             ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
 
-    for _ in range(5):
+    for _ in range(5000):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
 
     for tid in trace_ids:

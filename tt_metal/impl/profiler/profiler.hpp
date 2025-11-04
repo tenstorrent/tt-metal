@@ -143,6 +143,9 @@ private:
     void readL1DataBufferForCore(
         IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
 
+    // Clear the device-side DRAM profiler buffer
+    void clearProfilerDramBuffer(const IDevice* device);
+
     // Read device profiler buffer
     void readProfilerBuffer(IDevice* device);
 
