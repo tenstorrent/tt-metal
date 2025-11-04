@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/transformer/fused_distributed_rmsnorm/device/rmsnorm_pre_all_gather_op.hpp"
-#include "ttnn/operations/cb_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -203,8 +202,6 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
         .compile_args = compute_args};
     auto compute_kernels_id = CreateKernel(program, compute_kernel_file, core_grid, compute_config);
 
-    uint32_t curr_row = 0;
-
     const auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
@@ -230,7 +227,6 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
             tile_row_end,
         };
         SetRuntimeArgs(program, writer_kernels_id, core, writer_runtime_args);
-        curr_row += num_tile_rows_per_core;
     }
 
     auto override_runtime_arguments_callback =
