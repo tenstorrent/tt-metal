@@ -49,15 +49,15 @@ int main() {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     // A Program contains kernels that perform computations or data movement.
     Program program = CreateProgram();
-    // We will only be using one Tensix core for this particular example. As Tenstorrent processors are a 2D grid of
-    // cores we can specify the core coordinates as (0, 0).
-    constexpr CoreCoord core = {0, 0};
+    // Run on all worker cores in the device's logical grid.
+    CoreCoord grid = mesh_device->logical_grid_size();
+    CoreRange all_cores({0, 0}, {grid.x - 1, grid.y - 1});
 
     // Create the kernel that will be used to demo the TTSIM_TENSIX_DUMP debug feature.
     CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "llk_init_uninit_ttsim_tensix_dump/kernels/compute_llk_ttsim_tensix_dump.cpp",
-        core,
+        all_cores,
         ComputeConfig{});
 
     // Add the program to the workload and enqueue it for execution on the MeshDevice.
