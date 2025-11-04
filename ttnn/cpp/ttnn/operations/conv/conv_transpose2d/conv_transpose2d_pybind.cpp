@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 
+#include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
@@ -94,18 +95,19 @@ void py_bind_conv_transpose2d(py::module& module) {
                uint32_t input_width,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> output_padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
                const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
+               std::optional<const ttnn::Tensor>& bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const Conv2dSliceConfig>& dram_slice_config,
                bool mirror_kernel,
                const bool return_output_dim,
-               const bool return_weights_and_bias) -> Result {
+               const bool return_weights_and_bias) -> ResultWithOptions {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -126,6 +128,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                     conv_config,
                     compute_config,
                     memory_config,
+                    dram_slice_config,
                     mirror_kernel,
                     return_output_dim,
                     return_weights_and_bias);
@@ -150,6 +153,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("dram_slice_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
             py::arg("return_output_dim") = false,
             py::arg("return_weights_and_bias") = false});

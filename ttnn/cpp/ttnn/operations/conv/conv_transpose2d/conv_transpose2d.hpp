@@ -37,7 +37,7 @@ Result conv_transpose2d_DRAM(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
@@ -60,7 +60,7 @@ Result conv_transpose2d_L1(
     uint32_t input_width,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> output_padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
@@ -82,7 +82,7 @@ struct ConvTranpose2dOperation {
         uint32_t input_width,
         std::array<uint32_t, 2> kernel_size,
         std::array<uint32_t, 2> stride = std::array<uint32_t, 2>{1, 1},
-        std::array<uint32_t, 2> padding = std::array<uint32_t, 2>{0, 0},
+        std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding = std::array<uint32_t, 4>{0, 0, 0, 0},
         std::array<uint32_t, 2> output_padding = std::array<uint32_t, 2>{0, 0},
         std::array<uint32_t, 2> dilation = std::array<uint32_t, 2>{1, 1},
         uint32_t groups = 1,
@@ -104,7 +104,7 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     std::array<uint32_t, 2> kernel_size;
     std::array<uint32_t, 2> stride;
     std::array<uint32_t, 4> padding_n4;
-    std::array<uint32_t, 2> output_padding_n4;
+    std::array<uint32_t, 2> output_padding;
     std::array<uint32_t, 2> dilation;
     uint32_t groups;
     Layout input_layout;
@@ -115,6 +115,11 @@ class ConvT2DSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
+    bool mirror_kernel;
+
+    IOShape full_input_shape;
+    IOShape strided_input_shape;
+    std::array<uint32_t, 4> input_padding;
 
 public:
     ConvT2DSliceAttr(
@@ -125,7 +130,7 @@ public:
         std::array<uint32_t, 2> kernel_size,
         std::array<uint32_t, 2> stride,
         std::array<uint32_t, 4> padding_n4,
-        std::array<uint32_t, 2> output_padding_n4,
+        std::array<uint32_t, 2> output_padding,
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
         Layout input_layout,
@@ -135,7 +140,8 @@ public:
         OptionalRefTensor bias_tensor,
         Conv2dConfig& conv_config,
         DeviceComputeKernelConfig& compute_config,
-        MeshDevice* device);
+        MeshDevice* device,
+        bool mirror_kernel);
     std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
     uint32_t get_L1_usage() override;
     tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;

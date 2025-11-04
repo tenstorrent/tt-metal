@@ -47,6 +47,7 @@ def run_conv_transpose2d(
     enable_act_double_buffer=False,
     preprocess_weights_bias=False,
     config_tensors_in_dram=False,
+    dram_slice_config=None,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -174,6 +175,7 @@ def run_conv_transpose2d(
         input_width=input_width,
         conv_config=conv_config,
         compute_config=compute_config,
+        dram_slice_config=dram_slice_config,
         groups=groups,
         mirror_kernel=mirror_kernel,
         return_output_dim=True,
