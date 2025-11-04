@@ -85,7 +85,7 @@ runs:
               if [ "$ignore_sha" != "" ]; then
                 echo "Filtering out commit SHA: $ignore_sha"
                 # Filter by SHA (supports both full and short SHAs)
-                filtered_commits=$(echo "$filtered_commits" | grep -v "^$ignore_sha" || true)
+                filtered_commits=$(echo "$filtered_commits" | grep -v "^$ignore_sha\\|" || true)
               fi
             done
           fi
