@@ -18,10 +18,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
 
-// FIXME: Remove after testing
-#include <set>
-#include <unordered_set>
-
 namespace tt::tt_fabric {
 namespace multi_host_tests {
 
