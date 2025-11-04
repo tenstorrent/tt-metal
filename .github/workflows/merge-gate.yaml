@@ -259,8 +259,14 @@ jobs:
       product: tt-nn
 
   ttsim-unit-tests:
-    if: ${{ github.event_name != 'pull_request' }}
-    needs: build
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    needs: [build, find-changes]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -268,9 +274,9 @@ jobs:
     with:
       basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
       test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
-      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      run-ttsim-integration-tests: false
       run-metal-cpp-unit-tests: true
 
   # GitHub has so many design limitations it's not even funny.
