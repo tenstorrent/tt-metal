@@ -92,7 +92,7 @@ ParsedMetric parse_metric_path(std::string_view path) {
 // Prometheus requires backslashes, double-quotes, and newlines to be escaped
 std::string escape_label_value(std::string_view value) {
     std::string escaped;
-    escaped.reserve(value.size());
+    escaped.reserve(value.size() * 2);  // Reserve extra capacity for escaped characters
     for (char c : value) {
         if (c == '\\' || c == '"' || c == '\n') {
             escaped += '\\';

@@ -193,12 +193,16 @@ export class MetricSidebar extends LitElement {
 
         // Determine data type
         let dataType;
-        if (typeof this.metricValue === 'boolean') {
+        if (this.metricValue === null || this.metricValue === undefined) {
+            dataType = 'No Value';
+        } else if (typeof this.metricValue === 'boolean') {
             dataType = 'Boolean Health';
         } else if (typeof this.metricValue === 'string') {
             dataType = 'String Value';
-        } else {
+        } else if (typeof this.metricValue === 'number') {
             dataType = 'Numeric Value';
+        } else {
+            dataType = 'Unknown';
         }
 
         return {

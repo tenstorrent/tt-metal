@@ -275,8 +275,7 @@ void ARCStringMetric::update(
 
     // Update the metric value and timestamp
     std::string new_value = optional_value.value_or("");
-    std::string old_value = value_;
-    changed_since_transmission_ = new_value != old_value;
-    value_ = new_value;
+    changed_since_transmission_ = (new_value != value_);
+    value_ = std::move(new_value);
     set_timestamp_now();
 }

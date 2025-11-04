@@ -242,6 +242,7 @@ private:
         }
 
         // Validate and merge string metrics
+        std::unordered_set<std::string> merged_string_paths;
         for (const auto& [path, value] : other.string_metrics) {
             // Check if this path exists in other metric types
             if (bool_metrics.find(path) != bool_metrics.end()) {
@@ -257,14 +258,19 @@ private:
                 continue;  // Skip this update
             }
             string_metrics[path] = value;
+            merged_string_paths.insert(path);
         }
 
-        // Merge string metadata
+        // Merge string metadata only for successfully merged paths
         for (const auto& [path, unit] : other.string_metric_units) {
-            string_metric_units[path] = unit;
+            if (merged_string_paths.find(path) != merged_string_paths.end()) {
+                string_metric_units[path] = unit;
+            }
         }
         for (const auto& [path, timestamp] : other.string_metric_timestamps) {
-            string_metric_timestamps[path] = timestamp;
+            if (merged_string_paths.find(path) != merged_string_paths.end()) {
+                string_metric_timestamps[path] = timestamp;
+            }
         }
     }
 

@@ -13,6 +13,7 @@
 #include <vector>
 #include <chrono>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include <fmt/ranges.h>

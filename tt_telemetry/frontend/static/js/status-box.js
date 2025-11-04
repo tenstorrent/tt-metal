@@ -394,8 +394,8 @@ export class StatusBox extends LitElement {
         if (this.type === 'valued') {
             statusClass = 'valued';
             const valueDisplay = formatValue(this.value);
-            // Don't show units for string values
-            const unitDisplay = (typeof this.value !== 'string' && this.unitDisplayLabel) ? ` ${this.unitDisplayLabel}` : '';
+            // Don't show units for string values, null, or undefined
+            const unitDisplay = (this.value != null && typeof this.value !== 'string' && this.unitDisplayLabel) ? ` ${this.unitDisplayLabel}` : '';
             content = html`
                 <div class="valued-name ${scaleClass}">${displayName}</div>
                 <div class="valued-value">${valueDisplay}${unitDisplay}</div>

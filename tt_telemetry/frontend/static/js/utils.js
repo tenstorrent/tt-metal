@@ -74,8 +74,8 @@ export function formatValue(value, maxLength = 20) {
         if (Number.isInteger(value)) {
             return String(value);
         }
-        // Format to 2 decimal places and remove trailing zeros
-        return parseFloat(value.toFixed(2)).toString();
+        // Format to 2 decimal places (toFixed already returns a string)
+        return value.toFixed(2);
     }
 
     // Handle booleans
@@ -85,6 +85,9 @@ export function formatValue(value, maxLength = 20) {
 
     // Handle strings
     if (typeof value === 'string') {
+        if (maxLength <= 0) {
+            return '…';
+        }
         if (value.length <= maxLength) {
             return value;
         }

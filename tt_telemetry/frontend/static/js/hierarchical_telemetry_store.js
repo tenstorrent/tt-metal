@@ -249,7 +249,7 @@ export class HierarchicalTelemetryStore {
             return;
         }
 
-        // Split path into components. Then move upwards to propagate the boolean value and timestamp.
+        // Split path into components. Then move upwards to propagate the string value and timestamp.
         const parts = path.split("/");
         for (let i = parts.length; i > 0; i--) {
             const currentPath = parts.slice(0, i).join("/");
