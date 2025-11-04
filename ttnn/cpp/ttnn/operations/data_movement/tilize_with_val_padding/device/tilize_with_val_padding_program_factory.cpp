@@ -69,6 +69,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+
     int32_t num_tiles = output.physical_volume() / TILE_HW;
 
     auto true_input_shape = a.padded_shape();
@@ -196,7 +198,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         core,
-        tt::tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
+        tt::tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_llk_acc,
+            .compile_args = compute_kernel_args,
+        });
 
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
@@ -238,6 +243,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -385,21 +392,26 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
-            ComputeConfig{.compile_args = {single_block_size, single_block_size, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {single_block_size, single_block_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_row_core_range,
-            ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
     }
     if (has_cliff_row) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_row_core_range,
-            ComputeConfig{.compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
     }
 
     if (has_cliff_col) {
@@ -407,7 +419,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_core_range,
-            ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc,
+                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
     }
 
     // RUNTIME ARGS
@@ -510,6 +524,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
@@ -593,14 +609,15 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range,
-            ComputeConfig{.compile_args = {nblocks_per_core, num_tiles_per_row}});
+            ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core, num_tiles_per_row}});
     }
     if (has_cliff) {
         CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range_cliff,
-            ComputeConfig{.compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
+            ComputeConfig{
+                .fp32_dest_acc_en = fp32_llk_acc, .compile_args = {nblocks_per_core_cliff, num_tiles_per_row}});
     }
 
     /* RUNTIME ARGS */
@@ -709,6 +726,8 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+
     auto input_shard_spec = a.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
 
@@ -790,7 +809,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         all_cores,
-        ComputeConfig{.compile_args = compute_args});
+        ComputeConfig{.fp32_dest_acc_en = fp32_llk_acc, .compile_args = compute_args});
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
 
