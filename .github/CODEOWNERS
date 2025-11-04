@@ -143,8 +143,8 @@ ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na @t
 
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @nmauriceTT @jbbieniekTT @aczajkowskiTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
-ttnn/cpp/ttnn/operations/ccl/ @cfjchu @omilyutin-tt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @cfjchu @omilyutin-tt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+ttnn/cpp/ttnn/operations/ccl/ @cfjchu @omilyutin-tt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @cfjchu @omilyutin-tt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/point_to_point/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
@@ -163,8 +163,8 @@ ttnn/cpp/ttnn/operations/matmul/ @tenstorrent/metalium-developers-mmfusedreduce 
 ttnn/cpp/ttnn/operations/matmul/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/ @tenstorrent/metalium-developers-convolutions
 ttnn/cpp/ttnn/operations/experimental/adaptive_pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/ccl/  @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+ttnn/cpp/ttnn/operations/experimental/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+ttnn/cpp/ttnn/operations/experimental/ccl/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/conv3d/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/conv3d/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/experimental/cnn/ @tenstorrent/metalium-developers-convolutions @esmalTT @tenstorrent/metalium-codeowners-large-changes
@@ -208,8 +208,8 @@ tests/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @
 tests/ttnn/multidevice_perf_tests/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/nightly/tg/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/gtests/ccl/ @cfjchu @omilyutin-tt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/ccl/ @cfjchu @omilyutin-tt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/ttnn/unit_tests/gtests/ccl/ @cfjchu @omilyutin-tt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/ttnn/unit_tests/operations/ccl/ @cfjchu @omilyutin-tt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
