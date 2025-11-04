@@ -196,7 +196,7 @@ ttnn::Tensor bound_matmul(
             optional_output_tensor);
     }
 
-    if (parameters.user_fused_activation.has_value() && !has_user_grid) {
+    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
         output_tensor = ttnn::operations::unary::Unary_chain::invoke(
