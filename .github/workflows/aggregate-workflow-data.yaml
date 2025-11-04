@@ -4,7 +4,7 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '*/5 * * * *' # every 5 minutes
+    - cron: '*/10 * * * *' # every 10 minutes
   workflow_dispatch:
     inputs:
       days:

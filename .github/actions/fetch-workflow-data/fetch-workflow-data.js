@@ -548,7 +548,7 @@ async function run() {
     let cachedLastSuccessTimestamps = {};
 
     // Find and restore artifacts from previous successful run
-    const previousRunId = await findPreviousAggregateRun(octokit, github.context, '31803-increase-caching-threshold-for-triage-pipeline');
+    const previousRunId = await findPreviousAggregateRun(octokit, github.context, branch);
     if (previousRunId) {
       core.info(`[CACHE] Starting artifact restoration from run ${previousRunId}`);
       try {
