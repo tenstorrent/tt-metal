@@ -953,11 +953,6 @@ def _watchdog_main(parent_pid, cmd_queue):
       {"cmd": "cancel", "test_id": str}
       {"cmd": "shutdown"}
     """
-    try:
-        parent_pgid = os.getpgid(parent_pid)
-    except Exception:
-        parent_pgid = None
-
     deadlines = {}  # test_id -> { 'deadline': float, 'pid': int }
 
     def kill_target(pid: int):
