@@ -61,10 +61,10 @@ void kernel_main() {
     const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_addr, tile_size_bytes);
 #endif
 
-    generate_tile_with_packed_bfloat16_value(cb_bcast_lr_idx, packed_lr);
-    generate_tile_with_packed_bfloat16_value(cb_bcast_momentum_idx, packed_momentum);
-    generate_tile_with_packed_bfloat16_value(cb_bcast_dampening_idx, packed_dampening);
-    generate_tile_with_packed_bfloat16_value(cb_bcast_wd_idx, packed_wd);
+    generate_bcast_scalar_bfloat16(cb_bcast_lr_idx, packed_lr);
+    generate_bcast_scalar_bfloat16(cb_bcast_momentum_idx, packed_momentum);
+    generate_bcast_scalar_bfloat16(cb_bcast_dampening_idx, packed_dampening);
+    generate_bcast_scalar_bfloat16(cb_bcast_wd_idx, packed_wd);
 
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {
