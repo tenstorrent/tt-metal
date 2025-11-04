@@ -123,6 +123,19 @@ HalCoreInfoType create_tensix_mem_map() {
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
         },
     };
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
+        // DM
+        {
+            {"BR", "BRISC"},
+            {"NC", "NCRISC"},
+        },
+        // COMPUTE
+        {
+            {"TR0", "TRISC0"},
+            {"TR1", "TRISC1"},
+            {"TR2", "TRISC2"},
+        },
+    };
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
@@ -131,6 +144,7 @@ HalCoreInfoType create_tensix_mem_map() {
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
+        std::move(processor_classes_names),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory()};

@@ -31,6 +31,15 @@ PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
 
 
+def is_6u_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
+
+
 def get_device_data(setupStr=""):
     postProcessRun = os.system(
         f"cd {PROFILER_SCRIPTS_ROOT} && " f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats"
@@ -359,7 +368,7 @@ def test_device_trace_run():
 def test_dispatch_cores():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383],
-        "Tensix CQ Prefetch": [900, 1440, 3870, 5000, 7752],
+        "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
         "dispatch_total_cq_cmd_op_time": [236],
         "dispatch_go_send_wait_time": [236],
     }
@@ -407,6 +416,7 @@ def test_dispatch_cores():
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
+@pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
         "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 2777, 3285, 3530, 3769, 4237, 4881, 6681, 7150],
@@ -507,7 +517,7 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 3, 6]  # N150, N300, T3K
+    WH_ERISC_COUNTS = [0, 3, 6, 16]  # N150, N300, T3K, 6U
     WH_TENSIX_COUNTS = [72, 64, 56]
     BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
@@ -738,15 +748,6 @@ def test_fabric_event_profiler_fabric_mux():
         assert (
             fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
-
-
-def is_6u_wrapper():
-    ctx = mp.get_context("spawn")
-    with ctx.Pool() as pool:
-        result = pool.apply(is_6u)
-        pool.close()
-        pool.join()
-    return result
 
 
 @skip_for_blackhole()

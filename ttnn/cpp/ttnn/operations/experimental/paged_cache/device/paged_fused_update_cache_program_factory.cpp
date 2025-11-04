@@ -97,7 +97,6 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
 
     // Index tensor-specific parameters
     bool use_index_tensor = update_idxs_tensor.has_value();
-    uint32_t index_tensor_tile_size = 0;
     uint32_t index_buffer_addr = 0;
     uint32_t log2_page_size = 0;
     uint32_t index_stick_size = 0;
@@ -108,7 +107,6 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_tensor_tile_size = tt::tile_size(index_data_format);
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
@@ -582,7 +580,6 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
 
     // Index tensor-specific parameters
     const bool use_index_tensor = update_idxs_tensor.has_value();
-    uint32_t index_tensor_tile_size = 0;
     uint32_t index_buffer_addr = 0;
     const uint32_t log2_page_size = 0;
     uint32_t index_stick_size = 0;
@@ -593,7 +590,6 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         index_buffer_ptr = update_idxs_tensor.value().is_sharded() ? update_idxs_tensor.value().buffer() : nullptr;
         index_buffer_addr = use_index_tensor ? update_idxs_tensor.value().buffer()->address() : 0;
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_tensor_tile_size = tt::tile_size(index_data_format);
         index_is_dram = update_idxs_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM;
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }

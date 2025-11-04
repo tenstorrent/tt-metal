@@ -807,11 +807,7 @@ class MLA1D(AbstractModule):
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
-        tt_q = ttnn.to_layout(tt_q, ttnn.ROW_MAJOR_LAYOUT)
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
-        tt_q = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
@@ -942,11 +938,7 @@ class MLA1D(AbstractModule):
             v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
         )  # [1, num_heads, bsz, v_head_dim]
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
-        v_out = ttnn.to_layout(v_out, ttnn.ROW_MAJOR_LAYOUT)
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
-        v_out = ttnn.to_layout(v_out, ttnn.TILE_LAYOUT)
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
 
@@ -976,7 +968,9 @@ class MLA1D(AbstractModule):
             Output tensor after MLP computation
         """
 
-        sdpa_dp_factor, mla_tp_factor = mesh_shape = cfg["mesh_shape"]
+        mesh_shape = cfg["mesh_shape"]
+
+        sdpa_dp_factor = mla_tp_factor = mesh_shape[1]
 
         num_heads = cfg["num_heads"]
         num_heads_local = even_int_div(num_heads, mla_tp_factor)
@@ -1057,8 +1051,10 @@ class MLA1D(AbstractModule):
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=kvpe_cache.dtype)
 
         # Update KVPE Cache
-        local_batch_idx = batch_idx % sdpa_dp_factor  # Local batch index within the DP shard
-        col_idx = batch_idx // sdpa_dp_factor  # Which DP shard the batch belongs to
+        batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
+        local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
+        col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
+
         ttnn.experimental.paged_fill_cache(
             kvpe_cache,
             tt_kvpe,

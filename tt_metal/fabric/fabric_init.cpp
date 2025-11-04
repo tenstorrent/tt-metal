@@ -172,7 +172,7 @@ void build_tt_fabric_program(
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
             log_debug(
-                tt::LogOp,
+                tt::LogFabric,
                 "FabricEriscDatamoverConfig for device {}: eth_chan={}, direction={}",
                 device->id(),
                 eth_chan,

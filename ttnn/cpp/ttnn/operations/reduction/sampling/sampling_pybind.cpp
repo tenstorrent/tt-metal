@@ -15,8 +15,6 @@ namespace py = pybind11;
 void bind_reduction_sampling_operation(py::module& module) {
     auto doc =
         R"doc(
-          ``ttnn.sampling(input_values_tensor: ttnn.Tensor, input_indices_tensor: ttnn.Tensor, k: ttnn.Tensor, p: ttnn.Tensor, temp: ttnn.Tensor, seed: Optional[int] = None, sub_core_grids: Optional[ttnn.CoreRangeSet] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
-
           Samples from the :attr:`input_values_tensor` based on provided top-k and top-p constraints.
 
           This operation samples values from the :attr:`input_values_tensor` based on the provided thresholds :attr:`k` (top-k sampling)
