@@ -267,29 +267,49 @@ class Experts:
             self.has_shared = True
 
     def __call__(self, hidden_states, routing_weights):
-        # hidden_states: [B, S, H] in TILE layout (keep 3D)
-        # routing_weights: [B*S, E] (from router), TILE or ROW_MAJOR
-        batch_size = hidden_states.shape[0]
-        seq_len = hidden_states.shape[1]
+        # hidden_states: [B, S, H]
+        # routing_weights: [B*S, E] or [B, S, E]
+        batch_size, seq_len, _ = hidden_states.shape
 
-        # Pack all tokens across batches into tokens_3d[0] with shape [S_total, 1, H]
+        # Pack tokens into a single dimension to align with sparse kernel expectations
         tokens_total = batch_size * seq_len
         tokens_3d = ttnn.reshape(hidden_states, (tokens_total, 1, self.hidden_size))
-        print("tokens_3d packed: ", tokens_3d.shape)
 
-        # Convert routing weights to ROW_MAJOR 3D tensor [1, S_total, E]
+        # Prepare routing weights in the same packed token order: [T, E] -> [1, T, E]
         rw_2d = (
             routing_weights if len(routing_weights.shape) == 2 else ttnn.reshape(routing_weights, (tokens_total, -1))
         )
-        print("rw_2d: ", rw_2d)
         rw_rm = ttnn.to_layout(rw_2d, ttnn.ROW_MAJOR_LAYOUT)
         weights_3d = ttnn.reshape(rw_rm, (1, tokens_total, self.num_experts))
-        # Binary mask for expert selection (top-k), used in sparse matmuls to compute only selected experts
         mask = ttnn.gt(weights_3d, 0.0)
 
-        # Program config: mirror smoke3 (1D multicast, in0 multicast)
+        # Sparse expert projections over packed tokens
         output_tile = ttnn.Tile([32, 32])
+        gate = ttnn.sparse_matmul(
+            tokens_3d,
+            self.gate_proj,
+            sparsity=mask,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+        )
+        up = ttnn.sparse_matmul(
+            tokens_3d,
+            self.up_proj,
+            sparsity=mask,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
+        )
 
+        # SwiGLU: silu(gate) * up
+        glu = ttnn.silu(gate)
+        down_in0 = ttnn.mul(glu, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(glu)
+        ttnn.deallocate(up)
+        ttnn.deallocate(gate)
+
+        # Second sparse projection (A is sparse per-token per-expert)
+        # Restore down program config exactly as before
+        output_tile = ttnn.Tile([32, 32])
         down_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             in0_block_w=1,
@@ -304,56 +324,27 @@ class Experts:
             mcast_in0=True,
         )
 
-        # Gate
-        print("going into gate: ", tokens_3d.shape, self.gate_proj.shape, weights_3d.shape)
-        gate = ttnn.sparse_matmul(
-            tokens_3d,
-            self.gate_proj,
-            sparsity=mask,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-            # program_config=pc,
-        )
-
-        # Up
-        up = ttnn.sparse_matmul(
-            tokens_3d,
-            self.up_proj,
-            sparsity=mask,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
-        )
-        # Activation: GLM experts use SwiGLU -> silu(gate) * up
-        glu = ttnn.silu(gate)
-        down_in0 = ttnn.mul(glu, up, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(glu)
-        ttnn.deallocate(up)
-        ttnn.deallocate(gate)
-
-        # Down: batched sparse matmul with sparse A
         down = ttnn.sparse_matmul(
             down_in0,
             self.down_proj,
             sparsity=mask,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_tile=output_tile,
             is_input_a_sparse=True,
             is_input_b_sparse=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=output_tile,
             program_config=down_pc,
         )
-        # Keep down-proj bias disabled here; GLM reference often omits it
+        ttnn.deallocate(down_in0)
 
-        # Bias and combine experts using routing weights
-        # down currently shaped like [S_total, E, 1, H_per_tp]; reshape to [B, E, S, H]
-        next_states = ttnn.reshape(down, (batch_size, self.num_experts, seq_len, self.hidden_size))
-        # Explicitly apply routing weights at combine time: [B,E,S,H] * [B,E,S,1]
-        w = ttnn.reshape(rw_rm, (batch_size, seq_len, self.num_experts))  # [B,S,E]
-        w = ttnn.transpose(w, 1, 2)  # [B,E,S]
-        w = ttnn.unsqueeze(w, -1)  # [B,E,S,1]
-        next_states = ttnn.mul(next_states, w, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        next_states = ttnn.sum(next_states, dim=1, keepdim=True)
+        # Combine expert outputs with routing weights in packed token order
+        down_flat = ttnn.reshape(down, (tokens_total, self.num_experts, self.hidden_size))
+        w_flat = ttnn.reshape(rw_rm, (tokens_total, self.num_experts))
+        w_flat = ttnn.unsqueeze(w_flat, -1)
+        combined = ttnn.mul(down_flat, w_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        combined = ttnn.sum(combined, dim=1, keepdim=False)  # [T, H]
+        next_states = ttnn.reshape(combined, (batch_size, 1, seq_len, self.hidden_size))
 
-        # Add shared experts dense path before allreduce (single combined allreduce)
+        # Shared experts dense path (optional)
         if getattr(self, "has_shared", False):
             gate_s = ttnn.linear(hidden_states, self.shared_gate_w, bias=self.shared_gate_b)
             up_s = ttnn.linear(hidden_states, self.shared_up_w, bias=self.shared_up_b)
@@ -365,12 +356,10 @@ class Experts:
 
             shared_out = ttnn.linear(down_in_s, self.shared_down_w, bias=self.shared_down_b)
             ttnn.deallocate(down_in_s)
-            # Match next_states pre-allreduce shape: [B, 1, S, H]
             shared_out = ttnn.reshape(shared_out, (batch_size, 1, seq_len, self.hidden_size))
-            print("shared_out: ", shared_out)
             next_states = next_states + shared_out * 4
 
-        # EP allreduce then TP allreduce (single path for routed + shared)
+        # Collectives
         if self.mesh_config.ep > 1:
             next_states = self.mesh_config.allreduce(next_states, self.ccl_manager, axis=self.mesh_config.ep_axis)
         next_states = self.mesh_config.allreduce(

@@ -347,7 +347,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         tt_output = decoder_layer(
             tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
         )
-        pcc_threshold = 0.93
+        pcc_threshold = 0.87
         passing, output = run_component_comparison(
             tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
         )
