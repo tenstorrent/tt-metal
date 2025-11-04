@@ -90,6 +90,7 @@ jobs:
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      build-workflows-changed: ${{ steps.find-changes.outputs.build-workflows-changed }}
     steps:
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
