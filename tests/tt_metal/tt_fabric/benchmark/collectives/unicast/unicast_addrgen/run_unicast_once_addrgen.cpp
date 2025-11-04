@@ -212,6 +212,8 @@ Notes:
             case AddrgenApiVariant::UnicastWrite: return std::string(KDIR) + "unicast_tx_writer_cb_to_dst_addrgen.cpp";
             case AddrgenApiVariant::UnicastWriteWithState:
                 return std::string(KDIR) + "unicast_tx_writer_with_state_addrgen.cpp";
+            case AddrgenApiVariant::UnicastWriteSetState:
+                return std::string(KDIR) + "unicast_tx_writer_set_state_addrgen.cpp";
             default: TT_FATAL(false, "Unknown API variant"); return "";
         }
     };

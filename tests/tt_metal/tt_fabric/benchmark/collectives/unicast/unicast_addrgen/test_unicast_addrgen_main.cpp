@@ -50,13 +50,22 @@ TEST_P(AddrgenApiVariantTest, Write) {
     EXPECT_GT(result.bytes, 0u);
 }
 
-// Instantiate with both variants
+// Instantiate with all variants
 INSTANTIATE_TEST_SUITE_P(
     AddrgenOverloads,
     AddrgenApiVariantTest,
     ::testing::Values(
         tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite,
-        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState));
+        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState,
+        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState),
+    [](const ::testing::TestParamInfo<AddrgenApiVariantTest::ParamType>& info) {
+        switch (info.param) {
+            case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite: return "UnicastWrite";
+            case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState: return "UnicastWriteWithState";
+            case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState: return "UnicastWriteSetState";
+            default: return "UnknownVariant";
+        }
+    });
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

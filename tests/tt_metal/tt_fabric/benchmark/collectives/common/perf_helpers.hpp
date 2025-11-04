@@ -15,8 +15,9 @@ namespace tt::tt_fabric::bench {
 
 // API variants for addrgen overload testing
 enum class AddrgenApiVariant {
-    UnicastWrite,          // fabric_unicast_noc_unicast_write
-    UnicastWriteWithState  // fabric_unicast_noc_unicast_write_with_state
+    UnicastWrite,           // fabric_unicast_noc_unicast_write
+    UnicastWriteWithState,  // fabric_unicast_noc_unicast_write_with_state
+    UnicastWriteSetState    // fabric_unicast_noc_unicast_write_set_state + _with_state
 };
 
 using HelpersFixture = ::tt::tt_metal::MeshDeviceFixtureBase;
