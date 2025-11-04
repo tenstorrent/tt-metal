@@ -242,9 +242,9 @@ jobs:
       - name: Run image
         timeout-minutes: 70
         env:
-          SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
-          LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+          HF_MODEL: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
   test-bh-multicard-image:
     needs:
       - get-image-tags

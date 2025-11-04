@@ -45,8 +45,23 @@ test_suite_bh_pcie_didt_tests() {
 
 verify_llama_dir_() {
     if [ -z "${LLAMA_DIR}" ]; then
-      echo "Error: LLAMA_DIR environment variable not detected. Please set this environment variable to tell the tests where to find the downloaded Llama weights." >&2
-      exit 1
+      echo "LLAMA_DIR environment variable not set. Checking for HF_MODEL and TT_CACHE_PATH..."
+
+      # Check if both HF_MODEL and TT_CACHE_PATH are set
+      if [ -z "${HF_MODEL}" ] || [ -z "${TT_CACHE_PATH}" ]; then
+        echo "Error: HF_MODEL and TT_CACHE_PATH environment variables not detected. Please set these environment variables to tell the tests where to find the downloaded Llama weights." >&2
+        exit 1
+      fi
+
+      # Check if the HF_MODEL directory exists and is not empty
+      if [ -d "$HF_MODEL" ] && [ "$(ls -A $HF_MODEL)" ]; then
+        echo "[upstream-tests] Llama weights exist, continuing"
+      else
+        echo "[upstream-tests] Error: Llama weights do not seem to exist in $HF_MODEL, exiting" >&2
+        exit 1
+      fi
+      echo "[upstream-tests] HF_MODEL and TT_CACHE_PATH are set and exist, continuing"
+      return 0
     fi
 
     if [ -d "$LLAMA_DIR" ] && [ "$(ls -A $LLAMA_DIR)" ]; then
