@@ -566,4 +566,4 @@ def test_multimodal_demo_text(
         )
 
         if perf_targets:
-            verify_perf(measurements, perf_targets, high_tol_percentage=1.15)
+            verify_perf(measurements, perf_targets, high_tol_percentage=perf_tolerance or 1.15)
