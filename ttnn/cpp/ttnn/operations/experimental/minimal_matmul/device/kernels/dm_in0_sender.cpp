@@ -96,10 +96,6 @@ void kernel_main() {
      * reuse.
      */
 
-    bool k_forward = true;
-    bool n_forward = true;
-    bool reuse_block = false;
-
     uint32_t defer_write_m_tile = 0;
     uint32_t defer_write_m_tile_end = 0;
     uint32_t defer_write_n_tile = 0;
@@ -112,11 +108,8 @@ void kernel_main() {
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
         uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
 
-        // When striding M block, in0 gets no reuse
-        reuse_block = false;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
-            uint32_t n_tile = n_forward ? N_start_tile + n_block_iter * N_block_tiles
-                                        : N_start_tile + (N_blocks_per_core - 1 - n_block_iter) * N_block_tiles;
+            uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
@@ -137,19 +130,13 @@ void kernel_main() {
                     }
                 }
 
-                if (reuse_block && k_block_iter == 0) {
-                    // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
-                    reuse_block = false;
-                    continue;
-                }
-                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
+                uint32_t k_block = k_block_iter;
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {
                     if constexpr (fuse_op) {
-                        // TODO update this function call
-                        fused_op_receiver.compute_actual_k_block_iter(k_block_iter);
+                        k_block = fused_op_receiver.compute_actual_k_block_iter(k_block_iter);
                     }
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
@@ -205,10 +192,6 @@ void kernel_main() {
             }
 #endif
 
-            k_forward = !k_forward;
-            // We get reuse on in0 when striding N block
-            reuse_block = true;
-
             defer_write_m_tile = m_tile;
             defer_write_m_tile_end = m_tile_end;
             defer_write_n_tile = n_tile;
@@ -227,7 +210,6 @@ void kernel_main() {
                 }
             }
         }
-        n_forward = !n_forward;
     }
     noc_async_write_barrier();
     noc_async_atomic_barrier();

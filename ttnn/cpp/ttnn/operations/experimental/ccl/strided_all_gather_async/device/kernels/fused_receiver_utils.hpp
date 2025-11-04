@@ -26,7 +26,6 @@ struct MinimalMatmulOpReceiver {
         wait_for_op_signal(wait_for_op_signal) {
         sem_targets[0] = 0;  // backward
         sem_targets[1] = 0;  // forward
-        sem_targets[2] = 0;  // self
 
         // Runtime args
         uint32_t num_transfers = get_arg_val<uint32_t>(rt_args_idx++);  // TODO remove
@@ -51,7 +50,7 @@ struct MinimalMatmulOpReceiver {
         if (k_block_slice_iter == 0) {
             uint32_t device_index = curr_k_block_iter / num_k_blocks_per_device;
             if (device_index == 0) {
-                curr_k_block_source = 2;
+                curr_k_block_source = 1;
                 target_k_block_slice = my_chip_id;
             } else if (device_index % 2) {
                 curr_k_block_source = 0;
@@ -65,6 +64,7 @@ struct MinimalMatmulOpReceiver {
             volatile tt_l1_ptr uint32_t* semaphore = signal_op_semaphore_addr_ptrs[curr_k_block_source];
             uint32_t sem_target = sem_targets[curr_k_block_source];
             noc_semaphore_wait_min(semaphore, sem_target + 1);
+            sem_targets[curr_k_block_source]++;
         }
 
         return (target_k_block_slice * num_k_blocks_per_device) + k_block_slice_iter;
