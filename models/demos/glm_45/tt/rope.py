@@ -12,8 +12,10 @@ class ApplyRotaryPosEmb(nn.Module):
         self.config = config
 
     def forward(self, x, cos, sin):
-        # Broadcast cos/sin across heads (and tokens implicitly)
+        # Broadcast cos/sin across heads and tokens
+        # x is shaped [1, tokens, num_heads, head_dim] where tokens = batch_size * seq_len
         num_heads = x.shape[-2]
+        tokens = x.shape[-3]
         # GLM applies rotary only on the first half of head_dim; our math uses a,b that are half of that.
         # Ensure cos/sin width matches a,b width BEFORE broadcasting to avoid slicing a height-sharded tensor.
         half_rot = (x.shape[-1] // 2) // 2
@@ -26,6 +28,15 @@ class ApplyRotaryPosEmb(nn.Module):
             sin_in = ttnn.to_memory_config(sin_in, ttnn.DRAM_MEMORY_CONFIG)
             cos_in = ttnn.slice(cos_in, (0, 0, 0, 0), (cos_in.shape[0], cos_in.shape[1], cos_in.shape[2], half_rot))
             sin_in = ttnn.slice(sin_in, (0, 0, 0, 0), (sin_in.shape[0], sin_in.shape[1], sin_in.shape[2], half_rot))
+
+        # Match tokens dimension as well: base cos/sin carry only seq_len along the tokens axis.
+        # When batch > 1, tokens = batch * seq_len, so repeat along that axis.
+        base_tokens = cos_in.shape[-3]
+        if tokens != base_tokens:
+            assert tokens % base_tokens == 0, "RoPE: tokens must be a multiple of base sequence length"
+            repeat_factor = tokens // base_tokens
+            cos_in = ttnn.repeat(cos_in, (1, repeat_factor, 1, 1))
+            sin_in = ttnn.repeat(sin_in, (1, repeat_factor, 1, 1))
 
         cos_bcast = ttnn.repeat(cos_in, (1, 1, num_heads, 1))
         sin_bcast = ttnn.repeat(sin_in, (1, 1, num_heads, 1))
