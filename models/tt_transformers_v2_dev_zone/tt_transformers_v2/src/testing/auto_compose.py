@@ -13,6 +13,8 @@ from loguru import logger
 
 import ttnn
 
+# todo)) add checks to to_torch_auto_compose to ensure it only supports ttnn.MeshDevice and cpu device for input and cpu device for output!
+
 # ======================================================================================
 # Public API
 # ======================================================================================

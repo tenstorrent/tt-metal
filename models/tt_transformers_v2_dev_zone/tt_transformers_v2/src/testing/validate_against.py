@@ -390,12 +390,6 @@ def _prepare_metric_config(metric_tolerances_input):
     return metrics_map, hib, tol_map, logs_local
 
 
-# todo)) There seems to be a third use case of validate functions:
-# - run both TTNN model and Torch model side by side (i.e., each has their separate inputs and outputs) and compare the results!
-# - this is not more useful than the above two use cases, unless we can make it more automatic!
-
-# todo)) add checks to to_torch_auto_compose to ensure it only supports ttnn.MeshDevice and cpu device for input and cpu device for output!
-
 # todo)) add capability to run the reference function instead of the decorated function on a per-module basis!
 # this is where distribute_as.py comes in handy!
 
