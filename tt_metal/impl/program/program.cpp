@@ -682,6 +682,13 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(const ProgramDescr
                 if (runtime_arg_from.empty()) {
                     continue;
                 }
+                TT_FATAL(
+                    runtime_args_to[i][j].size() >= runtime_arg_from.size(),
+                    "Buffer overflow: destination runtime_args_to[{}][{}] has size {} but source has size {}",
+                    i,
+                    j,
+                    runtime_args_to[i][j].size(),
+                    runtime_arg_from.size());
                 std::memcpy(
                     runtime_args_to[i][j].data(),
                     runtime_arg_from.data(),
@@ -690,6 +697,11 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(const ProgramDescr
         }
         auto common_to = kernel_to.common_runtime_args_data();
         if (!kernel_from.common_runtime_args.empty()) {
+            TT_FATAL(
+                common_to.size() >= kernel_from.common_runtime_args.size(),
+                "Buffer overflow: destination common_runtime_args has size {} but source has size {}",
+                common_to.size(),
+                kernel_from.common_runtime_args.size());
             std::memcpy(
                 common_to.data(),
                 kernel_from.common_runtime_args.data(),
@@ -704,6 +716,7 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(const ProgramDescr
         }
     }
 
+    TT_FATAL(circular_buffers_.size() == descriptor.cbs.size(), "Number of circular buffers in program and descriptor do not match");
     bool should_invalidate_cb_allocation = false;
     for (size_t circular_buffers_idx = 0; circular_buffers_idx < circular_buffers_.size(); ++circular_buffers_idx) {
         auto& circular_buffer = circular_buffers_[circular_buffers_idx];
