@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/moreh_common.hpp"
 
 bool is_in_indices(uint32_t* index_ptr, uint32_t size, uint32_t row_id) {
     for (uint32_t i = 0; i < size; i++) {
@@ -17,6 +16,17 @@ bool is_in_indices(uint32_t* index_ptr, uint32_t size, uint32_t row_id) {
 }
 
 void kernel_main() {
+    // Compile-time args
+    constexpr bool is_last_dim = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t index_size = get_compile_time_arg_val(1);
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t index_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t elem_size = get_compile_time_arg_val(4);
+    constexpr uint32_t row_size = get_compile_time_arg_val(5);
+    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+
+    // Run-time args
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t index_addr = get_arg_val<uint32_t>(1);
     uint32_t fill_value = get_arg_val<uint32_t>(2);
@@ -25,17 +35,9 @@ void kernel_main() {
     uint32_t num_rows_to_fill_per_index = get_arg_val<uint32_t>(5);
     uint32_t dim = get_arg_val<uint32_t>(6);
 
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t index_cb_id = get_compile_time_arg_val(1);
-    constexpr bool is_last_dim = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t index_size = get_compile_time_arg_val(3);
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t index_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t elem_size = get_compile_time_arg_val(6);
-    constexpr uint32_t row_size = get_compile_time_arg_val(7);
-    constexpr auto input_args = TensorAccessorArgs<8>();
-    constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-
+    // Derived
+    constexpr uint32_t src_cb_id = tt::CBIndex::c_0;
+    constexpr uint32_t index_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t onetile = 1;
 
     const auto s0 = TensorAccessor(input_args, input_addr, input_page_size);

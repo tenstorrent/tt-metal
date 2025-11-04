@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "index_fill_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include "index_fill_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/tensor/types.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::index_fill {
 
@@ -15,25 +15,24 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    Program program{};
-
+    ////////////////////////////////////////////////////////////////////////////
+    //                         Parameters Setup
+    ////////////////////////////////////////////////////////////////////////////
     const tt::tt_metal::Tensor& index = tensor_args.index;
     const tt::tt_metal::Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
 
-    auto dtype = input.dtype();
-
     const auto input_shape = input.logical_shape();
     const auto n = input_shape.rank();
-
     uint32_t num_rows_to_fill_per_index = 1;
     for (int i = n - 2; i > dim; i--) {
         num_rows_to_fill_per_index *= input_shape[i];
     }
 
+    // Prepare fill_value to send as a uint32_t kernel arg
     auto fill_value_ = operation_attributes.value;
     uint32_t fill_value{};
-    switch (dtype) {
+    switch (input.dtype()) {
         case DataType::BFLOAT16:
             fill_value = pack_two_bfloat16_into_uint32({bfloat16(std::get<float>(fill_value_)), bfloat16(0.0f)});
             break;
@@ -42,17 +41,20 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         default: TT_FATAL(false, "Unsupported datatype"); break;
     }
 
+    ////////////////////////////////////////////////////////////////////////////
+    //                            Program Setup
+    ////////////////////////////////////////////////////////////////////////////
+    Program program{};
+
+    // Distribute work across core grid
     auto num_rows = input.physical_volume() / input.padded_shape()[-1];
-
     auto compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
-    auto input_data_format = datatype_to_dataformat_converter(dtype);
-    auto index_data_format = datatype_to_dataformat_converter(index.dtype());
+    // Create circular buffers
+    auto input_dataformat = datatype_to_dataformat_converter(input.dtype());
+    auto index_dataformat = datatype_to_dataformat_converter(index.dtype());
 
     uint32_t input_page_size = input.buffer()->aligned_page_size();
     uint32_t index_page_size = index.buffer()->aligned_page_size();
@@ -62,21 +64,18 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     CreateCircularBuffer(
         program,
         all_cores,
-        tt::tt_metal::CircularBufferConfig(input_page_size, {{src_cb_index, input_data_format}})
+        tt::tt_metal::CircularBufferConfig(input_page_size, {{src_cb_index, input_dataformat}})
             .set_page_size(src_cb_index, input_page_size));
 
     auto index_cb_index = tt::CBIndex::c_1;
     CreateCircularBuffer(
         program,
         all_cores,
-        tt::tt_metal::CircularBufferConfig(index_page_size, {{index_cb_index, index_data_format}})
+        tt::tt_metal::CircularBufferConfig(index_page_size, {{index_cb_index, index_dataformat}})
             .set_page_size(index_cb_index, index_page_size));
 
-    // Create Kernels
-    // reader
+    // Create reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src_cb_index,
-        (std::uint32_t)index_cb_index,
         (std::uint32_t)(dim == n - 1),
         (std::uint32_t)index.physical_volume(),
         (std::uint32_t)input_page_size,
@@ -92,6 +91,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    // Create writer kernel
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_page_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
@@ -101,12 +101,11 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
+    // Set runtime args for each core
     uint32_t unit_offset = 0;
-    uint32_t num_cores_group_1 = core_group_1.num_cores();
-    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        const auto& core = cores[i];
-        uint32_t num_rows_per_core = i < num_cores_group_1 ? num_rows_per_core_group_1 : num_rows_per_core_group_2;
+    auto cores = corerange_to_cores(all_cores);
+    for (const auto& core : cores) {
+        uint32_t num_rows_per_core{};
         if (core_group_1.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -130,7 +129,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         unit_offset += num_rows_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores, num_cores_y}};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
 }
 
 void IndexFillOperation::MultiCore::override_runtime_arguments(
@@ -141,15 +140,13 @@ void IndexFillOperation::MultiCore::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
+    auto& cores = cached_program.shared_variables.cores;
 
     auto src_buffer = tensor_args.input.buffer()->address();
     auto index_buffer = tensor_args.index.buffer()->address();
     auto output_buffer = output.buffer()->address();
 
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+    for (const auto& core : cores) {
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer;
