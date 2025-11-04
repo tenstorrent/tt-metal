@@ -124,7 +124,6 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"all_to_one_random", HighLevelTrafficPattern::AllToOneRandom},
     {"full_device_random_pairing", HighLevelTrafficPattern::FullDeviceRandomPairing},
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
-    {"unidirectional_linear_unicast", HighLevelTrafficPattern::UnidirectionalLinearUnicast},
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
@@ -888,8 +887,6 @@ private:
                 expand_full_device_random_pairing(test, defaults);
             } else if (pattern.type == "unidirectional_linear") {
                 expand_unidirectional_linear_unicast_or_multicast(test, defaults);
-            } else if (pattern.type == "unidirectional_linear_unicast") {
-                expand_unidirectional_linear_unicast(test, defaults);
             } else if (pattern.type == "full_ring" || pattern.type == "half_ring") {
                 HighLevelTrafficPattern pattern_type =
                     detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
@@ -1059,33 +1056,6 @@ private:
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
         }
-    }
-
-    void expand_unidirectional_linear_unicast(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
-        log_debug(LogTest, "Expanding unidirectional_linear_unicast pattern for test: {}", test.name);
-        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
-        TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear_unicast because no devices were found.");
-
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> unicast_pairs;
-
-        for (const auto& src_node : devices) {
-            // Create separate patterns for N/S and E/W dimensions to avoid bottlenecking on sender
-            for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
-                // Skip dimensions with only one device
-                if (this->route_manager_.get_mesh_shape()[dim] < 2) {
-                    continue;
-                }
-
-                auto hops = this->route_manager_.get_unidirectional_linear_mcast_hops(src_node, dim);
-                ParsedTrafficPatternConfig specific_pattern;
-                specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-
-                auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
-                test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
-            }
-        }
-
-        add_senders_from_pairs(test, unicast_pairs, base_pattern);
     }
 
     void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
