@@ -23,24 +23,7 @@ on:
 
 jobs:
   galaxy-demo-tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { name: "Galaxy Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 30, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "Galaxy Llama3 long context demo tests", arch: wormhole_b0, model: llama3_long_context, timeout: 60, owner_id: U03PUAKE719}, # Miguel Tairum
-          { name: "Galaxy Llama3 evals tests", arch: wormhole_b0, model: llama3_evals, timeout: 45, owner_id: U03PUAKE719}, # Miguel Tairum
-          { name: "Galaxy Llama3 8B data-parallel demo tests", arch: wormhole_b0, model: llama3_8b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Llama3 70B data-parallel demo tests", arch: wormhole_b0, model: llama3_70b_dp, timeout: 30, owner_id: U08BH66EXAL}, # Radoica Draskic
-          { name: "Galaxy Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 30, owner_id: U05RWH3QUPM}, # Salar Hosseini
-          { name: "Galaxy SentenceBert demo tests", arch: wormhole_b0, model: sentence_bert, timeout: 30, owner_id: U088413NP0Q}, # Ashai Reddy
-          { name: "Galaxy Stable Diffusion 3.5 Large demo tests", arch: wormhole_b0, model: sd35, timeout: 30, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "Galaxy Flux.1-dev demo tests", arch: wormhole_b0, model: flux1, timeout: 30, owner_id: U08TED0JM9D}, # Samuel Adesoye
-          { name: "Galaxy GPT-OSS demo tests", arch: wormhole_b0, model: gpt-oss, timeout: 30, owner_id: U06F3ER8X9A}, # Stuti Raizada
-          { name: "Galaxy Wan2.2 demo tests", arch: wormhole_b0, model: wan22, timeout: 25, owner_id: U03FJB5TM5Y}, # Colman Glagovich
-          { name: "Galaxy Mochi demo tests", arch: wormhole_b0, model: mochi, timeout: 30, owner_id: U09ELB03XRU}, # Stephen Osborne
-        ]
-    name: ${{ matrix.test-group.name }}
+    name: Galaxy Demo Tests (Sequential)
     runs-on:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
@@ -52,7 +35,7 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: wormhole_b0
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -70,21 +53,196 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run demo regression tests
-        timeout-minutes: ${{ matrix.test-group.timeout }}
+
+      # Llama3 Tests
+      - name: Reset cards before Llama3 test
         run: |
-          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+          tt-smi -glx_reset_auto
+      - name: Galaxy Llama3 demo tests
+        id: test-llama3
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: ${{ failure() && steps.test-llama3.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
-      - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy Llama3 demo tests') && !cancelled() }}
+          owner: U053W15B6JF # Djordje Ivanovic
+
+      - name: Reset cards before Llama3 long context test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Llama3 long context demo tests
+        id: test-llama3-long
+        timeout-minutes: 60
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_long_context
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-llama3-long.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U03PUAKE719 # Miguel Tairum
+
+      - name: Reset cards before Llama3 evals test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Llama3 evals tests
+        id: test-llama3-evals
+        timeout-minutes: 45
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_evals
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-llama3-evals.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U03PUAKE719 # Miguel Tairum
+
+      - name: Reset cards before Llama3 8B DP test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Llama3 8B data-parallel demo tests
+        id: test-llama3-8b-dp
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_8b_dp
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-llama3-8b-dp.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08BH66EXAL # Radoica Draskic
+
+      - name: Reset cards before Llama3 70B DP test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Llama3 70B data-parallel demo tests
+        id: test-llama3-70b-dp
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_70b_dp
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-llama3-70b-dp.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08BH66EXAL # Radoica Draskic
+
+      # Other Model Tests
+      - name: Reset cards before Falcon7b test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Falcon7b demo tests
+        id: test-falcon7b
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model falcon7b
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-falcon7b.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U05RWH3QUPM # Salar Hosseini
+
+      - name: Reset cards before SentenceBert test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy SentenceBert demo tests
+        id: test-sentence-bert
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model sentence_bert
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-sentence-bert.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U088413NP0Q # Ashai Reddy
+
+      - name: Reset cards before SD35 test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Stable Diffusion 3.5 Large demo tests
+        id: test-sd35
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model sd35
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-sd35.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U03FJB5TM5Y # Colman Glagovich
+
+      - name: Reset cards before Flux1 test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Flux.1-dev demo tests
+        id: test-flux1
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model flux1
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-flux1.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U08TED0JM9D # Samuel Adesoye
+
+      - name: Reset cards before GPT-OSS test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy GPT-OSS demo tests
+        id: test-gpt-oss
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model gpt-oss
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-gpt-oss.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U06F3ER8X9A # Stuti Raizada
+
+      - name: Reset cards before Wan2.2 test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Wan2.2 demo tests
+        id: test-wan22
+        timeout-minutes: 25
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model wan22
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-wan22.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U03FJB5TM5Y # Colman Glagovich
+
+      - name: Reset cards before Mochi test
+        run: |
+          tt-smi -glx_reset_auto
+      - name: Galaxy Mochi demo tests
+        id: test-mochi
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model mochi
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() && steps.test-mochi.outcome == 'failure' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U09ELB03XRU # Stephen Osborne
+
+      # Environment data and benchmark collection
+      - name: Save environment data for Falcon7b
+        if: ${{ !cancelled() }}
         run: |
           python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
-      - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy Llama3 demo tests') && !cancelled() }}
+      - name: Upload benchmark data for Falcon7b
+        if: ${{ !cancelled() }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -92,6 +250,7 @@ jobs:
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
