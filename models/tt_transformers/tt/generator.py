@@ -389,11 +389,6 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
-        # Issue #31321: Sampling is unstable for temperature > 0, so we only support greedy decoding for now
-        assert (
-            sampling_params is None or sampling_params.temperature == 0
-        ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
         sampling_on_device = sampling_params is not None
 
         B = tokens.shape[0]
