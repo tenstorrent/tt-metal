@@ -15,6 +15,52 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
+def get_out_subblock_w(per_core_N, out_subblock_h):
+    """
+    Helper function to calculate the out_subblock_w based on the per_core_N and out_subblock_h
+    """
+    out_subblock_w = 4  # TODO: Check with LLK team if this is the true bound, might be 8 now
+    while out_subblock_w > 1:
+        if out_subblock_w * out_subblock_h <= 4 and per_core_N % out_subblock_w == 0:
+            break
+        out_subblock_w -= 1
+    return out_subblock_w
+
+
+def matmul_config(
+    self,
+    m: int,
+    k: int,
+    n: int,
+    grid_size,
+    in0_block_w: int = None,
+    fuse_batch: bool = False,
+    fused_activation=None,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    self.tile_size = ttnn.TILE_SIZE
+
+    per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
+    per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
+
+    out_subblock_h = 1
+    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
+
+    if in0_block_w is None:
+        in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=fuse_batch,
+    )
+
+
 class TtGemmaImageFeedForward(LightweightModule):
     def __init__(
         self,
@@ -84,23 +130,6 @@ class TtGemmaImageFeedForward(LightweightModule):
             # Reshape input to to fit on device and parallelize computation
             x_in = ttnn.reshape(x_in, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        cores_x = 8
-        cores_y = 8
-        M = x_in.shape[-2]
-        N = self.c_fc_weight.shape[-1]
-
-        matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(cores_x, cores_y),
-            in0_block_w=1,  # Must divide Kt evenly
-            out_subblock_h=1,  # Must divide per_core_M evenly
-            out_subblock_w=1,  # Must divide per_core_N evenly
-            per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
-            per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
-            transpose_mcast=False,
-            fused_activation=None,
-            fuse_batch=False,  # mstojko - set this to False because LLms.md says "Set fuse_batch to False for DRAM inputs."
-        )
-
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         c_fc_out = ttnn.linear(
             x_in,
@@ -108,7 +137,9 @@ class TtGemmaImageFeedForward(LightweightModule):
             bias=self.c_fc_bias,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
-            program_config=matmul_2d_program_config,
+            program_config=matmul_config(
+                self, x_in.shape[-2], x_in.shape[-1], self.c_fc_weight.shape[-1], (8, 8), fuse_batch=False
+            ),
             activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
         )
 
@@ -117,7 +148,9 @@ class TtGemmaImageFeedForward(LightweightModule):
             self.c_proj_weight,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat8_b,
-            program_config=matmul_2d_program_config,
+            program_config=matmul_config(
+                self, c_fc_out.shape[-2], c_fc_out.shape[-1], self.c_proj_weight.shape[-1], (8, 8), fuse_batch=False
+            ),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
