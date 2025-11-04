@@ -534,9 +534,10 @@ def test_multimodal_demo_text(
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): (17, None),  # None to default to tolerance percentage (1.15)
             # second value to override default tolerance percentage (1.15); observing variance across different CI machines
-            # data on variance across t3k machines in CI: https://github.com/tenstorrent/tt-metal/pull/31605
+            # For T3K Llama-3.2-90B, the decode_t/s/u target is set to 3 with a wide tolerance (4.17, i.e. 317%) due to high variance observed across CI machines.
+            # Empirical data from CI runs (see https://github.com/tenstorrent/tt-metal/pull/31605) shows that decode performance can vary significantly, sometimes falling well below the nominal target.
+            # This wide tolerance is necessary to avoid spurious test failures until CI infrastructure is stabilized or performance variance is reduced.
             ("T3K", "Llama-3.2-90B", 1): (3, 4.17),
-        }
 
         perf_targets = {}
         if run_config in targets_prefill_tok_s:
