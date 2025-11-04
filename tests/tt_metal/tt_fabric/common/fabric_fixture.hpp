@@ -195,6 +195,18 @@ protected:
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
+class Fabric2DUDMModeFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            std::nullopt,
+            tt_fabric::FabricTensixConfig::DISABLED,
+            tt_fabric::FabricUDMMode::ENABLED);
+    }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
 class NightlyFabric2DUDMModeFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() {

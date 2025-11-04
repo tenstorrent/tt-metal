@@ -614,6 +614,32 @@ TEST_F(NightlyFabric2DFixture, TestMeshFabricUnicastNocInlineWriteWithState) {
 }
 
 // UDM Mode Tests - test udm api changes for 2D
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastWriteWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::W, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::W, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::W, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadEast) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
+}
+TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadWest) {
+    UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::W, 1));
+}
+
+// Nightly UDM Mode Tests - test udm api changes for 2D
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteEast) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::E, 2));
 }
@@ -627,7 +653,7 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastWriteSouth) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_WRITE, std::make_tuple(RoutingDirection::S, 1));
 }
 
-// UDM Mode Tests - test udm inline write api changes for 2D
+// Nightly UDM Mode Tests - test udm inline write api changes for 2D
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteEast) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::E, 2));
 }
@@ -641,7 +667,7 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastInlineWriteSouth) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE, std::make_tuple(RoutingDirection::S, 1));
 }
 
-// UDM Mode Tests - test udm atomic inc api changes for 2D
+// Nightly UDM Mode Tests - test udm atomic inc api changes for 2D
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncEast) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::E, 2));
 }
@@ -655,7 +681,7 @@ TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncSouth) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::S, 1));
 }
 
-// UDM Mode Read Tests - test udm read api for 2D
+// Nightly UDM Mode Read Tests - test udm read api for 2D
 TEST_F(NightlyFabric2DUDMModeFixture, TestUDMFabricReadEast) {
     UDMFabricUnicastCommon(this, NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 2));
 }
