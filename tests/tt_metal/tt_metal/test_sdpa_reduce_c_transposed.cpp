@@ -39,55 +39,55 @@ static void transpose_tiles_inplace_row_major(std::vector<bfloat16>& rm, uint32_
     }
 }
 
-static std::vector<bfloat16> golden_reduce_c_transposed(
-    const std::vector<bfloat16>& qk_im_rm_transposed,
-    const std::vector<bfloat16>& prev_max_first_col,
-    uint32_t q_chunk_size,
-    uint32_t k_chunk_size,
-    bool do_eltwise_max) {
-    const uint32_t rows = q_chunk_size * 32;
-    const uint32_t cols = k_chunk_size * 32;
-    const uint32_t stats_cols = 32;
+// static std::vector<bfloat16> golden_reduce_c_transposed(
+//     const std::vector<bfloat16>& qk_im_rm_transposed,
+//     const std::vector<bfloat16>& prev_max_first_col,
+//     uint32_t q_chunk_size,
+//     uint32_t k_chunk_size,
+//     bool do_eltwise_max) {
+//     const uint32_t rows = q_chunk_size * 32;
+//     const uint32_t cols = k_chunk_size * 32;
+//     const uint32_t stats_cols = 32;
 
-    // Undo tile transpose to compute row-wise max on original orientation
-    std::vector<bfloat16> qk_im_rm = qk_im_rm_transposed;
-    transpose_tiles_inplace_row_major(qk_im_rm, rows, cols);
+//     // Undo tile transpose to compute row-wise max on original orientation
+//     std::vector<bfloat16> qk_im_rm = qk_im_rm_transposed;
+//     transpose_tiles_inplace_row_major(qk_im_rm, rows, cols);
 
-    std::vector<bfloat16> out(rows * stats_cols, static_cast<bfloat16>(0.0f));
-    for (uint32_t r = 0; r < rows; ++r) {
-        float row_max = -std::numeric_limits<float>::infinity();
-        for (uint32_t c = 0; c < cols; ++c) {
-            row_max = std::max(row_max, static_cast<float>(qk_im_rm[r * cols + c]));
-        }
-        if (do_eltwise_max) {
-            row_max = std::max(row_max, static_cast<float>(prev_max_first_col[r]));
-        }
-        out[r * stats_cols + 0] = static_cast<bfloat16>(row_max);
-    }
+//     std::vector<bfloat16> out(rows * stats_cols, static_cast<bfloat16>(0.0f));
+//     for (uint32_t r = 0; r < rows; ++r) {
+//         float row_max = -std::numeric_limits<float>::infinity();
+//         for (uint32_t c = 0; c < cols; ++c) {
+//             row_max = std::max(row_max, static_cast<float>(qk_im_rm[r * cols + c]));
+//         }
+//         if (do_eltwise_max) {
+//             row_max = std::max(row_max, static_cast<float>(prev_max_first_col[r]));
+//         }
+//         out[r * stats_cols + 0] = static_cast<bfloat16>(row_max);
+//     }
 
-    // Re-apply tile transpose for the stats output (rows x 32)
-    transpose_tiles_inplace_row_major(out, rows, 32);
-    return out;
-}
+//     // Re-apply tile transpose for the stats output (rows x 32)
+//     transpose_tiles_inplace_row_major(out, rows, 32);
+//     return out;
+// }
 
-static float compare_first_col_mse(const std::vector<bfloat16>& result_rm, const std::vector<bfloat16>& golden_rm) {
-    // Operates on row-major data, where each tile in the row-major data has been transposed.
-    const uint32_t n_tiles = result_rm.size() / (32 * 32);
-    const uint32_t rows = golden_rm.size() / 32;
-    float mse = 0.0f;
-    uint32_t start_idx = 0;
-    for (uint32_t t = 0; t < n_tiles; ++t) {
-        for (uint32_t r = 0; r < 32; ++r) {
-            float a = static_cast<float>(result_rm[start_idx + r]);
-            float b = static_cast<float>(golden_rm[start_idx + r]);
-            float d = a - b;
-            mse += d * d;
-        }
-        start_idx += 32 * 32;
-    }
-    mse /= rows;
-    return mse;
-}
+// static float compare_first_col_mse(const std::vector<bfloat16>& result_rm, const std::vector<bfloat16>& golden_rm) {
+//     // Operates on row-major data, where each tile in the row-major data has been transposed.
+//     const uint32_t n_tiles = result_rm.size() / (32 * 32);
+//     const uint32_t rows = golden_rm.size() / 32;
+//     float mse = 0.0f;
+//     uint32_t start_idx = 0;
+//     for (uint32_t t = 0; t < n_tiles; ++t) {
+//         for (uint32_t r = 0; r < 32; ++r) {
+//             float a = static_cast<float>(result_rm[start_idx + r]);
+//             float b = static_cast<float>(golden_rm[start_idx + r]);
+//             float d = a - b;
+//             mse += d * d;
+//         }
+//         start_idx += 32 * 32;
+//     }
+//     mse /= rows;
+//     return mse;
+// }
 
 static bool test_sdpa_reduce_c_transposed(
     tt_metal::IDevice* device,
@@ -276,9 +276,26 @@ static bool test_sdpa_reduce_c_transposed(
     // Kernel outputs 1 x k_chunk_size tiles; untilize to 32 x (k_chunk_size*32)
     auto out_max_rm = untilize_nfaces(out_max_bfp16, 32, k_chunk_size * 32);
 
-    auto golden_rm = golden_reduce_c_transposed(qk_rm, prev_max_first_col, q_chunk_size, k_chunk_size, do_eltwise_max);
-
-    float mse = compare_first_col_mse(out_max_rm, golden_rm);
+    // New MSE: compare OUT row0 per column against per-column maxima across all rows (1xcols semantics)
+    float mse = 0.0f;
+    {
+        uint32_t rows_total = q_chunk_size * 32;
+        uint32_t width_total = k_chunk_size * 32;
+        uint32_t out_width = width_total;
+        for (uint32_t col = 0; col < width_total; ++col) {
+            float gmax = -std::numeric_limits<float>::infinity();
+            for (uint32_t r = 0; r < rows_total; ++r) {
+                float v = static_cast<float>(qk_rm[r * width_total + col]);
+                if (v > gmax) {
+                    gmax = v;
+                }
+            }
+            float out_v = static_cast<float>(out_max_rm[0 * out_width + col]);
+            float d = out_v - gmax;
+            mse += d * d;
+        }
+        mse /= static_cast<float>(k_chunk_size * 32);
+    }
 
     // Debug: print first row of OUT and GOLDEN per tile in paired order
     {
