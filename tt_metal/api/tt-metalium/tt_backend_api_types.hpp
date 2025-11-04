@@ -144,11 +144,6 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
     }
 }
 
-std::string get_string(ARCH arch);
-std::string get_string_lowercase(ARCH arch);
-std::string get_alias(ARCH arch);
-ARCH get_arch_from_string(const std::string& arch_str);
-
 }  // namespace tt
 
 template <>

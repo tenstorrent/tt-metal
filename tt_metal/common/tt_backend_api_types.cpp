@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include "common/tt_backend_api_types.hpp"
 
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
