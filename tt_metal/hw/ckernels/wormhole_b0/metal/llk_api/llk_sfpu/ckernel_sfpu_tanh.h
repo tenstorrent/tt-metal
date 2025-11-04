@@ -83,28 +83,28 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en 
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
         // SFPU microcode
-        vUInt l0 = l_reg[LRegs::LReg0];
-        vUInt l1 = l_reg[LRegs::LReg1];
-        vUInt l2 = l_reg[LRegs::LReg2];
+        sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
+        sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
+        sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            vFloat val = dst_reg[0];
-            val = lut(val, l0, l1, l2);
-            dst_reg[0] = val;
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            val = sfpi::lut(val, l0, l1, l2);
+            sfpi::dst_reg[0] = val;
 
-            dst_reg++;
+            sfpi::dst_reg++;
         }
 
-        l_reg[LRegs::LReg0] = l0;
-        l_reg[LRegs::LReg1] = l1;
-        l_reg[LRegs::LReg2] = l2;
+        l_reg[sfpi::LRegs::LReg0] = l0;
+        l_reg[sfpi::LRegs::LReg1] = l1;
+        l_reg[sfpi::LRegs::LReg2] = l2;
     } else {  // APPROXIMATION_MODE is false
 
         for (int d = 0; d < ITERATIONS; d++) {
-            vFloat val = dst_reg[0];
+            sfpi::vFloat val = sfpi::dst_reg[0];
 
-            vFloat result;
+            sfpi::vFloat result;
 
             if constexpr (is_fp32_dest_acc_en) {
                 result = _sfpu_tanh_continued_fraction_<is_fp32_dest_acc_en>(val);
@@ -112,8 +112,8 @@ inline void calculate_tanh() {
                 result = _sfpu_tanh_polynomial_<is_fp32_dest_acc_en>(val);
             }
 
-            dst_reg[0] = result;
-            dst_reg++;
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
         }
     }
 }
