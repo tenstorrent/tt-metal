@@ -7,6 +7,8 @@ We have reused the TtLlamaImageFeedForward with few changes in CoreGrid and prog
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 
 import ttnn
@@ -88,7 +90,6 @@ class TtGemmaImageFeedForward(LightweightModule):
         cores_y = 8
         M = x_in.shape[-2]
         N = self.c_fc_weight.shape[-1]
-        import math
 
         matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(cores_x, cores_y),
@@ -117,7 +118,7 @@ class TtGemmaImageFeedForward(LightweightModule):
             c_fc_out,
             self.c_proj_weight,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             program_config=matmul_2d_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

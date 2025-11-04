@@ -293,7 +293,7 @@ class TtGemmaImageAttention(LightweightModule):
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
