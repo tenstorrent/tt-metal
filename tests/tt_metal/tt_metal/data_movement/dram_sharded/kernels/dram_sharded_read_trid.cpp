@@ -32,11 +32,9 @@ void kernel_main() {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             dst_addr = l1_addr;
-
             for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
                 uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
                 noc_async_read_one_packet_set_state(src_noc_addr, page_size_bytes);
-
                 for (uint32_t i = 0; i < pages_per_bank; i++) {
                     noc_async_read_tile_dram_sharded_set_trid(curr_trid);
                     noc_async_read_tile_dram_sharded_with_state_with_trid(
@@ -49,6 +47,5 @@ void kernel_main() {
         for (uint32_t t = 0; t < num_of_trids; t++) {
             noc_async_read_barrier_with_trid(t);
         }
-        // noc_async_read_barrier();
     }
 }
