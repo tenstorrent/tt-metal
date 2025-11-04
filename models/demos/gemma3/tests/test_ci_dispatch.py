@@ -14,7 +14,7 @@ from loguru import logger
     ["google/gemma-3-4b-it", "google/gemma-3-27b-it"],
     ids=["gemma-3-4b-it", "gemma-3-27b-it"],
 )
-def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_generator):
+def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
     if not is_ci_env:
         pytest.skip("Skipping CI dispatch tests when running locally.")
 
