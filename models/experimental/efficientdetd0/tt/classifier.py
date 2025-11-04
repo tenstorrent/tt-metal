@@ -12,7 +12,6 @@ class Classifier:
         device,
         parameters,
         conv_params,
-        num_anchors,
         num_classes,
         num_layers,
         pyramid_levels=5,
@@ -28,6 +27,7 @@ class Classifier:
                     conv_params=conv_params.conv_list[j][i],
                     batch=1,
                     deallocate_activation=True,
+                    dtype=ttnn.bfloat8_b,
                 )
                 for i in range(num_layers)
             ]
@@ -42,6 +42,7 @@ class Classifier:
                 conv_params=conv_params.header_list[j],
                 batch=1,
                 deallocate_activation=True,
+                dtype=ttnn.bfloat8_b,
             )
             for j in range(pyramid_levels)
         ]
@@ -51,9 +52,9 @@ class Classifier:
         for feat, conv_list, header in zip(inputs, self.conv_list, self.header_list):
             for conv in conv_list:
                 feat = conv(feat)
-                feat = feat * ttnn.sigmoid_accurate(feat, True)
+                feat = feat * ttnn.sigmoid_accurate(feat)
             feat = header(feat)
-            feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
+            feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)
             feat = ttnn.reshape(feat, (feat.shape[0], -1, self.num_classes))
             feats.append(feat)
         feats = ttnn.concat(feats, dim=1)

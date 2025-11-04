@@ -187,7 +187,7 @@ def register_layer_hooks(model, layer_type):
     return layer_info, hooks
 
 
-def infer_torch_module_args(model, input, layer_type=nn.Conv2d):
+def infer_torch_module_args(model, input, layer_type=(nn.Conv2d, nn.MaxPool2d)):
     """Run forward pass and collect layer information."""
     model.eval()
 

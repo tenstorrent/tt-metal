@@ -30,8 +30,7 @@ torch.manual_seed(0)
         (
             (
                 # N C H W
-                # torch.randn([1, 64, 64, 64]),
-                torch.randn([1, 64, 32, 32]),
+                torch.randn([1, 64, 64, 64]),
                 torch.randn([1, 64, 32, 32]),
                 torch.randn([1, 64, 16, 16]),
                 torch.randn([1, 64, 8, 8]),
@@ -94,7 +93,6 @@ def test_classifier(
         device,
         parameters,
         conv_args,
-        num_anchors=num_anchors,
         num_classes=num_classes,
         num_layers=box_class_repeats,
         pyramid_levels=pyramid_levels,

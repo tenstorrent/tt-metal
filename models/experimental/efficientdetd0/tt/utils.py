@@ -5,8 +5,6 @@
 import ttnn
 import math
 
-# from models.experimental.efficientnetb0.tt.efficientnetb0 import Conv2dDynamicSamePadding
-
 
 class BatchNorm2d:
     def __init__(self, parameters, device, cache={}, memory_config=None, compute_kernel_config=None):
@@ -99,6 +97,7 @@ class MaxPool2dDynamicSamePadding:
         shard_layout,
         maxpool_params,
         batch=1,
+        dtype=ttnn.bfloat16,
         deallocate_activation=False,
     ):
         self.device = device
@@ -136,6 +135,7 @@ class MaxPool2dDynamicSamePadding:
             device=device,
             shard_layout=self.shard_layout,
             deallocate_activation=deallocate_activation,
+            dtype=dtype,
         )
 
     def __call__(self, x):
@@ -155,6 +155,7 @@ class EfficientNetb0Conv2D:
         groups=1,
         output_layout=ttnn.TILE_LAYOUT,
         dilation=1,
+        output_dtype=ttnn.bfloat16,
         deallocate_activation=False,
     ):
         self.device = device
@@ -170,6 +171,7 @@ class EfficientNetb0Conv2D:
         self.stride = conv.stride
         self.groups = conv.groups
         self.deallocate_activation = deallocate_activation
+        self.output_dtype = output_dtype
         self.cache = cache
         self.parameters = parameters
         self.shard_layout = shard_layout
@@ -221,7 +223,8 @@ class EfficientNetb0Conv2D:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
-            dtype=ttnn.bfloat16,
+            memory_config=None,
+            dtype=self.output_dtype,
             slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
@@ -236,6 +239,7 @@ class Conv2dDynamicSamePadding:
         shard_layout,
         conv_params,
         batch=1,
+        dtype=ttnn.bfloat16,
         deallocate_activation=False,
     ):
         self.device = device
@@ -274,6 +278,8 @@ class Conv2dDynamicSamePadding:
             device=device,
             shard_layout=self.shard_layout,
             deallocate_activation=deallocate_activation,
+            weights_dtype=dtype,
+            output_dtype=dtype,
         )
 
         self.parameters_conv = conv_params
@@ -297,6 +303,7 @@ class SeparableConvBlock:
         activation=False,
         batch=1,
         deallocate_activation=False,
+        dtype=ttnn.bfloat16,
     ):
         self.activation = activation
         self.depthwise_conv = Conv2dDynamicSamePadding(
@@ -314,6 +321,7 @@ class SeparableConvBlock:
             conv_params.pointwise_conv,
             batch=batch,
             deallocate_activation=True,
+            dtype=dtype,
         )
 
     def __call__(self, x):

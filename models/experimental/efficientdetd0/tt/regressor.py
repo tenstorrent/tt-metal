@@ -12,7 +12,6 @@ class Regressor:
         device,
         parameters,
         conv_params,
-        num_anchors,
         num_layers,
         pyramid_levels=5,
     ):
