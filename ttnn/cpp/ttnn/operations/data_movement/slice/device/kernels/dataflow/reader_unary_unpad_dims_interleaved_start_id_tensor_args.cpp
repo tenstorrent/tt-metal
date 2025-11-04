@@ -9,13 +9,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_tensor = get_compile_time_arg_val(1);
     constexpr uint32_t num_dims = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    const uint32_t tile_width = get_compile_time_arg_val(3);
+    const uint32_t tile_height = get_compile_time_arg_val(4);
+    constexpr auto src_args = TensorAccessorArgs<5>();
     constexpr auto start_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto end_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
-
-    // Tile constants
-    constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t TILE_HEIGHT = 32;
 
     const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_addr = get_common_arg_val<uint32_t>(1);
@@ -88,22 +86,22 @@ void kernel_main() {
 
     // For the last 2 dimensions (height and width in tiles)
     if (num_dims >= 2) {
-        uint32_t start_h_tiles = start_indices[num_dims - 2] / TILE_HEIGHT;
-        uint32_t start_w_tiles = start_indices[num_dims - 1] / TILE_WIDTH;
+        uint32_t start_h_tiles = start_indices[num_dims - 2] / tile_height;
+        uint32_t start_w_tiles = start_indices[num_dims - 1] / tile_width;
 
         // Get input shape from common args to calculate pages per row
         volatile tt_l1_ptr uint32_t* input_shape_args =
             (volatile tt_l1_ptr uint32_t*)(get_common_arg_addr(3 + 2 * num_dims));
         uint32_t input_width = input_shape_args[num_dims - 1];
         uint32_t input_height = input_shape_args[num_dims - 2];
-        uint32_t num_pages_width = input_width / TILE_WIDTH;
+        uint32_t num_pages_width = input_width / tile_width;
 
         calculated_start_offset += start_h_tiles * num_pages_width + start_w_tiles;
 
         // For higher dimensions, add their contribution
         if (num_dims > 2) {
             uint32_t upper_dims_offset = 0;
-            uint32_t multiplier = (input_height / TILE_HEIGHT) * num_pages_width;
+            uint32_t multiplier = (input_height / tile_height) * num_pages_width;
 
             for (int32_t i = num_dims - 3; i >= 0; i--) {
                 upper_dims_offset = upper_dims_offset * input_shape_args[i] + start_indices[i];

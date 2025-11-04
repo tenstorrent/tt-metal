@@ -1084,9 +1084,13 @@ operation::ProgramWithCallbacks slice_tile_multi_core_tensor_args(
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_tensor_config);
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_width = tile_shape[1];
+    uint32_t tile_height = tile_shape[0];
 
     // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, tensor_cb_index, num_dims};
+    std::vector<uint32_t> reader_compile_time_args = {
+        src0_cb_index, tensor_cb_index, num_dims, tile_width, tile_height};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*start_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*end_buffer).append_to(reader_compile_time_args);

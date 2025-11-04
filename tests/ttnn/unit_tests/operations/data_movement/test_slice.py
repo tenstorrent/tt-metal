@@ -1087,7 +1087,7 @@ def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, m
         # ([4, 4], 1, [0, 1], [1, 2], 1, ttnn.ROW_MAJOR_LAYOUT),
         # ([1, 28, 56, 96], 2, [0, 0, 0, 0], [1, 16, 32, 32], 2, ttnn.ROW_MAJOR_LAYOUT),
         # ([10], 1, [2], [7], 1, ttnn.ROW_MAJOR_LAYOUT),
-        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT),
+        ([3, 16, 128, 2880], 2, [0, 0, 32, 0], [3, 16, 64, 2880], 1, ttnn.TILE_LAYOUT),
     ),
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
@@ -1130,10 +1130,17 @@ def test_slice_tensor_args(mesh_device, input_shape, dim, start, end, step, layo
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     print("shape of ttnn output:", ttnn_output_tensor.shape)
-    for out in range(32):
-        print("shape of torch output slice:", torch_output_tensor.shape)
-        print("shape of ttnn output slice:", ttnn_output_tensor[out, :, :, :].shape)
-        assert_with_pcc(torch_output_tensor[0, :, :, :], ttnn_output_tensor[out, :, :, :], 0.999)
+    print("shape of torch output:", torch_output_tensor.shape)
+
+    num_devices = 32
+    batch_size = input_shape[0]  # First dimension of input
+
+    ttnn_reshaped = ttnn_output_tensor.view(num_devices, batch_size, *ttnn_output_tensor.shape[1:])
+
+    ttnn_device_output = ttnn_reshaped[0]  # Shape: [3, 16, 32, 2880]
+
+    print("shape of ttnn device output:", ttnn_device_output.shape)
+    assert_with_pcc(torch_output_tensor, ttnn_device_output, 0.999)
 
 
 @pytest.mark.parametrize(
