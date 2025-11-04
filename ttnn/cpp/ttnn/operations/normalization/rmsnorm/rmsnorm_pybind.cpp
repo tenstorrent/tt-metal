@@ -41,6 +41,9 @@ void bind_normalization_rms_norm(py::module& module) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
             Supported data types and layouts by tensor:
 
@@ -87,13 +90,6 @@ void bind_normalization_rms_norm(py::module& module) {
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
             - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
               :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             .. code-block:: python

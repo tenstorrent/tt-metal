@@ -40,6 +40,9 @@ void py_bind_sdpa_decode(py::module& module) {
             sliding_window_size (int, optional): The size of sliding window for sliding window attention. Defaults to `None`.
 
 
+        Returns:
+            ttnn.Tensor: the output tensor [1 x b x pnh x dh].
+
 
         "Accepts a `SDPAMultiCoreProgramConfig` which specifies the grid size and chunk tiles in the K/V/Mask sequence lengths (Q chunk tiles is not used). The op parallelizes over `b` and K/V/Mask's `s` dimension."
         "If a position is given as (-1), compute for the corresponding index in the batch is skipped."

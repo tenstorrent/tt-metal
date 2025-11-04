@@ -33,6 +33,9 @@ void bind_fill_cache_for_user_(py::module& module, const kv_cache_operation_t& o
             batch_index (int): the index into the cache tensor.
 
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
 
         )doc",
         operation.base_name(),
@@ -65,6 +68,9 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
             update_index (int): the index into the cache tensor.
             batch_offset (int): the batch_offset into the cache tensor.
 
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
 
         )doc",
@@ -105,13 +111,6 @@ void bind_update_cache(pybind11::module& module, const update_cache_operation_t&
 
         Keyword Args:
             * :attr:`compute_kernel_config` Optional[DeviceComputeKernelConfig]
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)

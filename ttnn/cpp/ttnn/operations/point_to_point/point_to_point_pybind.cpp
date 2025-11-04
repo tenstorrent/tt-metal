@@ -29,12 +29,8 @@ void py_bind_point_to_point(py::module& module) {
                 output_tensor (ttnn.Tensor,optional): Optional output tensor.
                 intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.
 
-            Returns:
-
-
-                ttnn.Tensor: the output tensor.
-
-
+           Returns:
+               ttnn.Tensor: the output tensor, with transferred shard on receiving device.
 
             Example:
 

@@ -111,6 +111,9 @@ void bind_reduction_sampling_operation(py::module& module) {
                     * - INT32, UINT32
                       - ROW_MAJOR
 
+            Returns:
+                ttnn.Tensor: The output tensor containing sampled indices.
+
             Memory Support:
               - Interleaved: DRAM and L1
 
@@ -122,13 +125,6 @@ void bind_reduction_sampling_operation(py::module& module) {
               - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
               - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.
               - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
-
-            Returns:
-
-
-                ttnn.Tensor: the output tensor.
-
-
 
             Example:
                 .. code-block:: python

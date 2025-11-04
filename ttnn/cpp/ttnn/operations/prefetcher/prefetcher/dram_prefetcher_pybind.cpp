@@ -30,7 +30,10 @@ void bind_dram_prefetcher_operation(py::module& module) {
                 enable_performance_mode (bool, optional): If set to true, the operation will be optimized for performance.
                     May lead to ND behavior on wormhole 4U systems!
 
+            Returns:
+                ttnn.Tensor: empty tensor (TODO: Should return None)
         )doc",
+
         ttnn::pybind_arguments_t{
             py::arg("tensors"),
             py::arg("num_layers"),

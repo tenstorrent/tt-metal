@@ -33,6 +33,9 @@ void py_bind_attention_softmax(pybind11::module& module) {
             causal_mask (bool, optional): the attention mask is causal. Defaults to `false`.
 
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("tensor"),
@@ -61,6 +64,9 @@ void py_bind_attention_softmax(pybind11::module& module) {
             program_config (SoftmaxProgramConfig): Program Config of the output tensor. Defaults to `SoftmaxDefaultProgramConfig()`.
             causal_mask (bool, optional): the attention mask is causal. Defaults to `false`.
 
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         )doc",
         ttnn::pybind_arguments_t{

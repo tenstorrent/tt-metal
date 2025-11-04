@@ -34,11 +34,7 @@ void bind_rand_operation(py::module& pymodule) {
                                 for reproducible results. Defaults to 0.
 
         Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
+            ttnn.Tensor: A tensor with specified shape, dtype, and layout containing random values.
 
         Example:
             >>> input_tensor_a = ttnn.rand([N,N], dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG )

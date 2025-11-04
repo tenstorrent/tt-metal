@@ -31,7 +31,10 @@ void bind_untilize_with_unpadding(py::module& module) {
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
 
+            Returns:
+                List of ttnn.Tensor: the output tensor.
         )doc";
+
     using OperationType = decltype(ttnn::untilize_with_unpadding);
     ttnn::bind_registered_operation(
         module,

@@ -28,11 +28,7 @@ void bind_full_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
 
         Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
+            ttnn.Tensor: A filled tensor of specified shape and value.
 
         Example:
             >>> any = ttnn.zeros(shape=(2, 2), dtype=ttnn.bfloat16)

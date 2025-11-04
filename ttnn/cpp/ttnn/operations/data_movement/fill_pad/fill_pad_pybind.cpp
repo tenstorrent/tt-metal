@@ -34,6 +34,9 @@ void bind_fill_pad_op(py::module& module) {
             Keyword args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
+            Returns:
+                ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::fill_implicit_tile_padding.base_name());
 

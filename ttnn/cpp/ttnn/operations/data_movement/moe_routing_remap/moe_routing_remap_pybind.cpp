@@ -47,6 +47,9 @@ Keyword Args:
     memory_config (ttnn.MemoryConfig, optional): Optional memory configuration for the output. Defaults to `None`.
     optional_output_tensor (ttnn.Tensor, optional): Optional output buffer.
 
+Returns:
+    ttnn.Tensor: Tensor containing the device partitioned local weights, `[devices/devices, total_experts]`
+
     )doc";
 
     using OperationType = decltype(ttnn::moe_routing_remap);

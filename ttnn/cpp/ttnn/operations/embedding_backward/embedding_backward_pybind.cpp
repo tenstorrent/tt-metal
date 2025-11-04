@@ -31,15 +31,11 @@ void py_bind_embedding_backward(py::module& module) {
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
 
 
-        Note:
-            The input and the output gradient tensors must have the same datatype.
-
         Returns:
-
-
             ttnn.Tensor: the output tensor.
 
-
+        Note:
+            The input and the output gradient tensors must have the same datatype.
 
         Example:
             >>> device_id = 0

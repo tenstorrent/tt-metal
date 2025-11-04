@@ -27,11 +27,7 @@ void bind_indexed_fill(pybind11::module& module) {
                 dim (int, optional): Dimension value. Defaults to `0`.
 
             Returns:
-
-
                 ttnn.Tensor: the output tensor.
-
-
 
             Example:
                 >>> batch_id = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.UINT32)), device=device)

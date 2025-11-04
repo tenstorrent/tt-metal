@@ -84,11 +84,7 @@ void py_bind_ring_attention_all_gather_async(pybind11::module& module) {
             topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring and Linear; callers must supply the desired value.
 
         Returns:
-
-
             ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)

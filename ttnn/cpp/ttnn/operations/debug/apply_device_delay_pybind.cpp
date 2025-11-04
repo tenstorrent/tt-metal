@@ -32,11 +32,7 @@ void py_bind_apply_device_delay(py::module& module) {
                 subdevice_id (ttnn.SubDeviceId, optional): The subdevice ID for the subdevice on which we schedule the worker core. Defaults to `None`.
 
             Returns:
-
-
-                ttnn.Tensor: the output tensor.
-
-
+                None: This function does not return a value.
 
             Example:
                 >>> # For a 2x2 mesh, apply different delays to each device

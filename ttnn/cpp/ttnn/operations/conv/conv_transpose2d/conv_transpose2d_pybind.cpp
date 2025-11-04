@@ -75,6 +75,7 @@ void py_bind_conv_transpose2d(py::module& module) {
 
         Returns:
             The output tensor, output height and width, and the preprocessed weights and bias.
+
             - ttnn.Tensor: the output tensor, when return_output_dim = False and return_weights_and_bias = False
             - tuple[ttnn.Tensor, tuple[int, int]]: the output tensor, and its height and width, if return_output_dim = True
             - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and its weights and biases, if return_weights_and_bias = True

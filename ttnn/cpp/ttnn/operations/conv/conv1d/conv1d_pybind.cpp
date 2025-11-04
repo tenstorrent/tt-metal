@@ -52,6 +52,7 @@ void py_bind_conv1d(py::module& module) {
 
         Returns:
             The output tensor, output length, and the preprocessed weights and bias.
+
             - ttnn.Tensor: The output tensor, when return_output_dim = False and return_weights_and_bias = False
             - tuple[ttnn.Tensor, int]: The output tensor, and its length, if return_output_dim = True
             - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its weights and biases, if return_weights_and_bias = True

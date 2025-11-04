@@ -23,11 +23,7 @@ void bind_generic_operation(py::module& module) {
                 computational buffer configurations, semaphores, and other execution parameters.
 
         Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
+            ttnn.Tensor: Handle to the output tensor.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples

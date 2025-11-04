@@ -75,7 +75,10 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                 compute_kernel_config (DeviceComputeKernelConfig, Optional): Optional configuration for the device compute kernel. Defaults to None.
                 mesh_coords (Set[MeshCoordinate], optional): Set of mesh coordinates to execute on.
 
+            Returns:
+                ttnn.Tensor, ttnn.Tensor: Tensors representing the updated cache states.
         )doc";
+
     using PagedFusedUpdateCacheType = decltype(ttnn::experimental::paged_fused_update_cache);
     ttnn::bind_registered_operation(
         module,

@@ -35,6 +35,9 @@ void bind_reduction_cumsum_operation(py::module& module) {
             reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
             out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
             If both :attr:`dtype` and :attr:`output` are specified then :attr:`output.dtype` must match :attr:`dtype`.
 
@@ -62,13 +65,6 @@ void bind_reduction_cumsum_operation(py::module& module) {
         Limitations:
             - Preallocated output must have the same shape as the input
             - Preallocated output for integer types is not supported
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             .. code-block:: python

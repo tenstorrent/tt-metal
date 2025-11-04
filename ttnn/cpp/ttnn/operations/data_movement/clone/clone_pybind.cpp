@@ -20,17 +20,13 @@ void bind_clone_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG. Defaults to `None`.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the cloned output tensor.
+
         Note:
             * ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
             * TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
             * If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> tensor = ttnn.from_torch(torch.rand([1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)

@@ -23,11 +23,7 @@ void bind_padded_slice(py::module& module) {
                 memory_config: Memory Config of the output tensor. This must be either height or block sharded.
 
             Returns:
-
-
                 ttnn.Tensor: the output tensor.
-
-
 
             Example:
                 >>> tensor = ttnn.padded_slice(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device), [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])

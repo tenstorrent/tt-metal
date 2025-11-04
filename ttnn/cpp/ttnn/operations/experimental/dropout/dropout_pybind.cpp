@@ -28,6 +28,9 @@ void bind_experimental_dropout_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -40,13 +43,6 @@ void bind_experimental_dropout_operation(py::module& module) {
                * - BFLOAT16
                  - TILE
                  - 2, 3, 4
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)

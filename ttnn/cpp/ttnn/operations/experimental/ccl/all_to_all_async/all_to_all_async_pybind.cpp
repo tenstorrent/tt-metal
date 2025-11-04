@@ -90,18 +90,14 @@ void py_bind_all_to_all_async(pybind11::module& module) {
                 is supported. Defaults to ttnn.Topology.Ring.
             subdevice_id (SubDeviceId, optional): Target specific subdevice for the operation.
 
+        Returns:
+            ttnn.Tensor: Output tensor containing redistributed data, sharded along out_dim.
+
         Notes:
             - The operation requires persistent intermediate and output buffers to be pre-allocated
             - Only supports resharding between dimensions 2 and 3
             - Chunks are sent in a ring pattern for optimal bandwidth utilization
             - Dynamic alternate routing is not supported
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> # Redistribute data from dim 2 to dim 3 across 4 devices

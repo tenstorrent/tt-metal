@@ -41,11 +41,7 @@ void bind_slice_write(py::module& module) {
                 memory_config Memory Config of the output tensor
 
             Returns:
-
-
-                ttnn.Tensor: the output tensor.
-
-
+                ttnn.Tensor: the output tensor after writing the input tensor to it.
 
             Example:
                 >>> ttnn.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)

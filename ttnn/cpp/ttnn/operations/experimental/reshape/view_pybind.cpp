@@ -27,10 +27,7 @@ void py_bind_view(py::module& module) {
             * input_tensor: Input Tensor.
             * new_shape: New shape of tensor.
         Returns:
-
-            ttnn.Tensor: the output tensor.
-
-
+            ttnn.Tensor: the output tensor with the new shape.
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 4), dtype=torch.bfloat16), device=device)
             >>> output = ttnn.experimental.view(tensor, (2, 1, 1, 4))
@@ -59,4 +56,5 @@ void py_bind_view(py::module& module) {
             py::arg("shape"),
         });
 }
+
 }  // namespace ttnn::operations::experimental::reshape::detail

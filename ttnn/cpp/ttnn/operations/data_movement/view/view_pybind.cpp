@@ -55,11 +55,7 @@ void py_bind_view(pybind11::module& module) {
             * new_shape: New shape of tensor.
 
         Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
+            ttnn.Tensor: a reference to the input tensor but with the new shape.
 
         Example:
 

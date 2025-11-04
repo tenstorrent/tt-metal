@@ -50,11 +50,7 @@ void bind_max_pool2d_operation(py::module& module) {
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
 
         Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
+            ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
 
         Example:
             >>> import ttnn
@@ -192,6 +188,9 @@ void bind_avg_pool2d_operation(py::module& module) {
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the average pool convolved output tensor.
 
         Example:
             >>> import ttnn

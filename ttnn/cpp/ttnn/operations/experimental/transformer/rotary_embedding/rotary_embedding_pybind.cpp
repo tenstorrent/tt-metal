@@ -36,6 +36,9 @@ void py_bind_rotary_embedding(pybind11::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),

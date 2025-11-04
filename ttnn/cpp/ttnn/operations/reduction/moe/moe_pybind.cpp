@@ -37,6 +37,9 @@ void bind_reduction_moe_operation(py::module& module) {
                 * :attr:`memory_config`: Memory Config of the output tensors
                 * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
 
+            Returns:
+                ttnn.Tensor: the output tensor.
+
             Note:
                 The :attr:`input_tensor`, :attr:`expert_mask_tensor`, and :attr:`topk_mask_tensor` must match the following data type and layout:
 
@@ -61,13 +64,6 @@ void bind_reduction_moe_operation(py::module& module) {
                 - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
                 - All of the shape validations are performed on padded shapes.
                 - Sharding is not supported for this operation.
-
-            Returns:
-
-
-                ttnn.Tensor: the output tensor.
-
-
 
             Example:
                 .. code-block:: python

@@ -36,6 +36,9 @@ void py_bind_sdpa(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
 
+        Returns:
+            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+
         )doc";
 
     using OperationType = decltype(ttnn::transformer::scaled_dot_product_attention);
@@ -98,6 +101,9 @@ void py_bind_sdpa(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor [b x nqh x s x dh].
 
         )doc";
 
@@ -164,10 +170,12 @@ void py_bind_sdpa(py::module& module) {
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):Defaults to None.
 
+        Returns:
             (ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N x dh].
               - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
         )doc";
+
     using JointOperationType = decltype(ttnn::transformer::joint_scaled_dot_product_attention);
 
     ttnn::bind_registered_operation(
@@ -249,11 +257,13 @@ void py_bind_sdpa(py::module& module) {
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
             ccl_core_grid_offset (ttnn.CoreCoord): Core grid offset for CCL operations.
 
+        Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].
               - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
               - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
         )doc";
+
     using RingJointOperationType = decltype(ttnn::transformer::ring_joint_scaled_dot_product_attention);
 
     ttnn::bind_registered_operation(
@@ -350,6 +360,9 @@ void py_bind_sdpa(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
 
+        Returns:
+            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+
         )doc";
 
     using MLAOperationType = decltype(ttnn::transformer::flash_mla_prefill);
@@ -409,6 +422,9 @@ void py_bind_sdpa(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor [b x nqh x s x dh].
 
         )doc";
 
@@ -479,6 +495,9 @@ void py_bind_sdpa(py::module& module) {
             program_config (SDPAProgramConfig, optional): Program configuration. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor with results for this device's assigned queries [b x nqh x local_s x dh].
 
         )doc";
 

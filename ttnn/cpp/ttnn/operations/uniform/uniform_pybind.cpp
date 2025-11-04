@@ -23,11 +23,7 @@ void bind_uniform_operation(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for the compute kernel. Defaults to `None`.
 
         Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
+            ttnn.Tensor: The `input` tensor with updated values drawn from the specified uniform distribution.
 
         Example:
             >>> input = ttnn.to_device(ttnn.from_torch(torch.ones(3, 3), dtype=torch.bfloat16)), device=device)

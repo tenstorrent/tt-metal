@@ -70,6 +70,9 @@ void bind_normalization_layernorm_operation(py::module& module) {
             program_config (ttnn.ProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig)
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
             Supported data types and layouts by tensor:
 
@@ -126,15 +129,6 @@ void bind_normalization_layernorm_operation(py::module& module) {
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
-
-
-        Returns:
-
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
 
         Example:

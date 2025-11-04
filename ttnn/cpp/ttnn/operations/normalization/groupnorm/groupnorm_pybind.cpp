@@ -60,6 +60,9 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                 use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance.
                 reciprocals (ttnn.Tensor, optional): Defaults to `None`. FP32 tensor containing pre-computed reciprocal values. Only valid when use_welford is True. Must be sharded to L1 memory in each core.
 
+            Returns:
+                ttnn.Tensor: the output tensor.
+
             Note:
                 The supported input data types and layouts:
 
@@ -207,13 +210,6 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
 
                     output_tensor = ttnn.to_torch(output_tensor)
                     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-
-            Returns:
-
-
-                ttnn.Tensor: the output tensor.
-
-
 
             Example:
                 .. code-block:: python

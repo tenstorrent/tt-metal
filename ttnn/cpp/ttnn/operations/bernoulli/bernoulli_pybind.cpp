@@ -23,11 +23,7 @@ void bind_bernoulli_operation(py::module& module) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for the compute kernel. Defaults to `None`.
 
         Returns:
-
-
             ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> input = ttnn.to_device(ttnn.from_torch(torch.empty(3, 3).uniform_(0, 1), dtype=torch.bfloat16)), device=device)

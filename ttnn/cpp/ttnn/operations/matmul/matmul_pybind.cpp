@@ -522,6 +522,9 @@ void py_module(py::module& module) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
             The input tensors support the following data types and layouts:
 
@@ -572,13 +575,6 @@ void py_module(py::module& module) {
 
 
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> # matrix x matrix - no batch dimensions
@@ -719,6 +715,9 @@ void py_module(py::module& module) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Example:
             >>> # batched matrix x broadcasted matrix
             >>> activations = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
@@ -822,6 +821,8 @@ void py_module(py::module& module) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
         )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::matmul_batched_weights)& self,
@@ -871,6 +872,7 @@ void py_module(py::module& module) {
             py::arg("global_cb") = std::nullopt,
             py::arg("sub_device_id") = std::nullopt,
         });
+
     bind_registered_operation(
         module,
         ::ttnn::addmm,
@@ -935,6 +937,9 @@ void py_module(py::module& module) {
             optional_output_tensor (ttnn.Tensor, optional): User-provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
             global_cb (ttnn.GlobalCircularBuffer): TBD
             sub_device_id (ttnn.SubDeviceId): TBD
+
+        Returns:
+            ttnn.Tensor: output tensor of shape (n, p)
 
         )doc",
         ttnn::pybind_overload_t{
@@ -1005,6 +1010,9 @@ void py_module(py::module& module) {
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor with sparse results.
 
         Supported Modes
             .. list-table::

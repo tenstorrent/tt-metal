@@ -32,6 +32,9 @@ void bind_untilize(py::module& module) {
                 use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
 
+            Returns:
+                List of ttnn.Tensor: the output tensor.
+
         )doc";
 
     using OperationType = decltype(ttnn::untilize);

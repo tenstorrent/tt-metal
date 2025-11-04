@@ -30,11 +30,7 @@ void bind_pad(py::module& module) {
                 * :attr:`memory_config`: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to `None`.
 
             Returns:
-
-
-                ttnn.Tensor: the output tensor.
-
-
+               List of ttnn.Tensor: the output tensor.
 
             Example:
                 .. code-block:: python

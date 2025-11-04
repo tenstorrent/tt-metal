@@ -96,11 +96,7 @@ void py_bind_reduce_scatter_minimal_async(pybind11::module& module) {
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
         Returns:
-
-
             ttnn.Tensor: the output tensor.
-
-
 
         Example:
 

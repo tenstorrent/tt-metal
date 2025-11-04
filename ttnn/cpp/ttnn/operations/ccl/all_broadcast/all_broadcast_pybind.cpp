@@ -32,8 +32,8 @@ void py_bind_all_broadcast(py::module& module) {
                 num_links (int, optional): The number of links to use for the all-broadcast operation. Defaults to `1`.
                 topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
 
-            Returns:
-                List[ttnn.Tensor]: A list of tensors, one from each device, where each tensor has the same shape as the input.
+           Returns:
+               List[ttnn.Tensor]: A list of tensors, one from each device, where each tensor has the same shape as the input.
 
             Example:
                 >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
