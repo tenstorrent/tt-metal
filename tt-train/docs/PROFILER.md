@@ -100,7 +100,7 @@ The directory contains the following files:
 | `profile_log_device.csv` | Device-side profiling data captured during execution. |
 | `tracy_profile_log_host.tracy` | Host-side Tracy profiler log, which can be opened with the Tracy GUI.|
 
-Custom markers can be emitted via `ctx().get_profiler().read_results("my_custom_marker")`
+Custom markers can be emitted via `ctx().get_profiler().read_results(device, "my_custom_marker")`
 
 ---
 
