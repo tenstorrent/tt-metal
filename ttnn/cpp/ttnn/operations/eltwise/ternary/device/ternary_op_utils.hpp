@@ -35,7 +35,7 @@ enum class KernelName {
     ComputeBcastTTT,        // TTT : column and scalar bcast cases
     ComputeBcastTTS_TST,    // TTS, TST: column and scalar bcast cases
     ComputeNoBcastTTS_TST,  // TTS, TST: no bcast, outer dim and row bcast cases
-    ComputeAddcmul,         // ADDCMUL: uses existing add/mul operations
+    ComputeNoBcastAddcmul,  // ADDCMUL: no bcast, uses existing add/mul operations
 };
 
 struct TernaryKernelConfig {

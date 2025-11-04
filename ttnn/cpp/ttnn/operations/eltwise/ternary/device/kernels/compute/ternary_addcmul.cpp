@@ -33,26 +33,25 @@ void MAIN {
 
         tile_regs_acquire();
 
-        // Copy inputs to DST registers (as done by ternary reader)
+        // Step 1: Load B and C, compute B * C -> DST[1]
+        copy_tile_to_dst_init_short(cb_in1);
+        copy_tile(cb_in1, 0, 0);  // input_b -> DST[0]
+
+        copy_tile_to_dst_init_short(cb_in2);
+        copy_tile(cb_in2, 0, 1);  // input_c -> DST[1]
+
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 1);  // DST[0] * DST[1] -> DST[1]
+
+        // Step 2: (input_b * input_c) * value -> DST[1]
+        mul_unary_tile(1, scalar_u32);  // DST[1] * scalar -> DST[1]
+
+        // Step 3: Load A and add with result
         copy_tile_to_dst_init_short(cb_in0);
         copy_tile(cb_in0, 0, 0);  // input_a -> DST[0]
 
-        copy_tile_to_dst_init_short(cb_in1);
-        copy_tile(cb_in1, 0, 1);  // input_b -> DST[1]
-
-        copy_tile_to_dst_init_short(cb_in2);
-        copy_tile(cb_in2, 0, 2);  // input_c -> DST[2]
-
-        // Step 1: input_b * input_c -> DST[3]
-        mul_binary_tile_init();
-        mul_binary_tile(1, 2, 3);  // DST[1] * DST[2] -> DST[3]
-
-        // Step 2: (input_b * input_c) * value -> DST[3]
-        mul_unary_tile(3, scalar_u32);  // DST[3] * scalar -> DST[3]
-
-        // Step 3: input_a + (input_b * input_c * value) -> DST[0]
         add_binary_tile_init();
-        add_binary_tile(0, 3, 0);  // DST[0] + DST[3] -> DST[0]
+        add_binary_tile(0, 1, 0);  // DST[0] + DST[1] -> DST[0]
 
         tile_regs_commit();
         tile_regs_wait();

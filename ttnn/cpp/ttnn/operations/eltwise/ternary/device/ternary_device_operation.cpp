@@ -114,7 +114,7 @@ TernaryDeviceOperation::program_factory_t TernaryDeviceOperation::select_program
 
 tt::stl::hash::hash_t TernaryDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        ternary_op_type, ternary_variant, broadcast_type, memory_config, get_dtype(), compute_kernel_config, scalar);
+        ternary_op_type, ternary_variant, broadcast_type, memory_config, get_dtype(), compute_kernel_config);
 }
 
 void TernaryDeviceOperation::validate_on_program_cache_hit(
@@ -336,7 +336,6 @@ TernaryDeviceOperation::invoke(
         .compute_kernel_config = std::nullopt,
         .scalar_input_a = std::nullopt,
         .scalar_input_b = std::nullopt,
-        .scalar = std::nullopt,
     };
 
     tensor_args_t args{
@@ -358,6 +357,11 @@ TernaryDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // This invoke variant is only for operations that need a scalar parameter with TTT variant
+    TT_FATAL(
+        op_type == TernaryOpType::ADDCMUL,
+        "This invoke variant with scalar parameter is only supported for ADDCMUL operation");
+
     // Detect broadcast type for TTT variant
     TernaryBroadcastType broadcast_type =
         get_broadcast_type(input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
@@ -370,9 +374,8 @@ TernaryDeviceOperation::invoke(
         .input_dtype = input_a.dtype(),
         .dtype = output_dtype.value_or(input_b.dtype()),
         .compute_kernel_config = std::nullopt,
-        .scalar_input_a = std::nullopt,
+        .scalar_input_a = scalar,  // Reuse scalar_input_a for ADDCMUL scalar value
         .scalar_input_b = std::nullopt,
-        .scalar = scalar,
     };
 
     tensor_args_t args{

@@ -95,7 +95,7 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
 
     // TTT configurations for ADDCMUL - only NONE broadcast type supported initially
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::NONE},
-     {KernelName::ReaderNoBcastTTT, KernelName::ComputeAddcmul, KernelName::WriterNoBcast}},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
 
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -166,7 +166,7 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeBcastTTS_TST:
             return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
-        case KernelName::ComputeAddcmul: return fmt::format(compute, root, "ternary_addcmul.cpp");
+        case KernelName::ComputeNoBcastAddcmul: return fmt::format(compute, root, "ternary_addcmul.cpp");
         default: __builtin_unreachable();
     }
 }

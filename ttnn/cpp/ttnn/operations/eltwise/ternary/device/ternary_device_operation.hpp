@@ -25,10 +25,8 @@ struct TernaryDeviceOperation {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
         // Scalar values for TTS/TST/TSS variants
-        std::optional<float> scalar_input_a;  // For TST/TSS
+        std::optional<float> scalar_input_a;  // For TST/TSS, and for ADDCMUL scalar value
         std::optional<float> scalar_input_b;  // For TTS/TSS
-        // Scalar for operations like ADDCMUL
-        std::optional<float> scalar;
 
         tt::stl::hash::hash_t to_hash() const;
 

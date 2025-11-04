@@ -463,8 +463,9 @@ void set_or_update_runtime_arguments(
         } else if (variant == TernaryVariant::TST) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         } else if (
-            operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL && operation_attributes.scalar.has_value()) {
-            scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar.value(), output.dtype());
+            operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+            operation_attributes.scalar_input_a.has_value()) {
+            scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         }
         auto [freq, counter] = [&] {
             switch (broadcast_type) {
