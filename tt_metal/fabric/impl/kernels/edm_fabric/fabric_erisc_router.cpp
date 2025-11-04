@@ -1764,7 +1764,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         did_something = false;
 
-        open_perf_recording_window(inner_loop_perf_telemetry_collector);
+        if constexpr (is_sender_channel_serviced[0]) {
+            open_perf_recording_window(inner_loop_perf_telemetry_collector);
+        }
 
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             invalidate_l1_cache();
@@ -1865,11 +1867,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
 
-        close_perf_recording_window(inner_loop_perf_telemetry_collector);
-        if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
-            if (captured_an_event(inner_loop_perf_telemetry_collector) ||
-                any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered)) {
-                write_perf_recording_window_results(inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
+        if constexpr (is_sender_channel_serviced[0]) {
+            close_perf_recording_window(inner_loop_perf_telemetry_collector);
+            if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
+                if (captured_an_event(inner_loop_perf_telemetry_collector) ||
+                    any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered)) {
+                    write_perf_recording_window_results(
+                        inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
+                }
             }
         }
     }
