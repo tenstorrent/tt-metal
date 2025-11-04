@@ -135,8 +135,8 @@ class DeepseekGenerator:
             if getattr(hf_config, "max_position_embeddings", None):
                 hf_config.max_seq_len = int(hf_config.max_position_embeddings)
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to infer max_seq_len from config: {e}. Falling back to default (4096).")
         hf_config.max_seq_len = 4096
 
     def _prepare_weight_configs(self, cache_dir: str | Path | None) -> None:
