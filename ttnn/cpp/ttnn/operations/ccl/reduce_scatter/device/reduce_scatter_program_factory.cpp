@@ -87,7 +87,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         operation_attributes.cluster_axis);
     TT_FATAL(
         forward_coordinate.has_value() || backward_coordinate.has_value(),
-        "DEBUG: forward_coord or backward_coord is null");
+        "DEBUG: forward_coord and backward_coord is null");
 
     log_debug(tt::LogOp, "Getting device index for {}", mesh_coordinate);
     uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(

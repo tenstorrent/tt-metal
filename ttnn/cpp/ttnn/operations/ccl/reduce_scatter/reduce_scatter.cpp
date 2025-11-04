@@ -31,14 +31,14 @@ ttnn::Tensor ExecuteReduceScatter::invoke(
     // reduce-scatter on cluster_axis=0
     if (cluster_axis == std::nullopt) {
         auto mesh_shape = input_tensor.device()->get_view().shape();
-        if (!mesh_shape.is_line_topology()) {
-            Tensor tensor = input_tensor;
-            for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+        Tensor tensor = input_tensor;
+        for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+            if (mesh_shape[i] > 1) {
                 tensor = ttnn::reduce_scatter(
                     tensor, dim, i, subdevice_id, memory_config, optional_output_tensor, num_links, topology);
             }
-            return tensor;
         }
+        return tensor;
     }
     auto mesh_device = input_tensor.device();
     uint32_t normalized_dim = input_tensor.logical_shape().get_normalized_index(dim);

@@ -25,10 +25,10 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
         // if it is not flat, then we need to call all-broadcast on dim=-1 to dim=0
         // first all broadcast will be on the last dimension, producing a vector of tensors
         // we then recursively call all broadcast on each of the tensors in the vector
-        if (!mesh_shape.is_line_topology()) {
-            std::deque<ttnn::Tensor> tensors;
-            tensors.push_back(input_tensor);
-            for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+        std::deque<ttnn::Tensor> tensors;
+        tensors.push_back(input_tensor);
+        for (uint32_t axis = 0; axis < mesh_shape.dims(); ++axis) {
+            if (mesh_shape[axis] > 1) {
                 uint32_t num_tensors = tensors.size();
                 for (uint32_t i = 0; i < num_tensors; ++i) {
                     auto tensor = std::move(tensors.front());
@@ -38,8 +38,8 @@ std::vector<ttnn::Tensor> ExecuteAllBroadcast::invoke(
                     tensors.insert(tensors.end(), curr_tensors.begin(), curr_tensors.end());
                 }
             }
-            return std::vector<ttnn::Tensor>(tensors.begin(), tensors.end());
         }
+        return std::vector<ttnn::Tensor>(tensors.begin(), tensors.end());
     }
     auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device is required for all_broadcast operation");

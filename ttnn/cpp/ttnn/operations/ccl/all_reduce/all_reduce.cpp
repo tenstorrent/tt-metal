@@ -25,13 +25,13 @@ ttnn::Tensor ExecuteAllReduce::invoke(
         auto mesh_shape = input_tensor.device()->get_view().shape();
         // Check if flat mesh (1x...M...x1) where M = total mesh volume
         // if it is not flat, then we need to call all-reduce from dim=0 to dim=-1
-        if (!mesh_shape.is_line_topology()) {
-            Tensor tensor = input_tensor;
-            for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+        Tensor tensor = input_tensor;
+        for (size_t i = 0; i < mesh_shape.dims(); ++i) {
+            if (mesh_shape[i] > 1) {
                 tensor = ttnn::all_reduce(tensor, i, subdevice_id, memory_config, num_links, topology);
             }
-            return tensor;
         }
+        return tensor;
     }
     // Get mesh device from input tensor
     auto mesh_device = input_tensor.device();

@@ -45,6 +45,10 @@ ttnn::Tensor ExecuteAllGather::invoke(
             }
             return tensor;
         }
+        // Find the dim that is not 1 and reduce there
+        for (int i = 0; i < mesh_shape.dims(); i++) {
+            cluster_axis = i;
+        }
     }
 
     auto mesh_device = input_tensor.device();
