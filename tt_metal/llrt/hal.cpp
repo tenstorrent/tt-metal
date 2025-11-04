@@ -90,12 +90,7 @@ std::pair<HalProcessorClassType, uint32_t> HalCoreInfoType::get_processor_class_
         }
         processor_index -= processor_count;
     }
-    TT_ASSERT(
-        processor_class_idx < this->processor_classes_.size(),
-        "{} {} {}",
-        processor_class_idx,
-        this->processor_classes_.size(),
-        processor_index);
+    TT_ASSERT(processor_class_idx < this->processor_classes_.size());
     return {static_cast<HalProcessorClassType>(processor_class_idx), processor_index};
 }
 
