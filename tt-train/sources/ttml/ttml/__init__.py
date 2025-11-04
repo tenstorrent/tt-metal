@@ -36,6 +36,7 @@ def _initialize():
             FileNotFoundError,
             json.JSONDecodeError,
         ):
+            # These exceptions indicate a non editable instance, catch them and return False.
             pass
 
         return False
