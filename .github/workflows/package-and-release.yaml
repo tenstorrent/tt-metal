@@ -101,7 +101,7 @@ jobs:
 
   create-tag:
     needs: release-precheck
-    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@dpopov-force-version
+    uses: tenstorrent/tt-metal/.github/workflows/release-verify-or-create-tag.yaml@main
     secrets: inherit
     with:
       fetch_depth: 0
