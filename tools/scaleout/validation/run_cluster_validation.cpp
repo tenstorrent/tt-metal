@@ -38,6 +38,7 @@ struct InputArgs {
     uint32_t num_iterations = 50;
     bool sweep_traffic_configs = false;
     bool validate_connectivity = true;
+    bool perform_unconditional_link_retrain = false;
 };
 
 std::filesystem::path generate_output_dir() {
@@ -98,6 +99,9 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
             tt::tt_metal::hal::get_erisc_l1_unreserved_size());
     } else {
         input_args.data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
+    }
+    if (test_args::has_command_option(args_vec, "--retrain-all-links")) {
+        input_args.perform_unconditional_link_retrain = true;
     }
 
     if (test_args::has_command_option(args_vec, "--packet-size-bytes")) {
@@ -259,6 +263,14 @@ int main(int argc, char* argv[]) {
 
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
+
+    if (input_args.perform_unconditional_link_retrain) {
+        log_output_rank0("Resetting All Ethernet Links in the System");
+        reset_ethernet_links(
+            physical_system_descriptor,
+            physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name()));
+        exit(0);
+    }
 
     AsicTopology missing_asic_topology = validate_connectivity(input_args, physical_system_descriptor);
     bool links_reset = false;
