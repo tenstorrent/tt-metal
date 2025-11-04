@@ -93,17 +93,23 @@ runs:
 
           # Build summary content
           summary_content=""
-          if [[ -s fail-first.txt ]]; then
+          if [[ -f fail-first.txt ]]; then
             summary_content+="=== FAILURE HIGHLIGHTS ==="$'\n'
             summary_content+="$(cat fail-first.txt)"$'\n'$'\n'
           fi
           summary_content+="=== KEY LINES ==="$'\n'
-          if [[ -s compact-summary.txt ]]; then
+          if [[ -f compact-summary.txt ]]; then
             summary_content+="$(cat compact-summary.txt)"
           else
             summary_content+="No matches for the current pattern"
           fi
         fi
+
+        echo "Fail-first and compact summary generated."
+        echo "Fail-first:"
+        cat fail-first.txt
+        echo "Compact summary:"
+        cat compact-summary.txt
 
         # Output to CI console (plain text format)
         echo "########################################################"
