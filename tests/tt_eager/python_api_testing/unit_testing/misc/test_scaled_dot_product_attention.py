@@ -1379,9 +1379,6 @@ def reference_flash_attention_with_sinks(Q, K, V, S, is_causal=True, q_chunk_siz
     return output
 
 
-import time
-
-
 def run_test_sdpa_with_attention_sink(
     device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sink_values=None, rmse_threshold=None
 ):
@@ -1405,16 +1402,14 @@ def run_test_sdpa_with_attention_sink(
     V = fa_rand(b, nkv, s, d)
 
     # Create per-head attention sink values
-    # Shape: [b, nh] - one value per head, scaled appropriately
-    sm_scale = 1.0 / math.sqrt(d)
+    # Shape: [1, nh, 1, 1] - one value per head,
     if sink_values is None:
-        S_per_head = torch.rand(1, nh) * 20.0  # Random values scaled by to make closer to real distribution
+        S_per_head = torch.rand(1, nh) * 4.0  # Random values scaled by to make closer to real distribution
     else:
         S_per_head = torch.tensor(sink_values).reshape(1, nh)
 
     # Prepare attention sink tensor for device: [1, nh, 1, 1]
     S_padded = S_per_head.reshape(1, nh, 1, 1)
-    # S_padded /= sm_scale  # Important!! GPT-OSS expects sink to not be scaled
 
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
@@ -1506,14 +1501,12 @@ def run_test_sdpa_with_attention_sink_sliding_window(
         S_per_head = torch.tensor(sink_values).reshape(1, nh)
 
     S_padded = S_per_head.reshape(1, nh, 1, 1)
-    # S_padded /= sm_scale  # Important!! GPT-OSS expects sink to not be scaled
 
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_S = ttnn.from_torch(S_padded, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
 
-    # tt_S = None
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
