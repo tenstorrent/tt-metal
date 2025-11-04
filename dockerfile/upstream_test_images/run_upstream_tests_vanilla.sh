@@ -254,9 +254,8 @@ test_suite_bh_glx_llama_demo_tests() {
 
     verify_llama_dir_
 
-    # Skipped due to https://github.com/tenstorrent/tt-metal/issues/28342
-    # pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
-    # pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 32 --max_generated_tokens 220
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 32 --max_generated_tokens 220
 }
 
 # Define test suite mappings for different hardware topologies
