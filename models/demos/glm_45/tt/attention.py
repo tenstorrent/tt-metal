@@ -10,7 +10,6 @@ from models.demos.glm_45.utils.general_utils import get_cache_file_name
 from models.demos.glm_45.utils.substate import substate
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 
-from ..tt.sdpa import sdpa as tt_sdpa
 from ..utils.general_utils import MAX_SEQ_LEN
 
 
@@ -347,25 +346,37 @@ class Attention:
             tt_k.deallocate(True)
             tt_k = tt_k_rope
 
-            # Reshape into SDPA shapes
-            tt_q = ttnn.reshape(tt_q, [batch_size * seq_len, 1, self.num_local_heads, self.head_dim])
-            tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, self.num_local_kv_heads, self.head_dim])
-            tt_v = ttnn.reshape(tt_v, [batch_size * seq_len, self.num_local_kv_heads, self.head_dim])
+            # Prepare fused SDPA inputs: [B, H, S, DH] and [B, K, S, DH]
+            tt_q = ttnn.reshape(tt_q, [batch_size, seq_len, self.num_local_heads, self.head_dim])
+            tt_q = ttnn.transpose(tt_q, 1, 2)
+            tt_k = ttnn.reshape(tt_k, [batch_size, seq_len, self.num_local_kv_heads, self.head_dim])
+            tt_k = ttnn.transpose(tt_k, 1, 2)
+            tt_v = ttnn.reshape(tt_v, [batch_size, seq_len, self.num_local_kv_heads, self.head_dim])
+            tt_v = ttnn.transpose(tt_v, 1, 2)
 
-            # Use provided mask (no attention sinks)
-            tt_sdpa_out, _ = tt_sdpa(
+            # If K length differs (shouldn't in this branch), pad Q along sequence to match K
+            sq, sk = tt_q.shape[2], tt_k.shape[2]
+            if sq != sk:
+                pad_len = sk - sq
+                assert pad_len >= 0
+                tt_q = ttnn.pad(tt_q, [(0, 0), (0, 0), (0, pad_len), (0, 0)], 0)
+
+            # Call fused SDPA (no attn_mask when is_causal=True)
+            attn = ttnn.transformer.scaled_dot_product_attention(
                 tt_q,
                 tt_k,
                 tt_v,
-                None,
-                sm_scale=self.scaling,
-                tt_mask=mask,
-                tt_cache=None,
-                position_idx=None,
+                is_causal=True,
+                scale=self.scaling,
             )
-            ttnn.deallocate(tt_q)
-            ttnn.deallocate(tt_k)
-            ttnn.deallocate(tt_v)
+            # Slice back to original Q length if padded
+            if sq != sk:
+                attn = ttnn.slice(attn, (0, 0, 0, 0), (attn.shape[0], attn.shape[1], sq, attn.shape[3]))
+
+            # Concatenate heads -> [B, S, H*DH]
+            tt_sdpa_out = ttnn.transformer.concatenate_heads(attn)
+            # Free temporaries
+            ttnn.deallocate(attn)
         else:
             # Prefill path: apply optional Q/K RMSNorm and RoPE before SDPA
             tt_q = ttnn.matmul(x, self.q_proj)
@@ -432,38 +443,51 @@ class Attention:
                     batch_idx=0,
                 )
 
-            # Transpose tensors back for SDPA computation
+            # Transpose tensors back for cache write order -> SDPA compute shapes
             tt_k = ttnn.transpose(tt_k, 1, 2)
             tt_v = ttnn.transpose(tt_v, 1, 2)
 
-            tt_q = ttnn.reshape(tt_q, [batch_size * seq_len, -1, self.num_local_heads, self.head_dim])
-            tt_k = ttnn.reshape(tt_k, [batch_size * seq_len, -1, self.head_dim])
-            tt_v = ttnn.reshape(tt_v, [batch_size * seq_len, -1, self.head_dim])
+            # Prepare fused SDPA inputs: [B, H, S, DH] and [B, K, S, DH]
+            tt_q = ttnn.reshape(tt_q, [batch_size, seq_len, self.num_local_heads, self.head_dim])
+            tt_q = ttnn.transpose(tt_q, 1, 2)
+            tt_k = ttnn.reshape(tt_k, [batch_size, seq_len, self.num_local_kv_heads, self.head_dim])
+            tt_k = ttnn.transpose(tt_k, 1, 2)
+            tt_v = ttnn.reshape(tt_v, [batch_size, seq_len, self.num_local_kv_heads, self.head_dim])
+            tt_v = ttnn.transpose(tt_v, 1, 2)
 
-            # Disable sliding window mask in prefill (reference prefill is causal-internal)
-            tt_sdpa_out, _ = tt_sdpa(
+            # If K length differs (e.g., chunking constraints), pad Q to match K for causal kernel
+            sq, sk = tt_q.shape[2], tt_k.shape[2]
+            if sq != sk:
+                pad_len = sk - sq
+                assert pad_len >= 0
+                tt_q = ttnn.pad(tt_q, [(0, 0), (0, 0), (0, pad_len), (0, 0)], 0)
+
+            # Call fused SDPA (no attn_mask when is_causal=True)
+            attn = ttnn.transformer.scaled_dot_product_attention(
                 tt_q,
                 tt_k,
                 tt_v,
-                None,
-                sm_scale=self.scaling,
-                tt_mask=None,
-                tt_cache=None,
-                position_idx=None,
+                is_causal=True,
+                scale=self.scaling,
             )
-            tt_q.deallocate(True)
-            tt_k.deallocate(True)
-            tt_v.deallocate(True)
+            # Slice back to original Q length if padded
+            if sq != sk:
+                attn = ttnn.slice(attn, (0, 0, 0, 0), (attn.shape[0], attn.shape[1], sq, attn.shape[3]))
 
+            # Concatenate heads -> [B, S, H*DH]
+            tt_sdpa_out = ttnn.transformer.concatenate_heads(attn)
+            ttnn.deallocate(attn)
+            # Free temporaries
+            ttnn.deallocate(tt_q)
+            ttnn.deallocate(tt_k)
+            ttnn.deallocate(tt_v)
+
+        # Project output and add bias: shapes [B, S, H] x [H, H] -> [B, S, H]
         tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16)
-        tt_sdpa_out.deallocate(True)
+        ttnn.deallocate(tt_sdpa_out)
         tt_out = ttnn.add(tt_out, self.o_proj_bias, output_tensor=tt_out)
 
-        # Return shape should match input x: [batch_size, seq_len, hidden], unify decode and prefill
-        if seq_len == 1:
-            # [1, 1, batch, hidden] -> [batch, 1, hidden]
-            tt_out = ttnn.transpose(tt_out, 0, 2)
-            tt_out = ttnn.squeeze(tt_out, dim=2)
+        # Ensure shape [B, S, H]
         tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         # Clean tensor parallel communication (with performance padding)

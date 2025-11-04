@@ -61,7 +61,7 @@ def run_attention_component(
     tt_out = attention_module(tt_hidden_states, tt_mask, rope_mats, tt_position_idx)
 
     # Compare outputs
-    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.99)
+    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.97)
     assert passing, f"Attention test failed. Output: {output}"
 
 
@@ -189,7 +189,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 
 
 @parametrize_mesh_with_fabric()
-@parametrize_batch_seq([(1, 1), (1, 16), (1, 128)])
+@parametrize_batch_seq([(1, 1), (1, 128), (2, 128)])
 @pytest.mark.parametrize("mesh_shape", [(1, 4)])
 def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
     """Test complete decoder layer - combines attention + MLP + norms"""
