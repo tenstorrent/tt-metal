@@ -48,15 +48,6 @@ bool is_integer_format(DataFormat format);
 
 std::ostream& operator<<(std::ostream& os, const DataFormat& format);
 
-/**
- * Returns size of datum in bytes
- *
- * Return value: uint32_t
- *
- * | Argument    | Description    | Type                | Valid Range | Required |
- * |-------------|----------------|---------------------|-------------|----------|
- * | format      | Format of data | tt::DataFormat enum |             | Yes      |
- */
 constexpr uint32_t datum_size(const DataFormat& format) {
     switch (format) {
         case DataFormat::Bfp2:
