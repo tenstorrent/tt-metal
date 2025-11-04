@@ -177,6 +177,10 @@ private:
                 log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both bool and double", path);
                 continue;  // Skip this update
             }
+            if (string_metrics.find(path) != string_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both bool and string", path);
+                continue;  // Skip this update
+            }
             bool_metrics[path] = value;
         }
 
@@ -194,6 +198,10 @@ private:
             }
             if (double_metrics.find(path) != double_metrics.end()) {
                 log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both uint and double", path);
+                continue;  // Skip this update
+            }
+            if (string_metrics.find(path) != string_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both uint and string", path);
                 continue;  // Skip this update
             }
             uint_metrics[path] = value;
@@ -216,6 +224,10 @@ private:
             }
             if (uint_metrics.find(path) != uint_metrics.end()) {
                 log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both double and uint", path);
+                continue;  // Skip this update
+            }
+            if (string_metrics.find(path) != string_metrics.end()) {
+                log_error(tt::LogAlways, "Metric type conflict: path '{}' exists as both double and string", path);
                 continue;  // Skip this update
             }
             double_metrics[path] = value;
