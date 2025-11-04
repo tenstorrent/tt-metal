@@ -251,7 +251,8 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         };
         static const std::vector<std::vector<std::pair<size_t, size_t>>> other_buffer_slot_options = {
             {{8, 16}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
-            {{16, 16}, {8, 16}, {8, 8}, {4, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
+            {{32, 32}, {24, 32}, {16, 32}, {16, 16}, {8, 16}, {8, 8}, {4, 8}}  // BLACKHOLE: {sender_slots,
+                                                                               // receiver_slots}
         };
 
         static tt::stl::Indestructible<std::vector<std::vector<std::pair<size_t, size_t>>>> mesh_slots(
