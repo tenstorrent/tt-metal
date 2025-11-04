@@ -45,12 +45,12 @@ def torch_equal_nan(a, b):
         ((4, 2, 2, 2, 1, 1), (4, 1, 1, 1, 128, 128), (4, 1, 2, 1, 1, 1)),
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5])
-@pytest.mark.parametrize("variant", ["TTT"])
-@pytest.mark.parametrize("condition", [1])
-def test_ttnn_addcmul(c_shape, t_shape, f_shape, scalar, variant, condition, device):
+@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+@pytest.mark.parametrize("condition", [1, 0])
+def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
-    C = torch.randn(t_shape, dtype=torch.float32) * -4
+    C = torch.ones(c_shape, dtype=torch.float32) * condition
     if variant == "TTS":
         T = torch.randn(t_shape, dtype=torch.float32)
         F = scalar
@@ -58,9 +58,9 @@ def test_ttnn_addcmul(c_shape, t_shape, f_shape, scalar, variant, condition, dev
         T = scalar
         F = torch.randn(f_shape, dtype=torch.float32)
     elif variant == "TTT":
-        T = torch.randn(t_shape, dtype=torch.float32) * 2
-        F = torch.randn(f_shape, dtype=torch.float32) * 10
-    golden = torch.addcmul(C, T, F, value=15.5)
+        T = torch.randn(t_shape, dtype=torch.float32)
+        F = torch.ones(f_shape, dtype=torch.float32) * 10
+    golden = torch.where(C.bool(), T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     if variant == "TTS":
@@ -72,12 +72,10 @@ def test_ttnn_addcmul(c_shape, t_shape, f_shape, scalar, variant, condition, dev
     elif variant == "TTT":
         ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_result = ttnn.addcmul(ttnn_C, ttnn_T, ttnn_F, value=15.5)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
-    print(torch.abs(result - golden))
-    print(torch.max(torch.abs(result - golden)))
 
-    assert_with_pcc(result, golden, 0.999)
+    assert torch_equal_nan(result, golden)
 
 
 @pytest.mark.parametrize(
