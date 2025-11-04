@@ -20,6 +20,8 @@
       { "id": "U08BH66EXAL", "name": "Radoica Draskic" }
     ] },
 
+    { "job-name-component": "blackhole‑ttnn‑stress‑tests (LoudBox ttnn stress tests, BH‑LoudBox) / ttnn stress tests blackhole BH‑LoudBox", "owner": { "id": "S0988UJEW8K", "name": "ttnncore" } },
+
     { "job-name-component": "t3000-demo-tests / t3k_mixtral_tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
     { "job-name-component": "t3k_mixtral_tests", "owner": { "id": "U03PUAKE719", "name": "Harry Zhou" } },
 
