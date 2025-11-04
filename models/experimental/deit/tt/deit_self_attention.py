@@ -9,7 +9,7 @@ from typing import Optional
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_tile
-from models.helper_funcs import Linear as TtLinear
+from models.common.helper_funcs import Linear as TtLinear
 from models.experimental.deit.tt.deit_config import DeiTConfig
 
 
