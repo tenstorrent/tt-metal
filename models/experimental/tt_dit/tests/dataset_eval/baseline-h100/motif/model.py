@@ -2,207 +2,191 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import csv
-import time
 import json
+import time
+import argparse
+import csv
 import urllib
-import torch
-import pytest
 import subprocess
-import statistics
+from pathlib import Path
 from loguru import logger
-from tqdm import tqdm
 from PIL import Image
 
 from clip_encoder import CLIPEncoder
 from fid_score import calculate_fid_score
 
-# === constants ===
+
 COCO_CAPTIONS_DOWNLOAD_PATH = (
     "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/"
     "text_to_image/coco2014/captions/captions_source.tsv"
 )
-OUT_DIR = "test_reports"
-RESULTS_FILE = "motif_test_results.json"
-MOTIF_DIR = "./Motif-Image-6B-Preview"
 
 
-@pytest.mark.parametrize(
-    "model_name,image_w,image_h,guidance_scale,num_inference_steps",
-    [("motif", 1024, 1024, 7.5, 50)],
-)
-@pytest.mark.parametrize("captions_path", ["captions.tsv"])
-@pytest.mark.parametrize("coco_statistics_path", ["val2014.npz"])
-def test_accuracy_motif(
-    model_name,
-    image_w,
-    image_h,
-    guidance_scale,
-    num_inference_steps,
-    captions_path,
-    coco_statistics_path,
-    evaluation_range,
-):
-    start_from, num_prompts = evaluation_range
-    prompts = load_coco_prompts(captions_path, start_from, num_prompts)
-    os.makedirs(OUT_DIR, exist_ok=True)
-
-    # === device setup ===
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"using device: {device}")
-
-    # === verify motif dir ===
-    config_path = os.path.join(MOTIF_DIR, "configs", "mmdit_xlarge_hq.json")
-    ckpt_path = os.path.join(MOTIF_DIR, "checkpoints", "pytorch_model_fsdp.bin")
-    if not os.path.isfile(config_path) or not os.path.isfile(ckpt_path):
-        raise RuntimeError(f"missing model files. expected:\n" f"  - {config_path}\n" f"  - {ckpt_path}")
-
-    # === begin eval ===
-    logger.info(f"generating {num_prompts} images via motif native pipeline...")
-    os.makedirs("generated_images", exist_ok=True)
-
-    clip = CLIPEncoder()
-    images, clip_scores, times = [], [], []
-
-    for i, prompt in enumerate(tqdm(prompts, desc="Generating images", ncols=80)):
-        logger.info(f"[{i+1}/{num_prompts}] prompt: {prompt[:80]}...")
-        output_dir = "generated_images"
-        t0 = time.time()
-
-        # === run motif inference via subprocess ===
-        cmd = [
-            "python",
-            os.path.join(MOTIF_DIR, "inference.py"),
-            "--model-config",
-            config_path,
-            "--model-ckpt",
-            ckpt_path,
-            "--steps",
-            str(num_inference_steps),
-            "--resolution",
-            str(image_w),
-            "--batch-size",
-            "1",
-            "--output-dir",
-            output_dir,
-        ]
-
-        # write the prompt to a temp text file (Motif expects --prompt-file)
-        prompt_file = os.path.join(output_dir, f"prompt_{i+1}.txt")
-        with open(prompt_file, "w") as f:
-            f.write(prompt)
-
-        cmd = [
-            "python",
-            os.path.join(MOTIF_DIR, "inference.py"),
-            "--model-config",
-            config_path,
-            "--model-ckpt",
-            ckpt_path,
-            "--steps",
-            str(num_inference_steps),
-            "--resolution",
-            str(image_w),
-            "--batch-size",
-            "1",
-            "--output-dir",
-            output_dir,
-            "--prompt-file",
-            prompt_file,
-        ]
-
-        subprocess.run(cmd, check=True)
-
-        t1 = time.time()
-        elapsed = t1 - t0
-
-        # === pick the latest generated image ===
-        generated_files = sorted(
-            [f for f in os.listdir(output_dir) if f.endswith(".png")],
-            key=lambda x: os.path.getmtime(os.path.join(output_dir, x)),
-            reverse=True,
-        )
-        if not generated_files:
-            raise RuntimeError("no output images found after inference run.")
-        output_path = os.path.join(output_dir, generated_files[0])
-        img_pil = Image.open(output_path).convert("RGB")
-
-        # === clip score ===
-        clip_score = 100 * clip.get_clip_score(prompt, img_pil).item()
-
-        images.append(img_pil)
-        clip_scores.append(clip_score)
-        times.append(elapsed)
-
-        tqdm.write(f"✓ image {i+1} ({elapsed:.2f}s, CLIP={clip_score:.2f})")
-
-    # === compute metrics ===
-    avg_clip = sum(clip_scores) / len(clip_scores)
-    std_clip = statistics.stdev(clip_scores) if len(clip_scores) > 1 else 0.0
-
-    fid_score = "N/A"
-    if len(images) > 1 and os.path.isfile(coco_statistics_path):
-        fid_score = calculate_fid_score(images, coco_statistics_path)
-    elif len(images) > 1:
-        logger.warning("fid skipped: coco stats file missing.")
-
-    avg_time = sum(times) / len(times)
-    min_time, max_time = min(times), max(times)
-
-    # === log results ===
-    logger.info("=== RESULTS ===")
-    logger.info(f"average clip: {avg_clip:.2f}")
-    logger.info(f"std dev clip: {std_clip:.2f}")
-    logger.info(f"fid score: {fid_score}")
-    logger.info(f"avg time: {avg_time:.2f}s  (min={min_time:.2f}s, max={max_time:.2f}s)")
-
-    # === save to json ===
-    results = {
-        "model": model_name,
-        "metadata": {
-            "device": device.upper(),
-            "start_from": start_from,
-            "num_prompts": num_prompts,
-            "image_w": image_w,
-            "image_h": image_h,
-            "guidance_scale": guidance_scale,
-            "num_inference_steps": num_inference_steps,
-            "backend": "motif_native_pipeline",
-        },
-        "metrics": {
-            "average_clip": avg_clip,
-            "deviation_clip": std_clip,
-            "fid_score": fid_score,
-            "average_inference_time": avg_time,
-            "min_inference_time": min_time,
-            "max_inference_time": max_time,
-        },
-        "individual_clip_scores": [float(x) for x in clip_scores],
-    }
-
-    with open(f"{OUT_DIR}/{RESULTS_FILE}", "w") as f:
-        json.dump(results, f, indent=4)
-    logger.info(f"results saved to {OUT_DIR}/{RESULTS_FILE}")
-
-    print(f"\n🎉 Test completed successfully!")
-    print(f"📊 Avg CLIP: {avg_clip:.2f} | FID: {fid_score}")
-    print(f"⚡ Avg Time: {avg_time:.2f}s | Saved: generated_images/")
-
-
-# === helper ===
-def load_coco_prompts(captions_path, start_from, num_prompts):
+def load_coco_prompts(captions_path, start_from=0, num_prompts=16):
+    """loads prompts from COCO captions tsv, downloading if missing"""
+    prompts = []
     if not os.path.isfile(captions_path):
-        logger.info(f"{captions_path} not found, downloading...")
+        logger.info(f"file {captions_path} not found. downloading...")
         urllib.request.urlretrieve(COCO_CAPTIONS_DOWNLOAD_PATH, captions_path)
         logger.info("download complete.")
-    prompts = []
+
     with open(captions_path, "r") as tsv_file:
         reader = csv.reader(tsv_file, delimiter="\t")
-        next(reader)
-        for i, row in enumerate(reader):
-            if i < start_from:
+        next(reader)  # skip header
+        for index, row in enumerate(reader):
+            if index < start_from:
                 continue
-            if i >= start_from + num_prompts:
+            if index >= start_from + num_prompts:
                 break
-            prompts.append(row[2])
+            if len(row) >= 3:
+                prompts.append(row[2].strip())
+    logger.info(f"loaded {len(prompts)} coco prompts from {captions_path}")
     return prompts
+
+
+def generate_images_with_inference(prompts_file, output_dir, num_prompts):
+    """forces motif inference to regenerate only the requested number of prompts"""
+    logger.info("clearing any previous images...")
+    os.makedirs(output_dir, exist_ok=True)
+    for f in Path(output_dir).rglob("*.png"):
+        f.unlink()
+
+    # create temporary subset prompt file
+    tmp_prompts_file = os.path.join(output_dir, "subset_prompts.txt")
+    with open(prompts_file, "r") as f_in, open(tmp_prompts_file, "w") as f_out:
+        lines = [line.strip() for line in f_in if line.strip()]
+        subset = lines[:num_prompts]
+        for l in subset:
+            f_out.write(l + "\n")
+
+    logger.info(f"generating {len(subset)} images using motif inference.py ...")
+
+    cmd = [
+        "python",
+        "inference.py",
+        "--model-config",
+        "configs/mmdit_xlarge_hq.json",
+        "--model-ckpt",
+        "checkpoints/pytorch_model_fsdp.bin",
+        "--seed",
+        "7777",
+        "--steps",
+        "20",
+        "--resolution",
+        "1024",
+        "--prompt-file",
+        tmp_prompts_file,  # use subset
+        "--guidance-scales",
+        "4.0",
+        "--output-dir",
+        output_dir,
+        "--batch-size",
+        "1",
+    ]
+    subprocess.run(cmd, check=True)
+    logger.info("image generation complete.")
+
+
+def compute_clip_scores(images_dir, prompts):
+    """computes average clip similarity across generated images and corresponding prompts"""
+    clip_encoder = CLIPEncoder(clip_version="ViT-B/32", pretrained="openai")
+    scores = []
+
+    # find all pngs recursively
+    all_images = sorted(Path(images_dir).rglob("*.png"))
+    if len(all_images) < len(prompts):
+        logger.warning(f"found only {len(all_images)} images, expected {len(prompts)}")
+
+    for idx, (prompt, img_path) in enumerate(zip(prompts, all_images)):
+        try:
+            image = Image.open(img_path).convert("RGB")
+            score = clip_encoder.get_clip_score(prompt, image)
+            scores.append(score.item())
+        except Exception as e:
+            logger.error(f"error processing {img_path}: {e}")
+
+    if not scores:
+        return 0.0
+
+    avg_score = sum(scores) / len(scores)
+    logger.info(f"average clip score = {avg_score:.4f} ({avg_score * 100:.2f} CLIPScore)")
+    return avg_score
+
+
+def compute_fid(images_dir, coco_stats="val2014.npz"):
+    """computes fid score against coco statistics"""
+    if not os.path.exists(coco_stats):
+        logger.info(f"COCO stats not found at {coco_stats}, downloading...")
+        os.makedirs(os.path.dirname(coco_stats) or ".", exist_ok=True)
+        urllib.request.urlretrieve(
+            "https://github.com/mlcommons/inference/raw/4b1d1156c23965172ae56eacdd8372f8897eb771/"
+            "text_to_image/tools/val2014.npz",
+            coco_stats,
+        )
+        logger.info("download complete.")
+
+    all_images = [Image.open(f).convert("RGB") for f in sorted(Path(images_dir).rglob("*.png"))]
+    if not all_images:
+        logger.error("no images found for fid computation")
+        return None
+
+    logger.info(f"computing fid over {len(all_images)} images ...")
+    fid = calculate_fid_score(all_images, coco_stats)
+    logger.info(f"fid score = {fid:.4f}")
+    return fid
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Motif Dataset Evaluation")
+    parser.add_argument("--images-dir", type=str, required=True, help="directory containing generated images")
+    parser.add_argument("--prompts-file", type=str, required=True, help="path to prompts file (.tsv or .txt)")
+    parser.add_argument("--output-json", type=str, default="dataset_eval_results.json", help="output results json")
+    parser.add_argument("--start-from", type=int, default=0, help="starting index for captions.tsv")
+    parser.add_argument("--num-prompts", type=int, default=16, help="number of prompts to evaluate")
+    args = parser.parse_args()
+
+    start_time = time.time()
+
+    # load prompts dynamically depending on file type
+    if args.prompts_file.endswith(".tsv"):
+        prompts = load_coco_prompts(args.prompts_file, args.start_from, args.num_prompts)
+    else:
+        with open(args.prompts_file, "r") as f:
+            prompts = [line.strip() for line in f if line.strip()]
+
+    # always regenerate fresh images
+    generate_images_with_inference(args.prompts_file, args.images_dir, args.num_prompts)
+
+    # automatically detect where the actual images were saved
+    def find_deepest_image_dir(root):
+        """walks the output dir and returns the first subdir containing pngs"""
+        for dirpath, _, filenames in os.walk(root):
+            if any(fn.lower().endswith(".png") for fn in filenames):
+                return dirpath
+        return root
+
+    image_root = find_deepest_image_dir(args.images_dir)
+    logger.info(f"found generated images under: {image_root}")
+
+    # compute metrics at the detected path
+    clip_score = compute_clip_scores(image_root, prompts)
+    fid_score = compute_fid(image_root, coco_stats="val2014.npz")
+    total_time = time.time() - start_time
+
+    results = {
+        "num_images": len(prompts),
+        "clip_score": clip_score,
+        "fid_score": fid_score,
+        "total_time_sec": total_time,
+        "images_dir": image_root,
+    }
+
+    with open(args.output_json, "w") as f:
+        json.dump(results, f, indent=2)
+
+    logger.info(f"saved results to {args.output_json}")
+    logger.info(json.dumps(results, indent=2))
+
+
+if __name__ == "__main__":
+    main()
