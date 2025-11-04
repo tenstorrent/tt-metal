@@ -958,9 +958,9 @@ def _watchdog_main(parent_pid, cmd_queue):
     except Exception:
         parent_pgid = None
 
-    deadlines = {}  # test_id -> monotonic deadline
+    deadlines = {}  # test_id -> { 'deadline': float, 'pid': int }
 
-    def kill_parent():
+    def kill_target(pid: int):
         try:
             try:
                 # Attempt debug collection before termination
@@ -971,11 +971,15 @@ def _watchdog_main(parent_pid, cmd_queue):
                 except Exception:
                     pass
 
-            # Kill process group first if available; fall back to PID
-            if parent_pgid is not None:
-                os.killpg(parent_pgid, signal.SIGKILL)
+            # Prefer to kill the target's process group to include its children
+            try:
+                pgid = os.getpgid(pid)
+            except Exception:
+                pgid = None
+            if pgid is not None and pgid > 0:
+                os.killpg(pgid, signal.SIGKILL)
             else:
-                os.kill(parent_pid, signal.SIGKILL)
+                os.kill(pid, signal.SIGKILL)
         finally:
             # Ensure watchdog exits
             os._exit(0)
@@ -991,10 +995,11 @@ def _watchdog_main(parent_pid, cmd_queue):
 
         # Check for any expired deadlines
         if deadlines:
-            expired = [tid for tid, dl in deadlines.items() if dl <= now]
+            expired = [tid for tid, info in deadlines.items() if info["deadline"] <= now]
             if expired:
-                # Any expiration triggers termination of the worker process
-                kill_parent()
+                # Kill the associated worker process for the first expired timer
+                target_pid = deadlines[expired[0]]["pid"]
+                kill_target(target_pid)
 
         if not msg:
             continue
@@ -1004,7 +1009,8 @@ def _watchdog_main(parent_pid, cmd_queue):
             try:
                 test_id = str(msg["test_id"])
                 timeout_secs = float(msg["timeout"])  # seconds from now
-                deadlines[test_id] = time.monotonic() + timeout_secs
+                target_pid = int(msg["pid"])  # worker pid to kill on expiry
+                deadlines[test_id] = {"deadline": time.monotonic() + timeout_secs, "pid": target_pid}
                 try:
                     logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
                 except Exception:
@@ -1075,7 +1081,7 @@ def pytest_timeout_set_timer(item, settings):
     if (metal_timeout_enabled is not None or using_xdist) and cmd_queue is not None:
         secs = float(settings.timeout)
         try:
-            cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs})
+            cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs, "pid": os.getpid()})
             logger.debug(f"Watchdog timer set for {item.nodeid} in {secs} seconds")
         except Exception as e:
             logger.error(f"Failed to arm watchdog timer: {e}")
