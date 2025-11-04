@@ -1305,8 +1305,6 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
     )
     semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
 
-    print(f"{tt_input.shape=}")
-
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input,
