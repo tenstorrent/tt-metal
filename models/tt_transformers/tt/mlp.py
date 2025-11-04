@@ -38,7 +38,7 @@ class MLP(LightweightModule):
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
         self.base_model_name = self.args.base_model_name
-        self.ffn2_model = ["phi-1", "phi-1.5"]
+        self.ffn2_model = ["phi-1", "phi-1_5"]
 
         if args.dummy_weights:
             cache_name = lambda _: None

@@ -46,7 +46,7 @@ class TransformerBlock(LightweightModule):
         self.current = 0
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
-        self.parallel_model = ["phi-1", "phi-1.5"]
+        self.parallel_model = ["phi-1", "phi-1_5"]
 
         self.layer_num = layer_num
 
