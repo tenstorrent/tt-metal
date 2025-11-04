@@ -1054,6 +1054,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
     uint32_t pages_at_once =
         (max_trace_buffer_pages_in_cmd_dat_q > pages) ? pages : max_trace_buffer_pages_in_cmd_dat_q;
     uint32_t read_length = pages_at_once << log_page_size;
+    uint32_t pages_read = pages_at_once;
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
 
@@ -1067,7 +1068,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
     }
 
     exec_buf_state.page_id = page_id;
-    exec_buf_state.pages -= pages_at_once;
+    exec_buf_state.pages -= pages_read;
     exec_buf_state.length += read_length;
 }
 
