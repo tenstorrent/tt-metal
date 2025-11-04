@@ -7,6 +7,7 @@ from typing import Any
 from loguru import logger
 import os
 import torch
+import ttnn
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_img2img_pipeline import (
@@ -97,26 +98,27 @@ class TtSDXLCombinedPipeline:
         logger.info("Creating combined pipeline with shared scheduler...")
 
         # Create a single shared scheduler based on base pipeline's scheduler config
-        shared_scheduler = TtEulerDiscreteScheduler(
-            ttnn_device,
-            torch_base_pipeline.scheduler.config.num_train_timesteps,
-            torch_base_pipeline.scheduler.config.beta_start,
-            torch_base_pipeline.scheduler.config.beta_end,
-            torch_base_pipeline.scheduler.config.beta_schedule,
-            torch_base_pipeline.scheduler.config.trained_betas,
-            torch_base_pipeline.scheduler.config.prediction_type,
-            torch_base_pipeline.scheduler.config.interpolation_type,
-            torch_base_pipeline.scheduler.config.use_karras_sigmas,
-            torch_base_pipeline.scheduler.config.use_exponential_sigmas,
-            torch_base_pipeline.scheduler.config.use_beta_sigmas,
-            torch_base_pipeline.scheduler.config.sigma_min,
-            torch_base_pipeline.scheduler.config.sigma_max,
-            torch_base_pipeline.scheduler.config.timestep_spacing,
-            torch_base_pipeline.scheduler.config.timestep_type,
-            torch_base_pipeline.scheduler.config.steps_offset,
-            torch_base_pipeline.scheduler.config.rescale_betas_zero_snr,
-            torch_base_pipeline.scheduler.config.final_sigmas_type,
-        )
+        with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
+            shared_scheduler = TtEulerDiscreteScheduler(
+                ttnn_device,
+                torch_base_pipeline.scheduler.config.num_train_timesteps,
+                torch_base_pipeline.scheduler.config.beta_start,
+                torch_base_pipeline.scheduler.config.beta_end,
+                torch_base_pipeline.scheduler.config.beta_schedule,
+                torch_base_pipeline.scheduler.config.trained_betas,
+                torch_base_pipeline.scheduler.config.prediction_type,
+                torch_base_pipeline.scheduler.config.interpolation_type,
+                torch_base_pipeline.scheduler.config.use_karras_sigmas,
+                torch_base_pipeline.scheduler.config.use_exponential_sigmas,
+                torch_base_pipeline.scheduler.config.use_beta_sigmas,
+                torch_base_pipeline.scheduler.config.sigma_min,
+                torch_base_pipeline.scheduler.config.sigma_max,
+                torch_base_pipeline.scheduler.config.timestep_spacing,
+                torch_base_pipeline.scheduler.config.timestep_type,
+                torch_base_pipeline.scheduler.config.steps_offset,
+                torch_base_pipeline.scheduler.config.rescale_betas_zero_snr,
+                torch_base_pipeline.scheduler.config.final_sigmas_type,
+            )
         logger.info("Shared scheduler created")
 
         # Create base pipeline with shared scheduler
@@ -355,8 +357,6 @@ class TtSDXLCombinedPipeline:
             sigmas=sigmas,
         )
 
-        print(f"self.base_pipeline.ttnn_timesteps: {self.base_pipeline.ttnn_timesteps}")
-
         # 3. Log the split information
         if self.config.use_refiner:
             logger.info(
@@ -370,9 +370,7 @@ class TtSDXLCombinedPipeline:
             original_timesteps = self.base_pipeline.ttnn_timesteps
             original_num_inference_steps = self.base_pipeline.num_inference_steps
             base_timesteps = original_timesteps[:split_idx]
-            print(f"len base_timesteps: {len(base_timesteps)}")
             refiner_timesteps = original_timesteps[split_idx:]
-            print(f"len refiner_timesteps: {len(refiner_timesteps)}")
             self.base_pipeline.ttnn_timesteps = base_timesteps
 
             # Set base pipeline to only run split_idx steps
@@ -402,15 +400,13 @@ class TtSDXLCombinedPipeline:
                 timesteps=timesteps,
                 sigmas=sigmas,
             )
-            print(f"self.refiner_pipeline.ttnn_timesteps: {self.refiner_pipeline.ttnn_timesteps}")
+
+            self.refiner_pipeline.tt_scheduler.set_step_index(split_idx)
 
             # Now override timesteps and num_inference_steps AFTER generate_input_tensors
             # to avoid them being reset by _prepare_timesteps
             self.refiner_pipeline.ttnn_timesteps = refiner_timesteps
             self.refiner_pipeline.num_inference_steps = effective_num_inference_steps - split_idx
-
-            # The scheduler needs to start from the correct step index
-            self.refiner_pipeline.tt_scheduler.set_step_index(split_idx)
 
             self.refiner_pipeline.prepare_input_tensors(
                 [

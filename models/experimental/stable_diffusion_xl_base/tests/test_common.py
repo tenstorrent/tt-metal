@@ -861,7 +861,6 @@ def run_tt_image_gen(
         latents = torch.permute(latents, (0, 3, 1, 2))
 
         profiler.end("image_gen")
-        print(f"latents: {latents.shape}")
         return latents, tid, output_device, output_shape, tid_vae
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)

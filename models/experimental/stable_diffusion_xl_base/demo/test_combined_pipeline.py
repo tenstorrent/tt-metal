@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtS
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 33000, "trace_region_size": 58378240}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 33000, "trace_region_size": 58386432}],
     indirect=True,
 )
 def test_refiner(mesh_device):
@@ -40,6 +40,7 @@ def test_refiner(mesh_device):
             use_cfg_parallel=False,
             encoders_on_device=True,
             vae_on_device=False,
+            capture_trace=False,
         ),
         refiner_config=TtSDXLImg2ImgPipelineConfig(
             num_inference_steps=10,
@@ -51,6 +52,7 @@ def test_refiner(mesh_device):
             strength=0.3,
             aesthetic_score=6.0,
             negative_aesthetic_score=2.5,
+            capture_trace=False,
         ),
         denoising_split=0.8,  # Base does 80%, refiner does 20%
     )
