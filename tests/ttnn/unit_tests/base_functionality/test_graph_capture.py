@@ -58,6 +58,13 @@ def test_graph_capture_with_all_parameters(device):
     ttnn.transpose(tt_input, 1, 2)
     captured_graph = ttnn.graph.end_graph_capture()
 
+    # Debug: print graph structure to understand actual node layout
+    print(f"\ntest_graph_capture_with_all_parameters: Graph has {len(captured_graph)} nodes:")
+    for i, node in enumerate(captured_graph):
+        op_name = node.get("params", {}).get("name", "N/A")
+        node_type = node.get("node_type", "N/A")
+        print(f"  Node {i}: type={node_type}, name={op_name}")
+
     node1 = captured_graph[1]["arguments"]
     # ttnn:transpose
     assert (
@@ -130,8 +137,8 @@ def test_graph_capture_without_memory_config(device):
     tt_out = ttnn.operations.moreh.dot(tt_input, tt_other, dtype=ttnn.bfloat16, output=None)
     captured_graph = ttnn.graph.end_graph_capture()
 
-    # Debug: print graph structure to understand deduplication
-    print(f"\nGraph has {len(captured_graph)} nodes:")
+    # Debug: print graph structure to understand actual node layout
+    print(f"\ntest_graph_capture_without_memory_config: Graph has {len(captured_graph)} nodes:")
     for i, node in enumerate(captured_graph):
         op_name = node.get("params", {}).get("name", "N/A")
         node_type = node.get("node_type", "N/A")
@@ -152,40 +159,40 @@ def test_graph_capture_without_memory_config(device):
     assert node1[4] == "nullopt"
     assert node1[5] == "nullopt"
 
-    # ttnn::prim::moreh_dot (2 input tensors × 1 duplicate each = 2 nodes removed, shifts from node6 to node4)
-    node4 = captured_graph[4]["arguments"]
+    # ttnn::prim::moreh_dot (tensor deduplication shifts this from node6 to node5)
+    node5 = captured_graph[5]["arguments"]
     assert (
-        node4[0]
+        node5[0]
         == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert (
-        node4[1]
+        node5[1]
         == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
-    assert node4[2] == "nullopt"
-    assert node4[3] == "DataType::BFLOAT16"
-    assert node4[4] == "nullopt"
-    assert node4[5] == "nullopt"
+    assert node5[2] == "nullopt"
+    assert node5[3] == "DataType::BFLOAT16"
+    assert node5[4] == "nullopt"
+    assert node5[5] == "nullopt"
 
-    # MorehDotOperation (tensor deduplication shifts this from node9 to node7)
-    node7 = captured_graph[7]["arguments"]
+    # MorehDotOperation (tensor deduplication shifts this from node9 to node8)
+    node8 = captured_graph[8]["arguments"]
     assert (
-        node7[0]
+        node8[0]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>]"
     )
     assert (
-        node7[1]
+        node8[1]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]"
     )
 
-    # tt::tt_metal::create_device_tensor (tensor deduplication shifts this from node10 to node8)
-    node8 = captured_graph[8]["arguments"]
-    assert node8[0] == "Shape([1, 1, 1, 1])"
-    assert node8[1] == "DataType::BFLOAT16"
-    assert node8[2] == "Layout::TILE"
-    assert node8[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    # tt::tt_metal::create_device_tensor (tensor deduplication shifts this from node10 to node9)
+    node9 = captured_graph[9]["arguments"]
+    assert node9[0] == "Shape([1, 1, 1, 1])"
+    assert node9[1] == "DataType::BFLOAT16"
+    assert node9[2] == "Layout::TILE"
+    assert node9[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
-        node8[4]
+        node9[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
@@ -196,6 +203,13 @@ def test_graph_capture_without_dtype(device):
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     tt_output = ttnn.moreh_full_like(tt_input, 3)
     captured_graph = ttnn.graph.end_graph_capture()
+
+    # Debug: print graph structure to understand actual node layout
+    print(f"\ntest_graph_capture_without_dtype: Graph has {len(captured_graph)} nodes:")
+    for i, node in enumerate(captured_graph):
+        op_name = node.get("params", {}).get("name", "N/A")
+        node_type = node.get("node_type", "N/A")
+        print(f"  Node {i}: type={node_type}, name={op_name}")
 
     # ttnn::moreh_full_like
     node1 = captured_graph[1]["arguments"]
