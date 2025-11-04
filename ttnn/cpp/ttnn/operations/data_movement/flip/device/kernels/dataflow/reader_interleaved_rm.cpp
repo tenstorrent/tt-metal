@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <stdint.h>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 
@@ -35,10 +36,11 @@ uint32_t compute_src_row_id(
 
 void kernel_main() {
     // Compile time arguments
-    constexpr bool src_is_dram = static_cast<bool>(get_compile_time_arg_val(0));
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t rank = get_compile_time_arg_val(2);
-    constexpr uint32_t element_size = get_compile_time_arg_val(3);
+    constexpr bool src_is_dram = static_cast<bool>(get_named_compile_time_arg_val("src_is_dram"));
+    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+    constexpr uint32_t rank = get_named_compile_time_arg_val("rank");
+    constexpr uint32_t element_size = get_named_compile_time_arg_val("element_size");
+    constexpr auto src_args = TensorAccessorArgs<0>();
 
     // Runtime arguments
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -58,7 +60,7 @@ void kernel_main() {
     const bool is_horizontal_flip = static_cast<bool>(dims_to_flip[rank - 1]);
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = page_size};
+    const auto s0 = TensorAccessor(src_args, src_addr, page_size);
 
     for (uint32_t row_id = start_row; row_id < end_row; row_id++) {
         uint32_t src_row_id = compute_src_row_id(row_id, rank, input_shape, dims_to_flip, input_row_strides);
@@ -67,9 +69,14 @@ void kernel_main() {
 
         cb_reserve_back(cb_id, 1);
         uint32_t l1_buffer_addr = get_write_ptr(cb_id);
-        uint64_t read_noc_addr = get_noc_addr(src_row_id, s0);
-        noc_async_read(read_noc_addr, l1_buffer_addr, page_size);
+        noc_async_read_page(src_row_id, s0, l1_buffer_addr);
         noc_async_read_barrier();
+
+        // cb_reserve_back(cb_id, 1);
+        // uint32_t l1_buffer_addr = get_write_ptr(cb_id);
+        // uint64_t read_noc_addr = get_noc_addr(src_row_id, s0);
+        // noc_async_read(read_noc_addr, l1_buffer_addr, page_size);
+        // noc_async_read_barrier();
 
         // for (uint32_t col_id = 0; col_id < row_width; ++col_id) {
         //     DPRINT << uint32_t(reinterpret_cast<uint32_t*>(l1_buffer_addr)[col_id]) << ", ";

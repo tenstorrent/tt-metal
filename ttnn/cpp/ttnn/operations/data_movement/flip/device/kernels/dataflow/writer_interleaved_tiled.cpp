@@ -7,6 +7,7 @@
 void kernel_main() {
     // compile time args
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // runtime args
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -17,8 +18,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id);
     const uint32_t tile_size = get_tile_size(cb_id);
 
-    const InterleavedAddrGenFast<dst_is_dram> d0 = {
-        .bank_base_address = dst_addr, .page_size = tile_size, .data_format = data_format};
+    const auto d0 = TensorAccessor(dst_args, dst_addr, tile_size);
 
     for (uint32_t tile_id = start_tile; tile_id < end_tile; ++tile_id) {
         cb_wait_front(cb_id, 1);

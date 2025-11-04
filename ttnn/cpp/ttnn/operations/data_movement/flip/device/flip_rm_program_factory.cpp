@@ -4,6 +4,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/operations/data_movement/flip/device/flip_device_operation.hpp"
 
@@ -87,8 +88,21 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     // ------------------------------------------------------------------------
     // 3) Set compile time arguments for kernels
     // ------------------------------------------------------------------------
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, input_page_size, rank, element_size};
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram, input_page_size};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"src_is_dram", (uint32_t)src_is_dram},
+        {"page_size", input_page_size},
+        {"rank", rank},
+        {"element_size", element_size},
+    };
+    std::vector<uint32_t> writer_compile_time_args = {};
+    std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
+        {"dst_is_dram", (uint32_t)dst_is_dram},
+        {"page_size", input_page_size},
+    };
+
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // ------------------------------------------------------------------------
     // 4) Create kernels
@@ -98,14 +112,14 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
         "ttnn/cpp/ttnn/operations/data_movement/flip/device/kernels/dataflow/"
         "reader_interleaved_rm.cpp",
         all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args));
+        ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     KernelHandle writer_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/flip/device/kernels/dataflow/"
         "writer_interleaved_rm.cpp",
         all_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+        WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
     // ------------------------------------------------------------------------
     // 5) Set runtime arguments for kernels
