@@ -126,12 +126,14 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
 
 uint16_t get_bus_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
+    TT_FATAL(cluster != nullptr, "UMD driver object must be valid");
     auto cluster_desc = cluster->get_cluster_description();
     uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
     return bus_id;
 }
 
 UbbId get_ubb_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipId chip_id) {
+    TT_FATAL(cluster != nullptr, "UMD driver object must be valid");
     auto cluster_desc = cluster->get_cluster_description();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
     const auto bus_id = get_bus_id(cluster, chip_id);
