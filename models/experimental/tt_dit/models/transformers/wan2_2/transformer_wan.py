@@ -275,12 +275,15 @@ class WanTransformer3DModel:
         ccl_manager=None,
         parallel_config=None,
         is_fsdp=True,
+        model_type="t2v",
     ):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.is_fsdp = is_fsdp
         self.fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
+        self.model_type = model_type
+        assert model_type in ["t2v", "i2v"], "model_type must be either t2v or i2v"
 
         self.patch_size = patch_size
         self.dim = dim
@@ -539,11 +542,16 @@ class WanTransformer3DModel:
         logger.info(f"Spatial output after permuting: {spatial_BCFHW.shape}")
         return spatial_BCFHW
 
-    def __call__(self, spatial, prompt, timestep):
+    def __call__(self, spatial, prompt, timestep, y=None):
         """
         Inputs are all torch tensors
+            y is an optional argument for image-to-video generation
+            We assume that preprocessing has already been done for y.
         Output is torch tensor
         """
+
+        if self.model_type == "i2v":
+            assert y is not None, "y must be provided for image-to-video generation"
 
         B, C, F, H, W = spatial.shape
         pF, pH, pW = self.patch_size
