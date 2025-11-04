@@ -36,6 +36,7 @@ from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 
 
 def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, dp_model: List[Transformer], tt_cache_path):
@@ -407,6 +408,70 @@ class LlamaForCausalLM(Generator):
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+class LlamaForCausalLM:
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=1,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        return cls(mesh_device)
+
+    def prefill_forward(self, *args, **kwargs):
+        logger.info("Running minimal reduce scatter async test, requires 2x4 mesh device")
+        num_links = 1
+        rs_input_shape = [1, 1, 8, 7168]
+        dim = 3
+        layout = ttnn.TILE_LAYOUT
+        rs_input_dtype = ttnn.bfloat16
+        mem_config_input = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        mem_config_rs = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+        enable_trace = False
+        num_iters = 3
+        use_barrier = True
+        use_persistent_buffers = False
+        rs_topology = ttnn.Topology.Linear
+        cluster_axis = 1
+
+        submesh_device = self.mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+        run_reduce_scatter_impl(
+            submesh_device,
+            submesh_device.get_num_devices(),
+            rs_input_shape,
+            dim,
+            num_links,
+            rs_input_dtype,
+            layout,
+            mem_config_input,
+            mem_config_rs,
+            rs_topology=rs_topology,
+            enable_trace=enable_trace,
+            num_iters=num_iters,
+            ones_tensor=False,
+            use_barrier=use_barrier,
+            use_persistent_buffers=use_persistent_buffers,
+            cluster_axis=cluster_axis,
+        )
+        logger.info("Minimal reduce scatter async test completed")
+        tokens = kwargs.get("tokens")
+        return torch.zeros(tokens.shape[0], 1, 128256)
+
+    def decode_forward(self, *args, **kwargs):
+        logger.info("Running nothing for decode forward")
+        return torch.zeros(32, 1, 128256)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return None
 
 
 class QwenForCausalLM(Generator):
