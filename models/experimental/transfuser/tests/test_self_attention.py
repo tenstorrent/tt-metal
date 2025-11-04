@@ -94,8 +94,8 @@ def create_self_attn_preprocessor(device, weight_dtype=ttnn.bfloat16, use_optimi
 
 @pytest.mark.parametrize(
     "n_embed, n_head, attn_pdrop, resid_pdrop, input_shape",
-    # ((128, 4, 0.1, 0.1, (1, 174, 128)),),  # case where weight padding is not required , higher pcc
-    ((72, 4, 0.1, 0.1, (1, 174, 72)),),  # GPT-SelfAttention 1
+    ((128, 4, 0.1, 0.1, (1, 174, 128)),),
+    ((72, 4, 0.1, 0.1, (1, 174, 72)),),
 )
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("weight_dtype", [ttnn.bfloat16])

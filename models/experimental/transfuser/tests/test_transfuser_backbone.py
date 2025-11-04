@@ -97,7 +97,6 @@ class TransfuserBackboneInfra:
         use_optimized_self_attn,
     ):
         super().__init__()
-        # self._init_seeds()
         self.device = device
         self.n_layer = n_layer
         self.image_arch = image_architecture
@@ -106,9 +105,7 @@ class TransfuserBackboneInfra:
         self.img_input_shape = img_input_shape
         self.lidar_input_shape = lidar_input_shape
         self.num_devices = device.get_num_devices()
-        # self.batch_size = batch_size * self.num_devices
         self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
-        # self.name = name
 
         # setting machine to avoid loading files
         self.config = GlobalConfig(setting="eval")
@@ -124,7 +121,7 @@ class TransfuserBackboneInfra:
             use_velocity=self.use_velocity,
         )
         torch_model.eval()
-        checkpoint_path = "model_ckpt/models_2022/transfuser/model_seed1_39.pth"
+        checkpoint_path = "model_seed1_39.pth"
         modified_state_dict = fix_and_filter_checkpoint_keys(
             checkpoint_path=checkpoint_path,
             target_prefix="module._model.",  # This is the prefix to keep and remove

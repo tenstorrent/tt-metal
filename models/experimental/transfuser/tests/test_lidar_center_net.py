@@ -423,11 +423,15 @@ def test_lidar_center_net(
     # Convert input to TTNN format
     tt_image_input = ttnn.from_torch(
         image.permute(0, 2, 3, 1),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        device=device,
         dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
         mesh_mapper=inputs_mesh_mapper,
     )
     tt_lidar_input = ttnn.from_torch(
         lidar_bev.permute(0, 2, 3, 1),
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
@@ -435,6 +439,7 @@ def test_lidar_center_net(
     )
     tt_velocity_input = ttnn.from_torch(
         velocity,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,

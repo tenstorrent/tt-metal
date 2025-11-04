@@ -111,26 +111,9 @@ class StageInfra:
             image_architecture="regnety_032",
         )
         torch_model.eval()
-        # checkpoint_path = "model_seed1_39.pth"
-        # checkpoint = torch.load(checkpoint_path, map_location="cpu")
-
-        # checkpoint = filter_checkpoint(checkpoint, stage_name=stage_name)
-        # torch_model = keep_only_stage_model(torch_model, stage_name=stage_name)
-
-        # torch_model.load_state_dict(checkpoint, strict=True)
-
-        # stage_to_pt_file = {
-        #     "layer1": "image_features_new.pt",
-        #     "layer2": "image_features_layer2.pt",
-        #     "layer3": "image_features_layer3.pt",
-        #     "layer4": "image_features_layer4.pt",
-        # }
-
-        # pt_filename = stage_to_pt_file.get(stage_name, f"image_features_{stage_name}.pt")
 
         # # Prepare golden inputs/outputs
         self.torch_input = torch.randn(self.input_shape)
-        # self.torch_input = torch.load(pt_filename)
 
         with torch.no_grad():
             self.torch_output = torch_model(
@@ -162,7 +145,6 @@ class StageInfra:
             mesh_mapper=self.inputs_mesh_mapper,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        # self.input_tensor = ttnn.to_device(tt_input, device)
 
         self.tt_input = ttnn.permute(self.tt_input, (0, 2, 3, 1))
 

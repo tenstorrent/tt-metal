@@ -12,171 +12,139 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 from loguru import logger
 
 
-# from models.experimental.transfuser.tt.ttn_bottleneck import TTNNBottleneck
+class TransfuserBottleneckInfra:
+    def __init__(
+        self,
+        device,
+        in_chs,
+        out_chs,
+        stride,
+        input_size,
+        stage_name,
+        model_config,
+    ):
+        super().__init__()
+        self.device = device
+        self.in_chs = in_chs
+        self.out_chs = out_chs
+        self.stride = stride
+        self.input_size = input_size
+        self.stage_name = stage_name
+        self.model_config = model_config
+        self.num_devices = device.get_num_devices()
+        self.inputs_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = self.get_mesh_mappers(device)
 
-
-def get_mesh_mappers(device):
-    if device.get_num_devices() != 1:
-        return (
-            ttnn.ShardTensorToMesh(device, dim=0),
-            None,
-            ttnn.ConcatMeshToTensor(device, dim=0),
-        )
-    return None, None, None
-
-
-def comp_pcc(golden, actual, pcc=0.99):
-    """Compare tensors using PCC similar to codebase patterns."""
-    golden_flat = golden.flatten()
-    actual_flat = actual.flatten()
-
-    correlation_matrix = torch.corrcoef(torch.stack([golden_flat, actual_flat]))
-    pcc_value = correlation_matrix[0, 1].item()
-
-    return pcc_value >= pcc, pcc_value
-
-
-def preprocess_parameters_for_ttnn(torch_model, device):
-    """Convert PyTorch parameters to TTNN tensors."""
-    parameters = {}
-
-    # Extract and convert all weights/biases to TTNN format
-    conv1_weight = ttnn.from_torch(torch_model.conv1.conv.weight, device=device)
-    conv1_bias = (
-        ttnn.from_torch(torch_model.conv1.bn.bias, device=device) if torch_model.conv1.bn.bias is not None else None
-    )
-
-    conv2_weight = ttnn.from_torch(torch_model.conv2.conv.weight, device=device)
-    conv2_bias = (
-        ttnn.from_torch(torch_model.conv2.bn.bias, device=device) if torch_model.conv2.bn.bias is not None else None
-    )
-
-    conv3_weight = ttnn.from_torch(torch_model.conv3.conv.weight, device=device)
-    conv3_bias = (
-        ttnn.from_torch(torch_model.conv3.bn.bias, device=device) if torch_model.conv3.bn.bias is not None else None
-    )
-
-    # SE parameters (if exists)
-    se_fc1_weight = se_fc1_bias = se_fc2_weight = se_fc2_bias = None
-    if hasattr(torch_model.se, "fc1"):
-        se_fc1_weight = ttnn.from_torch(torch_model.se.fc1.weight, device=device)
-        se_fc1_bias = (
-            ttnn.from_torch(torch_model.se.fc1.bias, device=device) if torch_model.se.fc1.bias is not None else None
-        )
-        se_fc2_weight = ttnn.from_torch(torch_model.se.fc2.weight, device=device)
-        se_fc2_bias = (
-            ttnn.from_torch(torch_model.se.fc2.bias, device=device) if torch_model.se.fc2.bias is not None else None
-        )
-
-    # Downsample parameters (if exists)
-    downsample_weight = downsample_bias = None
-    if torch_model.downsample is not None:
-        downsample_weight = ttnn.from_torch(torch_model.downsample[0].weight, device=device)
-        downsample_bias = (
-            ttnn.from_torch(torch_model.downsample[1].bias, device=device)
-            if torch_model.downsample[1].bias is not None
-            else None
-        )
-
-    return {
-        "conv1_weight": conv1_weight,
-        "conv1_bias": conv1_bias,
-        "conv2_weight": conv2_weight,
-        "conv2_bias": conv2_bias,
-        "conv3_weight": conv3_weight,
-        "conv3_bias": conv3_bias,
-        "se_fc1_weight": se_fc1_weight,
-        "se_fc1_bias": se_fc1_bias,
-        "se_fc2_weight": se_fc2_weight,
-        "se_fc2_bias": se_fc2_bias,
-        "downsample_weight": downsample_weight,
-        "downsample_bias": downsample_bias,
-    }
-
-
-@pytest.mark.parametrize(
-    "in_chs, out_chs, stride, input_size, stage_name",
-    [
-        (32, 72, 2, (1, 32, 80, 352), "layer1"),  # stage 1 DS
-        # (72, 72, 1, (1, 72, 40, 176)),  # stage 1 NDS
-    ],
-)
-def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size, stage_name):
-    """Test RegNet bottleneck with PCC assertion."""
-    device = ttnn.open_device(device_id=0, l1_small_size=16384)
-
-    try:
-        # Create PyTorch model for reference
+        # Build reference torch model
         torch_model = PyTorchBottleneck(in_chs=in_chs, out_chs=out_chs, stride=stride, group_size=24)
         torch_model.eval()
 
         # Create test input
-        torch_input = torch.randn(input_size)
-
-        # PyTorch forward pass
+        self.torch_input = torch.randn(self.input_size)
         with torch.no_grad():
-            torch_output = torch_model(torch_input)
+            self.torch_output = torch_model(self.torch_input)
 
-        inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
         parameters = preprocess_model_parameters(
             initialize_model=lambda: torch_model,
-            custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+            custom_preprocessor=create_custom_mesh_preprocessor(self.weights_mesh_mapper),
             device=None,
         )
-
-        model_config = {
-            "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
-            "WEIGHTS_DTYPE": ttnn.bfloat16,
-            "ACTIVATIONS_DTYPE": ttnn.bfloat16,
-        }
         downsample = True
         if in_chs == out_chs and stride == 1:
             downsample = False
-
         bottle_ratio = 1.0
         group_size = 24
         bottleneck_chs = int(round(out_chs * bottle_ratio))
         groups = bottleneck_chs // group_size
 
         layer_config = optimization_dict[stage_name]
-        ttnn_model = TTRegNetBottleneck(
+
+        self.ttnn_model = TTRegNetBottleneck(
             parameters=parameters,
-            model_config=model_config,
-            stride=stride,
+            model_config=self.model_config,
+            stride=self.stride,
             downsample=downsample,
             groups=groups,
             layer_config=layer_config,
         )
-        tt_input = ttnn.from_torch(
-            torch_input,
-            device=device,
+        self.tt_input = ttnn.from_torch(
+            self.torch_input,
+            device=self.device,
             dtype=ttnn.bfloat16,
-            mesh_mapper=inputs_mesh_mapper,
+            mesh_mapper=self.inputs_mesh_mapper,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))
-        tt_output, _ = ttnn_model(tt_input, device)
-        tt_torch_output = ttnn.to_torch(
-            tt_output,
-            device=device,
-            mesh_composer=output_mesh_composer,
+        self.tt_input = ttnn.permute(self.tt_input, (0, 2, 3, 1))
+        # Run + validate
+        self.run()
+        self.validate(self.model_config)
+
+    def get_mesh_mappers(self, device):
+        if device.get_num_devices() != 1:
+            return (
+                ttnn.ShardTensorToMesh(device, dim=0),
+                None,
+                ttnn.ConcatMeshToTensor(device, dim=0),
+            )
+        return None, None, None
+
+    def run(self):
+        self.tt_output, _ = self.ttnn_model(self.tt_input, self.device)
+        return self.tt_output
+
+    def validate(self, model_config):
+        self.tt_torch_output = ttnn.to_torch(
+            self.tt_output,
+            device=self.device,
+            mesh_composer=self.output_mesh_composer,
         )
-        expected_image_shape = torch_output.shape
-        tt_torch_output = torch.reshape(
-            tt_torch_output,
+        expected_image_shape = self.torch_output.shape
+        self.tt_torch_output = torch.reshape(
+            self.tt_torch_output,
             (expected_image_shape[0], expected_image_shape[2], expected_image_shape[3], expected_image_shape[1]),
         )
-        tt_torch_output = torch.permute(tt_torch_output, (0, 3, 1, 2))
-        pcc_passed, pcc_message = check_with_pcc(torch_output, tt_torch_output, pcc=0.99)
+        self.tt_torch_output = torch.permute(self.tt_torch_output, (0, 3, 1, 2))
+        pcc_passed, pcc_message = check_with_pcc(self.torch_output, self.tt_torch_output, pcc=0.99)
 
         logger.info(f"Image Output PCC: {pcc_message}")
         assert pcc_passed, logger.error(f"PCC check failed - pcc_message: {pcc_message}")
 
-        print("✓ RegNet bottleneck TTNN implementation matches PyTorch with PCC > 0.99")
+        print("RegNet bottleneck TTNN implementation matches PyTorch with PCC > 0.99")
 
-    finally:
-        ttnn.close_device(device)
+        return pcc_passed, f"Bottleneck: {pcc_message}"
 
 
-if __name__ == "__main__":
-    test_regnet_bottleneck_pcc()
+# High accuracy model config
+model_config = {
+    "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
+    "WEIGHTS_DTYPE": ttnn.bfloat16,
+    "ACTIVATIONS_DTYPE": ttnn.bfloat16,
+    "fp32_dest_acc_en": True,
+    "packer_l1_acc": True,
+    "math_approx_mode": False,
+}
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "in_chs, out_chs, stride, input_size, stage_name",
+    [
+        (32, 72, 2, (1, 32, 80, 352), "layer1"),  # stage 1 DS
+    ],
+)
+def test_transfuser_bottleneck(
+    device,
+    in_chs,
+    out_chs,
+    stride,
+    input_size,
+    stage_name,
+):
+    TransfuserBottleneckInfra(
+        device,
+        in_chs,
+        out_chs,
+        stride,
+        input_size,
+        stage_name,
+        model_config,
+    )
