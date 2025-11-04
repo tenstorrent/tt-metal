@@ -65,7 +65,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-llama3.outcome == 'failure' }}
+        if: ${{ steps.test-llama3.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U053W15B6JF # Djordje Ivanovic
@@ -80,7 +80,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_long_context
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-llama3-long.outcome == 'failure' }}
+        if: ${{ steps.test-llama3-long.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U03PUAKE719 # Miguel Tairum
@@ -95,7 +95,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_evals
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-llama3-evals.outcome == 'failure' }}
+        if: ${{ steps.test-llama3-evals.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U03PUAKE719 # Miguel Tairum
@@ -110,7 +110,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_8b_dp
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-llama3-8b-dp.outcome == 'failure' }}
+        if: ${{ steps.test-llama3-8b-dp.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U08BH66EXAL # Radoica Draskic
@@ -125,7 +125,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model llama3_70b_dp
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-llama3-70b-dp.outcome == 'failure' }}
+        if: ${{ steps.test-llama3-70b-dp.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U08BH66EXAL # Radoica Draskic
@@ -141,7 +141,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model falcon7b
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-falcon7b.outcome == 'failure' }}
+        if: ${{ steps.test-falcon7b.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U05RWH3QUPM # Salar Hosseini
@@ -156,7 +156,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model sentence_bert
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-sentence-bert.outcome == 'failure' }}
+        if: ${{ steps.test-sentence-bert.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U088413NP0Q # Ashai Reddy
@@ -171,7 +171,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model sd35
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-sd35.outcome == 'failure' }}
+        if: ${{ steps.test-sd35.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U03FJB5TM5Y # Colman Glagovich
@@ -186,7 +186,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model flux1
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-flux1.outcome == 'failure' }}
+        if: ${{ steps.test-flux1.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U08TED0JM9D # Samuel Adesoye
@@ -201,7 +201,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model gpt-oss
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-gpt-oss.outcome == 'failure' }}
+        if: ${{ steps.test-gpt-oss.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06F3ER8X9A # Stuti Raizada
@@ -216,7 +216,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model wan22
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-wan22.outcome == 'failure' }}
+        if: ${{ steps.test-wan22.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U03FJB5TM5Y # Colman Glagovich
@@ -231,7 +231,7 @@ jobs:
         run: |
           ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model mochi
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && steps.test-mochi.outcome == 'failure' }}
+        if: ${{ steps.test-mochi.outcome == 'failure' }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U09ELB03XRU # Stephen Osborne
