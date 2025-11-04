@@ -11,6 +11,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/experimental/lazy/lazy_mode.hpp"
 #include "ttnn/experimental/lazy/lazy_device_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_composite_operation.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -59,8 +60,12 @@ concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<ope
 template <typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
 
+template <typename operation_t, typename... args_t>
+concept LazifyableCompositeOperationConcept =
+    composite_operation::LazifyableCompositeOperationConcept<operation_t, args_t&&...>;
+
 template <typename Op, typename... Args>
-concept HasInvoke = requires {
+concept HasStaticInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
@@ -88,7 +93,6 @@ struct registered_operation_t {
     }
 
     template <typename... Args>
-        requires(HasInvoke<operation_t, Args && ...>)
     auto operator()(Args&&... args) const {
         return traced_invoke(std::forward<Args>(args)...);
     }
@@ -107,16 +111,15 @@ private:
     }
 
     template <typename... args_t>
-        requires PrimitiveOperationConcept<operation_t>
+        requires PrimitiveOperationConcept<operation_t> && HasStaticInvoke<operation_t, args_t&&...>
     auto invoke(args_t&&... args) const {
-        // Regular eager execution
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
         if (ttnn::experimental::lazy::is_lazy_enabled()) {
             if constexpr (CanBeMadeLazy<operation_t>) {
-                return invoke_lazy(operation_attributes, tensors_args);
+                return invoke_lazy_device_operation(operation_attributes, tensors_args);
             } else {
                 TT_THROW(
                     "Lazy mode not supported for operation {} with return type {}, falling back to eager execution",
@@ -124,11 +127,50 @@ private:
                     tt::stl::get_type_name<typename operation_t::tensor_return_value_t>());
             }
         }
+        // Regular eager execution
         return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
     }
 
     template <typename... args_t>
-        requires(CompositeOperationConcept<operation_t>)
+        requires(LazifyableCompositeOperationConcept<operation_t, args_t && ...>)
+    auto invoke(args_t&&... args) const {
+        if (ttnn::experimental::lazy::is_lazy_enabled()) {
+            // TODO: This shouldn't ignore optional tensors
+            // Create lazy operation wrapper
+            auto lazy_op = ttnn::experimental::lazy::make_lazy_composite_operation<operation_t, args_t&&...>(
+                std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()),
+                std::forward<args_t>(args)...);
+
+            // Extract input tensors from tensor_args
+            auto inputs = lazy_op->operation().get_tensor_inputs(std::forward<args_t>(args)...);
+            auto input_tensors = std::get<0>(inputs);
+
+            lazy_op->validate(input_tensors);
+
+            // Get output specs to create placeholder tensors
+            auto output_specs = lazy_op->compute_output_specs(input_tensors);
+
+            if constexpr (std::same_as<typename operation_t::tensor_return_value_t, Tensor>) {
+                // Single tensor output
+                TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
+                return Tensor::make_lazy_tensor(input_tensors, lazy_op, output_specs[0]);
+            } else if constexpr (std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>) {
+                // Multiple tensor outputs (vector)
+                return Tensor::make_lazy_tensors(input_tensors, lazy_op, output_specs);
+            } else {
+                static_assert(
+                    std::same_as<typename operation_t::tensor_return_value_t, void>,
+                    "Unsupported return type for lazy execution");
+            }
+        }
+        auto operation = operation_t(std::forward<args_t>(args)...);
+        auto [inputs, optional_inputs, optional_outputs] = operation.get_tensor_inputs(std::forward<args_t>(args)...);
+        operation.validate(inputs, optional_inputs, optional_outputs);
+        return operation.invoke(inputs, optional_inputs, optional_outputs);
+    }
+
+    template <typename... args_t>
+        requires(CompositeOperationConcept<operation_t> && HasStaticInvoke<operation_t, args_t && ...>)
     auto invoke(args_t&&... args) const {
         return invoke_composite(std::forward<args_t>(args)...);
     }
@@ -139,7 +181,8 @@ private:
     }
 
     template <typename operation_attributes_t, typename tensor_args_t>
-    auto invoke_lazy(const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
+    auto invoke_lazy_device_operation(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) const {
         using tensor_return_value_t = typename operation_t::tensor_return_value_t;
 
         // Extract input tensors from tensor_args

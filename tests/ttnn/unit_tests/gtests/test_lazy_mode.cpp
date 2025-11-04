@@ -22,9 +22,12 @@
 #include "ttnn_test_fixtures.hpp"
 #include "ttnn/operations/rand/rand.hpp"
 #include <enchantum/enchantum.hpp>
-#include "ttnn/experimental/lazy/lazy_device_operation.hpp"
 #include "ttnn/operations/copy/typecast/device/typecast_device_op.hpp"
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
+#include "ttnn/operations/data_movement/split/split.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 namespace test {
@@ -703,6 +706,200 @@ TEST_F(LazyModeFixture, UnaryOperationsFusion) {
 
     log_info(tt::LogTest, "✓ Lazy (with fusion) and eager results match!");
     log_info(tt::LogTest, "==== Finished UnaryOperationsFusion test ====");
+}
+
+// // Test: Data movement operations in lazy mode (split, concat, repeat, reshape)
+// TEST_F(LazyModeFixture, DataMovementOperationsLazy) {
+//     log_info(tt::LogTest, "==== Starting DataMovementOperationsLazy test ====");
+
+//     // First run in eager mode to get baseline
+//     log_info(tt::LogTest, "Running operations in EAGER mode for baseline...");
+//     lazy::disable();
+//     ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+//     ttnn::Shape shape({32, 64});
+//     const auto input_eager = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+
+//     // Test 1: Split operation - split along dim 1 (width) into chunks of size 32
+//     log_info(tt::LogTest, "Testing split operation in eager mode...");
+//     auto split_results_eager = ttnn::split(input_eager, 32, 1, std::nullopt);
+//     ASSERT_EQ(split_results_eager.size(), 2) << "Split should produce 2 tensors";
+//     ASSERT_EQ(split_results_eager[0].logical_shape(), ttnn::Shape({32, 32}))
+//         << "First split should have shape [32, 32]";
+//     ASSERT_EQ(split_results_eager[1].logical_shape(), ttnn::Shape({32, 32}))
+//         << "Second split should have shape [32, 32]";
+
+//     // Test 2: Concat operation - concat the split results back
+//     log_info(tt::LogTest, "Testing concat operation in eager mode...");
+//     auto concat_result_eager = ttnn::concat(split_results_eager, 1, std::nullopt);
+//     ASSERT_EQ(concat_result_eager.logical_shape(), shape) << "Concat should restore original shape";
+
+//     // Test 3: Reshape operation
+//     log_info(tt::LogTest, "Testing reshape operation in eager mode...");
+//     auto reshape_result_eager = ttnn::reshape(concat_result_eager, ttnn::Shape({64, 32}), std::nullopt);
+//     ASSERT_EQ(reshape_result_eager.logical_shape(), ttnn::Shape({64, 32}))
+//         << "Reshape should produce shape [64, 32]";
+
+//     // Test 4: Repeat operation
+//     log_info(tt::LogTest, "Testing repeat operation in eager mode...");
+//     auto repeat_result_eager = ttnn::repeat(reshape_result_eager, ttnn::SmallVector<uint32_t>{1, 2}, std::nullopt);
+//     ASSERT_EQ(repeat_result_eager.logical_shape(), ttnn::Shape({64, 64}))
+//         << "Repeat should produce shape [64, 64]";
+
+//     // Add element-wise operation to make the test more interesting
+//     auto relu_result_eager = ttnn::relu(repeat_result_eager);
+//     auto eager_result = relu_result_eager.cpu();
+
+//     // Now run in lazy mode
+//     log_info(tt::LogTest, "Running same operations in LAZY mode...");
+//     lazy::enable();
+//     ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+//     const auto input_lazy = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+
+//     // Test 1: Split operation - should be captured lazily (split into chunks of size 32)
+//     log_info(tt::LogTest, "Applying split operation in lazy mode...");
+//     auto split_results_lazy = ttnn::split(input_lazy, 32, 1, std::nullopt);
+//     ASSERT_EQ(split_results_lazy.size(), 2) << "Split should produce 2 tensors";
+
+//     ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+//     ASSERT_FALSE(split_results_lazy[0].lazy()->is_materialized())
+//         << "First split result should not be materialized";
+//     ASSERT_FALSE(split_results_lazy[1].lazy()->is_materialized())
+//         << "Second split result should not be materialized";
+
+//     // Test 2: Concat operation - should be captured lazily
+//     log_info(tt::LogTest, "Applying concat operation in lazy mode...");
+//     auto concat_result_lazy = ttnn::concat(split_results_lazy, 1, std::nullopt);
+
+//     ASSERT_FALSE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should not be materialized";
+
+//     // Test 3: Reshape operation - should be captured lazily
+//     log_info(tt::LogTest, "Applying reshape operation in lazy mode...");
+//     auto reshape_result_lazy = ttnn::reshape(concat_result_lazy, ttnn::Shape({64, 32}), std::nullopt);
+
+//     ASSERT_FALSE(reshape_result_lazy.lazy()->is_materialized()) << "Reshape result should not be materialized";
+
+//     // Test 4: Repeat operation - should be captured lazily
+//     log_info(tt::LogTest, "Applying repeat operation in lazy mode...");
+//     auto repeat_result_lazy = ttnn::repeat(reshape_result_lazy, ttnn::SmallVector<uint32_t>{1, 2}, std::nullopt);
+
+//     ASSERT_FALSE(repeat_result_lazy.lazy()->is_materialized()) << "Repeat result should not be materialized";
+
+//     // Add element-wise operation
+//     auto relu_result_lazy = ttnn::relu(repeat_result_lazy);
+
+//     ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
+
+//     log_info(
+//         tt::LogTest,
+//         "split_results_lazy[0] id: {}, split_results_lazy[1] id: {}, concat_result_lazy id: {}, "
+//         "reshape_result_lazy id: {}, repeat_result_lazy id: {}, relu_result_lazy id: {}",
+//         split_results_lazy[0].lazy()->id(),
+//         split_results_lazy[1].lazy()->id(),
+//         concat_result_lazy.lazy()->id(),
+//         reshape_result_lazy.lazy()->id(),
+//         repeat_result_lazy.lazy()->id(),
+//         relu_result_lazy.lazy()->id());
+
+//     // Now execute the lazy graph
+//     log_info(tt::LogTest, "Executing lazy graph...");
+//     relu_result_lazy.evaluate();
+
+//     ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
+//     ASSERT_TRUE(repeat_result_lazy.lazy()->is_materialized()) << "Repeat result should be materialized";
+//     ASSERT_TRUE(reshape_result_lazy.lazy()->is_materialized()) << "Reshape result should be materialized";
+//     ASSERT_TRUE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should be materialized";
+//     ASSERT_TRUE(split_results_lazy[0].lazy()->is_materialized())
+//         << "First split result should be materialized";
+//     ASSERT_TRUE(split_results_lazy[1].lazy()->is_materialized())
+//         << "Second split result should be materialized";
+//     ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+
+//     auto lazy_result = relu_result_lazy.cpu();
+
+//     // Compare results
+//     log_info(tt::LogTest, "Comparing lazy and eager results...");
+//     ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+//         << "Lazy and eager execution results should match";
+
+//     log_info(tt::LogTest, "✓ Lazy and eager results match!");
+//     log_info(tt::LogTest, "==== Finished DataMovementOperationsLazy test ====");
+// }
+
+// Test: Split operation in lazy mode with sibling evaluation verification
+TEST_F(LazyModeFixture, SplitOperationLazy) {
+    log_info(tt::LogTest, "==== Starting SplitOperationLazy test ====");
+
+    // First run in eager mode to get baseline
+    log_info(tt::LogTest, "Running split operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 64});
+    const auto input_eager = ttnn::full(shape, 3.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+
+    // Split along dim 1 (width) into chunks of size 32
+    auto split_results_eager = ttnn::split(input_eager, 32, 1, std::nullopt);
+    ASSERT_EQ(split_results_eager.size(), 2) << "Split should produce 2 tensors";
+    ASSERT_EQ(split_results_eager[0].logical_shape(), ttnn::Shape({32, 32}))
+        << "First split should have shape [32, 32]";
+    ASSERT_EQ(split_results_eager[1].logical_shape(), ttnn::Shape({32, 32}))
+        << "Second split should have shape [32, 32]";
+
+    auto eager_result_0 = split_results_eager[0].cpu();
+    auto eager_result_1 = split_results_eager[1].cpu();
+
+    // Now run in lazy mode
+    log_info(tt::LogTest, "Running split operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = ttnn::full(shape, 3.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+
+    // Split operation - should be captured lazily
+    log_info(tt::LogTest, "Applying split operation in lazy mode...");
+    auto split_results_lazy = ttnn::split(input_lazy, 32, 1, std::nullopt);
+    ASSERT_EQ(split_results_lazy.size(), 2) << "Split should produce 2 tensors";
+
+    // Verify that input is materialized but outputs are not
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(split_results_lazy[0].lazy()->is_materialized()) << "First split result should not be materialized";
+    ASSERT_FALSE(split_results_lazy[1].lazy()->is_materialized()) << "Second split result should not be materialized";
+
+    // Note: lazy()->siblings() is going to be empty since split is "fake multi-output" operation.
+    // It basically calls ttnn::slice for each output, so outputs tensors are independent.
+
+    log_info(
+        tt::LogTest,
+        "split_results_lazy[0] id: {}, split_results_lazy[1] id: {}",
+        split_results_lazy[0].lazy()->id(),
+        split_results_lazy[1].lazy()->id());
+
+    // Now execute ONLY the first output - this should also materialize the second output
+    log_info(tt::LogTest, "Evaluating first split output (should also evaluate second output)...");
+    split_results_lazy[0].evaluate();
+    split_results_lazy[1].evaluate();
+
+    // Verify that BOTH outputs are now materialized (because they are siblings)
+    ASSERT_TRUE(split_results_lazy[0].lazy()->is_materialized()) << "First split result should be materialized";
+    ASSERT_TRUE(split_results_lazy[1].lazy()->is_materialized())
+        << "Second split result should ALSO be materialized (sibling evaluation)";
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+
+    auto lazy_result_0 = split_results_lazy[0].cpu();
+    auto lazy_result_1 = split_results_lazy[1].cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result_0, eager_result_0))
+        << "Lazy and eager execution results should match for first output";
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result_1, eager_result_1))
+        << "Lazy and eager execution results should match for second output";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "✓ Sibling evaluation verified: evaluating one output materialized both outputs!");
+    log_info(tt::LogTest, "==== Finished SplitOperationLazy test ====");
 }
 
 }  // namespace test
