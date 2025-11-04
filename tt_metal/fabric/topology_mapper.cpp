@@ -1033,23 +1033,46 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping() {
     }
 }
 
-HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
-    // Convert SwitchId to MeshId for internal lookup (internal representation uses MeshId)
-    MeshId switch_mesh_id(*switch_id);
-
+HostName TopologyMapper::get_hostname_for_mesh(MeshId mesh_id) const {
     // Get all hosts for this mesh_id from the fabric node mapping
-    // Switches are single host, so we can get it from any ASIC in the switch
-    std::unordered_set<HostName> switch_hosts;
+    // Meshes can be multi-host, so we collect all unique hostnames and return the first one
+    std::unordered_set<HostName> mesh_hosts;
     for (const auto& [fabric_node_id, asic_id] : fabric_node_id_to_asic_id_) {
-        if (fabric_node_id.mesh_id == switch_mesh_id) {
-            switch_hosts.insert(physical_system_descriptor_.get_host_name_for_asic(asic_id));
+        if (fabric_node_id.mesh_id == mesh_id) {
+            mesh_hosts.insert(physical_system_descriptor_.get_host_name_for_asic(asic_id));
         }
     }
 
-    TT_FATAL(!switch_hosts.empty(), "Switch mesh_id {} not found in fabric node mapping", *switch_mesh_id);
-    TT_FATAL(switch_hosts.size() == 1, "Switch should have exactly one host, but found {}", switch_hosts.size());
+    TT_FATAL(!mesh_hosts.empty(), "Mesh mesh_id {} not found in fabric node mapping", *mesh_id);
 
-    return *switch_hosts.begin();
+    // Return the first hostname (for multi-host meshes, this represents one of the hosts)
+    return *mesh_hosts.begin();
+}
+
+HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
+    // Verify that the switch exists in the mesh graph
+    const auto& switch_ids = mesh_graph_.get_switch_ids();
+    bool switch_exists = false;
+    for (const auto& existing_switch_id : switch_ids) {
+        if (*existing_switch_id == *switch_id) {
+            switch_exists = true;
+            break;
+        }
+    }
+    TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", *switch_id);
+
+    // Convert SwitchId to MeshId and use the consolidated mesh hostname function
+    MeshId switch_mesh_id = mesh_graph_.get_mesh_id_for_switch(switch_id);
+    return get_hostname_for_mesh(switch_mesh_id);
+}
+
+HostName TopologyMapper::get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const {
+    // Direct lookup in the fabric node to ASIC mapping
+    auto it = fabric_node_id_to_asic_id_.find(fabric_node_id);
+    TT_FATAL(it != fabric_node_id_to_asic_id_.end(), "Fabric node id {} not found in mapping", fabric_node_id);
+
+    // Get the hostname for the corresponding ASIC
+    return physical_system_descriptor_.get_host_name_for_asic(it->second);
 }
 
 }  // namespace tt::tt_fabric

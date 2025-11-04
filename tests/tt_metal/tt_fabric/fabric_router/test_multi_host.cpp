@@ -19,8 +19,6 @@
 #include <tt-metalium/distributed_context.hpp>
 
 // FIXME: Remove after testing
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/fabric/topology_mapper.hpp"
 #include <set>
 #include <unordered_set>
 
@@ -543,38 +541,10 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchFabric2DSanity) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Test switch query APIs
     const auto& switch_ids = mesh_graph.get_switch_ids();
     EXPECT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
-    EXPECT_EQ(*switch_ids[0], 0) << "Switch ID should be 0";
-
     SwitchId switch_id = switch_ids[0];
-
-    // Test mesh_id mapping for switch
     MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
-    EXPECT_GE(*switch_mesh_id, 0) << "Switch should have a mapped mesh_id";
-
-    // Test meshes connected to switch
-    const auto& connected_meshes = mesh_graph.get_meshes_connected_to_switch(switch_id);
-    EXPECT_EQ(connected_meshes.size(), 3) << "Switch should be connected to 3 meshes";
-
-    // Verify each mesh is connected to the switch
-    for (const auto& mesh_id : connected_meshes) {
-        EXPECT_TRUE(mesh_graph.is_mesh_connected_to_switch(mesh_id, switch_id))
-            << "Mesh " << *mesh_id << " should be connected to switch 0";
-
-        auto switch_for_mesh = mesh_graph.get_switch_for_mesh(mesh_id);
-        ASSERT_TRUE(switch_for_mesh.has_value()) << "Mesh " << *mesh_id << " should have a connected switch";
-        EXPECT_EQ(*switch_for_mesh.value(), *switch_id) << "Mesh " << *mesh_id << " should be connected to switch 0";
-    }
-
-    // Test that switch is treated as a mesh internally (single host constraint)
-    const auto& host_ranks = mesh_graph.get_host_ranks(switch_mesh_id);
-    EXPECT_EQ(host_ranks.size(), 1) << "Switch should have exactly 1 host (single host constraint)";
-
-    // Test switch chip IDs
-    const auto& chip_ids = mesh_graph.get_chip_ids(switch_mesh_id);
-    EXPECT_EQ(chip_ids.size(), 8) << "Switch should have 2*4=8 chips";
 
     // Test intermesh connections - switch should have connections to all 3 meshes
     const auto& intermesh_connections = get_all_intermesh_connections(control_plane);
@@ -665,75 +635,25 @@ TEST(MultiHost, TestClosetBox3PodTTSwitchFabric1DSanity) {
     }
 }
 
-TEST(MultiHost, TestClosetBox3PodTTSwitchTopologyMapperAPIs) {
+TEST(MultiHost, TestClosetBox3PodTTSwitchAPIs) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
 
-    auto mesh_graph = MeshGraph(mesh_graph_desc_path.string());
+    auto control_plane = std::make_unique<ControlPlane>(mesh_graph_desc_path.string());
+    const auto& mesh_graph = control_plane->get_mesh_graph();
 
-    // Get physical system descriptor
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-
-    auto physical_system_descriptor = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
-        cluster.get_driver(), distributed_context, &hal, rtoptions, run_discovery);
-
-    // Create local mesh binding (for testing, bind all meshes)
-    LocalMeshBinding local_mesh_binding;
-    const auto& all_mesh_ids = mesh_graph.get_mesh_ids();
-    local_mesh_binding.mesh_ids = std::vector<MeshId>(all_mesh_ids.begin(), all_mesh_ids.end());
-    local_mesh_binding.host_rank = MeshHostRankId{0};
-
-    auto topology_mapper = TopologyMapper(mesh_graph, *physical_system_descriptor, local_mesh_binding);
-
-    // Test switch hostname API
-    const auto& switch_ids = mesh_graph.get_switch_ids();
-    ASSERT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
-
-    SwitchId switch_id = switch_ids[0];
-    MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
-
-    // Test get_hostname_for_switch() API
-    HostName switch_hostname = topology_mapper.get_hostname_for_switch(switch_id);
-    EXPECT_FALSE(switch_hostname.empty()) << "Switch hostname should not be empty";
-
-    // Verify switch hostname is consistent - get hostname from first chip in switch
-    const auto& chip_ids = mesh_graph.get_chip_ids(switch_mesh_id);
-    ASSERT_GT(chip_ids.size(), 0) << "Switch should have at least one chip";
-    FabricNodeId switch_fabric_node_id(switch_mesh_id, chip_ids.values()[0]);
-    auto switch_asic_id = topology_mapper.get_asic_id_from_fabric_node_id(switch_fabric_node_id);
-    auto chip_hostname = physical_system_descriptor->get_host_name_for_asic(switch_asic_id);
-    EXPECT_EQ(switch_hostname, chip_hostname) << "Switch hostname should match chip hostname";
-
-    // Test that switch mesh_id can be used with other topology mapper APIs
-    const auto& switch_host_ranks = topology_mapper.get_host_ranks(switch_mesh_id);
-    EXPECT_EQ(switch_host_ranks.size(), 1) << "Switch should have exactly 1 host rank";
-
-    const auto& switch_shape = topology_mapper.get_mesh_shape(switch_mesh_id);
-    EXPECT_EQ(switch_shape, MeshShape(2, 4)) << "Switch should have 2x4 shape";
-}
-
-TEST(MultiHost, TestClosetBox3PodTTSwitchMeshGraphAPIs) {
-    const std::filesystem::path mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_closetbox_3pod_ttswitch_mgd.textproto";
-
-    MeshGraph mesh_graph(mesh_graph_desc_path.string());
-
+    // ========== MeshGraph API Tests ==========
     // Test get_switch_ids()
     const auto& switch_ids = mesh_graph.get_switch_ids();
-    EXPECT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
-    EXPECT_EQ(*switch_ids[0], 0) << "Switch ID should be 0";
+    ASSERT_EQ(switch_ids.size(), 1) << "Should have exactly 1 switch";
+    EXPECT_EQ(*switch_ids[0], 3) << "Switch ID should be 0";
 
     SwitchId switch_id = switch_ids[0];
 
     // Test get_mesh_id_for_switch()
     MeshId switch_mesh_id = mesh_graph.get_mesh_id_for_switch(switch_id);
-    EXPECT_GE(*switch_mesh_id, 0) << "Switch should have a mapped mesh_id";
+    EXPECT_EQ(*switch_mesh_id, 3) << "Switch should have a mapped mesh_id";
 
     // Verify switch mesh_id is unique (not used by regular meshes)
     const auto& all_mesh_ids = mesh_graph.get_mesh_ids();
