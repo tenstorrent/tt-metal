@@ -224,11 +224,13 @@ void TopologyMapper::build_mapping() {
         "Multi-mesh-per-host systems are not supported by this algorithm, please use custom fabric topology via "
         "MetalContext::set_custom_fabric_topology");
 
+    generate_mapping_locally_ = (mesh_graph_.get_mesh_ids().size() == 1) &&
+                                (mesh_graph_.get_host_ranks(local_mesh_binding_.mesh_ids[0]).size() == 1);
     // Build host-to-mesh mapping via distributed all-gather of local bindings.
     auto mesh_id_host_names = build_host_mesh_mapping();
 
     // Only 1 host builds the mapping the rest will wait and use the mapping from the 1st host
-    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+    if (generate_mapping_locally_ || *tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
         // Build logical and physical adjacency maps
         auto adjacency_map_logical = build_adjacency_map_logical(mesh_id_host_names);
         auto adjacency_map_physical = build_adjacency_map_physical(mesh_id_host_names);
@@ -240,7 +242,9 @@ void TopologyMapper::build_mapping() {
         populate_fabric_node_id_to_asic_id_mappings(adjacency_map_physical, adjacency_map_logical);
 
         // Broadcast the mapping to all hosts
-        broadcast_mapping_to_all_hosts();
+        if (!generate_mapping_locally_) {
+            broadcast_mapping_to_all_hosts();
+        }
     } else {
         // Wait for the 1st host to build the mapping
         receive_mapping_from_host(0);
@@ -258,7 +262,7 @@ std::unordered_map<MeshId, std::unordered_set<HostName>> TopologyMapper::build_h
     const std::size_t world_size = *global_context->size();
 
     // Single-host or uninitialized distributed context: compute mapping locally without any collectives
-    if (world_size <= 1) {
+    if (world_size == 1 || generate_mapping_locally_) {
         for (const auto& mesh_id : local_mesh_binding_.mesh_ids) {
             mesh_id_to_hosts[mesh_id].insert(physical_system_descriptor_.my_host_name());
         }
