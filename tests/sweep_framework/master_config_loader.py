@@ -508,11 +508,22 @@ class MasterConfigLoader:
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
             else:
-                # Return config names for exact paired configs (default)
-                traced_config_names = [f"{operation_name}_traced_{i}" for i in range(len(paired_configs))]
+                # Return paired parameters as tuples to keep them together
+                # Use comma-separated parameter names to prevent Cartesian product
+                paired_param_tuples = []
+                for cfg in paired_configs:
+                    paired_param_tuples.append(
+                        (
+                            cfg["shape"],
+                            cfg["dtype"],
+                            cfg["layout"],
+                            cfg["memory_config"],
+                            cfg["output_memory_config"],
+                        )
+                    )
 
                 result = {
-                    "traced_config_name": traced_config_names,
+                    "input_shape,input_a_dtype,input_a_layout,input_a_memory_config,output_memory_config": paired_param_tuples,
                 }
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
