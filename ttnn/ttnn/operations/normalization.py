@@ -301,6 +301,23 @@ def dram_group_norm_params_from_torch(
         return tt_params
 
 
+def find_max_tile_span(W, group_size, tile_width):
+    """Finds the maximum (worst case) number of tiles a group of size group_size can span across.
+    This helps in setting the mask width conservatively.
+    """
+    current_position = 0
+    max_tile_span = 0
+
+    while current_position < W:
+        group_end = current_position + group_size
+        start_tile = current_position // tile_width
+        end_tile = (group_end - 1) // tile_width
+        current_tile_span = end_tile - start_tile + 1
+        max_tile_span = max(max_tile_span, current_tile_span)
+        current_position = group_end
+    return max_tile_span
+
+
 def create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid):
     """
     Create reciprocals tensor for group norm with welford algorithm.

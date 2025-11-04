@@ -268,13 +268,13 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
     auto ttnn_module = py::module_::import("ttnn");
     ttnn_module.def(
         "create_group_norm_input_mask",
-        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {
+        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type = DataType::BFLOAT16) {
             return create_group_norm_input_mask(num_channel, num_groups, num_cores_across_channel, data_type);
         },
         py::arg("num_channel"),
         py::arg("num_groups"),
         py::arg("num_cores_across_channel"),
-        py::arg("data_type"),
+        py::arg("data_type") = DataType::BFLOAT16,
         R"doc(
             C++ implementation of create_group_norm_input_mask.
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
@@ -282,13 +282,13 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
     );
     ttnn_module.def(
         "create_group_norm_input_negative_mask",
-        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type) {
+        [](int64_t num_channel, int64_t num_groups, int64_t num_cores_across_channel, DataType data_type = DataType::BFLOAT16) {
             return create_group_norm_input_negative_mask(num_channel, num_groups, num_cores_across_channel, data_type);
         },
         py::arg("num_channel"),
         py::arg("num_groups"),
         py::arg("num_cores_across_channel"),
-        py::arg("data_type"),
+        py::arg("data_type") = DataType::BFLOAT16,
         R"doc(
             C++ implementation of create_group_norm_input_negative_mask.
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
