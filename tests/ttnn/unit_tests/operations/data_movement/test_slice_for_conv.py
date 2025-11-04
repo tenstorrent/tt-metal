@@ -109,7 +109,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, layout, orientation, dtype):
@@ -121,6 +121,7 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
     strides = [1, 1, 1, 1]
     torch.manual_seed(2005)
     torch_input = torch.randint(-10, 10, dims)
+    torch_input = torch.tensor(range(dims[-1]), dtype=torch.int32).reshape(1, 1, 1, dims[-1]).broadcast_to(dims)
 
     ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=dtype)
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
