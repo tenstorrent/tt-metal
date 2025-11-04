@@ -16,17 +16,17 @@ from .validate_against import (
     ValidationResult,
     Metric,
     clear_validation_results,
-    device_validate_against,
+    compare_to_ttnn,
     enable_validation,
     get_validation_registry,
-    host_validate_against,
+    compare_to_torch,
     MetricSpec,
 )
 
 __all__ = [
     # Validation framework
-    "device_validate_against",
-    "host_validate_against",
+    "compare_to_ttnn",
+    "compare_to_torch",
     "get_validation_registry",
     "enable_validation",
     "clear_validation_results",

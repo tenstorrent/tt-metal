@@ -9,11 +9,11 @@ from tt_transformers_v2.src.testing import (
     Metric,
     MetricSpec,
     clear_validation_results,
+    compare_to_torch,
+    compare_to_ttnn,
     compute_pcc_host,
-    device_validate_against,
     enable_validation,
     get_validation_registry,
-    host_validate_against,
     to_torch_auto_compose,
 )
 
@@ -55,7 +55,7 @@ class HostValidatedRMSNorm:
             weight.unsqueeze(0).unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         )
 
-    @host_validate_against(
+    @compare_to_torch(
         reference_fn=torch_rms_norm,
         input_to_torch=lambda self, x: (
             # [INFO] produce input args to torch_rms_norm as a tuple
@@ -103,13 +103,13 @@ class DeviceValidatedRMSNorm:
     # [INFO] this decorator is useful when the reference function is a TTNN-native function.
     #        currently, it is experimental and requires the reference function has same-ordered
     #        inputs as the decorated function.
-    @device_validate_against(
+    @compare_to_ttnn(
         reference_fn=lambda self, x: self._reference_impl(x),
-        metric_tolerances={
-            Metric.MAX_ABS_ERROR: 1e-2,
-            Metric.MEAN_ABS_ERROR: 1e-3,
-            Metric.PCC: 0.99,
-        },
+        # [INFO] passing `metric_tolerances` is optional; if not provided, the default tolerances will be used:
+        # metric_tolerances={
+        #     Metric.MAX_ABS_ERROR: 1e-2,
+        #     Metric.PCC: 0.99,
+        # },
     )
     def __call__(self, x):
         # x shape: [1, seq_len, hidden_size]
@@ -118,6 +118,18 @@ class DeviceValidatedRMSNorm:
         rms = ttnn.sqrt(ttnn.add(mean_x_squared, self.eps))
         x_normed = ttnn.mul(x, ttnn.reciprocal(rms))
         return ttnn.mul(x_normed, self.weight)
+
+    @compare_to_ttnn(
+        reference_fn=lambda self, x: self._reference_impl(x),
+    )
+    def _call_torch__(self, x):
+        # copied __call__ code below and converted to torch tensor to mock a function under test that returns a torch tensor
+        # x shape: [1, seq_len, hidden_size]
+        x_squared = ttnn.mul(x, x)
+        mean_x_squared = ttnn.mean(x_squared, dim=-1, keepdim=True)
+        rms = ttnn.sqrt(ttnn.add(mean_x_squared, self.eps))
+        x_normed = ttnn.mul(x, ttnn.reciprocal(rms))
+        return to_torch_auto_compose(ttnn.mul(x_normed, self.weight))
 
 
 def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
@@ -135,6 +147,8 @@ def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
     x_tt = ttnn.from_torch(x.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     _ = rms_device(x_tt)
 
+    _ = rms_device._call_torch__(x_tt)
+
     # Host-validated RMSNorm
     rms_host = HostValidatedRMSNorm(weight, eps=1e-6, device=ttnn_mesh_device)
     x2 = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
@@ -143,13 +157,14 @@ def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
 
     assert len(registry.results) >= 2
     # Expect the last two validations to fail max_abs_error and mean_abs_error checks (known issue??)
-    assert not registry.results[-1].metrics[Metric.MAX_ABS_ERROR].passed
-    assert not registry.results[-2].metrics[Metric.MAX_ABS_ERROR].passed
-    assert not registry.results[-1].metrics[Metric.MEAN_ABS_ERROR].passed
-    assert not registry.results[-2].metrics[Metric.MEAN_ABS_ERROR].passed
+    assert not registry.results[0].metrics[Metric.MAX_ABS_ERROR].passed
+    assert not registry.results[1].metrics[Metric.MAX_ABS_ERROR].passed
+    assert not registry.results[2].metrics[Metric.MAX_ABS_ERROR].passed
+    assert not registry.results[2].metrics[Metric.MEAN_ABS_ERROR].passed
     # Expect the last two validations to pass pcc check
-    assert registry.results[-1].metrics[Metric.PCC].passed
-    assert registry.results[-2].metrics[Metric.PCC].passed
+    assert registry.results[0].metrics[Metric.PCC].passed
+    assert registry.results[1].metrics[Metric.PCC].passed
+    assert registry.results[2].metrics[Metric.PCC].passed
 
 
 # ============================================================================
@@ -157,7 +172,7 @@ def test_validation_rmsnorm_host_and_device(ttnn_mesh_device: ttnn.MeshDevice):
 # ============================================================================
 
 
-@host_validate_against(
+@compare_to_torch(
     reference_fn=torch.matmul,
     # [INFO] when reference function accepts inputs in the same order as the decorated function,
     #        we can omit input_to_torch; the mapping will be inferred automatically.
@@ -172,7 +187,7 @@ def ttnn_matmul(a, b):
 
 
 # make a test case to show how to directly use auto_compose to convert ttnn to torch
-@host_validate_against(
+@compare_to_torch(
     reference_fn=torch.matmul,
     # [INFO] this is a simple example of input remapping.
     input_to_torch=lambda a, b: (to_torch_auto_compose(b), to_torch_auto_compose(a)),
@@ -227,7 +242,7 @@ def custom_attention_reference(q, k, v, scale):
 # - a filename for the tensor
 
 
-@host_validate_against(
+@compare_to_torch(
     reference_fn=custom_attention_reference,
     # [INFO]{ when reference function accepts inputs in the same order as the decorated function,
     # we can omit input_to_torch; it will be inferred automatically as if the following code were written:
@@ -279,7 +294,7 @@ def test_validation_attention(ttnn_mesh_device: ttnn.MeshDevice):
 # ============================================================================
 
 
-@host_validate_against(
+@compare_to_torch(
     reference_fn=lambda tensor, device: tensor,
     output_to_torch=lambda x: to_torch_auto_compose(x),
     metric_tolerances={
@@ -314,7 +329,7 @@ def test_validation_checkpoint_from_torch(ttnn_mesh_device: ttnn.MeshDevice):
 # ============================================================================
 
 
-@host_validate_against(
+@compare_to_torch(
     reference_fn=torch.matmul,
     metric_tolerances={
         "pcc_host": MetricSpec(tolerance=0.99, higher_is_better=True, compute_fn=compute_pcc_host),
@@ -385,7 +400,7 @@ def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
     def _matmul(a, b):
         return ttnn.matmul(a, b)
 
-    validated_matmul = host_validate_against(
+    validated_matmul = compare_to_torch(
         reference_fn=torch.matmul,
         metric_tolerances={
             Metric.MAX_ABS_ERROR: 1.5e-1,
@@ -413,7 +428,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
         pass
 
     # [INFO] make a mismatched signature on reference function to force the reference function to raise an exception!
-    @host_validate_against(reference_fn=lambda a, b, c: _ref_raises(a, b), raise_exceptions=True)
+    @compare_to_torch(reference_fn=lambda a, b, c: _ref_raises(a, b), raise_exceptions=True)
     def _matmul(a, b):
         return ttnn.matmul(a, b)
 
@@ -422,7 +437,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     assert "missing 1 required positional argument: 'c'" in str(e.value)
 
     # [INFO] make a mismatched signature on output_to_torch to force the reference function to raise an exception!
-    @host_validate_against(reference_fn=lambda a, b: ..., output_to_torch=lambda x, y: ..., raise_exceptions=True)
+    @compare_to_torch(reference_fn=lambda a, b: ..., output_to_torch=lambda x, y: ..., raise_exceptions=True)
     def _matmul_too(a, b):
         return ttnn.matmul(a, b)
 
@@ -431,7 +446,7 @@ def test_validation_raises_on_reference_exception(ttnn_mesh_device: ttnn.MeshDev
     assert "missing 1 required positional argument: 'y'" in str(e.value)
 
     # [INFO] make a mismatched signature on input_to_torch to force the reference function to raise an exception!
-    @host_validate_against(reference_fn=lambda a, b: ..., input_to_torch=lambda x: ..., raise_exceptions=True)
+    @compare_to_torch(reference_fn=lambda a, b: ..., input_to_torch=lambda x: ..., raise_exceptions=True)
     def _matmul_three(a, b):
         return ttnn.matmul(a, b)
 

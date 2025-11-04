@@ -23,6 +23,8 @@ from enum import Enum
 from functools import wraps
 from typing import Any, Callable, Dict, List, Optional
 
+import torch
+
 import ttnn
 
 from .auto_compose import to_torch_auto_compose
@@ -50,36 +52,74 @@ def clear_validation_results():
     _validation_registry.results.clear()
 
 
-# Convenience wrappers (public) — keep core impl private
-
-
-# todo)) specialize the metric functions for device and host
-def device_validate_against(
+def compare_to_ttnn(
     reference_fn: Callable,
     *,
+    input_to_ttnn: Optional[Callable] = None,
+    output_to_ttnn: Optional[Callable] = None,
     metric_tolerances: Optional[Dict[Any, Any]] = None,
     enabled: bool = True,
     raise_exceptions: bool = False,
 ):
     """
-    Convenience wrapper for TTNN-on-device comparison. This is the most useful when the reference function is a TTNN-native function.
+    Convenience wrapper for TTNN-on-device comparison. Provides useful visual cue to users that the reference function is a TTNN-native function.
 
-    - Assumes the reference function has the same signature as the implementation
-      and returns `ttnn.Tensor` (match_signature=True)
-    - No input/output mapping; metrics run on-device
+    Args:
+        reference_fn: Reference function to compare against
+        input_to_ttnn: Maps decorated function inputs to reference function inputs
+        output_to_ttnn: Maps decorated function outputs to reference function outputs
+        metric_tolerances: Dictionary specifying tolerances and optionally custom metrics.
+        enabled: Whether validation is enabled (can disable globally via registry)
+        raise_exceptions: When True, re-raise any exceptions encountered during
+            reference execution, output mapping, or metric computation instead
+            of logging them into validation results.
+
+    Examples:
+        @compare_to_ttnn(
+            reference_fn=lambda self, x: ttnn.matmul(x, self.weight),
+            input_to_ttnn=lambda self, x: (self, x),
+        )
+        def __call__(self, x):
+            return torch.matmul(x, self.torch_weight)
+            # alternatively, the decorated function can return a TTNN tensor: return ttnn.from_torch(x) @ self.weight
+
+    NOTES:
+        - The reference function is expected to accepts TTNN tensors and returns a TTNN tensor
+        - The decorated function inputs/outputs TTNN tensors, Torch tensors, or mixed TTNN and Torch tensors
+        - When decorated function returns torch tensors:
+          - the reference function's inputs will be constructed through either input_to_ttnn or from_torch(decorated function inputs, device=ttnn.GetDefaultDevice())
+          - the metric on output tensor will be computed on the host
+        - Experimental support for on-device metric computation is provided and used when both the decorated function and the reference function return TTNN tensors
     """
+
+    # Default converters: recursively convert any TTNN tensors to torch, auto-compose shards.
+    # Non-tensor objects are passed through unchanged.
+
+    def _to_ttnn_auto(x: Any) -> Any:
+        if torch.is_tensor(x):
+            # Use auto-compose; relies on tensor.device() or a globally-set default device
+            assert (
+                ttnn.GetDefaultDevice() is not None
+            ), "Default device is not set. It is required by compare_to_ttnn. Please set it via ttnn.SetDefaultDevice(...)."
+            return ttnn.from_torch(x, device=ttnn.GetDefaultDevice())
+        return x
+
+    def _default_input_map(*args, **kwargs):
+        ref_args = _map_structure(args, _to_ttnn_auto)
+        ref_kwargs = _map_structure(kwargs, _to_ttnn_auto)
+        return ref_args, ref_kwargs
 
     return __validate_against(
         reference_fn=reference_fn,
-        input_map=None,
-        output_map=None,
+        input_map=input_to_ttnn or _default_input_map,
+        output_map=output_to_ttnn,
         metric_tolerances=metric_tolerances,
         enabled=enabled,
         raise_exceptions=raise_exceptions,
     )
 
 
-def host_validate_against(
+def compare_to_torch(
     reference_fn: Callable,
     *,
     input_to_torch: Optional[Callable] = None,
@@ -91,15 +131,20 @@ def host_validate_against(
     """
     Convenience wrapper for host/CPU comparison using torch.
 
-    - If not provided, inputs/outputs are automatically converted from TTNN to
-      PyTorch using topology-aware auto composition (see auto_compose.to_torch_auto_compose).
-      For host-sharded tensors, ensure a default device is set via `ttnn.SetDefaultDevice(...)`
-      or provide a custom `input_to_torch` that calls `to_torch_auto_compose(x, device=mesh_device)`.
-    - `input_to_torch(args, kwargs) -> (ref_args, ref_kwargs)` can be provided to
-      override default input mapping to the torch reference function
-    - `output_to_torch(output) -> torch.Tensor` can be provided to override default
-      impl-output conversion to torch
-    - Reference function is expected to return `torch.Tensor`
+    # Args:
+    #     reference_fn: Reference function to compare against
+    #     input_to_torch: Maps decorated function inputs to reference function inputs
+    #     output_to_torch: Maps decorated function outputs to reference function outputs
+    #     metric_tolerances: Dictionary specifying tolerances and optionally custom metrics.
+    #     enabled: Whether validation is enabled (can disable globally via registry)
+    #     raise_exceptions: When True, re-raise any exceptions encountered during
+    #         reference execution, output mapping, or metric computation instead
+    #         of logging them into validation results.
+    #
+    # Notes:
+    # - compare_to_torch is used when the reference function is a PyTorch function
+    # - the reference function takes as inputs to_torch_auto_compose(decorated function inputs) and compares the outputs with to_torch_auto_compose(decorated function outputs)
+    # - the decorated function inputs/outputs TTNN tensors, Torch tensors, or mixed TTNN and Torch tensors
     """
 
     # Default converters: recursively convert any TTNN tensors to torch, auto-compose shards.
@@ -110,14 +155,6 @@ def host_validate_against(
             # Use auto-compose; relies on tensor.device() or a globally-set default device
             return to_torch_auto_compose(x)
         return x
-
-    def _map_structure(obj: Any, fn: Callable[[Any], Any]) -> Any:
-        if isinstance(obj, (list, tuple)):
-            mapped = [_map_structure(x, fn) for x in obj]
-            return type(obj)(mapped)
-        if isinstance(obj, dict):
-            return {k: _map_structure(v, fn) for k, v in obj.items()}
-        return fn(obj)
 
     def _default_input_map(*args, **kwargs):
         ref_args = _map_structure(args, _to_torch_auto)
@@ -353,18 +390,7 @@ def _prepare_metric_config(metric_tolerances_input):
     return metrics_map, hib, tol_map, logs_local
 
 
-# todo)) refactor __validate_against code into host_validate_against and device_validate_against to avoid the if-else branch!
-# make better documentation for host_validate_against and device_validate_against to explain the difference between the two
-# host_validate_against is used when the reference function is a PyTorch function --> change the name of the function to `compare_to_torch`
-# - the reference function takes as inputs to_torch_auto_compose(decorated function inputs) and compares the outputs with to_torch_auto_compose(decorated function outputs)
-# - the decorated function inputs/outputs TTNN tensors, Torch tensors, or mixed TTNN and Torch tensors
-# device_validate_against is used when the reference function is a TTNN-native function --> change the name of the function to `compare_to_ttnn`
-# - the reference function takes as inputs from_torch(decorated function inputs) and compares the outputs with from_torch(decorated function outputs)
-# - if there is no device specified in the reference function, it can be assumed to be on the host?! or 1x1 mesh device? Should also allow specifying the device with mesh_mapper
-# - the decorated function inputs/outputs TTNN tensors, Torch tensors, or mixed TTNN and Torch tensors
-# In both host_validate_against and device_validate_against, all the inputs/outputs are converted to Torch tensors using to_torch_auto_compose before the metric computation! i.e., remove the device metric computation!
-# Is there any difference between host_validate_against and device_validate_against?
-# There seems to be a third use case of validate functions:
+# todo)) There seems to be a third use case of validate functions:
 # - run both TTNN model and Torch model side by side (i.e., each has their separate inputs and outputs) and compare the results!
 # - this is not more useful than the above two use cases, unless we can make it more automatic!
 
@@ -453,6 +479,12 @@ def __validate_against(
         def __call__(self, x):
             return ttnn.rms_norm(x, self.weight, self.eps)  # Returns ttnn.Tensor
     """
+
+    if metric_tolerances is None:
+        metric_tolerances = {
+            Metric.MAX_ABS_ERROR: 1e-2,
+            Metric.PCC: 0.99,
+        }
 
     metrics_to_use, higher_is_better_effective, tolerances_map, pre_logs = _prepare_metric_config(metric_tolerances)
 
@@ -623,3 +655,15 @@ def __validate_against(
         return wrapper
 
     return decorator
+
+
+def _map_structure(obj: Any, fn: Callable[[Any], Any]) -> Any:
+    """
+    Map a structure of objects to a new structure using a function.
+    """
+    if isinstance(obj, (list, tuple)):
+        mapped = [_map_structure(x, fn) for x in obj]
+        return type(obj)(mapped)
+    if isinstance(obj, dict):
+        return {k: _map_structure(v, fn) for k, v in obj.items()}
+    return fn(obj)
