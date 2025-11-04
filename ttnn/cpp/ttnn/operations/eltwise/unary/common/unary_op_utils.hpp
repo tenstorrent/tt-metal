@@ -52,6 +52,7 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::ELU:
         case UnaryOpType::GELU:
         case UnaryOpType::RSQRT:
+        case UnaryOpType::SQRT:
         case UnaryOpType::HEAVISIDE:
         case UnaryOpType::ERF:
         case UnaryOpType::ERFC:
@@ -106,6 +107,5 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
 
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
-
+uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype);
 }  // namespace ttnn::operations::unary::utils

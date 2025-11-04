@@ -2084,6 +2084,26 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
 
 // clang-format off
 /**
+ * Sets the transaction id for a noc write.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | False    |
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID);
+    WAYPOINT("NWSW");
+    ncrisc_noc_set_transaction_id(noc, write_cmd_buf, trid);
+    WAYPOINT("NWSD");
+}
+
+// clang-format off
+/**
  * This blocking call waits for all the outstanding enqueued read transactions
  * issued on the current Tensix core with the given transaction id to complete.
  * After returning from this call there will be no outstanding read transactions
@@ -2278,6 +2298,31 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 
 // clang-format off
 /**
+ * This blocking call waits for all outstanding enqueued write transactions
+ * with the given transaction id to depart, but will not wait
+ * for them to complete.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID);
+    WAYPOINT("NFTW");
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
+        continue;
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NFTD");
+}
+
+// clang-format off
+/**
  * This resets the barrier counter for a given transaction id on a given NOC using a mask.
  * Only the N bits up to the number of transaction ids are used.
  *
@@ -2340,6 +2385,7 @@ private:
     }
 
 public:
+    Noc() : noc_id_(noc_index) {}
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
 
     uint8_t get_noc_id() const { return noc_id_; }

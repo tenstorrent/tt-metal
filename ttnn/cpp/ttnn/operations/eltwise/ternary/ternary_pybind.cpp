@@ -12,7 +12,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::ternary {
@@ -139,8 +139,40 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
         ttnn::pybind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
-               const std::variant<float, Tensor>& true_value,
-               const std::variant<float, Tensor>& false_value,
+               const TensorScalarVariant& true_value,
+               const TensorScalarVariant& false_value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor);
+            },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& predicate,
+               const int32_t& true_value,
+               const int32_t& false_value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor);
+            },
+            py::arg("predicate"),
+            py::arg("true_value"),
+            py::arg("false_value"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& predicate,
+               const uint32_t& true_value,
+               const uint32_t& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
                 return self(predicate, true_value, false_value, memory_config, output_tensor);
