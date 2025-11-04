@@ -313,7 +313,7 @@ To identify the tray number to reset specific devices, run either ``tt-smi -glx_
 
 .. codeblock::
 
-    $ tt-sml -glx_list_tray_to_device
+    $ tt-smi -glx_list_tray_to_device
 
         Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
               Mapping of trays to devices on the galaxy:       
