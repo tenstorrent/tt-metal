@@ -206,13 +206,8 @@ Tensor invoke_impl(
     float t_false,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    log_info(tt::LogOp, "Where LLK - TSS");
-    unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
-    return ttnn::operations::unary::Unary_chain::invoke(
-        condition,
-        {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
-        memory_config,
-        output);
+    log_debug(tt::LogOp, "Where LLK - TSS");
+    return ttnn::where_tss(condition, t_true, t_false, memory_config, output);
 }
 
 }  // namespace
@@ -230,6 +225,21 @@ Tensor WhereOperation::invoke(
         value_true,
         value_false);
 }
+template <typename T>
+    requires std::same_as<T, int32_t> || std::same_as<T, uint32_t>
+Tensor WhereOperation::invoke(
+    const Tensor& predicate,
+    const T& value_true,
+    const T& value_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    return ttnn::where_tss(predicate, value_true, value_false, memory_config, output);
+}
+
+template Tensor WhereOperation::invoke<int32_t>(
+    const Tensor&, const int32_t&, const int32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor WhereOperation::invoke<uint32_t>(
+    const Tensor&, const uint32_t&, const uint32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor AddcmulOperation::invoke(
     const Tensor& input_a,
