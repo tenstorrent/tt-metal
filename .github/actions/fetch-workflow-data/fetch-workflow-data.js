@@ -149,7 +149,7 @@ async function findPreviousAggregateRun(octokit, context) {
       owner: context.repo.owner,
       repo: context.repo.repo,
       workflow_id: workflowId,
-      branch: 'main',
+      branch: '31803-increase-caching-threshold-for-triage-pipeline',
       status: 'completed',
       per_page: 10
     });
