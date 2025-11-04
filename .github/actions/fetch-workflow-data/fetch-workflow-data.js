@@ -1342,7 +1342,7 @@ async function run() {
     let newCommitsCount = 0;
     let skippedCachedCommits = 0;
     let consecutiveCachedCommits = 0;
-    const MAX_CONSECUTIVE_CACHED = 10; // If we see 10 consecutive cached commits, assume we've caught up
+    const MAX_CONSECUTIVE_CACHED = 100; // If we see 10 consecutive cached commits, assume we've caught up
     try {
       const sinceIso = getCutoffDate(days).toISOString();
       core.info(`[COMMITS] Fetching commits since ${sinceIso}`);
