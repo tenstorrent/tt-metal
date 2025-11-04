@@ -1,5 +1,11 @@
 project(ttml)
 
+# Option to enable TTML's internal profiler hooks. When enabled, the
+# ttml::core::TTProfiler checks TRACY_ENABLE at compile time and activates
+# profiler synchronization calls. This complements TT-Metal/TTNN being built
+# with tracing enabled.
+option(TRACY_ENABLE "Enable Tracy instrumentation in TTML" OFF)
+
 set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.hpp
@@ -189,8 +195,7 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ttnn_all_includes.hpp
     # Common
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
-    # RMSNorm
-    # RMSNorm Forward
+    # RMSNorm RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation_types.hpp
@@ -257,8 +262,8 @@ set(METAL_OPS_FILES
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
 
-# Check if TT::Metalium target exists
-# If it does not exist, assume that we are building with tt-train as top level project
+# Check if TT::Metalium target exists If it does not exist, assume that we are
+# building with tt-train as top level project
 if(NOT TARGET TT::Metalium)
     find_package(TT-NN)
 
@@ -358,6 +363,11 @@ endif()
 add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
+
+if(TRACY_ENABLE)
+    target_compile_definitions(ttml PUBLIC TRACY_ENABLE)
+    message(STATUS "TTML: TRACY_ENABLE is ON")
+endif()
 
 find_package(
     Python3
@@ -478,11 +488,7 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
-nanobind_add_module(
-    _ttml
-    STABLE_ABI NB_STATIC
-    ${TTML_SRC_NANOBIND}
-)
+nanobind_add_module(_ttml STABLE_ABI NB_STATIC ${TTML_SRC_NANOBIND})
 target_link_libraries(
     _ttml
     PRIVATE
