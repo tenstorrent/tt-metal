@@ -55,7 +55,7 @@
 
 namespace ckernel {
 
-ALWI void sfpu_reduce_max_sdpa_init() { PACK((llk_math_sfpu_reduce_max_sdpa_init())); }
+ALWI void sfpu_reduce_max_sdpa_init(uint32_t num_cols) { PACK((llk_math_sfpu_reduce_max_sdpa_init(num_cols))); }
 
 ALWI void sfpu_reduce_max_sdpa(uint32_t idst, uint32_t block_height, int vector_mode = (int)VectorMode::RC_custom) {
     PACK((llk_math_sfpu_reduce_max_sdpa(idst, block_height, vector_mode)));

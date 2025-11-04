@@ -374,11 +374,10 @@ int main(int argc, char** argv) {
     /**
      * Parameters to sweep over for correctness.
      */
-    std::vector<uint32_t> q_chunk_sizes = {4};      // rows
-    std::vector<uint32_t> k_chunk_sizes = {2};      // cols
+    std::vector<uint32_t> q_chunk_sizes = {1, 2, 4};  // rows
+    std::vector<uint32_t> k_chunk_sizes = {1, 2, 4};  // cols
     std::vector<bool> fp32_dest_acc_ens = {false};  //, true};
     std::vector<bool> do_eltwise = {false};         //, true};
-
     /**
      * These parameters are the same as the SDPA sprint-2 perfomance test parameters.
      * Uncomment to measure perf of the test we care most about.
@@ -390,6 +389,11 @@ int main(int argc, char** argv) {
 
     for (uint32_t q_chunk_size : q_chunk_sizes) {
         for (uint32_t k_chunk_size : k_chunk_sizes) {
+            if (q_chunk_size * k_chunk_size > 8) {
+                log_info(
+                    LogTest, "Skipping test: q_chunk_size * k_chunk_size > 8 ({}, {})", q_chunk_size, k_chunk_size);
+                continue;
+            }
             for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
                 for (bool do_elt : do_eltwise) {
                     bool this_passed =
