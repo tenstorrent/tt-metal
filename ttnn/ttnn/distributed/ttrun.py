@@ -266,7 +266,9 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     type=click.Path(exists=True, path_type=Path),
     help="Mock cluster rank binding configuration file (YAML)",
 )
-@click.option("--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host")
+@click.option(
+    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
+)
 @click.pass_context
 def main(
     ctx: click.Context,
