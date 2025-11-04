@@ -329,6 +329,10 @@ void Hal::initialize_qa() {
     this->noc_y_id_translate_table_ = {};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
+        // No checks
+    };
 }
 
 }  // namespace tt_metal

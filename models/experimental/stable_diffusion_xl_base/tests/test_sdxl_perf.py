@@ -41,9 +41,10 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
-        is_ci_env,
-        is_ci_v2_env,
-        model_location_generator,
+        debug_mode=False,
+        is_ci_env=is_ci_env,
+        is_ci_v2_env=is_ci_v2_env,
+        model_location_generator=model_location_generator,
         iterations=iterations,
     )
 
@@ -79,7 +80,7 @@ def test_sdxl_unet_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_decode_perf_device():
-    expected_device_perf_cycles_per_iteration = 954_689_017
+    expected_device_perf_cycles_per_iteration = 932_430_106
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -104,7 +105,7 @@ def test_sdxl_vae_decode_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_encode_perf_device():
-    expected_device_perf_cycles_per_iteration = 502_563_162
+    expected_device_perf_cycles_per_iteration = 492_473_727
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

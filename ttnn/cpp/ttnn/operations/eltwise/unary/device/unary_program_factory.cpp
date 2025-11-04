@@ -25,9 +25,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = args.op_chain;
-    float value1 = 0.0f;
-    float value2 = 0.0f;
-
+    uint32_t packed_scalar1 = 0u;
+    uint32_t packed_scalar2 = 0u;
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -102,11 +101,14 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
-            case UnaryOpType::HARDSHRINK: value1 = *ops_chain[0].get_param_if<float>(0); break;
+            case UnaryOpType::HARDSHRINK:
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
+                break;
             case UnaryOpType::WHERE_TSS:
-                value1 = *ops_chain[0].get_param_if<float>(0);
-                value2 = *ops_chain[0].get_param_if<float>(1);
-                if (input.dtype() == DataType::INT32) {
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
+                // Set appropriate defines based on input dtype
+                if (input.dtype() == DataType::INT32 || input.dtype() == DataType::UINT32) {
                     unary_defines["FILL_INT"] = "fill_tile_int";
                 } else {
                     unary_defines["FILL_FLOAT"] = "fill_tile";
@@ -159,8 +161,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 .compile_args = compute_kernel_args_group_2,
                 .defines = unary_defines});
     }
-    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
-    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

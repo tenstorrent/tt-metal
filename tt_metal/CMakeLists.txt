@@ -88,6 +88,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program.hpp
     api/tt-metalium/program_cache.hpp
     api/tt-metalium/program_descriptors.hpp
+    api/tt-metalium/queue_id.hpp
     api/tt-metalium/routing_table_generator.hpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp
@@ -173,6 +174,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.yaml
@@ -189,6 +191,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/p300_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto
             fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto
@@ -209,6 +212,7 @@ target_sources(
             tools/profiler/kernel_profiler.hpp
             tools/profiler/fabric_event_profiler.hpp
             tools/profiler/noc_event_profiler.hpp
+            tools/profiler/cpp_device_analyses.json
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp

@@ -34,7 +34,7 @@ void create_arc_metrics(
     const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
     log_info(tt::LogAlways, "Creating ARC firmware metrics...");
-    tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
+    tt::umd::ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
     // Iterate through all chips and create ARC metrics for MMIO-capable ones
     for (tt::ChipId chip_id : cluster_descriptor->get_all_chips()) {
@@ -182,9 +182,7 @@ void ARCUintMetric::update(
     uint64_t old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
-    timestamp_ =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    set_timestamp_now();
 }
 
 /**************************************************************************************************
@@ -220,7 +218,5 @@ void ARCDoubleMetric::update(
     double old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
-    timestamp_ =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    set_timestamp_now();
 }
