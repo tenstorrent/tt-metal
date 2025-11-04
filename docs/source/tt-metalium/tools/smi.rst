@@ -178,7 +178,7 @@ PCIe configurations vary depending on the system. The current implementation of 
 
 To perform a reset, either provide a list of comma separated values of the PCI index of the cards on the host, or an input reset_config.json file that can be generated using:
 
-.. codeblock::
+.. code-block::
 
     -g/ --generate_reset_json
 
@@ -192,7 +192,7 @@ By default, the reset command re-initializes boards after reset. To disable this
 
 A successful reset on a system with both Wormhole and Grayskull displays the following:
 
-.. codeblock::
+.. code-block::
 
     $ tt-smi -r 0,1
 
@@ -211,7 +211,7 @@ A successful reset on a system with both Wormhole and Grayskull displays the fol
 
 OR
 
-.. codeblock::
+.. code-block::
 
     tt-smi -r reset_config.json
 
@@ -236,7 +236,7 @@ To find the correct board dev ID to call the reset on, use the TT-SMI board list
 
 The output includes a list of all boards on host and all boards that can be reset.
 
-.. codeblock::
+.. code-block::
 
     $ tt-smi -ls
 
@@ -262,14 +262,14 @@ Disabling SW Version Reporting
 
 To disable software version and serial number reporting, update the following parameters in the reset config file. The reset file is generated:
 
-.. codeblock::
+.. code-block::
 
     ~/.config/tenstorrent/reset_config.json
     tt-smi -g
 
 Run the following:
 
-.. codeblock::
+.. code-block::
   
      "disable_serial_report": false,     // make this true
      "disable_sw_version_report": false, // make this true
@@ -286,8 +286,8 @@ The following methods reset Wormhole Galaxy 6U trays:
 
 Full Galaxy Reset:
 
-.. codeblock::
-  
+.. code-block::
+
     tt-smi -glx_reset
      Resetting WH Galaxy trays with reset command...
     Executing command: sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF
@@ -299,7 +299,7 @@ Full Galaxy Reset:
 
 Tray Reset:
 
-.. codeblock::
+.. code-block::
 
     tt-smi -glx_reset_tray 3 --no_reinit
      Resetting WH Galaxy trays with reset command...
@@ -311,12 +311,12 @@ Tray Reset:
 
 To identify the tray number to reset specific devices, run either ``tt-smi -glx_list_tray_to_device`` or ``tt-smi --galaxy_6u_list_tray_to_device``. These commands display a mapping table showing the relationship between tray numbers, tray bus IDs, and the corresponding PCI device IDs, making it easier to target a tray to reset. Do not run this command in a virtual machine (VM) environment, it requires direct hardware access to the Galaxy system.
 
-.. codeblock::
+.. code-block::
 
     $ tt-smi -glx_list_tray_to_device
 
         Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
-              Mapping of trays to devices on the galaxy:       
+              Mapping of trays to devices on the galaxy:
         ┏━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┓
         ┃ Tray Number ┃ Tray Bus ID ┃ PCI Dev ID              ┃
         ┡━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━┩
@@ -331,14 +331,14 @@ Snapshots
 
 TT-SMI provides an easy way to display information on the GUI in a json file, using the ``-s, --snapshot`` argument. By default the file is named and stored as `` ~/tt_smi/<timestamp>_snapshot.json``. Rename the file using the ``-f`` option. To not output a file, use ``tt-smi -f -``. It behaves like ``tt-smi -s``, printing snapshot info directly to STDOUT.
 
-.. codeblock::
+.. code-block::
 
     $ tt-smi -s -f tt_smi_example.json
 
         Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
           Saved tt-smi log to: tt_smi_example.json
 
-.. codeblock::
+.. code-block::
 
     $ tt-smi -f -
 
