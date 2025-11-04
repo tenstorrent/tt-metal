@@ -27,14 +27,16 @@ constexpr uint32_t input_num_pages = get_compile_time_arg_val(7);
 constexpr uint32_t output_num_pages = get_compile_time_arg_val(8);
 constexpr uint32_t batch_num_pages = get_compile_time_arg_val(9);
 constexpr uint32_t slice_B = get_compile_time_arg_val(10);
-constexpr bool is_forward = get_compile_time_arg_val(11);
-constexpr bool is_first_device_in_direction = get_compile_time_arg_val(12);
-constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(13);
-constexpr bool do_final_reduction = get_compile_time_arg_val(14);
-constexpr bool sync_with_other_direction = get_compile_time_arg_val(15);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
-constexpr uint32_t start_tiles_read = get_compile_time_arg_val(17);
-constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(18);
+constexpr bool sync_with_other_direction = get_compile_time_arg_val(11);
+
+namespace detail {
+inline bool do_accumulate_output(const bool is_forward) {
+    if constexpr (sync_with_other_direction) {
+        return !is_forward;
+    }
+    return false;
+}
+}  // namespace detail
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -48,8 +50,15 @@ void kernel_main() {
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const bool is_forward = get_arg_val<uint32_t>(arg_idx++);
+    const bool is_first_device_in_direction = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_targets_in_direction = get_arg_val<uint32_t>(arg_idx++);
+    const bool do_final_reduction = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 19;
+    constexpr uint32_t ct_idx = 12;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
@@ -130,7 +139,7 @@ void kernel_main() {
      * Intermediate buffer is double-sized (shape [2, *input_shape]) to accommodate forward and backward.
      * BWD indexes into second half of intermediate buffer.
      */
-    constexpr uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+    const uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
 
     uint32_t chunk_count = 0;
     uint32_t fwd_sync_cnt = 0;
@@ -151,7 +160,7 @@ void kernel_main() {
         uint32_t input_tile_id_start = slice_idx * output_num_pages;
         uint32_t intermediate_tile_id_start = input_tile_id_start + intermediate_full_offset;
 
-        if constexpr (is_first_device_in_direction) {
+        if (is_first_device_in_direction) {
             // We have no incoming slices, so forward directly to writer
             uint32_t cb_in0 = cb_reader_output_id;
 
@@ -226,7 +235,7 @@ void kernel_main() {
         }
 
         // Next slice idx
-        if constexpr (is_forward) {
+        if (is_forward) {
             slice_idx--;
         } else {
             slice_idx++;
@@ -234,7 +243,7 @@ void kernel_main() {
     }
 
     // Do the final reduction. Synchronize with other direction.
-    if constexpr (do_final_reduction) {
+    if (do_final_reduction) {
         chunk_count = 0;
 
         uint32_t input_tile_id_start = my_chip_id * output_num_pages;
@@ -246,8 +255,7 @@ void kernel_main() {
          * incoming BWD intermediate. Use output address generator.
          * If true, output += intermediate. Otherwise, output = input + intermediate
          */
-        constexpr bool accumulate_output = sync_with_other_direction && !is_forward;
-        uint32_t tile_id_start = accumulate_output ? output_tile_id_start : input_tile_id_start;
+        const uint32_t tile_id_start = do_accumulate_output(is_forward) ? output_tile_id_start : input_tile_id_start;
 
         uint32_t cb_in0 = cb_input_id;
         for (uint32_t b = 0; b < slice_B; ++b) {
@@ -256,7 +264,7 @@ void kernel_main() {
 
             while (tiles_read < tiles_to_read) {
                 // Wait for FWD writer to signal that it has done its final reduction
-                if constexpr (accumulate_output) {
+                if (do_accumulate_output(is_forward)) {
                     noc_semaphore_wait_min(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
                 }
@@ -268,8 +276,9 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t tile_id = tile_id_start + tiles_read + j;
-                    uint64_t noc_read_addr = accumulate_output ? get_noc_addr(tile_id, output_tensor_addrgen)
-                                                               : get_noc_addr(tile_id, input_tensor_addrgen);
+                    uint64_t noc_read_addr = do_accumulate_output(is_forward)
+                                                 ? get_noc_addr(tile_id, output_tensor_addrgen)
+                                                 : get_noc_addr(tile_id, input_tensor_addrgen);
                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
                     l1_write_addr += page_size;
                 }
