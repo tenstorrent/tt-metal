@@ -31,7 +31,7 @@ random.seed(0)
 # Simply initialize the loader and get parameters for your operation
 loader = MasterConfigLoader()
 # Default: Run exact 30 traced configs from real models
-model_traced_params = loader.get_suite_parameters("sigmoid_accurate")
+model_traced_params = loader.get_suite_parameters("sigmoid_accurate", all_cases=True)
 # To run all combinations (30 shapes × dtypes × layouts × memory_configs), use:
 # model_traced_params = loader.get_suite_parameters("sigmoid_accurate", all_cases=True)
 
