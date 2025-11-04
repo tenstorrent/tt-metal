@@ -1,4 +1,4 @@
-name: "Build tt-metal artifactss"
+name: "Build tt-metal artifacts"
 
 permissions:
   packages: write
