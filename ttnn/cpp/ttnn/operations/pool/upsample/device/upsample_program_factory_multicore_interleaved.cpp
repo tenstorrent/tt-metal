@@ -163,8 +163,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     // Compute kernel (only for tiled layout)
-    tt::tt_metal::KernelHandle compute_kernel_group1_id = 0;
-    tt::tt_metal::KernelHandle compute_kernel_group2_id = 0;
     if (is_tiled_layout) {
         const uint32_t num_input_tiles_in_row =
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
@@ -178,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)output_cb_index          // out_cb_id
             };
 
-            compute_kernel_group1_id = tt::tt_metal::CreateKernel(
+            tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
                 core_group_1,
@@ -194,7 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)output_cb_index          // out_cb_id
             };
 
-            compute_kernel_group2_id = tt::tt_metal::CreateKernel(
+            tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
                 core_group_2,
