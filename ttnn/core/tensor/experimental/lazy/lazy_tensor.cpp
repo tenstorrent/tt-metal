@@ -93,6 +93,8 @@ void LazyTensor::evaluate() {
     state_ = LazyTensorState::SCHEDULED;
 
     // Verify that all inputs are materialized
+    std::vector<MaterializedTensor> input_tensors;
+    input_tensors.reserve(op_inputs_.size());
     for (const auto& input : op_inputs_) {
         auto op_name = input->op() ? input->op()->name() : "Unknown";
         TT_FATAL(
@@ -100,13 +102,14 @@ void LazyTensor::evaluate() {
             "Input tensor {} produced by operation {} is not materialized",
             input->id(),
             op_name);
+        input_tensors.push_back(input->materialized_tensor());
     }
 
-    materialized_outputs_ = op_->invoke();
+    materialized_outputs_ = op_->invoke(input_tensors);
     state_ = LazyTensorState::EVALUATED;
     // Now update siblings' materialized tensors
     for (auto& sibling : siblings_) {
-        // TODO: Make sure that this is not expensive copy
+        // TODO: make sure that this works
         sibling->materialized_outputs_ = materialized_outputs_;
         sibling->state_ = LazyTensorState::EVALUATED;
     }

@@ -15,11 +15,6 @@
 
 namespace ttnn::experimental::lazy {
 
-template <typename operation_t>
-constexpr tt::stl::hash::hash_t get_operation_type_id() {
-    return tt::stl::hash::type_hash<operation_t>;
-}
-
 // Generic wrapper that adapts any device operation to LazyOperation
 template <typename operation_t>
     requires ttnn::device_operation::DeviceOperationConcept<operation_t>
@@ -60,8 +55,10 @@ public:
 
     std::string_view name() const override { return std::string_view(name_.c_str()); }
 
-    std::vector<tt::tt_metal::metal_tensor::Tensor> invoke() override {
+    std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(
+        const std::vector<tt::tt_metal::metal_tensor::Tensor>& input_tensors) override {
         // Use the standard device operation eager execution path
+        (void)input_tensors;
         auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args_);
 
         // Convert result to vector
