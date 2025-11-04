@@ -38,8 +38,6 @@ struct SetTensorSpecOperation {
         const OptionalTensors& optional_input_tensors,
         OptionalTensors& optional_output_tensors) const;
 
-    tt::stl::hash::hash_t to_hash() const { return tt::stl::hash::hash_objects_with_default_seed(new_tensor_spec); }
-
 private:
     spec_return_value_t new_tensor_spec;
 };

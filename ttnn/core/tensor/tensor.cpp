@@ -252,7 +252,7 @@ bool Tensor::is_sharded() const {
     return memory_config().is_sharded();
 }
 
-uint32_t Tensor::element_size() const { return get_materialized_tensor().element_size(); }
+uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->dtype()); }
 
 // ttnn Tensor-only methods / constructors
 tt::tt_metal::metal_tensor::Tensor& Tensor::get_materialized_tensor() {

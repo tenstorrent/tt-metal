@@ -124,7 +124,7 @@ concept LazifyableCompositeOperationConcept =
         args_t&&... args) {
         { operation_t(std::forward<args_t>(args)...) } -> std::same_as<operation_t>;
         {
-            std::declval<operation_t>().get_tensor_inputs(std::forward<args_t>(args)...)
+            operation_t::get_tensor_inputs(std::forward<args_t>(args)...)
         } -> std::same_as<std::tuple<Tensors, OptionalTensors, OptionalTensors>>;
         { std::declval<operation_t>().validate(input_tensors, optional_input_tensors, optional_output_tensors) };
         {
