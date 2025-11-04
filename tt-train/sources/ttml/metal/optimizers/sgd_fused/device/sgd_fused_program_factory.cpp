@@ -4,7 +4,6 @@
 
 #include "sgd_fused_program_factory.hpp"
 
-#include <bit>
 #include <common/TracyQueue.hpp>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
