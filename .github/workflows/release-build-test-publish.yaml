@@ -134,11 +134,14 @@ jobs:
   # We need to tag the image used to reproduce the release later
   push-image-to-ghcr:
     needs: build-artifact
-    uses: ./.github/actions/push-latest-image-to-ghcr
-    with:
-      docker-image-tag: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      github-token: ${{ github.token }}
-      new-tag: ${{ inputs.tag-version }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push dev docker image to GHCR with release tag
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          new-tag: ${{ inputs.tag-version }}
 
   create-docker-release-image:
     needs:
