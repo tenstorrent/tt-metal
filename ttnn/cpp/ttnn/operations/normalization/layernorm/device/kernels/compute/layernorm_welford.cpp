@@ -107,7 +107,7 @@ void MAIN {
         }
 
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
-        tile_regs_acquire();
+        ACQ();
 
         uint32_t start_N = 0;
         transpose_wh_init_short(cb_x);
@@ -122,13 +122,12 @@ void MAIN {
                 start_N += tile_width;
             }
         }
-        welford_store_mean_var_to_dst_col<W>(dst1, start_N - 1, *p_reciprocals);
-        tile_regs_commit();
+        welford_store_mean_var_to_dst_col<W>(dst1, W - 1, *p_reciprocals);
 
         // Transpose dst1 and dst2 back to columns
         cb_reserve_back(cb_ex, onetile);
         cb_reserve_back(cb_ex2, onetile);
-        tile_regs_wait();
+
         pack_reconfig_data_format(cb_ex);
         pack_tile(dst1, cb_ex);
         pack_reconfig_data_format(cb_ex2);
@@ -163,6 +162,7 @@ void MAIN {
 
         cb_push_back(cb_ex, onetile);
         cb_push_back(cb_ex2, onetile);
+        REL();
 
         // x - E[x]
         // Reuse cb_x since we didn't pop anything from it

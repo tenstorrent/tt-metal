@@ -207,8 +207,7 @@ void MAIN {
                         transpose_wh_init_short(cb_in0);
                         transpose_wh_tile(cb_in0, index, 0);
 #endif
-                        auto num_group_cols_in_tile =
-                            std::min(TILE_WIDTH - this_tile_offset, curr_xy_limit - curr_xy_coord);
+                        auto num_group_cols_in_tile = std::min(TILE_WIDTH - this_tile_offset, channels_per_group);
                         welford_load_mean_m2_from_dst(mean_dst);
                         welford_tile<0>(
                             input_dst, curr_xy_coord, this_tile_offset, num_group_cols_in_tile, empty_reciprocal_lut);

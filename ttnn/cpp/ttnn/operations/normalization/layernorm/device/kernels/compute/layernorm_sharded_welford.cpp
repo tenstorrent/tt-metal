@@ -257,9 +257,13 @@ void MAIN {
     for (uint32_t i = 0; i < block_ht; i++) {
         tile_regs_acquire();
         welford_clear_previous_mean_and_m2();
+        uint32_t num_cols_processed = 0;
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             transpose_wh_tile(cb_in, w + index_h_offset, welford_input_dst);
-            welford_tile<per_core_recip_lut_size>(welford_input_dst, w * tile_width, *p_reciprocals);
+            auto num_cols_in_tile = std::min(tile_width, partial_reduce_W - num_cols_processed);
+            welford_tile<per_core_recip_lut_size>(
+                welford_input_dst, num_cols_processed, 0, num_cols_in_tile, *p_reciprocals);
+            num_cols_processed += num_cols_in_tile;
             // welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, per_core_recip_lut_size>(
             //     w * tile_width, partial_reduce_W, 0, *p_reciprocals);
         }

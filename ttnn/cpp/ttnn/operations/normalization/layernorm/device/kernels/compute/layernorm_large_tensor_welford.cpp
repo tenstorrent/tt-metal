@@ -97,6 +97,7 @@ void MAIN {
         // First pass over the input.
         // Calculate E[x] and Var[x]
         // =====================================
+        uint32_t num_cols_processed = 0;
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             if constexpr (fuse_pre_add) {
                 // Fused pre-add
@@ -136,6 +137,9 @@ void MAIN {
                 copy_tile(cb_welford.read(), 1, dst2);
 
                 cb_pop_front(cb_welford.read(), twotiles);
+                welford_load_mean_m2_from_dst(dst1);
+            } else {
+                welford_clear_previous_mean_and_m2();
             }
 
             // Process block of Welford's
@@ -145,8 +149,11 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 cb_wait_front(cb_result_or_input, j + 1);
                 transpose_wh_tile(cb_result_or_input, j, dst0);
-                welford_tile<dst0, dst1, dst2, true, W>((wt + j) * tile_width, W, 0, *p_reciprocals);
+                auto num_cols_in_tile = std::min(tile_width, W - num_cols_processed);
+                welford_tile<W>(dst0, num_cols_processed, 0, num_cols_in_tile, *p_reciprocals);
+                num_cols_processed += num_cols_in_tile;
             }
+            welford_store_mean_m2_to_dst(dst1);
             tile_regs_commit();
 
             // Pop the input or result CB
@@ -178,6 +185,9 @@ void MAIN {
         tile_regs_acquire();
         transpose_wh_tile(cb_welford.read(), 0, dst1);
         transpose_wh_tile(cb_welford.read(), 1, dst2);
+
+        welford_load_mean_m2_from_dst(dst1);
+        welford_store_mean_var_to_dst_col<W>(dst1, W - 1, *p_reciprocals);
 
         tile_regs_commit();
         tile_regs_wait();
