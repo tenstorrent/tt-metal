@@ -6,7 +6,6 @@
 #include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-// #include "tt-metalium/buffer.hpp"
 #include <tt-metalium/distributed.hpp>
 
 using namespace tt;
@@ -19,10 +18,9 @@ int main() {
     char* dprint_cores_selected = std::getenv("TT_METAL_DPRINT_CORES");
     if (dprint_cores_selected == nullptr) {
         fmt::print(
-            "ERROR: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of the "
+            "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of the "
             "TTSIM_TENSIX_DUMP debug feature.\n");
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
-        return -1;
     }
 
     // Ensure the TTSIM is enabled so the TTSIM_TENSIX_DUMP debug feature is enabled.
