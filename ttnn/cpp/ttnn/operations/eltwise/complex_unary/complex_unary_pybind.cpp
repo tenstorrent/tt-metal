@@ -35,16 +35,8 @@ void bind_complex_unary_tensor(
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
 
-
         Returns:
-
-
-
-
             ttnn.Tensor: the output tensor.
-
-
-
 
 
         Example:
@@ -86,6 +78,9 @@ void bind_complex_unary_complextensor(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory config for the operation. Defaults to `None`.
 
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
 
         Example:

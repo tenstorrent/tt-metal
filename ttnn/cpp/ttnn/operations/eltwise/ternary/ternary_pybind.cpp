@@ -39,6 +39,9 @@ void bind_ternary_composite_float(
             value (float, optional): scalar value to be multiplied.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -53,13 +56,6 @@ void bind_ternary_composite_float(
                  - 2, 3, 4
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> value = 1.0
@@ -249,6 +245,9 @@ void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, 
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:

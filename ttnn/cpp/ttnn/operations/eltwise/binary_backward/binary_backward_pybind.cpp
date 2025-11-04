@@ -42,6 +42,9 @@ void bind_binary_backward_ops(
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -58,13 +61,6 @@ void bind_binary_backward_ops(
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
             {4}
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
@@ -128,6 +124,9 @@ void bind_binary_backward_concat(
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
 
 
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
 
         Note:
@@ -228,6 +227,9 @@ void bind_binary_backward_addalpha(
 
 
 
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -323,6 +325,9 @@ void bind_binary_backward_bias_gelu(
         Keyword args:
             {4} (string): {5}. Defaults to `{6}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:
@@ -594,6 +599,9 @@ void bind_binary_bw_mul(
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `input_tensor_b`. Defaults to `None`.
 
 
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
         Note:
             Supported dtypes, layouts, and ranks:
 
@@ -844,6 +852,9 @@ void bind_binary_bw_div(
             other_grad (ttnn.Tensor, optional): Preallocated output tensor for gradient of `other_tensor`. Defaults to `None`.
 
 
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
         Supports broadcasting.
 
         Note:
@@ -970,6 +981,9 @@ void bind_binary_backward_overload(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:

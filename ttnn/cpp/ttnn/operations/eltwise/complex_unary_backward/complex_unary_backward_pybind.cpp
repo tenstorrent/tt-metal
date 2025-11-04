@@ -40,15 +40,11 @@ void bind_complex_unary_backward(
             memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
 
 
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
         Note:
             {3}
-
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
 
         Example:
             >>> grad_tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)
@@ -99,6 +95,9 @@ void bind_complex_unary_backward_tensor(
         Keyword args:
             memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
 
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
 
         Note:
             {3}
