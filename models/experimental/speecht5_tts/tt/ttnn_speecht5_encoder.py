@@ -28,6 +28,8 @@ import ttnn
 
 from models.experimental.speecht5_tts.reference.speecht5_encoder import create_sinusoidal_positions
 
+from models.experimental.speecht5_tts.reference.speecht5_encoder import create_sinusoidal_positions
+
 
 @dataclass
 class TTNNEncoderConfig:
