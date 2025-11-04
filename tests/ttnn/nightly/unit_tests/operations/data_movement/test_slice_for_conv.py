@@ -7,7 +7,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_blackhole
-from ..test_utils import round_up
+from tests.ttnn.unit_tests.operations.test_utils import round_up
 
 
 def num_to_core_range_set(x):
