@@ -279,6 +279,7 @@ private:
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
     const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
+    bool generate_mapping_locally_ = false;
 
     // Bidirectional mapping between FabricNodeId and AsicID
     std::unordered_map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_id_to_asic_id_;
