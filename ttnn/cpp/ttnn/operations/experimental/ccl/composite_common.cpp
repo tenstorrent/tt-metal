@@ -9,14 +9,6 @@
 
 namespace composite_common {
 
-bool is_fabric_2d() {
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-
-    return (
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-}
-
 // Map a dimension of an ND tensor to 4D. If dim > than rank difference, subtract rank difference.
 std::tuple<uint32_t, int32_t> normalize_dim_4d(const uint32_t dim, const uint32_t rank) {
     constexpr int32_t RANK_4D = 4, RANK_2D = 2;
@@ -265,13 +257,21 @@ bool use_composite_all_to_all(
     uint32_t tile_width = tile_shape[1];
 
     auto input_shape = input_tensor.logical_shape();
+    uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt);
 
     int32_t rank = input_tensor.logical_shape().rank();
     in_dim = (in_dim < 0) ? rank + in_dim : in_dim;
     out_dim = (out_dim < 0) ? rank + out_dim : out_dim;
 
+    auto last_dim = rank - 1;
+    auto second_last_dim = rank - 2;
+
+    auto output_out_dim = input_shape[out_dim] / num_devices;
     bool is_tiled_and_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                     (input_shape[2] % tile_height == 0 && input_shape[3] % tile_width == 0);
+                                     (in_dim != second_last_dim || input_shape[in_dim] % (tile_height / 2) == 0) &&
+                                     (in_dim != last_dim || input_shape[in_dim] % tile_width == 0) &&
+                                     (out_dim != second_last_dim || output_out_dim % (tile_height / 2) == 0) &&
+                                     (out_dim != last_dim || output_out_dim % tile_width == 0);
 
     // the current native implementation works for very specific cases
     bool use_native =
@@ -280,7 +280,7 @@ bool use_composite_all_to_all(
          input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED &&
          (!memory_config.has_value() ||
           memory_config.value().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) &&
-         (in_dim == 2 || in_dim == 3) && (out_dim == 2 || out_dim == 3) && is_tiled_and_tile_aligned);
+         is_tiled_and_tile_aligned);
 
     return !use_native;
 }

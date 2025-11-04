@@ -16,6 +16,7 @@ def run_with_trace(
     num_links,
     output_mem_config,
     num_iter=20,
+    cluster_axis=None,
     subdevice_id=None,
 ):
     # Compile Run
@@ -23,6 +24,7 @@ def run_with_trace(
     tt_out_tensor = ttnn.all_broadcast(
         input_tensor_mesh,
         num_links=num_links,
+        cluster_axis=cluster_axis,
         memory_config=output_mem_config,
         topology=all_broadcast_topology,
         subdevice_id=subdevice_id,
@@ -36,6 +38,7 @@ def run_with_trace(
         tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
+            cluster_axis=cluster_axis,
             memory_config=output_mem_config,
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
@@ -73,6 +76,7 @@ def run_all_broadcast_impl(
     cluster_axis=None,
     mesh_mapper_config=None,
 ):
+    use_sub_devices = False
     if mesh_mapper_config is None:
         mesh_mapper_config = ttnn.MeshMapperConfig(
             [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
@@ -91,8 +95,9 @@ def run_all_broadcast_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     logger.info(f"Output shape: {output_shape}")
@@ -187,6 +192,7 @@ def run_all_broadcast_impl(
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
+            cluster_axis=cluster_axis,
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -197,6 +203,7 @@ def run_all_broadcast_impl(
                 input_tensor_mesh_list[i],
                 num_links=num_links,
                 memory_config=output_mem_config,
+                cluster_axis=cluster_axis,
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
             )
@@ -227,7 +234,8 @@ def run_all_broadcast_impl(
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
     if not passed:
         assert eq, f"{i} FAILED: {output}"
 
@@ -521,3 +529,42 @@ def test_all_broadcast_sharded_2x4(
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    indirect=True,
+    ids=["fabric_linear", "fabric_2d_dynamic"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        [1, 1, 1, 32],
+    ],
+)
+def test_all_broadcast_2x4_non_flat_mesh(mesh_device, input_shape):
+    torch.manual_seed(2005)
+    devices = mesh_device.get_num_devices()
+    logger.info(f"devices: {devices}")
+    torch_inputs_per_device = [torch.rand(input_shape, dtype=torch.bfloat16) for i in range(devices)]
+
+    torch_input = torch.cat(torch_inputs_per_device, dim=-1)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+    )  # [2, 2, 32, 32] per device after sharding
+    tt_output = ttnn.all_broadcast(tt_input)
+
+    for i, torch_reference in enumerate(torch_inputs_per_device):
+        tt_torch_output = ttnn.to_torch(tt_output[i], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+        # split the tensor across dim = 0
+        tt_torch_output_slices = torch.chunk(tt_torch_output, devices, dim=0)
+        for tt_torch_output_slice in tt_torch_output_slices:
+            eq, output = comp_equal(tt_torch_output_slice, torch_reference)
+            assert eq, f"Tensor{i} FAILED: {output}"
