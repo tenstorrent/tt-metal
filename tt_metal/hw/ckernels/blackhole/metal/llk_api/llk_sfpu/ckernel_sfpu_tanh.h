@@ -32,8 +32,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
 
     sfpi::vFloat result = numerator * ckernel::sfpu::_sfpu_reciprocal_<2>(denominator);
 
-    // The limits of the continued fraction is +inf.
-    // Since tanh(x) -> +inf, we clamp output to 1.0
+    // For larger x, the continued fraction may exceed 1.0.
+    // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
@@ -48,7 +48,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_continued_fraction_(sfpi::vFloat val) {
 
 template <bool is_fp32_acc_to_dest_mode = true>
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
-    // For negative numbers, we compute tanh(x) = -tanh(x)
+    // For negative numbers, we compute tanh(-x) = -tanh(x)
     sfpi::vFloat val = sfpi::setsgn(x, 0);  // set positive
 
     // Polynomial coefficients found using Sollya
@@ -65,8 +65,8 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
         sfpi::vConst0,
         val);
 
-    // The limits of the polynomial approximation is +inf.
-    // Since tanh(x) -> +inf, we clamp output to 1.0
+    // For larger x, the polynomial approximation may exceed 1.0.
+    // Since tanh(x) is bounded by [-1, 1], we clamp output to 1.0.
     sfpi::vFloat threshold_value = sfpi::vConst1;
     sfpi::vec_min_max(result, threshold_value);
 
