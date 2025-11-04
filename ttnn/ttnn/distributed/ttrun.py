@@ -266,6 +266,9 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     type=click.Path(exists=True, path_type=Path),
     help="Mock cluster rank binding configuration file (YAML)",
 )
+@click.option(
+    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -275,6 +278,7 @@ def main(
     mpi_args: Optional[List[str]],
     debug_gdbserver: bool,
     mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -400,9 +404,10 @@ def main(
         raise click.ClickException("No program specified. Please provide a program to run.")
 
     # Validate program executable exists
-    program_path = Path(program[0])
-    if not program_path.exists() and not shutil.which(program[0]):
-        raise click.ClickException(f"Program not found: {program[0]}")
+    if not skip_executable_check:
+        program_path = Path(program[0])
+        if not program_path.exists() and not shutil.which(program[0]):
+            raise click.ClickException(f"Program not found: {program[0]}")
 
     # Build MPI command
     mpi_cmd = build_mpi_command(config, program, mpi_args, debug_gdbserver=debug_gdbserver)
