@@ -76,6 +76,7 @@ def run_all_broadcast_impl(
     cluster_axis=None,
     mesh_mapper_config=None,
 ):
+    use_sub_devices = False
     if mesh_mapper_config is None:
         mesh_mapper_config = ttnn.MeshMapperConfig(
             [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
@@ -94,8 +95,9 @@ def run_all_broadcast_impl(
     )
     worker_sub_device_id = ttnn.SubDeviceId(0)
     sub_device_stall_group = [worker_sub_device_id]
-    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
-    mesh_device.load_sub_device_manager(sub_device_manager)
+    if use_sub_devices:
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     logger.info(f"Output shape: {output_shape}")
@@ -232,7 +234,8 @@ def run_all_broadcast_impl(
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
     mesh_device.reset_sub_device_stall_group()
-    mesh_device.clear_loaded_sub_device_manager()
+    if use_sub_devices:
+        mesh_device.clear_loaded_sub_device_manager()
     if not passed:
         assert eq, f"{i} FAILED: {output}"
 
