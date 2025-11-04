@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <stdexcept>
 
 #include <fmt/base.h>
-#include <umd/device/types/arch.hpp>
 
 namespace tt {
 
