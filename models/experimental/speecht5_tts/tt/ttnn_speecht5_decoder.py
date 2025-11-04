@@ -148,13 +148,25 @@ class TTNNSpeechDecoderPrenet:
 
     def _consistent_dropout(self, inputs_embeds, p):
         """
-        TTNN consistent dropout implementation: temporarily disabled for PCC debugging.
+        TTNN consistent dropout implementation.
 
         HF applies dropout during inference (unusual but by design per paper §2.2).
-        For now, disable dropout to isolate numerical precision issues.
         """
-        # Temporarily disable dropout for PCC debugging
-        return inputs_embeds
+        # Create probability tensor from first element in batch
+        prob_tensor = ttnn.full(
+            inputs_embeds[0].shape, p, dtype=ttnn.bfloat16, device=inputs_embeds.device(), layout=ttnn.TILE_LAYOUT
+        )
+
+        # Generate Bernoulli mask (0s and 1s)
+        mask = ttnn.bernoulli(prob_tensor, 0, dtype=ttnn.bfloat16)
+
+        # Repeat mask across batch dimension
+        batch_size = inputs_embeds.shape[0]
+        all_masks = ttnn.repeat(ttnn.unsqueeze(mask, 0), [batch_size, 1, 1])
+
+        # Apply mask and scale
+        scale = 1.0 / (1.0 - p)
+        return ttnn.multiply(ttnn.where(all_masks == 1, inputs_embeds, 0), scale)
 
     def __call__(
         self,
@@ -215,10 +227,6 @@ class TTNNSpeechDecoderPrenet:
 
         # Add positional encoding (L1 output)
         hidden_states = ttnn.add(hidden_states, pe_scaled, memory_config=ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ensure_l1_memory(hidden_states)
-
-        # Apply dropout after positional encoding (L1 output)
-        hidden_states = self._consistent_dropout(hidden_states, self.config.dropout)
         hidden_states = ensure_l1_memory(hidden_states)
 
         # PHASE 5: Add speaker embeddings if provided
@@ -418,7 +426,7 @@ class TTNNSpeechT5Attention:
         query = ttnn.multiply(query, self.scaling, memory_config=ttnn.L1_MEMORY_CONFIG)
         query = ensure_l1_memory(query)
 
-        # PHASE 3: K, V from key_value_states (cross-attn) or hidden_states (self-attn) (high-performance compute kernel)
+        # PHASE 3: K, V computation
         if is_cross_attention:
             # Cross-attention: K, V from encoder
             key = l1_linear(
@@ -643,11 +651,12 @@ class TTNNSpeechT5Decoder:
     4. Return hidden states
     """
 
-    def __init__(self, device, parameters, config: TTNNDecoderConfig):
+    def __init__(self, device, parameters, config: TTNNDecoderConfig, max_sequence_length: int = 20):
         print("  [Decoder Init] Starting...")
         self.device = device
         self.config = config
         self.parameters = parameters
+        self.max_sequence_length = max_sequence_length  # Store the max length
 
         # Speech decoder prenet
         print("  [Decoder Init] Creating prenet...")
@@ -673,7 +682,7 @@ class TTNNSpeechT5Decoder:
 
         # Pre-compute causal masks for common sequence lengths
         # This avoids dynamic tensor creation during forward pass (required for trace)
-        print("  [Decoder Init] Pre-computing causal masks...")
+        print(f"  [Decoder Init] Pre-computing causal masks up to length {max_sequence_length}...")
         self.causal_mask_cache = {}
         self._precompute_causal_masks()
         print("  [Decoder Init] Done!")
@@ -684,10 +693,9 @@ class TTNNSpeechT5Decoder:
         This avoids dynamic tensor creation during forward pass, which is
         required for trace support.
 
-        Pre-computes for lengths: 20
-        Note: Add more lengths as needed for your use case.
+        Pre-computes for lengths: 20 and the configured max_sequence_length
         """
-        common_lengths = [20]
+        common_lengths = [20, self.max_sequence_length]
 
         for seq_len in common_lengths:
             # Create causal mask in PyTorch
