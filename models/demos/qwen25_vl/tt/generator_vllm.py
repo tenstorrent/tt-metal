@@ -225,6 +225,14 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             kv_cache=kv_cache,
             prompt_lens=decoding_pos,
         )
+
+        # Defensive unwrapping for fine-tuned models (e.g., olmOCR) that may return nested tuples
+        # This handles cases where model output format differs from base Qwen2.5-VL
+        while isinstance(logits, tuple):
+            if len(logits) == 0:
+                raise ValueError("Empty tuple output from prefill_forward_text")
+            logits = logits[0]
+
         return logits, rope_deltas
 
     def decode_forward(self, *args, **kwargs):
@@ -234,4 +242,13 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         if rope_deltas_list is not None:
             super().update_rope_deltas(rope_deltas_list)
 
-        return super().decode_forward_text(*args, **kwargs)
+        output = super().decode_forward_text(*args, **kwargs)
+
+        # Defensive unwrapping for fine-tuned models that may return nested tuples
+        while isinstance(output, tuple):
+            if len(output) == 0:
+                raise ValueError("Empty tuple output from decode_forward_text")
+            output = output[0]
+
+        return output
+        # return super().decode_forward_text(*args, **kwargs)
