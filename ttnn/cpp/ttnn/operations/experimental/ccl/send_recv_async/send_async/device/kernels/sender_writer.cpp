@@ -21,10 +21,11 @@ constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(6);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
 constexpr bool is_dram = get_compile_time_arg_val(8);
 
-template <uint32_t packet_size, uint32_t cb_id, bool is_dram>
+template <uint32_t cb_id, bool is_dram>
 FORCE_INLINE void write_data_to_remote_core(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     uint64_t dst_addr,
+    uint32_t packet_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
     cb_wait_front(cb_id, 1);
     auto l1_read_addr = get_read_ptr(cb_id);
@@ -80,8 +81,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
             socket_reserve_pages(sender_socket, 1);
             uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
-            write_data_to_remote_core<full_packet_size, data_cb_id, is_dram>(
-                fabric_connection, dst_addr, data_packet_header_addr);
+            write_data_to_remote_core<data_cb_id, is_dram>(
+                fabric_connection, dst_addr, full_packet_size, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
@@ -89,15 +90,8 @@ void kernel_main() {
         if (num_pages_remainder > 0) {
             socket_reserve_pages(sender_socket, 1);
             uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
-            cb_wait_front(data_cb_id, 1);
-            auto l1_read_addr = get_read_ptr(data_cb_id);
-            data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, remainder_packet_size);
-            fabric_connection.wait_for_empty_write_slot();
-            fabric_connection.send_payload_without_header_non_blocking_from_address(
-                l1_read_addr, remainder_packet_size);
-            fabric_connection.send_payload_flush_blocking_from_address(
-                (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-            cb_pop_front(data_cb_id, 1);
+            write_data_to_remote_core<data_cb_id, is_dram>(
+                fabric_connection, dst_addr, remainder_packet_size, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
@@ -109,13 +103,13 @@ void kernel_main() {
             socket_reserve_pages(sender_socket, 1);
             uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr;
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
-                write_data_to_remote_core<whole_packet_size, data_cb_id, is_dram>(
-                    fabric_connection, dst_addr, data_packet_header_addr);
+                write_data_to_remote_core<data_cb_id, is_dram>(
+                    fabric_connection, dst_addr, whole_packet_size, data_packet_header_addr);
                 dst_addr += whole_packet_size;
             }
             if constexpr (aligned_partial_packet_size > 0) {
-                write_data_to_remote_core<aligned_partial_packet_size, data_cb_id, is_dram>(
-                    fabric_connection, dst_addr, data_packet_header_addr);
+                write_data_to_remote_core<data_cb_id, is_dram>(
+                    fabric_connection, dst_addr, aligned_partial_packet_size, data_packet_header_addr);
             }
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
