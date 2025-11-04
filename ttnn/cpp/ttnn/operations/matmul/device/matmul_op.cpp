@@ -517,19 +517,21 @@ inline MatmulProgramConfig create_simple_matmul_program_config(
     uint32_t per_core_M, per_core_N, out_subblock_h, out_subblock_w;
     uint32_t num_blocks_x, num_blocks_y;
 
-    bool all_dram_interleaved = input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                                mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                                input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                                input_tensor_a.memory_config().buffer_type() == BufferType::DRAM &&
-                                input_tensor_b.memory_config().buffer_type() == BufferType::DRAM &&
-                                mem_config.buffer_type() == BufferType::DRAM;
+    const bool all_interleaved = input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                                 mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                                 input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+
+    const bool all_dram_interleaved = all_interleaved &&
+                                      input_tensor_a.memory_config().buffer_type() == BufferType::DRAM &&
+                                      input_tensor_b.memory_config().buffer_type() == BufferType::DRAM &&
+                                      mem_config.buffer_type() == BufferType::DRAM;
 
     uint32_t height = ashape[-2];
     uint32_t width = bshape[-1];
     bool is_narrow = is_narrow_shape(height, width);
     bool is_wide = false;
     bool is_tall = false;
-    if (is_narrow) {
+    if (all_interleaved && is_narrow) {
         is_wide = width > height;
         is_tall = !is_wide;
     }
