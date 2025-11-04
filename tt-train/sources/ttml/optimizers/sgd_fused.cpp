@@ -68,12 +68,14 @@ void SGDFused::step() {
             momentum_buffer = it->second->get_value(autograd::PreferredPrecision::FULL);
         }
 
+        // The first step should not apply dampening
+        float dampening = m_steps == 0 ? 0.0f : m_config.dampening;
         ttml::metal::sgd_fused(
             param,
             gradients,
             m_config.lr,
             m_config.momentum,
-            m_config.dampening,
+            dampening,
             m_config.weight_decay,
             m_config.nesterov,
             momentum_buffer);

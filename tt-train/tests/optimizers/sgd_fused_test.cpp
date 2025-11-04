@@ -153,7 +153,6 @@ static void run_steps_and_compare(const ParityCase& pc, uint32_t steps) {
 
     // Create fused optimizer
     ttml::optimizers::SGDFused opt_fused(params_fused, fused_cfg);
-    opt_fused.set_steps(1);
 
     auto theta_ref = autograd::create_tensor(to_tt(w0), true);
     theta_ref->set_grad(to_tt(g0));
@@ -167,7 +166,6 @@ static void run_steps_and_compare(const ParityCase& pc, uint32_t steps) {
     ref_cfg.nesterov = pc.nesterov;
 
     ttml::optimizers::SGD opt_ref(params_ref, ref_cfg);
-    opt_ref.set_steps(1);
 
     // Run both optimizers for the specified number of steps
     for (uint32_t i = 0; i < steps; ++i) {
