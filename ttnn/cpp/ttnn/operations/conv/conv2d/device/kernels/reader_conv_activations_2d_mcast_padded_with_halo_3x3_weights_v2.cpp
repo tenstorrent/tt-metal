@@ -151,23 +151,26 @@ void kernel_main() {
                     signal_reserve_done(act_split_reader_reserve_done_semaphore_addr_ptr);
                     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 }
-                read_activation_data<
-                    sliced_inner_dim,
-                    dilation_w,
-                    coalesced_read_bytes,
-                    conv_act_c_read_bytes,
-                    act_block_w_extra_align_bytes,
-                    stride_w_bytes,
-                    weight_size_w,
-                    stride_w,
-                    weight_size_h,
-                    window_outer_offset>(
-                    packed_reader_indices_ptr,
-                    reader_offset,
-                    l1_write_addr_act,
-                    reader_idx,
-                    act_l1_read_addr,
-                    stride_h_bytes);
+                {
+                    DeviceZoneScopedN("IMG2COL");
+                    read_activation_data<
+                        sliced_inner_dim,
+                        dilation_w,
+                        coalesced_read_bytes,
+                        conv_act_c_read_bytes,
+                        act_block_w_extra_align_bytes,
+                        stride_w_bytes,
+                        weight_size_w,
+                        stride_w,
+                        weight_size_h,
+                        window_outer_offset>(
+                        packed_reader_indices_ptr,
+                        reader_offset,
+                        l1_write_addr_act,
+                        reader_idx,
+                        act_l1_read_addr,
+                        stride_h_bytes);
+                }
                 if constexpr (split_reader_cb_shared) {
                     wait_write_done(act_split_reader_write_done_semaphore_addr_ptr);
                 }
@@ -199,61 +202,66 @@ void kernel_main() {
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
                     uint64_t act_multicast_data_addr = act_multicast_noc_addr | get_write_ptr(cb_id_act);
-
-                    if (is_receiver_core) {
-                        if constexpr (act_mcast_num_cores) {
-                            // num_dests will source, since we are copying to a different local CB as well
-                            noc_async_write_multicast_loopback_src(
+                    {
+                        DeviceZoneScopedN("MCAST SEND");
+                        if (is_receiver_core) {
+                            if constexpr (act_mcast_num_cores) {
+                                // num_dests will source, since we are copying to a different local CB as well
+                                noc_async_write_multicast_loopback_src(
+                                    tilized_act_start_address,
+                                    act_multicast_data_addr,
+                                    act_mcast_sender_size_bytes,
+                                    act_mcast_num_cores + 1,
+                                    true);
+                            } else {
+                                // In this case sender core is the only reciever in the grid,
+                                // we can't use the multicast_loopback_src (hang)
+                                noc_async_write(
+                                    get_noc_addr(tilized_act_start_address),
+                                    get_noc_addr(get_write_ptr(cb_id_act)),
+                                    act_mcast_sender_size_bytes);
+                                noc_async_write_barrier();
+                            }
+                        } else {
+                            // If sender core is not the reciever core as well we can't use the loopback mcast. (hang)
+                            noc_async_write_multicast(
                                 tilized_act_start_address,
                                 act_multicast_data_addr,
                                 act_mcast_sender_size_bytes,
                                 act_mcast_num_cores + 1,
                                 true);
-                        } else {
-                            // In this case sender core is the only reciever in the grid,
-                            // we can't use the multicast_loopback_src (hang)
-                            noc_async_write(
-                                get_noc_addr(tilized_act_start_address),
-                                get_noc_addr(get_write_ptr(cb_id_act)),
-                                act_mcast_sender_size_bytes);
-                            noc_async_write_barrier();
                         }
-                    } else {
-                        // If sender core is not the reciever core as well we can't use the loopback mcast. (hang)
-                        noc_async_write_multicast(
-                            tilized_act_start_address,
-                            act_multicast_data_addr,
-                            act_mcast_sender_size_bytes,
-                            act_mcast_num_cores + 1,
-                            true);
-                    }
 
-                    // Note: no need for write barrier, since these two multicasts are done on the same noc id and
-                    // same vc even though cmd bufs are different Also, this only works because we are setting VCs
-                    // statically (using NOC_CMD_STATIC_VC).
+                        // Note: no need for write barrier, since these two multicasts are done on the same noc id and
+                        // same vc even though cmd bufs are different Also, this only works because we are setting VCs
+                        // statically (using NOC_CMD_STATIC_VC).
 #ifdef ARCH_BLACKHOLE
-                    // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
-                    // may not be sent in order they are issued
-                    noc_async_writes_flushed();
+                        // On Blackhole the flush is needed because the commands go into separate cmd buffer FIFOs and
+                        // may not be sent in order they are issued
+                        noc_async_writes_flushed();
 #endif
 
-                    if (is_receiver_core) {
-                        // We should also multicast VALID flag to destinations for receiver semaphore
-                        if constexpr (act_mcast_num_cores) {
-                            noc_semaphore_set_multicast_loopback_src(
+                        if (is_receiver_core) {
+                            // We should also multicast VALID flag to destinations for receiver semaphore
+                            if constexpr (act_mcast_num_cores) {
+                                noc_semaphore_set_multicast_loopback_src(
+                                    act_mcast_sender_semaphore_valid_addr,
+                                    act_mcast_receiver_semaphore_noc_addr,
+                                    act_mcast_num_cores + 1);
+                                noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                                {
+                                    DeviceZoneScopedN("TIME");
+                                }
+                                if constexpr (act_mcast_split) {
+                                    noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+                                }
+                            }
+                        } else {
+                            noc_semaphore_set_multicast(
                                 act_mcast_sender_semaphore_valid_addr,
                                 act_mcast_receiver_semaphore_noc_addr,
                                 act_mcast_num_cores + 1);
-                            noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                            if constexpr (act_mcast_split) {
-                                noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
-                            }
                         }
-                    } else {
-                        noc_semaphore_set_multicast(
-                            act_mcast_sender_semaphore_valid_addr,
-                            act_mcast_receiver_semaphore_noc_addr,
-                            act_mcast_num_cores + 1);
                     }
                 } else if (is_receiver_core) {
                     // MCAST RECEIVER: receive entire tilized input from sender core
@@ -276,10 +284,13 @@ void kernel_main() {
                             act_mcast_sender_semaphore_addr);
                     }
                     noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
-                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                    if constexpr (act_mcast_split) {
-                        noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+                    {
+                        DeviceZoneScopedN("MCAST RECEIVE");
+                        // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
+                        noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
+                        if constexpr (act_mcast_split) {
+                            noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
+                        }
                     }
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);

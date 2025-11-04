@@ -12,6 +12,8 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "tools/profiler/kernel_profiler.hpp"
+
 // #include "debug/dprint.h"
 
 #define DEBUG_PRINT 0
@@ -30,7 +32,10 @@ void tilize_in(
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         cb_wait_front(in_cb_id, in_block_w);
         cb_reserve_back(out_cb_id, in_block_w);
-        fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
+        {
+            DeviceZoneScopedN("TILIZE BLOCK");
+            fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
+        }
         cb_push_back(out_cb_id, in_block_w);
         cb_pop_front(in_cb_id, in_block_w);
     }
@@ -414,16 +419,19 @@ void MAIN {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
                             // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
-                            matmul_block(
-                                mm_in0_cb_id,
-                                in1_cb_id,
-                                in0_index,
-                                in1_index,
-                                dst_index,
-                                false,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
+                            {
+                                DeviceZoneScopedN("MATMUL BLOCK");
+                                matmul_block(
+                                    mm_in0_cb_id,
+                                    in1_cb_id,
+                                    in0_index,
+                                    in1_index,
+                                    dst_index,
+                                    false,
+                                    out_subblock_w,
+                                    out_subblock_h,
+                                    in0_block_w);
+                            }
                             in0_index++;               // stride right by 1
                             in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w (should be
                                                        // called in1_block_w)
