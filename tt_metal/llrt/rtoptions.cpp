@@ -111,137 +111,11 @@ RunTimeOptions::RunTimeOptions() :
         this->root_dir = p.string();
     }
 
-    // Check if user has specified a cache path.
-    const char* cache_dir_str = std::getenv("TT_METAL_CACHE");
-    if (cache_dir_str != nullptr) {
-        this->is_cache_dir_env_var_set = true;
-        this->cache_dir_ = std::string(cache_dir_str) + "/tt-metal-cache/";
-    }
-
-    const char* kernel_dir_str = std::getenv("TT_METAL_KERNEL_PATH");
-    if (kernel_dir_str != nullptr) {
-        this->is_kernel_dir_env_var_set = true;
-        this->kernel_dir = std::string(kernel_dir_str) + "/";
-    }
-
-    const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
-    if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
-        this->is_custom_fabric_mesh_graph_desc_path_set = true;
-        this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
-    }
-
-    const char* core_grid_override_todeprecate_str = std::getenv("TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE");
-    if (core_grid_override_todeprecate_str != nullptr) {
-        this->is_core_grid_override_todeprecate_env_var_set = true;
-        this->core_grid_override_todeprecate = std::string(core_grid_override_todeprecate_str);
-    }
-
-    build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
-
-    test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
-
     InitializeFromEnvVars();
-    profiler_enabled = false;
-    profile_dispatch_cores = false;
-    profiler_sync_enabled = false;
-    profiler_mid_run_dump = false;
-    profiler_buffer_usage_enabled = false;
-    profiler_trace_profiler = false;
-    profiler_trace_tracking = false;
-    profiler_cpp_post_process = false;
-
-#if defined(TRACY_ENABLE)
-    const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
-    if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
-        profiler_enabled = true;
-        const char* profile_dispatch_str = std::getenv("TT_METAL_DEVICE_PROFILER_DISPATCH");
-        if (profile_dispatch_str != nullptr && profile_dispatch_str[0] == '1') {
-            profile_dispatch_cores = true;
-        }
-        const char* profiler_sync_enabled_str = std::getenv("TT_METAL_PROFILER_SYNC");
-        if (profiler_sync_enabled_str != nullptr && profiler_sync_enabled_str[0] == '1') {
-            profiler_sync_enabled = true;
-        }
-        const char* profiler_trace_profiler_str = std::getenv("TT_METAL_TRACE_PROFILER");
-        if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
-            profiler_trace_profiler = true;
-        }
-        const char* profiler_trace_tracking_str = std::getenv("TT_METAL_PROFILER_TRACE_TRACKING");
-        if (profiler_trace_tracking_str != nullptr && profiler_trace_tracking_str[0] == '1') {
-            profiler_trace_tracking = true;
-        }
-        const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
-        if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
-            profiler_mid_run_dump = true;
-        }
-        const char* profiler_cpp_post_process_str = std::getenv("TT_METAL_PROFILER_CPP_POST_PROCESS");
-        if (profiler_cpp_post_process_str != nullptr && profiler_cpp_post_process_str[0] == '1') {
-            profiler_cpp_post_process = true;
-        }
-    }
-#endif
-
-    const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
-    if (profiler_noc_events_str != nullptr && profiler_noc_events_str[0] == '1') {
-        profiler_enabled = true;
-        profiler_noc_events_enabled = true;
-    }
-
-    const char *profiler_noc_events_report_path_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH");
-    if (profiler_noc_events_report_path_str != nullptr) {
-        profiler_noc_events_report_path = profiler_noc_events_report_path_str;
-    }
 
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
-
-    null_kernels = (std::getenv("TT_METAL_NULL_KERNELS") != nullptr);
-
-    kernels_early_return = (std::getenv("TT_METAL_KERNELS_EARLY_RETURN") != nullptr);
-
-    this->clear_l1 = false;
-    const char* clear_l1_enabled_str = std::getenv("TT_METAL_CLEAR_L1");
-    if (clear_l1_enabled_str != nullptr && clear_l1_enabled_str[0] == '1') {
-        this->clear_l1 = true;
-    }
-
-    this->clear_dram = false;
-    const char* clear_dram_enabled_str = std::getenv("TT_METAL_CLEAR_DRAM");
-    if (clear_dram_enabled_str != nullptr && clear_dram_enabled_str[0] == '1') {
-        this->clear_dram = true;
-    }
-
-    const char* riscv_debug_info_enabled_str = std::getenv("TT_METAL_RISCV_DEBUG_INFO");
-    bool enable_riscv_debug_info = get_inspector_enabled();
-    if (riscv_debug_info_enabled_str != nullptr) {
-        enable_riscv_debug_info = true;
-        if (strcmp(riscv_debug_info_enabled_str, "0") == 0) {
-            enable_riscv_debug_info = false;
-        }
-    }
-    set_riscv_debug_info_enabled(enable_riscv_debug_info);
-
-    const char* num_cqs = getenv("TT_METAL_GTEST_NUM_HW_CQS");
-    if (num_cqs != nullptr) {
-        try {
-            set_num_hw_cqs(std::stoi(num_cqs));
-        } catch (const std::invalid_argument& ia) {
-            TT_THROW("Invalid TT_METAL_GTEST_NUM_HW_CQS: {}", num_cqs);
-        } catch (const std::out_of_range&) {
-            TT_THROW("TT_METAL_GTEST_NUM_HW_CQS value out of range: {}", num_cqs);
-        }
-    }
-
-    const char* arc_debug_enabled_str = std::getenv("TT_METAL_ARC_DEBUG_BUFFER_SIZE");
-    if (arc_debug_enabled_str != nullptr) {
-        sscanf(arc_debug_enabled_str, "%u", &arc_debug_buffer_size);
-    }
-
-    const char* timeout_duration_for_operations_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
-    float timeout_duration_for_operations =
-        timeout_duration_for_operations_value ? std::stof(timeout_duration_for_operations_value) : 0.f;
-    this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration_for_operations);
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
@@ -602,11 +476,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DEVICE_PROFILER_DISPATCH=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_DISPATCH: {
             // Only enable dispatch profiling if device profiler is also enabled
-            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
-            if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
-                if (value && value[0] == '1') {
-                    this->profile_dispatch_cores = true;
-                }
+            if (this->profiler_enabled && value && value[0] == '1') {
+                this->profile_dispatch_cores = true;
             }
             break;
         }
@@ -616,11 +487,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (asynchronous profiling)
         // Usage: export TT_METAL_PROFILER_SYNC=1
         case EnvVarID::TT_METAL_PROFILER_SYNC: {
-            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
-            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
-                if (value && value[0] == '1') {
-                    this->profiler_sync_enabled = true;
-                }
+            // Only enable sync profiling if device profiler is also enabled
+            if (this->profiler_enabled && value && value[0] == '1') {
+                this->profiler_sync_enabled = true;
             }
             break;
         }
@@ -659,11 +528,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (trace profiling disabled)
         // Usage: export TT_METAL_TRACE_PROFILER=1
         case EnvVarID::TT_METAL_TRACE_PROFILER: {
-            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
-            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
-                if (value && value[0] == '1') {
-                    this->profiler_trace_profiler = true;
-                }
+            // Only enable trace profiling if device profiler is also enabled
+            if (this->profiler_enabled && value && value[0] == '1') {
+                this->profiler_trace_profiler = true;
             }
             break;
         }
@@ -673,11 +540,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (trace tracking disabled)
         // Usage: export TT_METAL_PROFILER_TRACE_TRACKING=1
         case EnvVarID::TT_METAL_PROFILER_TRACE_TRACKING: {
-            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
-            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
-                if (value && value[0] == '1') {
-                    this->profiler_trace_tracking = true;
-                }
+            // Only enable trace tracking if device profiler is also enabled
+            if (this->profiler_enabled && value && value[0] == '1') {
+                this->profiler_trace_tracking = true;
             }
             break;
         }
@@ -687,11 +552,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (no mid-run dumps)
         // Usage: export TT_METAL_PROFILER_MID_RUN_DUMP=1
         case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: {
-            const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
-            if (profiler_enabled_str && profiler_enabled_str[0] == '1') {
-                if (value && value[0] == '1') {
-                    this->profiler_mid_run_dump = true;
-                }
+            // Only enable mid-run dumps if device profiler is also enabled
+            if (this->profiler_enabled && value && value[0] == '1') {
+                this->profiler_mid_run_dump = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_CPP_POST_PROCESS
+        // Enable C++ post-processing for profiler output. Requires TT_METAL_DEVICE_PROFILER=1 to be effective.
+        // Default: false
+        // Usage: export TT_METAL_PROFILER_CPP_POST_PROCESS=1
+        case EnvVarID::TT_METAL_PROFILER_CPP_POST_PROCESS: {
+            // Only enable C++ post-processing if device profiler is also enabled
+            if (this->profiler_enabled && value && value[0] == '1') {
+                this->profiler_cpp_post_process = true;
             }
             break;
         }
