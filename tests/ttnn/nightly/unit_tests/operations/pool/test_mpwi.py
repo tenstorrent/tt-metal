@@ -109,8 +109,9 @@ def test_mpwi_general(device, ttnn_dtype, input_spec):
         dilation_w,
         ttnn_dtype,
         device,
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ceil_mode,
-        None,  # no memory_config
-        False,  # not in place
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        memory_config=None,
+        in_place=False,
+        run_twice=True,
     )
