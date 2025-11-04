@@ -18,13 +18,10 @@ FabricTelemetryReader::FabricTelemetryReader(
     tray_id_(tray_id),
     asic_location_(asic_location),
     chip_id_(chip_id),
-    cached_bw_telemetry_{},
-    cached_wormhole_fabric_telemetry_{},
-    cached_blackhole_fabric_telemetry_{},
+    cached_fabric_telemetry_{},
     last_update_cycle_(std::chrono::steady_clock::time_point::min()) {
     ethernet_core_ = cluster->get_soc_descriptor(chip_id).get_eth_core_for_channel(channel, tt::CoordSystem::LOGICAL);
     fabric_telemetry_addr_ = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY);
-    bw_telemetry_addr_ = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
 }
 
 // Reads an entire contiguous struct from L1 memory
@@ -60,13 +57,13 @@ void FabricTelemetryReader::update_telemetry(
     std::chrono::steady_clock::time_point start_of_update_cycle) {
     // Only read from device if this is a new update cycle
     if (start_of_update_cycle != last_update_cycle_) {
-        cached_bw_telemetry_ = read_from_device<BandwidthTelemetry>(cluster, chip_id_, ethernet_core_, bw_telemetry_addr_);
+        // Update only the appropriate object based on architecture
         switch (cluster->get_cluster_description()->get_arch()) {
         case tt::ARCH::WORMHOLE_B0:
-            cached_wormhole_fabric_telemetry_ = read_from_device<FabricTelemetry<1>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
+            cached_fabric_telemetry_ = read_from_device<FabricTelemetry<1>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
             break;
         case tt::ARCH::BLACKHOLE:
-            cached_blackhole_fabric_telemetry_ = read_from_device<FabricTelemetry<2>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
+            cached_fabric_telemetry_ = read_from_device<FabricTelemetry<2>>(cluster, chip_id_, ethernet_core_, fabric_telemetry_addr_);
             break;
         default:
             TT_FATAL(false, "Unknown architecture: {}", cluster->get_cluster_description()->get_arch());
@@ -76,23 +73,9 @@ void FabricTelemetryReader::update_telemetry(
     }
 }
 
-const BandwidthTelemetry& FabricTelemetryReader::get_bandwidth_telemetry(
+const FabricTelemetryContainer& FabricTelemetryReader::get_fabric_telemetry(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     std::chrono::steady_clock::time_point start_of_update_cycle) {
     update_telemetry(cluster, start_of_update_cycle);
-    return cached_bw_telemetry_;
-}
-
-const FabricTelemetry<1>& FabricTelemetryReader::get_wormhole_fabric_telemetry(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    std::chrono::steady_clock::time_point start_of_update_cycle) {
-    update_telemetry(cluster, start_of_update_cycle);
-    return cached_wormhole_fabric_telemetry_;
-}
-
-const FabricTelemetry<2>& FabricTelemetryReader::get_blackhole_fabric_telemetry(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    std::chrono::steady_clock::time_point start_of_update_cycle) {
-    update_telemetry(cluster, start_of_update_cycle);
-    return cached_blackhole_fabric_telemetry_;
+    return cached_fabric_telemetry_;
 }

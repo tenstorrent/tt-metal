@@ -156,6 +156,7 @@ public:
         tt::tt_metal::ASICLocation asic_location,
         tt::ChipId chip_id,
         uint32_t channel,
+        size_t erisc_core,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -168,6 +169,7 @@ private:
     tt::tt_metal::ASICLocation asic_location_;
     tt::ChipId chip_id_;
     uint32_t channel_;
+    size_t erisc_core_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
@@ -177,6 +179,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
+        size_t erisc_core,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -188,6 +191,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
+    size_t erisc_core_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
@@ -197,6 +201,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
+        size_t erisc_core,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -208,6 +213,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
+    size_t erisc_core_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 
@@ -217,6 +223,7 @@ public:
         tt::tt_metal::TrayID tray_id,
         tt::tt_metal::ASICLocation asic_location,
         uint32_t channel,
+        size_t erisc_core,
         std::shared_ptr<FabricTelemetryReader> telemetry_reader);
 
     const std::vector<std::string> telemetry_path() const override;
@@ -228,6 +235,7 @@ private:
     tt::tt_metal::TrayID tray_id_;
     tt::tt_metal::ASICLocation asic_location_;
     uint32_t channel_;
+    size_t erisc_core_;
     std::shared_ptr<FabricTelemetryReader> telemetry_reader_;
 };
 

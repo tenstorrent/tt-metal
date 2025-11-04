@@ -13,11 +13,14 @@
 
 #include <chrono>
 #include <cstdint>
+#include <variant>
 
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <llrt/hal.hpp>
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 #include <tt_metal/api/tt-metalium/fabric_telemetry.hpp>
+
+using FabricTelemetryContainer =  std::variant<FabricTelemetry<1>, FabricTelemetry<2>>;
 
 class FabricTelemetryReader {
 public:
@@ -30,13 +33,7 @@ public:
         const std::unique_ptr<tt::tt_metal::Hal>& hal);
 
     // Returns the cached telemetry data, updating from device if needed
-    const BandwidthTelemetry& get_bandwidth_telemetry(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        std::chrono::steady_clock::time_point start_of_update_cycle);
-    const FabricTelemetry<1>& get_wormhole_fabric_telemetry(
-        const std::unique_ptr<tt::umd::Cluster>& cluster,
-        std::chrono::steady_clock::time_point start_of_update_cycle);
-    const FabricTelemetry<2>& get_blackhole_fabric_telemetry(
+    const FabricTelemetryContainer& get_fabric_telemetry(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         std::chrono::steady_clock::time_point start_of_update_cycle);
 
@@ -50,11 +47,8 @@ private:
     tt::ChipId chip_id_;
     tt::umd::CoreCoord ethernet_core_;
     uint32_t fabric_telemetry_addr_;
-    uint32_t bw_telemetry_addr_;
-    
-    BandwidthTelemetry cached_bw_telemetry_;
-    FabricTelemetry<1> cached_wormhole_fabric_telemetry_;
-    FabricTelemetry<2> cached_blackhole_fabric_telemetry_;
+
+    FabricTelemetryContainer cached_fabric_telemetry_;
     std::chrono::steady_clock::time_point last_update_cycle_;
 };
 
