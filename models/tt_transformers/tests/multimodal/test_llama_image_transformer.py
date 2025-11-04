@@ -96,7 +96,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     reference_model = model.model.vision_model.eval()
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
-    # the following part is checking if the loaded weights have the same values and arangement in memory
+    # the following part is checking if the loaded weights have the same values and arrangement in memory
     # keep in mind that rope is not applied by model definition on the vision branch
     loaded_hf_weights = model.state_dict()
     vision_keys = [k for k in loaded_hf_weights.keys() if "vision" and "transformer" in k]
