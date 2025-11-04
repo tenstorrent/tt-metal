@@ -155,7 +155,7 @@ This section displays device software versions. If failures occur, error message
 App Keyboard Shortcuts
 --------
 
-All app keyboard shortcuts can be found in the help menu. Bring up the help menu by pressing the  "h" or clicking the "help" button on the footer.
+All app keyboard shortcuts can be found in the help menu. Bring up the help menu by pressing the  "h" or clicking the "help" button in the footer.
 
 .. image:: https://github.com/tenstorrent/tt-smi/blob/main/images/help.png
 
@@ -312,7 +312,7 @@ Tray Reset:
 To identify the tray number to reset specific devices, run either ``tt-smi -glx_list_tray_to_device`` or ``tt-smi --galaxy_6u_list_tray_to_device``. These commands display a mapping table showing the relationship between tray numbers, tray bus IDs, and the corresponding PCI device IDs, making it easier to target a tray to reset. Do not run this command in a virtual machine (VM) environment, it requires direct hardware access to the Galaxy system.
 
 .. codeblock::
-  
+
     $ tt-sml -glx_list_tray_to_device
 
         Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
