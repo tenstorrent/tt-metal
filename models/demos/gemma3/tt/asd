@@ -1,0 +1,11 @@
+        matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(cores_x, cores_y),
+            in0_block_w=1,    # Must divide Kt evenly
+            out_subblock_h=1, # Must divide per_core_M evenly
+            out_subblock_w=1, # Must divide per_core_N evenly
+            per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
+            per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )

@@ -84,6 +84,24 @@ class TtGemmaImageFeedForward(LightweightModule):
         pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
+        cores_x = 8
+        cores_y = 8
+        M = x_in.shape[-2]
+        N = self.c_fc_weight.shape[-1]
+        import math
+
+        matmul_2d_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(cores_x, cores_y),
+            in0_block_w=1,  # Must divide Kt evenly
+            out_subblock_h=1,  # Must divide per_core_M evenly
+            out_subblock_w=1,  # Must divide per_core_N evenly
+            per_core_M=math.ceil(M / 32 / cores_y),  # M / TILE_HEIGHT / Grid_Size
+            per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         c_fc_out = ttnn.linear(
             x_in,
@@ -93,7 +111,7 @@ class TtGemmaImageFeedForward(LightweightModule):
             # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
             # program_config=pc_1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=matmul_2d_program_config,
             activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
         )
 
