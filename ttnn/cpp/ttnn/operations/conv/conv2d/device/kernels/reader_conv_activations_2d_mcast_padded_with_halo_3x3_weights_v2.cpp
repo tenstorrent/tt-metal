@@ -59,10 +59,11 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_write_done_semaphore_addr);
     }
 
-    constexpr uint32_t act_mcast_reserve_done_semaphore_id = get_compile_time_arg_val(35);
+    constexpr bool act_mcast_split = get_compile_time_arg_val(35) == 1;
+    constexpr uint32_t act_mcast_reserve_done_semaphore_id = get_compile_time_arg_val(36);
     const uint32_t act_mcast_reserve_done_semaphore_addr =
         split_reader_enabled ? get_semaphore(act_mcast_reserve_done_semaphore_id) : 0;
-    constexpr uint32_t act_mcast_receiver_second_semaphore_id = get_compile_time_arg_val(36);
+    constexpr uint32_t act_mcast_receiver_second_semaphore_id = get_compile_time_arg_val(37);
     const uint32_t act_mcast_receiver_second_semaphore_addr =
         split_reader_enabled ? get_semaphore(act_mcast_receiver_second_semaphore_id) : 0;
 
@@ -135,6 +136,7 @@ void kernel_main() {
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr bool sliced_inner_dim = window_outer > 1;
     constexpr uint32_t img2col_tiles = (split_reader_cb_shared) ? act_block_num_tiles : act_block_num_tiles_read;
+    constexpr uint32_t tilize_read_tiles = (act_mcast_split) ? act_block_num_tiles_read : act_block_num_tiles;
     // Reset reader_idx to finish act_block_h_datums
     uint32_t reader_idx = 0;
     uint32_t start_reader_idx = 0;
@@ -187,12 +189,12 @@ void kernel_main() {
                     noc_semaphore_set(act_mcast_sender_semaphore_addr_ptr, 0);
 
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-                    if constexpr (split_reader_enabled) {
+                    if constexpr (act_mcast_split) {
                         noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
                         noc_semaphore_set(act_mcast_reserve_done_semaphore_addr_ptr, VALID);
                     }
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                    cb_wait_front(tilized_in0_cb_id, act_block_num_tiles_read);
+                    cb_wait_front(tilized_in0_cb_id, tilize_read_tiles);
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint32_t tilized_act_start_address = get_read_ptr(tilized_in0_cb_id);
 
@@ -243,7 +245,7 @@ void kernel_main() {
                                 act_mcast_receiver_semaphore_noc_addr,
                                 act_mcast_num_cores + 1);
                             noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                            if constexpr (split_reader_enabled) {
+                            if constexpr (act_mcast_split) {
                                 noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
                             }
                         }
@@ -257,7 +259,7 @@ void kernel_main() {
                     // MCAST RECEIVER: receive entire tilized input from sender core
                     // Set act semaphore value to INVALID
                     noc_semaphore_set(act_mcast_receiver_semaphore_addr_ptr, INVALID);
-                    if constexpr (split_reader_enabled) {
+                    if constexpr (act_mcast_split) {
                         noc_semaphore_set(act_mcast_receiver_second_semaphore_addr_ptr, INVALID);
                     }
                     // Atomic increment source core counter
@@ -276,14 +278,14 @@ void kernel_main() {
                     noc_semaphore_inc(act_mcast_sender_semaphore_noc_addr, 1);
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     noc_semaphore_wait(act_mcast_receiver_semaphore_addr_ptr, VALID);
-                    if constexpr (split_reader_enabled) {
+                    if constexpr (act_mcast_split) {
                         noc_semaphore_wait(act_mcast_receiver_second_semaphore_addr_ptr, VALID);
                     }
                 }
                 cb_push_back(cb_id_act, act_block_num_tiles);
             }  // act_w_num_outer
 
-            cb_pop_front(tilized_in0_cb_id, act_block_num_tiles_read);
+            cb_pop_front(tilized_in0_cb_id, tilize_read_tiles);
 #endif
         }
         start_reader_idx = reader_idx;

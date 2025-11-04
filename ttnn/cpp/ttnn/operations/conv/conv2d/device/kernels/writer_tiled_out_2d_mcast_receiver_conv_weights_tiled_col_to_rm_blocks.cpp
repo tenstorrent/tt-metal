@@ -70,7 +70,7 @@ void kernel_main() {
         (split_reader_cb_shared) ? get_write_ptr(cb_id_act_second_reader) + act_write_offset_last : 0;
     const uint32_t split_reader_cb_write_addr_sum = split_reader_cb_write_addr + split_reader_cb_write_addr_last;
 
-    constexpr bool transpose_mcast = get_compile_time_arg_val(36) == 1;
+    constexpr bool act_mcast_split = get_compile_time_arg_val(36) == 1;
     const uint32_t act_mcast_reserve_done_semaphore_addr = get_semaphore(get_compile_time_arg_val(37));
     const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(38));
     constexpr uint32_t act_cb_id = get_compile_time_arg_val(39);
@@ -84,7 +84,6 @@ void kernel_main() {
     constexpr uint32_t act_mcast_write_offset_last = get_compile_time_arg_val(43);
     constexpr uint32_t act_mcast_num_cores = get_compile_time_arg_val(44);
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(45);
-    constexpr bool skip_mcast = get_compile_time_arg_val(46) == 1;
 
     volatile tt_l1_ptr uint32_t* act_mcast_reserve_done_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_mcast_reserve_done_semaphore_addr);
@@ -119,7 +118,7 @@ void kernel_main() {
     uint32_t act_mcast_dest_noc_end_x = 0;
     uint32_t act_mcast_dest_noc_end_y = 0;
     uint32_t act_mcast_sender_id = 0;
-    if constexpr (split_reader_enabled) {
+    if constexpr (act_mcast_split) {
         act_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i++);
         act_mcast_dest_noc_start_y = get_arg_val<uint32_t>(i++);
         act_mcast_dest_noc_end_x = get_arg_val<uint32_t>(i++);
@@ -237,7 +236,7 @@ void kernel_main() {
                     noc_semaphore_wait(weights_mcast_receiver_semaphore_addr_ptr, VALID);
                     cb_push_back(cb_id_weight, weight_block_num_tiles);
 
-                    if constexpr (split_reader_enabled && !skip_mcast) {
+                    if constexpr (act_mcast_split) {
                         if (weight_tile_h_outer_i == act_mcast_sender_id) {
                             uint64_t act_address = base_act_address + act_write_offset_current;
                             uint64_t act_multicast_data_addr = act_multicast_noc_addr | act_address;
@@ -302,7 +301,7 @@ void kernel_main() {
                     }
 
                 }  // for weight_block_height_num_outer
-                if constexpr (split_reader_enabled && !skip_mcast) {
+                if constexpr (act_mcast_split) {
                     cb_pop_front(act_tilized_cb, act_block_num_tiles_split_last);
                 }
             }

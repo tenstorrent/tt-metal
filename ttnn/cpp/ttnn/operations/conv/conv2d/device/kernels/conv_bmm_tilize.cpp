@@ -209,8 +209,9 @@ void MAIN {
     constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(37);
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(38);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(39) == 1;
-    constexpr uint32_t tilized_cb_second_reader_id = get_compile_time_arg_val(40);
-
+    constexpr bool act_mcast_split = get_compile_time_arg_val(40) == 1;
+    constexpr uint32_t tilized_cb_second_reader_id = get_compile_time_arg_val(41);
+    constexpr bool second_tilize_in = split_reader && (act_mcast_split || !split_reader_cb_shared);
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
     constexpr bool spill = in0_num_blocks_w > 1;
@@ -224,7 +225,7 @@ void MAIN {
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
-    constexpr uint32_t in0_num_subblocks_read_last = (split_reader) ? reader_num_h_subblocks / 2 : 0;
+    constexpr uint32_t in0_num_subblocks_read_last = (second_tilize_in) ? reader_num_h_subblocks / 2 : 0;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
 
     // if activation reuse is enabled, we need to update read pointers of the act buffers
@@ -245,7 +246,10 @@ void MAIN {
     if constexpr (check_skip_compute) {
         skip_compute = (bool)get_arg_val<uint32_t>(0);
     }
+    constexpr uint32_t act_first_src_cb_id = in0_pretilize_cb_id;
     constexpr uint32_t act_second_src_cb_id = split_reader_cb_shared ? in0_pretilize_cb_id : in0_cb_second_reader_id;
+    constexpr uint32_t act_first_dst_cb_id = tilized_in0_cb_id;
+    constexpr uint32_t act_second_dst_cb_id = act_mcast_split ? tilized_cb_second_reader_id : tilized_in0_cb_id;
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -281,14 +285,11 @@ void MAIN {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
-                        tilize_in<true, !split_reader>(
-                            in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
-                        if constexpr (split_reader) {
+                        tilize_in<true, !second_tilize_in>(
+                            act_first_src_cb_id, in0_block_w, in0_num_subblocks_read, act_first_dst_cb_id);
+                        if constexpr (second_tilize_in) {
                             tilize_in<false, true>(
-                                act_second_src_cb_id,
-                                in0_block_w,
-                                in0_num_subblocks_read_last,
-                                tilized_cb_second_reader_id);
+                                act_second_src_cb_id, in0_block_w, in0_num_subblocks_read_last, act_second_dst_cb_id);
                         }
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,

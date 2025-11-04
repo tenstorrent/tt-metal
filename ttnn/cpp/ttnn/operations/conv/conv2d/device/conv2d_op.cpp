@@ -47,7 +47,8 @@ Tensor conv2d(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader) {
+    std::optional<bool> force_split_reader,
+    std::optional<bool> force_act_mcast_split) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -80,7 +81,8 @@ Tensor conv2d(
         full_inner_dim,
         enable_activation_reuse,
         config_tensors_in_dram,
-        force_split_reader);
+        force_split_reader,
+        force_act_mcast_split);
     IDevice* device = a.device();
 
     conv_op.pre_op_l1_allocation_size_bytes =
@@ -268,7 +270,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
             full_inner_dim,
             enable_activation_reuse,
             config_tensors_in_dram,
-            force_split_reader);
+            force_split_reader,
+            force_act_mcast_split);
     }
 
     const uint32_t post_op_l1_allocation_size =
@@ -299,7 +302,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
             .enable_act_double_buffer = enable_act_double_buffer,
             .enable_weights_double_buffer = enable_weights_double_buffer,
             .enable_activation_reuse = enable_activation_reuse,
-            .force_split_reader = force_split_reader},
+            .force_split_reader = force_split_reader,
+            .force_act_mcast_split = force_act_mcast_split},
         input_tensor_a.dtype(),
         this->dtype,
         output_image_width,

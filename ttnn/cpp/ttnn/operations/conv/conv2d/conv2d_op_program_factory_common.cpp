@@ -116,10 +116,11 @@ std::vector<CBInfo> get_cb_info(
             fp32_dest_acc_en,
             output_datatype,
             conv_config.enable_activation_reuse));
+
+    const bool act_split_mcast = split_reader_enabled && sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED &&
+                                 !skip_act_cb_create && conv_config.force_act_mcast_split.value_or(false);
     const uint32_t tilized_act_block_num_tiles_last =
-        (split_reader_enabled && sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED)
-            ? (block_config.act_block_h_ntiles / 2) * block_config.act_block_w_ntiles
-            : 0;
+        (act_split_mcast) ? (block_config.act_block_h_ntiles / 2) * block_config.act_block_w_ntiles : 0;
     const uint32_t tilized_act_block_num_tiles =
         block_config.act_block_h_ntiles * block_config.act_block_w_ntiles - tilized_act_block_num_tiles_last;
 

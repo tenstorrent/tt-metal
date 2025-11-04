@@ -118,6 +118,13 @@ struct Conv2dConfig {
     // If not Height sharded and activation block size height is not greater than 32, then this is ignored.
     // If not set, then split reader heuristic is used to determine if it should be enabled.
     std::optional<bool> force_split_reader = std::nullopt;
+
+    // Force act mcast split overrides act mcast split heuristic.
+    // Act mcast split can be enabled for Block sharded convolutions to boost activation mcast performance,
+    // so its meant to be used for activation mcast bound convolutions.
+    // If not set, then act mcast split heuristic is used to determine if it should be enabled (currently defaults to
+    // disabled).
+    std::optional<bool> force_act_mcast_split = std::nullopt;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -140,7 +147,8 @@ struct Conv2dConfig {
         "in_place",
         "enable_kernel_stride_folding",
         "enable_activation_reuse",
-        "force_split_reader");
+        "force_split_reader",
+        "force_act_mcast_split");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
@@ -162,7 +170,8 @@ struct Conv2dConfig {
             std::cref(this->in_place),
             std::cref(this->enable_kernel_stride_folding),
             std::cref(this->enable_activation_reuse),
-            std::cref(this->force_split_reader));
+            std::cref(this->force_split_reader),
+            std::cref(this->force_act_mcast_split));
     }
 };
 
@@ -235,7 +244,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     bool full_inner_dim,
     bool enable_activation_reuse,
     bool config_tensors_in_dram,
-    std::optional<bool> force_split_reader);
+    std::optional<bool> force_split_reader,
+    std::optional<bool> force_act_mcast_split);
 
 // new micro op
 struct Conv2d {
@@ -257,6 +267,7 @@ struct Conv2d {
     bool config_tensors_in_dram;
     uint32_t pre_op_l1_allocation_size_bytes{};
     std::optional<bool> force_split_reader = std::nullopt;
+    std::optional<bool> force_act_mcast_split = std::nullopt;
     Conv2d(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
@@ -275,7 +286,8 @@ struct Conv2d {
         bool full_inner_dim,
         bool enable_activation_reuse,
         bool config_tensors_in_dram,
-        std::optional<bool> force_split_reader) :
+        std::optional<bool> force_split_reader,
+        std::optional<bool> force_act_mcast_split) :
         parallelization_config(p_config),
         block_config(b_config),
         sliding_window_config(sliding_window_config),
@@ -293,7 +305,8 @@ struct Conv2d {
         full_inner_dim(full_inner_dim),
         enable_activation_reuse(enable_activation_reuse),
         config_tensors_in_dram(config_tensors_in_dram),
-        force_split_reader(force_split_reader) {};
+        force_split_reader(force_split_reader),
+        force_act_mcast_split(force_act_mcast_split) {};
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -324,7 +337,8 @@ struct Conv2d {
         "enable_weights_double_buffer",
         "enable_activation_reuse",
         "config_tensors_in_dram",
-        "force_split_reader");
+        "force_split_reader",
+        "force_act_mcast_split");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -342,7 +356,8 @@ struct Conv2d {
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_activation_reuse),
             std::cref(this->config_tensors_in_dram),
-            std::cref(this->force_split_reader));
+            std::cref(this->force_split_reader),
+            std::cref(this->force_act_mcast_split));
     }
 };
 
@@ -366,7 +381,8 @@ Tensor conv2d(
     bool full_inner_dim = false,
     bool enable_activation_reuse = false,
     bool config_tensors_in_dram = false,
-    std::optional<bool> force_split_reader = std::nullopt);
+    std::optional<bool> force_split_reader = std::nullopt,
+    std::optional<bool> force_act_mcast_split = std::nullopt);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation

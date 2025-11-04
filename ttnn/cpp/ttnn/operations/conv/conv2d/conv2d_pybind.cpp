@@ -319,6 +319,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             std::optional<bool>,
             bool,
+            std::optional<bool>,
             std::optional<bool>>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
@@ -340,7 +341,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = std::nullopt,
         py::arg("enable_activation_reuse") = false,
-        py::arg("force_split_reader") = std::nullopt);
+        py::arg("force_split_reader") = std::nullopt,
+        py::arg("force_act_mcast_split") = std::nullopt);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -482,6 +484,15 @@ void py_bind_conv2d(py::module& module) {
         This is useful when the input tensor is large, and the activation reader is a bottleneck.
         This is only supported for Height Sharded Conv2D.
         Setting this overrides the split reader heuristic.
+
+        ===============================================================
+    )doc");
+
+    py_conv_config.def_readwrite("force_act_mcast_split", &Conv2dConfig::force_act_mcast_split, R"doc(
+        ===================== EXPERIMENTAL FEATURE ======================
+
+        This forces the act mcast split to be enabled for Block Sharded Conv2D.
+        This is useful when the activation mcast is a bottleneck.
 
         ===============================================================
     )doc");

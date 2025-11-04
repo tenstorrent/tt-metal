@@ -456,8 +456,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         0,
         0,
         0,
-        0,                              // activation reuse related arguments
-        static_cast<uint32_t>(false)};  // split_reader_cb_shared (not used in width sharded)
+        0,                             // activation reuse related arguments
+        static_cast<uint32_t>(false),  // split_reader_cb_shared (not used in width sharded)
+        static_cast<uint32_t>(false),  // act_mcast_split (not used in width sharded)
+        0};                            // tilized_cb_second_reader_id (not used in width sharded)
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,
