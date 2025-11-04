@@ -116,7 +116,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     uint32_t chunked_q_chunk_offset = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
-    uint32_t max_blocks_per_seq = 0;
+    [[maybe_unused]] uint32_t max_blocks_per_seq = 0;
     uint32_t page_table_stick_size = 0;
     tt::DataFormat page_table_df = tt::DataFormat::Int32;
 

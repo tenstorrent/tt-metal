@@ -167,9 +167,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    # Vars that are used only in Asserts will appear as dead stores in builds
-    # where the preprocessor has stripped away the assert.
-    -Wno-unused-but-set-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"

@@ -1201,7 +1201,7 @@ public:
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
             // Try to move in current direction
             MeshCoordinate next_coord = current_coord;
-            bool need_wraparound = false;
+            [[maybe_unused]] bool need_wraparound = false;
 
             switch (current_direction) {
                 case RoutingDirection::N:

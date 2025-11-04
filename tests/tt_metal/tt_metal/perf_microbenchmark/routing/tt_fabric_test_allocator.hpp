@@ -449,6 +449,245 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
     return *inserted_it->second;
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * Manages dynamic allocation policy computation and caching.
+ *
+ * Responsibilities:
+ * - Compute optimal allocation policies for a given test configuration
+ * - Cache policies based on topology key (name + num_links)
+ * - Determine when reconstruction is needed (iteration 0 or topology change)
+ */
+class DynamicPolicyManager {
+public:
+    DynamicPolicyManager(const IDeviceInfoProvider& device_info_provider, const IRouteManager& route_manager) :
+        device_info_provider_(device_info_provider), route_manager_(route_manager) {}
+
+    /**
+     * Get new policy for a test configuration if recomputation is needed.
+     *
+     * Returns std::nullopt if the cached policy can be reused (same topology, not iteration 0).
+     * Returns a new policy if:
+     * - First iteration (iteration_number == 0), OR
+     * - Topology changed (different name or num_links)
+     *
+     */
+    std::optional<AllocatorPolicies> get_new_policy_for_test(const TestConfig& config) {
+        // Build topology key from parameters that affect allocation policy:
+        // - config.name: Different tests have different sender/receiver patterns
+        // - num_links: Link duplication creates additional sender cores, affecting reserved cores
+        //
+        // Parameters that DON'T affect policy (and thus share the same key):
+        // - size/num_packets: Only affects validation, not resource allocation
+        // - ftype/ntype: Only affects routing, not allocation
+        //
+        // Format: "test_name:links_N" (e.g., "FlowControlMesh:links_2")
+        std::string topology_key = fmt::format("{}:links_{}", config.name, config.fabric_setup.num_links);
+
+        bool needs_recomputation = (config.iteration_number == 0) || (topology_key != last_topology_key_);
+
+        if (needs_recomputation) {
+            // Compute fresh policy
+            cached_policy_ = compute_policy(config);
+            last_topology_key_ = topology_key;
+
+            return cached_policy_;  // Return new policy
+        } else {
+            return std::nullopt;  // Signal to reuse existing policy
+        }
+    }
+
+    const AllocatorPolicies& get_cached_policy() const { return cached_policy_; }
+
+    void reset() {
+        last_topology_key_.clear();
+        cached_policy_ = AllocatorPolicies{};
+    }
+
+private:
+    /**
+     * Compute dynamic allocation policies based on test configuration.
+     *
+     * Analyzes the test topology (senders, receivers, devices, flow control) and computes
+     * optimal allocation policies:
+     * - max_configs_per_core: How many receiver configs can share a single core
+     * - default_payload_chunk_size: Buffer size for each receiver config
+     *
+     */
+    AllocatorPolicies compute_policy(const TestConfig& config) {
+        // 1. Query system parameters
+        CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
+        uint32_t total_worker_cores = worker_grid.x * worker_grid.y;
+
+        // 2. Determine mux cores per device and num_links (if flow control enabled)
+        uint32_t mux_cores_per_device = 0;
+        uint32_t num_links = 1;  // Default to 1 link
+        if (config.enable_flow_control) {
+            // Determine num_links from test config
+            uint32_t max_link_id = 0;
+            for (const auto& sender : config.senders) {
+                max_link_id = std::max(max_link_id, sender.link_id);
+            }
+            num_links = max_link_id + 1;  // link_id is 0-indexed
+
+            // Per device max: 4 directions × num_links
+            mux_cores_per_device = NUM_DIRECTIONS * num_links;
+        }
+
+        // 3. Build per-device receiver load histogram
+        std::unordered_map<FabricNodeId, uint32_t> receiver_load_per_device;
+
+        for (const auto& sender : config.senders) {
+            for (const auto& pattern : sender.patterns) {
+                const auto& dest = pattern.destination.value();
+
+                if (dest.hops.has_value()) {
+                    auto dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
+                        sender.device,
+                        const_cast<std::unordered_map<RoutingDirection, uint32_t>&>(dest.hops.value()),
+                        pattern.ftype.value());
+                    for (const auto& dst_id : dst_node_ids) {
+                        receiver_load_per_device[dst_id]++;
+                    }
+                } else if (dest.device.has_value()) {
+                    receiver_load_per_device[dest.device.value()]++;
+                }
+            }
+        }
+
+        // 4. Per-device analysis - find worst case
+        uint32_t max_configs_per_core_needed = DEFAULT_MIN_CONFIGS_PER_CORE;
+        std::optional<FabricNodeId> worst_case_device;
+
+        for (const auto& [device_id, num_receivers] : receiver_load_per_device) {
+            // Count reserved cores on this device
+            uint32_t sender_cores_on_device = 0;
+            for (const auto& sender : config.senders) {
+                if (sender.device == device_id) {
+                    sender_cores_on_device++;
+                }
+            }
+
+            bool has_sync = false;
+            for (const auto& sync : config.global_sync_configs) {
+                if (sync.device == device_id) {
+                    has_sync = true;
+                    break;
+                }
+            }
+
+            uint32_t reserved_cores =
+                (has_sync ? 1 : 0) + sender_cores_on_device + mux_cores_per_device + SAFETY_MARGIN_CORES;
+
+            // Feasibility check 1: No cores left for receivers
+            if (reserved_cores >= total_worker_cores) {
+                log_fatal(
+                    tt::LogTest,
+                    "Device [mesh={}, chip={}] allocation is INFEASIBLE!\n"
+                    "  Reserved cores: {} >= Total cores: {}\n"
+                    "  Breakdown: sync={}, senders={}, mux={}, safety={}\n"
+                    "  No cores left for {} receiver configs!\n"
+                    "  Suggestions: Reduce link count, disable flow control, or use larger core grid.",
+                    device_id.mesh_id,
+                    device_id.chip_id,
+                    reserved_cores,
+                    total_worker_cores,
+                    (has_sync ? 1 : 0),
+                    sender_cores_on_device,
+                    mux_cores_per_device,
+                    SAFETY_MARGIN_CORES,
+                    num_receivers);
+                TT_FATAL(false, "Infeasible allocation configuration");
+            }
+
+            uint32_t available_for_receivers = total_worker_cores - reserved_cores;
+
+            // Feasibility check 2: Insufficient cores for minimum buffer size
+            uint32_t min_cores_needed =
+                (num_receivers + MAX_CONFIGS_PER_CORE_CEILING - 1) / MAX_CONFIGS_PER_CORE_CEILING;
+
+            if (available_for_receivers < min_cores_needed) {
+                log_fatal(
+                    tt::LogTest,
+                    "Device [mesh={}, chip={}] allocation is INFEASIBLE!\n"
+                    "  Receiver configs: {}\n"
+                    "  Minimum cores needed: {} (to provide 16KB per receiver)\n"
+                    "  Available cores: {}\n"
+                    "  Reserved cores: {}\n"
+                    "  The test requires more receiver cores than available even at maximum sharing.\n"
+                    "  Suggestions: Reduce test scale, links, or use larger core grid.",
+                    device_id.mesh_id,
+                    device_id.chip_id,
+                    num_receivers,
+                    min_cores_needed,
+                    available_for_receivers,
+                    reserved_cores);
+                TT_FATAL(false, "Infeasible allocation: insufficient receiver cores");
+            }
+
+            // Compute required configs per core based on available cores
+            uint32_t required = (num_receivers + available_for_receivers - 1) / available_for_receivers;
+
+            // Apply mux client cap if flow control is enabled
+            // Since link duplication uniformly distributes receivers across links,
+            // we divide total receivers by num_links to get receivers per link
+            if (config.enable_flow_control && num_links > 0) {
+                uint32_t receivers_per_link = num_receivers / num_links;
+
+                if (receivers_per_link > MAX_RECV_CORES_PER_LINK_WITH_MUX) {
+                    // Calculate minimum sharing factor needed to satisfy mux client cap
+                    uint32_t sharing_factor_per_link =
+                        (receivers_per_link + MAX_RECV_CORES_PER_LINK_WITH_MUX - 1) / MAX_RECV_CORES_PER_LINK_WITH_MUX;
+
+                    // Apply the stricter constraint (mux cap vs available cores)
+                    required = std::max(required, sharing_factor_per_link);
+                }
+            }
+
+            if (required > max_configs_per_core_needed) {
+                max_configs_per_core_needed = required;
+                worst_case_device = device_id;
+            }
+        }
+
+        // 5. Apply bounds
+        uint32_t max_configs_per_core = std::min(max_configs_per_core_needed, MAX_CONFIGS_PER_CORE_CEILING);
+        uint32_t payload_chunk_size = USABLE_L1_SIZE_BYTES / max_configs_per_core;
+
+        // since L1 alignment is not available here, align to 64 bytes as a safe minimum
+        payload_chunk_size = tt::align(payload_chunk_size, 64);
+
+        // 6. Build and return policies
+        AllocatorPolicies computed_policies;
+        computed_policies.receiver_config.max_configs_per_core = max_configs_per_core;
+        computed_policies.default_payload_chunk_size = payload_chunk_size;
+
+        return computed_policies;
+    }
+
+    // Dependencies
+    const IDeviceInfoProvider& device_info_provider_;
+    const IRouteManager& route_manager_;
+
+    // Caching state
+    std::string last_topology_key_;
+    AllocatorPolicies cached_policy_;
+
+    // Constants for dynamic policy computation
+    static constexpr uint32_t MIN_BUFFER_SIZE_BYTES = 16 * 1024;                                            // 16KB
+    static constexpr uint32_t USABLE_L1_SIZE_BYTES = 1024 * 1024;                                           // 1MB
+    static constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = USABLE_L1_SIZE_BYTES / MIN_BUFFER_SIZE_BYTES;  // 64
+    static constexpr uint32_t SAFETY_MARGIN_CORES = 2;
+    static constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
+    static constexpr uint32_t NUM_DIRECTIONS = 4;  // N, S, E, W
+
+    // Mux kernel stack constraint: Maximum receiver cores per device per link when flow control enabled
+    // Beyond this limit, receiver cores must be shared to prevent mux kernel stack overflow
+    static constexpr uint32_t MAX_RECV_CORES_PER_LINK_WITH_MUX = 20;
+};
+
+>>>>>>> 0475d0d1ce (Enable unused-but-set-variable compiler warning (#31638))
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
     // PASS 0: Reserve sync cores for synchronization
     for (auto& sync_sender : test_config.global_sync_configs) {

@@ -56,7 +56,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
     uint32_t num_whole_packets = 0, num_pages_remainder = 0, num_whole_packets_per_page = 0, partial_packet_size = 0,
-             aligned_partial_packet_size = 0, socket_block_size = 0;
+             socket_block_size = 0;
     if (num_pages_per_packet > 0) {
         num_whole_packets = num_pages / num_pages_per_packet;
         num_pages_remainder = num_pages % num_pages_per_packet;
@@ -64,7 +64,6 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     } else {
         num_whole_packets_per_page = input_page_size / fabric_max_payload_size;
         partial_packet_size = input_page_size % fabric_max_payload_size;
-        aligned_partial_packet_size = tt::align(partial_packet_size, max_alignment);
         socket_block_size = socket_aligned_page_size;
     }
 

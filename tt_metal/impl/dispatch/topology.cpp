@@ -618,9 +618,14 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     }
 
     // For kernels on mmio chip, need to confirm which remote device each is servicing
+<<<<<<< HEAD
     std::map<chip_id_t, uint32_t> device_id_to_tunnel_stop;
     std::map<chip_id_t, std::vector<chip_id_t>> mmio_device_id_to_serviced_devices;
     uint32_t tunnel_depth{};
+=======
+    std::map<ChipId, uint32_t> device_id_to_tunnel_stop;
+    std::map<ChipId, std::vector<ChipId>> mmio_device_id_to_serviced_devices;
+>>>>>>> 0475d0d1ce (Enable unused-but-set-variable compiler warning (#31638))
     for (auto mmio_device_id : mmio_device_ids) {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(mmio_device_id) !=
             mmio_device_id) {
@@ -634,7 +639,6 @@ void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
         std::vector<chip_id_t> remote_devices;
         for (auto tunnel :
              tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id)) {
-            tunnel_depth = tunnel.size();
             for (uint32_t tunnel_stop = 0; tunnel_stop < tunnel.size(); tunnel_stop++) {
                 chip_id_t remote_device_id = tunnel[tunnel_stop];
                 device_id_to_tunnel_stop[remote_device_id] = tunnel_stop;
