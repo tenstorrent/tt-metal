@@ -12,15 +12,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.lm_head import LMHead
+from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    assert_hidden_dim_pcc,
-    get_model_config,
-    pad_or_trim_seq_len,
-    run_module_forward,
-)
+from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
 
 
 class DeepseekV3LMHead(nn.Module):
@@ -45,43 +40,38 @@ class DeepseekV3LMHead(nn.Module):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mode,seq_len",
+    "mode, batch_size_per_row",
     [
         ("decode", 32),
         ("prefill", 1024),
-        ("prefill", 2048),
     ],
 )
 def test_forward_pass(
     mode: str,
-    seq_len: int,
+    batch_size_per_row: int,
     hf_config: Any,
     mesh_device: ttnn.Device,
     ccl: CCL,
     cache_path: Path,
     set_deterministic_env: Any,
 ):
-    assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
-
     reference_model = DeepseekV3LMHead(hf_config).eval()
     state_dict = sub_state_dict(reference_model.state_dict(), "lm_head.")
-    torch_input = torch.randn(1, 1, seq_len, hf_config.hidden_size)
+    batch_size = batch_size_per_row * mesh_device.shape[0]
+    torch_input = torch.randn(1, 1, batch_size, hf_config.hidden_size)
     reference_output = reference_model(torch_input)
 
-    # Pad input to SEQ_LEN_CHUNK_SIZE if necessary
-    torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
-
     # Setup: Convert weights and get weight_config
-    weight_config = LMHead.convert_weights(hf_config, (state_dict,), cache_path, mesh_device)
-    model_config = get_model_config(LMHead, mode, hf_config, mesh_device, 3)
-    model_state = LMHead.create_state(hf_config, mesh_device, ccl)
+    weight_config = LMHead1D.convert_weights(hf_config, (state_dict,), cache_path, mesh_device)
+    model_config = get_model_config(LMHead1D, mode, mesh_device)
+    model_state = LMHead1D.create_state(mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=mesh_device.shape),
         dtype=ttnn.bfloat16,
         memory_config=run_config["input_memory_config"],
         layout=ttnn.TILE_LAYOUT,
@@ -89,7 +79,7 @@ def test_forward_pass(
 
     # TTNN forward pass
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(LMHead, mode, tt_input, run_config)
+    tt_output = run_module_forward(LMHead1D, mode, tt_input, run_config)
 
     expected_output_memory_config = run_config["output_memory_config"]
 
@@ -100,16 +90,9 @@ def test_forward_pass(
     ), f"Output memory config mismatch: expected {expected_output_memory_config}, got {actual_output_memory_config}"
 
     logger.info("running ttnn.to_torch")
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
+    tt_output_torch = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
+    )
+    logger.info(f"tt_output_torch shape: {tt_output_torch.shape}")
     logger.info("finished ttnn.to_torch")
-
-    # Cleanup
-    ttnn.deallocate(tt_input)
-    ttnn.deallocate(tt_output)
-
-    # Check PCC
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
