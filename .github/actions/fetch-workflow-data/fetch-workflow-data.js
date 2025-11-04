@@ -265,7 +265,7 @@ function groupRunsByName(runs) {
  * @param {object} context - GitHub Actions context
  * @returns {Promise<number|null>} Run ID or null if not found
  */
-async function findPreviousAggregateRun(octokit, context, branch = '31803-increase-caching-threshold-for-triage-pipeline') {
+async function findPreviousAggregateRun(octokit, context, branch = 'main') {
   try {
     core.info('[CACHE] Searching for previous successful aggregate-workflow-data run...');
     const workflowId = '.github/workflows/aggregate-workflow-data.yaml';
@@ -548,7 +548,7 @@ async function run() {
     let cachedLastSuccessTimestamps = {};
 
     // Find and restore artifacts from previous successful run
-    const previousRunId = await findPreviousAggregateRun(octokit, github.context, branch);
+    const previousRunId = await findPreviousAggregateRun(octokit, github.context, '31803-increase-caching-threshold-for-triage-pipeline');
     if (previousRunId) {
       core.info(`[CACHE] Starting artifact restoration from run ${previousRunId}`);
       try {
