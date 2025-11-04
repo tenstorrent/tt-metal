@@ -71,6 +71,8 @@ runs:
 
           # Filter out ignored commits by SHA
           filtered_commits="$all_commits"
+          echo "Ignored commits processing:"
+          echo "$ignore_commits"
           if [ -n "$ignore_commits" ]; then
             echo "Filtering out ignored commit SHAs: $ignore_commits"
 
