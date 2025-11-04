@@ -5,6 +5,10 @@ inputs:
     description: "Type of tag to create: 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
     required: false
     default: ""
+  force-bump-type:
+    description: "Force a specific bump type instead of auto-detecting from commits. Options: 'major', 'minor', 'patch', 'none'. If set, overrides commit message analysis."
+    required: false
+    default: ""
 outputs:
   latest_semver:
     description: 'The latest semver tag found'
@@ -42,34 +46,42 @@ runs:
       shell: bash
       run: |
         latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
-        echo "Analyzing commits since $latest_tag"
+        force_bump="${{ inputs.force-bump-type }}"
 
-        # Get commit messages since the latest tag
-        if [ "$latest_tag" = "v0.0.0" ]; then
-          # If no previous tag, analyze all commits
-          commits=$(git log --oneline --pretty=format:"%s")
+        # Check if a forced bump type is provided
+        if [ -n "$force_bump" ]; then
+          echo "Using forced bump type: $force_bump"
+          bump_type="$force_bump"
         else
-          # Get commits since the latest tag
-          commits=$(git log ${latest_tag}..HEAD --oneline --pretty=format:"%s")
-        fi
+          echo "Analyzing commits since $latest_tag"
 
-        # Check for version bump indicators
-        bump_type="none"
+          # Get commit messages since the latest tag
+          if [ "$latest_tag" = "v0.0.0" ]; then
+            # If no previous tag, analyze all commits
+            commits=$(git log --oneline --pretty=format:"%s")
+          else
+            # Get commits since the latest tag
+            commits=$(git log ${latest_tag}..HEAD --oneline --pretty=format:"%s")
+          fi
 
-        # Check for MAJOR version indicators
-        if echo "$commits" | grep "(MAJOR)"; then
-          bump_type="major"
-          echo "Found MAJOR version indicators"
+          # Check for version bump indicators
+          bump_type="none"
 
-        # Check for MINOR version indicators
-        elif echo "$commits" | grep "(MINOR)"; then
-          bump_type="minor"
-          echo "Found MINOR version indicators"
+          # Check for MAJOR version indicators
+          if echo "$commits" | grep "(MAJOR)"; then
+            bump_type="major"
+            echo "Found MAJOR version indicators"
 
-        # Check for PATCH version indicators
-        elif echo "$commits" | grep "(PATCH)"; then
-          bump_type="patch"
-          echo "Found PATCH version indicators"
+          # Check for MINOR version indicators
+          elif echo "$commits" | grep "(MINOR)"; then
+            bump_type="minor"
+            echo "Found MINOR version indicators"
+
+          # Check for PATCH version indicators
+          elif echo "$commits" | grep "(PATCH)"; then
+            bump_type="patch"
+            echo "Found PATCH version indicators"
+          fi
         fi
 
         echo "Determined bump type: $bump_type"
