@@ -382,7 +382,7 @@ def format_sampling_params(sampling_params):
 
     # Must pad sampling_params to max_batch_size
     default_params = {"temp": 0.0, "p": 1.0, "k": 1}
-    target_len = 32
+    target_len = self.max_batch_size
     for name, tensor in zip(
         ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
     ):
