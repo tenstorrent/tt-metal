@@ -807,11 +807,7 @@ class MLA1D(AbstractModule):
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
-        tt_q = ttnn.to_layout(tt_q, ttnn.ROW_MAJOR_LAYOUT)
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
-        tt_q = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)
 
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
@@ -942,11 +938,7 @@ class MLA1D(AbstractModule):
             v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"])
         )  # [1, num_heads, bsz, v_head_dim]
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
-        v_out = ttnn.to_layout(v_out, ttnn.ROW_MAJOR_LAYOUT)
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
-        v_out = ttnn.to_layout(v_out, ttnn.TILE_LAYOUT)
 
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
 
@@ -998,9 +990,6 @@ class MLA1D(AbstractModule):
             tt_q, **ccl.populate_reduce_scatter_runtime_args(cfg["wq_a_rs_prefill"])
         )
         tt_q = ttnn.experimental.all_gather_async(tt_q, **ccl.populate_all_gather_runtime_args(cfg["wq_a_ag_prefill"]))
-
-        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
-        ttnn.synchronize_device(cfg["mesh_device"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])

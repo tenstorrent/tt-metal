@@ -89,9 +89,7 @@ Device::Device(
     uint32_t worker_thread_core,
     uint32_t completion_queue_reader_core,
     size_t worker_l1_size) :
-    id_(device_id),
-    worker_thread_core_(worker_thread_core),
-    completion_queue_reader_core_(completion_queue_reader_core) {
+    id_(device_id), completion_queue_reader_core_(completion_queue_reader_core) {
     ZoneScoped;
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap, minimal);
 }

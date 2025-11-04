@@ -17,7 +17,11 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to tilize need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
 
-    TT_FATAL(input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0, "Error");
+    TT_FATAL(
+        input_tensor_a.physical_volume() % tt::constants::TILE_HW == 0,
+        "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+        input_tensor_a.physical_volume(),
+        tt::constants::TILE_HW);
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
@@ -33,14 +37,27 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-            "Error, expected memory layout to be HEIGHT_SHARDED but got {}",
+            "Input tensor memory layout must be HEIGHT_SHARDED but got {}",
             input_tensor_a.memory_config().memory_layout());
-        TT_FATAL(this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(), "Error");
-        TT_FATAL(this->use_multicore == true, "Error");
-        TT_FATAL(input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR, "Error");
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == input_tensor_a.memory_config().memory_layout(),
+            "Output memory config layout ({}) must match input tensor memory layout ({})",
+            this->output_mem_config.memory_layout(),
+            input_tensor_a.memory_config().memory_layout());
+        TT_FATAL(this->use_multicore == true, "Multicore must be enabled for sharded input");
+        TT_FATAL(
+            input_tensor_a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
+            "Input tensor shard orientation must be ROW_MAJOR but got {}",
+            input_tensor_a.shard_spec().value().orientation);
     } else {
-        TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-        TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Input tensor memory layout must be INTERLEAVED but got {}",
+            input_tensor_a.memory_config().memory_layout());
+        TT_FATAL(
+            this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Output memory config layout must be INTERLEAVED but got {}",
+            this->output_mem_config.memory_layout());
     }
 }
 
