@@ -22,10 +22,10 @@ on:
         required: false
         type: string
         default: "4f05a65a961d4a3ca14f65ff9633030e0a35358e"
-      timeout:
+      job-timeout:
         required: false
         type: number
-        default: 5
+        default: 15
       run-metal-cpp-unit-tests:
         required: false
         type: boolean
@@ -34,6 +34,7 @@ on:
 jobs:
   ttsim-integration:
     runs-on: tt-ubuntu-2204-small-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -137,6 +138,7 @@ jobs:
           done
   ttnn-pytests:
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTNN Pytests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -279,6 +281,7 @@ jobs:
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-small-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -330,7 +333,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: 5
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
@@ -351,6 +354,7 @@ jobs:
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Galaxy C++ tests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -405,6 +409,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
+        timeout-minutes: 5
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*StreamRegWrite*"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*InlineWrite*"

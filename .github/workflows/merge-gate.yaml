@@ -255,6 +255,20 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  ttsim-unit-tests:
+    needs: build
+    secrets: inherit
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    with:
+      basic-docker-image: ${{ needs.build.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
+      run-metal-cpp-unit-tests: true
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -268,14 +282,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
+          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttsim-unit-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
