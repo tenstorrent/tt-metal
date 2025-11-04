@@ -9,18 +9,16 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-using namespace tt;
-using namespace tt::tt_metal;
-using namespace tt::constants;
-using namespace tt::tt_metal::detail;
-
 namespace ttnn::operations::index_fill {
+
 IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::create(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    const Tensor& index = tensor_args.index;
-    const Tensor& input = tensor_args.input;
+    Program program{};
+
+    const tt::tt_metal::Tensor& index = tensor_args.index;
+    const tt::tt_metal::Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
 
     auto dtype = input.dtype();
@@ -45,15 +43,13 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     }
 
     auto num_rows = input.physical_volume() / input.padded_shape()[-1];
-    Program program{};
-    IDevice* device = input.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = input.device()->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
 
     auto input_data_format = datatype_to_dataformat_converter(dtype);
     auto index_data_format = datatype_to_dataformat_converter(index.dtype());
@@ -62,18 +58,18 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     uint32_t index_page_size = index.buffer()->aligned_page_size();
     uint32_t output_page_size = output.buffer()->aligned_page_size();
 
-    auto src_cb_index = CBIndex::c_0;
+    auto src_cb_index = tt::CBIndex::c_0;
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(input_page_size, {{src_cb_index, input_data_format}})
+        tt::tt_metal::CircularBufferConfig(input_page_size, {{src_cb_index, input_data_format}})
             .set_page_size(src_cb_index, input_page_size));
 
-    auto index_cb_index = CBIndex::c_1;
+    auto index_cb_index = tt::CBIndex::c_1;
     CreateCircularBuffer(
         program,
         all_cores,
-        CircularBufferConfig(index_page_size, {{index_cb_index, index_data_format}})
+        tt::tt_metal::CircularBufferConfig(index_page_size, {{index_cb_index, index_data_format}})
             .set_page_size(index_cb_index, index_page_size));
 
     // Create Kernels
@@ -94,7 +90,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         program,
         "ttnn/cpp/ttnn/operations/index_fill/device/kernels/reader_index_fill.cpp",
         all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_page_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
@@ -103,7 +99,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         program,
         "ttnn/cpp/ttnn/operations/index_fill/device/kernels/writer_index_fill.cpp",
         all_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     uint32_t unit_offset = 0;
     uint32_t num_cores_group_1 = core_group_1.num_cores();
