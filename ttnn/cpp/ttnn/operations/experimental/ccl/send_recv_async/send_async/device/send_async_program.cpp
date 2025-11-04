@@ -50,6 +50,25 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     }
     uint32_t num_cores = sender_core_coords.size();
 
+    // cores must not exceed available fabric links
+    if (num_cores > 0) {
+        const auto& receiver_fabric_node_id = receiver_fabric_node_ids[0];
+        const auto& sender_fabric_node_id = sender_fabric_node_ids[0];
+        auto available_link_indices =
+            tt::tt_fabric::get_forwarding_link_indices(receiver_fabric_node_id, sender_fabric_node_id);
+        uint32_t num_available_links = available_link_indices.size();
+
+        TT_FATAL(
+            num_cores <= num_available_links,
+            "Cannot create {} receiver-sender pairs with only {} available fabric links between devices. "
+            "Reduce the number of cores per device. "
+            "Available links: {}, Requested pairs: {}",
+            num_cores,
+            num_available_links,
+            num_available_links,
+            num_cores);
+    }
+
     auto max_alignment = std::max(
         target_device->allocator()->get_alignment(mesh_socket.get_config().socket_mem_config.socket_storage_type),
         input_tensor.buffer()->alignment());
