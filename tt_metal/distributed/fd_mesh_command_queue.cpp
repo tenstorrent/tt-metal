@@ -518,9 +518,7 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
     // Barrier across all hosts of the mesh
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
         mesh_device_->get_view().mesh_id());
-    if (*(distributed_context->size()) > 1) {
-        distributed_context->barrier();
-    }
+    distributed_context->barrier();
 }
 
 void FDMeshCommandQueue::write_shard_to_device(
