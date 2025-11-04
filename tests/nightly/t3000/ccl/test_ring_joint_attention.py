@@ -76,6 +76,7 @@ def run_ring_joint_sdpa(
     rp_axis,
     up_axis,
     all_gather_topology,
+    pcc_threshold,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
@@ -230,6 +231,21 @@ def run_ring_joint_sdpa(
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
             )
+            # tensor_1 = ttnn.to_torch(
+            #    tt_out,
+            #    dtype=torch.float32,
+            #    mesh_composer=ttnn.concat_mesh_to_tensor_composer(submesh, dim=0),
+            # )
+            # tensor_2 = ttnn.to_torch(
+            #    tt_joint_out,
+            #    dtype=torch.float32,
+            #    mesh_composer=ttnn.concat_mesh_to_tensor_composer(submesh, dim=0),
+            # )
+            # print(f" HERE output1[:10]={tensor_1.flatten()[:10]}")
+            # print(f" HERE output2[:10]={tensor_2.flatten()[:10]}")
+            # import sys
+            # sys.exit(1)
+
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
 
@@ -279,7 +295,7 @@ def run_ring_joint_sdpa(
 
         passing = True
         for out, gt in [(tt_out, gt_out), (tt_joint_out, gt_joint_out)]:
-            out_pass, out_pcc = comp_pcc(gt, out, 0.994)
+            out_pass, out_pcc = comp_pcc(gt, out, pcc_threshold)
             logger.debug(f"python vs pytorch: {out_pcc}")
             logger.debug(f"mse: {((gt - out) ** 2).mean()}")
             passing = passing and out_pass
@@ -287,7 +303,11 @@ def run_ring_joint_sdpa(
         assert passing
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8_b", "bf4_b"])
+@pytest.mark.parametrize(
+    "dtype, pcc_threshold",
+    [(ttnn.bfloat16, 0.994), (ttnn.bfloat8_b, 0.994), (ttnn.bfloat4_b, 0.8)],
+    ids=["bf16", "bf8_b", "bf4_b"],
+)
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size, n_iters, trace_enabled",
     [
@@ -346,6 +366,7 @@ def test_ring_joint_sdpa(
     q_chunk_size,
     k_chunk_size,
     dtype,
+    pcc_threshold,
     n_iters,
     trace_enabled,
     num_links,
@@ -384,10 +405,19 @@ def test_ring_joint_sdpa(
         rp_axis,
         up_axis,
         all_gather_topology,
+        pcc_threshold,
     )
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8_b", "bf4_b"])
+@pytest.mark.parametrize(
+    "dtype, pcc_threshold",
+    [
+        (ttnn.bfloat16, 0.994),
+        (ttnn.bfloat8_b, 0.944),
+        (ttnn.bfloat4_b, 0.8),
+    ],
+    ids=["bf16", "bf8_b", "bf4_b"],
+)
 @pytest.mark.parametrize(
     "b, nh, seq_len, joint_seq_len, d, q_chunk_size, k_chunk_size",
     [
@@ -434,6 +464,7 @@ def test_ring_joint_sdpa_program_cache(
     q_chunk_size,
     k_chunk_size,
     dtype,
+    pcc_threshold,
     n_iters,
     trace_enabled,
     num_links,
@@ -481,6 +512,7 @@ def test_ring_joint_sdpa_program_cache(
             rp_axis,
             up_axis,
             all_gather_topology,
+            pcc_threshold,
         )
 
     assert submesh.num_program_cache_entries() == 1

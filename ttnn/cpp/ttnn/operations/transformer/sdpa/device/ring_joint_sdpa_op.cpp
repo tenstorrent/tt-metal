@@ -81,8 +81,9 @@ void RingJointScaledDotProductAttention::validate(const std::vector<Tensor>& inp
         TT_FATAL(tensor.buffer() != nullptr, "Operands to Joint SDPA need to be allocated in buffers on device");
         TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to Joint SDPA must be tilized");
         TT_FATAL(
-            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B,
-            "Inputs to Joint SDPA must be BF16 or BF8");
+            tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
+                tensor.dtype() == DataType::BFLOAT4_B,
+            "Inputs to Joint SDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");

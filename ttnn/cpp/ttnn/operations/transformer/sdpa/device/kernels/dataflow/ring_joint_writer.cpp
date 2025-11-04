@@ -77,8 +77,8 @@ void kernel_main() {
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_in);
-    DPRINT << "tile_bytes:" << tile_bytes << ENDL();
-    DPRINT << "lse_tile_bytes:" << lse_tile_bytes << ENDL();
+    // DPRINT << "tile_bytes:" << tile_bytes << ENDL();
+    // DPRINT << "lse_tile_bytes:" << lse_tile_bytes << ENDL();
 
     const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
     const auto joint_out_writer = TensorAccessor(joint_out_args, joint_out_addr, tile_bytes);
