@@ -528,7 +528,6 @@ set(CPACK_COMPONENTS_ALL ttml)
 # Debian-specific settings
 set(CPACK_DEBIAN_TTML_PACKAGE_NAME "ttml")
 set(CPACK_DEBIAN_TTML_FILE_NAME "ttml-${CPACK_PACKAGE_VERSION}-Linux.deb")
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 
 # Set the package architecture
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE "amd64")
