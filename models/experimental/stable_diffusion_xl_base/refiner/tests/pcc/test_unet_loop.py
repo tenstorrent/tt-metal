@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
-from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
+from models.experimental.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
@@ -20,13 +20,14 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     prepare_input_tensors,
     allocate_input_tensors,
     create_user_tensors,
+    get_timesteps,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
 # TODO: test 20 instead of 10 unet iterations
-UNET_LOOP_PCC = {"10": 0.862, "50": 0.894}
+UNET_LOOP_PCC = {"10": 0.995, "50": 0.993}
 
 
 @torch.no_grad()
@@ -37,21 +38,39 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
         prompts = [prompts]
 
     guidance_scale = 5.0
+    strength = 0.3
+    aesthetic_score = 6.0
+    negative_aesthetic_score = 2.5
+
+    # TODO: change run_tt_denoising to incorporate guidance_rescale logic
+    guidance_rescale = 0.0
+    denoising_start = 0.8
+
+    pcc = UNET_LOOP_PCC.get(str(num_inference_steps), 0)
 
     # 0. Set up default height and width for unet
     height = 1024
     width = 1024
 
     # 1. Load components
-    pipeline = DiffusionPipeline.from_pretrained(
+    base = DiffusionPipeline.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
         local_files_only=is_ci_env,
     )
 
+    pipeline = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_env,
+        text_encoder_2=base.text_encoder_2,
+        vae=base.vae,
+    )
+
     # 2. Load tt_unet and tt_scheduler
-    tt_model_config = ModelOptimisations()
+    tt_model_config = RefinerModelOptimisations()
     tt_unet = TtUNet2DConditionModel(
         ttnn_device,
         pipeline.unet.state_dict(),
@@ -115,23 +134,45 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
         negative_pooled_prompt_embeds.append(negative_pooled_prompt_embed)
 
     # Prepare timesteps
-    timesteps, num_inference_steps = retrieve_timesteps(pipeline.scheduler, num_inference_steps, cpu_device, None, None)
     ttnn_timesteps, tt_num_inference_steps = retrieve_timesteps(
         tt_scheduler, num_inference_steps, cpu_device, None, None
+    )
+    ttnn_timesteps, tt_num_inference_steps = get_timesteps(
+        tt_scheduler,
+        tt_num_inference_steps,
+        strength,
+        denoising_start,
+    )
+    timesteps, num_inference_steps = retrieve_timesteps(pipeline.scheduler, num_inference_steps, cpu_device, None, None)
+    timesteps, num_inference_steps = pipeline.get_timesteps(
+        pipeline.scheduler,
+        num_inference_steps,
+        strength,
+        denoising_start,
     )
 
     num_channels_latents = pipeline.unet.config.in_channels
     assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
 
+    latents = base(
+        prompt=prompts,
+        num_inference_steps=num_inference_steps,
+        denoising_end=denoising_start,
+        output_type="latent",
+    ).images
+
+    latent_timestep = timesteps[:1].repeat(1 * 1)
+
+    add_noise = True if denoising_start is None else False
     latents = pipeline.prepare_latents(
+        latents,
+        latent_timestep,
         1,
-        num_channels_latents,
-        height,
-        width,
+        1,
         prompt_embeds[0].dtype,
         cpu_device,
         None,
-        None,
+        add_noise,
     )
     B, C, H, W = latents.shape
 
@@ -145,14 +186,18 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
     original_size = (height, width)
     target_size = (height, width)
     crops_coords_top_left = (0, 0)
-    add_time_ids = pipeline._get_add_time_ids(
+    add_time_ids, negative_add_time_ids = pipeline._get_add_time_ids(
+        original_size,
+        crops_coords_top_left,
+        target_size,
+        aesthetic_score,
+        negative_aesthetic_score,
         original_size,
         crops_coords_top_left,
         target_size,
         dtype=prompt_embeds[0].dtype,
         text_encoder_projection_dim=text_encoder_projection_dim,
     )
-    negative_add_time_ids = add_time_ids
 
     tt_latents = torch.permute(latents, (0, 2, 3, 1))
     tt_latents = tt_latents.reshape(1, 1, B * H * W, C)
@@ -300,7 +345,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, deb
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, UNET_LOOP_PCC.get(str(num_inference_steps), 0))
+    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, pcc)
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
