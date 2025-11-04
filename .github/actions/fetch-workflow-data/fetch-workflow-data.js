@@ -265,7 +265,7 @@ function groupRunsByName(runs) {
  * @param {object} context - GitHub Actions context
  * @returns {Promise<number|null>} Run ID or null if not found
  */
-async function findPreviousAggregateRun(octokit, context, branch = 'main') {
+async function findPreviousAggregateRun(octokit, context, branch = '31803-increase-caching-threshold-for-triage-pipeline') {
   try {
     core.info('[CACHE] Searching for previous successful aggregate-workflow-data run...');
     const workflowId = '.github/workflows/aggregate-workflow-data.yaml';
