@@ -27,6 +27,13 @@ void bind_full_operation(py::module& module) {
             device (ttnn.Device, optional): The device on which the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `None`.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> any = ttnn.zeros(shape=(2, 2), dtype=ttnn.bfloat16)
             >>> filled_tensor = ttnn.moreh_full([2, 2], any, 7.0, dtype=ttnn.bfloat16)

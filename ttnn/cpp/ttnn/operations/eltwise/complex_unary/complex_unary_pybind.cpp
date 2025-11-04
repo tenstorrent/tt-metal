@@ -36,6 +36,17 @@ void bind_complex_unary_tensor(
 
 
 
+        Returns:
+
+
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
+
+
         Example:
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.tensor((0, 1), dtype=torch.bfloat16)), device=device)
             >>> output = {1}(tensor)

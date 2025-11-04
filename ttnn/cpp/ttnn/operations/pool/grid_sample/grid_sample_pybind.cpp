@@ -60,6 +60,11 @@ void bind_grid_sample(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the operation.
 
                         Where K is the grid batching factor.
+        Returns:
+
+            ttnn.Tensor: the output tensor.
+
+
         Example:
             >>> # Create input tensor (N=1, H=4, W=4, C=32) - channel last format
             >>> input_tensor = ttnn.from_torch(torch.randn(1, 4, 4, 32), device=device)

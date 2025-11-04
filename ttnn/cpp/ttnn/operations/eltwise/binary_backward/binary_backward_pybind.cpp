@@ -59,6 +59,13 @@ void bind_binary_backward_ops(
 
             {4}
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)

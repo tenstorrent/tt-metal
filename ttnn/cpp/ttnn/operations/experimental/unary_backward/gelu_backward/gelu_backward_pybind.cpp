@@ -40,6 +40,15 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
                     - 2, 3, 4
 
 
+        Returns:
+
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
+
         Example:
 
             >>> grad_tensor = ttnn.from_torch(

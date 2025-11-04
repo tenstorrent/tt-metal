@@ -34,6 +34,13 @@ void py_bind_embedding_backward(py::module& module) {
         Note:
             The input and the output gradient tensors must have the same datatype.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> device_id = 0
             >>> device = ttnn.open_device(device_id=device_id)

@@ -33,6 +33,13 @@ void bind_rand_operation(py::module& pymodule) {
             seed (int, optional): An optional seed to initialize the random number generator
                                 for reproducible results. Defaults to 0.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> input_tensor_a = ttnn.rand([N,N], dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG )
             >>> input_tensor_b = ttnn.rand((N, N), device=device)

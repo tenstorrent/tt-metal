@@ -96,6 +96,13 @@ void py_bind_all_to_all_async(pybind11::module& module) {
             - Chunks are sent in a ring pattern for optimal bandwidth utilization
             - Dynamic alternate routing is not supported
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> # Redistribute data from dim 2 to dim 3 across 4 devices
             >>> intermediate_buf = ttnn.zeros_like(input_tensor)  # Intermediate buffer

@@ -33,6 +33,17 @@ void bind_global_avg_pool2d(py::module& module) {
 
 
 
+        Returns:
+
+
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
+
+
         Example:
             >>> tensor = ttnn.from_torch(torch.randn((10, 3, 32, 32), dtype=ttnn.bfloat16), device=device)
             >>> output = {1}(tensor)

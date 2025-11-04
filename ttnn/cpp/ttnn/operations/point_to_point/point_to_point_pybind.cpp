@@ -29,6 +29,13 @@ void py_bind_point_to_point(py::module& module) {
                 output_tensor (ttnn.Tensor,optional): Optional output tensor.
                 intermediate_tensor (ttnn.Tensor,optional): Optional intermediate tensor.
 
+            Returns:
+
+
+                ttnn.Tensor: the output tensor.
+
+
+
             Example:
 
                 >>> input_tensor_torch = torch.zeros((2,1,1,16), dtype=dtype)

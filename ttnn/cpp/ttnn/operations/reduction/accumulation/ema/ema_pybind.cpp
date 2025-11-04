@@ -59,6 +59,13 @@ void bind_reduction_ema_operation(py::module& module) {
         Limitations:
             - Preallocated output must have the same shape as the input
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             .. code-block:: python
 

@@ -62,6 +62,13 @@ void bind_reduction_cumprod_operation(py::module& module) {
             - Preallocated output must have the same shape as the input
             - Preallocated output for integer types is not supported
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             .. code-block:: python
 

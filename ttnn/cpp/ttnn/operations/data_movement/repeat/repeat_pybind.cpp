@@ -46,6 +46,13 @@ void py_bind_repeat(py::module& module) {
     Keyword Args:
         memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
+    Returns:
+
+
+        ttnn.Tensor: the output tensor.
+
+
+
     Example:
 
         >>> tensor = ttnn.repeat(ttnn.from_torch(torch.tensor([[1, 2], [3, 4]]), [1,2],)), device)

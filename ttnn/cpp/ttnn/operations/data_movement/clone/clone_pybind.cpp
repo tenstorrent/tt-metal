@@ -25,6 +25,13 @@ void bind_clone_operation(py::module& module) {
             * TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
             * If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> tensor = ttnn.from_torch(torch.rand([1, 32, 32], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = ttnn.clone(tensor, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)

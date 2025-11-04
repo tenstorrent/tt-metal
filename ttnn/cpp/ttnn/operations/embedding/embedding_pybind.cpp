@@ -38,6 +38,17 @@ void py_module(py::module& module) {
 
 
 
+        Returns:
+
+
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
+
+
         Example:
             >>> device_id = 0
             >>> device = ttnn.open_device(device_id=device_id)

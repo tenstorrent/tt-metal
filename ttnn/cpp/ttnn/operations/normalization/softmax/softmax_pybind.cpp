@@ -43,6 +43,13 @@ void bind_normalization_softmax_program_config_operation(py::module& module) {
         standard behavior suitable for most use cases. It automatically selects
         appropriate parameters based on the input tensor characteristics.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             .. code-block:: python
 

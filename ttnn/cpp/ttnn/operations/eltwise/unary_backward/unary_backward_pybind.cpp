@@ -59,6 +59,13 @@ void bind_unary_backward_two_float(
 
             {4}
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
 
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)

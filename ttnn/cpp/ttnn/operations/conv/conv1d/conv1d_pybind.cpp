@@ -50,6 +50,7 @@ void py_bind_conv1d(py::module& module) {
             return_output_dim (bool, optional): If true, the op also returns the length of the output tensor. Default: False
             return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
+        Returns:
             The output tensor, output length, and the preprocessed weights and bias.
             - ttnn.Tensor: The output tensor, when return_output_dim = False and return_weights_and_bias = False
             - tuple[ttnn.Tensor, int]: The output tensor, and its length, if return_output_dim = True

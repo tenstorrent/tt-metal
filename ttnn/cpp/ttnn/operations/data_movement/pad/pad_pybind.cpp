@@ -29,6 +29,13 @@ void bind_pad(py::module& module) {
                 * :attr:`use_multicore`: (Optional[bool]) switch to use multicore implementation
                 * :attr:`memory_config`: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to `None`.
 
+            Returns:
+
+
+                ttnn.Tensor: the output tensor.
+
+
+
             Example:
                 .. code-block:: python
 

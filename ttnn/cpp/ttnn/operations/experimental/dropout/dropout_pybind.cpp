@@ -41,6 +41,13 @@ void bind_experimental_dropout_operation(py::module& module) {
                  - TILE
                  - 2, 3, 4
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> seed = 124

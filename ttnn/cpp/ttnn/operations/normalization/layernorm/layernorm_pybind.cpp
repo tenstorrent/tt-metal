@@ -128,6 +128,15 @@ void bind_normalization_layernorm_operation(py::module& module) {
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
 
 
+        Returns:
+
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
+
         Example:
             .. code-block:: python
 

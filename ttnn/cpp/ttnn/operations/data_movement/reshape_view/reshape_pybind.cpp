@@ -97,6 +97,13 @@ void py_bind_reshape_view(pybind11::module& module) {
             * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
             * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
 
             >>> tensor = ttnn.from_torch(torch.arange(4, dtype=torch.bfloat16), device=device)

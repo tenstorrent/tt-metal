@@ -52,6 +52,13 @@ void bind_quantize_operation(
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> input_tensor = ttnn.from_torch(torch.tensor([[0.1, 0.2], [0.3, 0.4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> scale = 0.001173

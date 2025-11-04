@@ -44,6 +44,13 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> import ttnn
             >>> import torch

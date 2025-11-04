@@ -31,6 +31,13 @@ void bind_scatter(py::module& module) {
             * Input tensors must be interleaved, tiled and on device.
             * No reduction operations have been implemented yet.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> input_torch = torch.randn([10, 20, 30, 20, 10], dtype=torch.float32)
             >>> index_torch = torch.randint(0, 10, [10, 20, 30, 20, 5], dtype=torch.int64)

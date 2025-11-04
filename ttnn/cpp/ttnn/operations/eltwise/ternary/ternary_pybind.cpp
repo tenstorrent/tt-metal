@@ -54,6 +54,13 @@ void bind_ternary_composite_float(
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> value = 1.0
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)

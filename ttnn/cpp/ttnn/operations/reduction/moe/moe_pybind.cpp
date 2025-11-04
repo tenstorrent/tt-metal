@@ -62,6 +62,13 @@ void bind_reduction_moe_operation(py::module& module) {
                 - All of the shape validations are performed on padded shapes.
                 - Sharding is not supported for this operation.
 
+            Returns:
+
+
+                ttnn.Tensor: the output tensor.
+
+
+
             Example:
                 .. code-block:: python
 

@@ -40,6 +40,13 @@ void bind_slice_write(py::module& module) {
             Keyword Args:
                 memory_config Memory Config of the output tensor
 
+            Returns:
+
+
+                ttnn.Tensor: the output tensor.
+
+
+
             Example:
                 >>> ttnn.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)
                 )doc";

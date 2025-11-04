@@ -37,6 +37,13 @@ void bind_mse_loss_function(py::module& module) {
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
+            Returns:
+
+
+                ttnn.Tensor: the output tensor.
+
+
+
             Example:
 
                 >>> input_reference = ttnn.to_device(ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16)), device=device)

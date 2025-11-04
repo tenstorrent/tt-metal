@@ -573,6 +573,13 @@ void py_module(py::module& module) {
 
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             >>> # matrix x matrix - no batch dimensions
             >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((64, 32), dtype=torch.bfloat16)), device)

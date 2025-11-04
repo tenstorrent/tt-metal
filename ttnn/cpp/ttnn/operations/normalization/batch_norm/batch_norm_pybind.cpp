@@ -67,6 +67,13 @@ void bind_batch_norm_operation(py::module& module) {
         Limitations:
             - All input tensors must be tilized, interleaved, rank 4, and on-device.
 
+        Returns:
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
         Example:
             .. code-block:: python
 

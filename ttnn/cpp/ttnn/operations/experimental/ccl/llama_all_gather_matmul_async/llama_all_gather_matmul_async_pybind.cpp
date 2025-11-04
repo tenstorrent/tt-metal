@@ -111,6 +111,15 @@ void py_bind_llama_all_gather_matmul_async(pybind11::module& module) {
             global_cb (ttnn.GlobalCircularBuffer, optional): The global circular buffer to use for the operation. Defaults to `None`.
 
 
+        Returns:
+
+
+
+            ttnn.Tensor: the output tensor.
+
+
+
+
         Example:
             >>> input_tensor0 = torch.randn([1, 1, 32, 896], dtype=torch.bfloat8)
             >>> input_tensor1 = torch.randn([1, 1, 3584, 2048], dtype=torch.bfloat8)
