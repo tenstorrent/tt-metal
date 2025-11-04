@@ -18,6 +18,7 @@ TOOLS_CHANGED=false
 ANY_CODE_CHANGED=false
 DOCS_CHANGED=false
 MODEL_CHARTS_CHANGED=false
+BUILD_WORKFLOWS_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
@@ -66,6 +67,10 @@ while IFS= read -r FILE; do
                MODEL_CHARTS_CHANGED=true
             fi
             ;;
+        .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml|.github/workflows/ttsim.yaml)
+            BUILD_WORKFLOWS_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
     esac
 done <<< "$CHANGED_FILES"
 
@@ -104,6 +109,7 @@ declare -A changes=(
     [any-code-changed]=$ANY_CODE_CHANGED
     [docs-changed]=$DOCS_CHANGED
     [model-charts-changed]=$MODEL_CHARTS_CHANGED
+    [build-workflows-changed]=$BUILD_WORKFLOWS_CHANGED
 )
 
 for var in "${!changes[@]}"; do
