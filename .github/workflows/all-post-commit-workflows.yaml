@@ -165,7 +165,21 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-
+  ttsim-unit-tests:
+    # Breaking, remove for now
+    if: false
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    with:
+      basic-docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      run-metal-cpp-unit-tests: true
   run-profiler-regression:
     needs: [build-artifact]
     strategy:
