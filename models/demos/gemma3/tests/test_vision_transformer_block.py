@@ -6,6 +6,7 @@ import os
 import pytest
 import torch
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
@@ -80,7 +81,12 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    tt_out = tt_model(attention_input, mask=tt_mask)
+    n = 3
+    for i in range(n):
+        if i == n - 1:
+            signpost("mstojko_signpost")
+        tt_out = tt_model(attention_input, mask=tt_mask)
+
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
     reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)[0]

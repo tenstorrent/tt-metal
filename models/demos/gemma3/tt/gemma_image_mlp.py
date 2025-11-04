@@ -99,7 +99,7 @@ class TtGemmaImageFeedForward(LightweightModule):
             per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
             transpose_mcast=False,
             fused_activation=None,
-            # fuse_batch=False,
+            fuse_batch=False,  # mstojko - set this to False because LLms.md says "Set fuse_batch to False for DRAM inputs."
         )
 
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
@@ -108,9 +108,7 @@ class TtGemmaImageFeedForward(LightweightModule):
             self.c_fc_weight,
             bias=self.c_fc_bias,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
-            # program_config=pc_1,
             program_config=matmul_2d_program_config,
             activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
         )
@@ -119,9 +117,8 @@ class TtGemmaImageFeedForward(LightweightModule):
             c_fc_out,
             self.c_proj_weight,
             compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            # core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat16,
-            # program_config=pc_2,
+            program_config=matmul_2d_program_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
