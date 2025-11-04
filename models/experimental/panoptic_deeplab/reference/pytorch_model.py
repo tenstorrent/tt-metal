@@ -192,7 +192,7 @@ class PytorchPanopticDeepLab(nn.Module):
 
             # Always fuse ImageNet normalization into stem.conv1 weights
             # This is the single point where normalization fusion happens
-            from models.experimental.panoptic_deeplab.tt.model_preprocessing import fuse_imagenet_normalization
+            from models.experimental.panoptic_deeplab.reference.pytorch_preprocessing import fuse_imagenet_normalization
 
             fuse_imagenet_normalization(self)
         except Exception as e:
