@@ -864,4 +864,51 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
     }
 }
 
+// Test that FabricConfig can restrict torus topology to mesh (ignore wrap-around links)
+TEST(MeshGraphValidation, TestFabricConfigOverrideTorusToMesh) {
+    using namespace single_galaxy_constants;
+    // Use existing torus XY MGD - this MGD has physical wrap-around connections
+    const std::filesystem::path torus_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
+
+    // Test 1: Without FabricConfig - should respect dim_types (RING = torus with wrap-around)
+    {
+        MeshGraph mesh_graph_no_override(torus_mgd_path.string());
+        const auto& connectivity = mesh_graph_no_override.get_intra_mesh_connectivity();
+
+        // In torus, NW corner (chip 0) should have wrap-around connections
+        auto& nw_connections = connectivity[0][nw_fabric_id];
+        // Should have all 4 directions due to wrap-around
+        EXPECT_GT(nw_connections.size(), 2);  // More than just E and S
+        // Check wrap-around exists (W and N)
+        EXPECT_GT(nw_connections.count(3), 0);  // Has W connection (wrap-around)
+    }
+
+    // Test 2: With FabricConfig=FABRIC_2D - should restrict to mesh (ignore wrap-around links)
+    {
+        MeshGraph mesh_graph_override(torus_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
+        const auto& connectivity = mesh_graph_override.get_intra_mesh_connectivity();
+
+        // In mesh mode, NW corner should only have E and S connections (ignore wrap-around)
+        auto& nw_connections = connectivity[0][nw_fabric_id];
+        EXPECT_EQ(nw_connections.size(), 2);    // Only E and S
+        EXPECT_EQ(nw_connections.count(3), 0);  // No W connection (wrap-around ignored)
+    }
+}
+
+// Test that FabricConfig cannot create topology that doesn't physically exist (mesh→torus)
+TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
+    using namespace single_galaxy_constants;
+    // Use existing mesh MGD - this MGD does NOT have physical wrap-around connections
+    const std::filesystem::path mesh_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
+
+    // Attempting to override mesh to torus should throw - cannot create connections that don't exist
+    EXPECT_THROW(
+        { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
+        std::runtime_error);
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

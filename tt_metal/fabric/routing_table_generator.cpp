@@ -42,8 +42,9 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
     return os;
 }
 
-RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_file) {
-    this->mesh_graph = std::make_unique<MeshGraph>(mesh_graph_desc_file);
+RoutingTableGenerator::RoutingTableGenerator(
+    const std::string& mesh_graph_desc_file, std::optional<FabricConfig> fabric_config) {
+    this->mesh_graph = std::make_unique<MeshGraph>(mesh_graph_desc_file, fabric_config);
     // Use IntraMeshConnectivity to size all variables
     const auto& intra_mesh_connectivity = this->mesh_graph->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->mesh_graph->get_inter_mesh_connectivity();
