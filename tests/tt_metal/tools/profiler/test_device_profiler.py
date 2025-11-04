@@ -61,6 +61,8 @@ def set_env_vars(**kwargs):
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
         "doDeviceTrace": "TT_METAL_TRACE_PROFILER=1 ",
+        "do_mid_run_dump": "TT_METAL_PROFILER_MID_RUN_DUMP=1 ",
+        "do_cpp_post_process": "TT_METAL_PROFILER_CPP_POST_PROCESS=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -70,9 +72,22 @@ def set_env_vars(**kwargs):
 
 
 # returns True if test passed, False if test was SKIPPED
-def run_gtest_profiler_test(testbin, testname, doSync=False, enable_noc_tracing=False, skip_get_device_data=False):
+def run_gtest_profiler_test(
+    testbin,
+    testname,
+    doSync=False,
+    enable_noc_tracing=False,
+    do_mid_run_dump=False,
+    do_cpp_post_process=False,
+    skip_get_device_data=False,
+):
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(doSync=doSync, enable_noc_tracing=enable_noc_tracing)
+    envVars = set_env_vars(
+        doSync=doSync,
+        enable_noc_tracing=enable_noc_tracing,
+        do_mid_run_dump=do_mid_run_dump,
+        do_cpp_post_process=do_cpp_post_process,
+    )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testbin} --gtest_filter={testname}"
     print()
     logger.info(f"Running: {testCommand}")
@@ -876,4 +891,25 @@ def test_sub_device_profiler():
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
         "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+    )
+
+
+def test_get_ops_perf_data():
+    run_gtest_profiler_test(
+        "./build/test/ttnn/tracy/cpp/test_get_ops_perf_data",
+        "GetOpsPerfDataFixture.TestGetOpsPerfDataBeforeReadMeshDeviceProfilerResultsCall",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+    run_gtest_profiler_test(
+        "./build/test/ttnn/tracy/cpp/test_get_ops_perf_data",
+        "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterSingleReadMeshDeviceProfilerResultsCall",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
+    )
+    run_gtest_profiler_test(
+        "./build/test/ttnn/tracy/cpp/test_get_ops_perf_data",
+        "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls",
+        do_mid_run_dump=True,
+        do_cpp_post_process=True,
     )

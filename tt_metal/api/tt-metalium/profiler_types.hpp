@@ -41,6 +41,8 @@ struct OpAnalysisData {
     OpId op_id;
     std::unordered_map<std::string, OpSingleAnalysisResult> op_analyses_results;
 
+    bool operator==(const OpAnalysisData& other) const;
+
     bool operator<(const OpAnalysisData& other) const;
 };
 

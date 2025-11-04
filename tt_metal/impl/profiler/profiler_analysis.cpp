@@ -94,6 +94,10 @@ bool OpId::operator<(const OpId& other) const {
     return trace_id_counter < other.trace_id_counter;
 }
 
+bool OpAnalysisData::operator==(const OpAnalysisData& other) const {
+    return this->op_id == other.op_id && this->op_analyses_results == other.op_analyses_results;
+}
+
 bool OpAnalysisData::operator<(const OpAnalysisData& other) const {
     TT_ASSERT(this->op_analyses_results.find("DEVICE FW DURATION [ns]") != this->op_analyses_results.end());
     TT_ASSERT(other.op_analyses_results.find("DEVICE FW DURATION [ns]") != other.op_analyses_results.end());
