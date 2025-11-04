@@ -20,7 +20,7 @@ on:
       ignore-commits:
         description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps"
         required: false
-        default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9"
+        default: "72e9419a1be562889e1f008cf3e2db495f9e0aa9" # Ignore the commit that bumps to v0.65.0
         type: string
 
   schedule:
