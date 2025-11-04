@@ -29,20 +29,20 @@ constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;       // gamma (scale parame
 constexpr uint32_t cb_x_hat_idx = tt::CBIndex::c_3;       // x_hat (computed as (input - mean) * rstd)
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_4;        // rstd from forward pass
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
-constexpr uint32_t cb_input_idx = tt::CBIndex::c_7;       // input tensor
-constexpr uint32_t cb_mean_idx = tt::CBIndex::c_8;        // mean from forward pass
-constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_9;  // broadcasted mean (to avoid conflict with reader)
+constexpr uint32_t cb_input_idx = tt::CBIndex::c_6;       // input tensor
+constexpr uint32_t cb_mean_idx = tt::CBIndex::c_7;        // mean from forward pass
+constexpr uint32_t cb_mean_bcast_idx = tt::CBIndex::c_8;  // broadcasted mean (to avoid conflict with reader)
 
 // CBs with output data
-constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gradient)
-constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_11;     // dgamma components
-constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta components
-constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_13;        // broadcasted rstd (to avoid conflict with reader)
+constexpr uint32_t cb_dx_idx = tt::CBIndex::c_9;              // dx (input gradient)
+constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_10;  // dgamma components
+constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_11;   // dbeta components
+constexpr uint32_t cb_rstd_bcast_idx = tt::CBIndex::c_12;     // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
-constexpr uint32_t cb_scaled_dy_gamma_sum_idx = tt::CBIndex::c_17;  // (1/N) * sum(dy * gamma) - pre-scaled
+constexpr uint32_t cb_scaled_dy_gamma_sum_idx = tt::CBIndex::c_13;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr uint32_t cb_scaled_dy_gamma_xnorm_sum_idx =
-    tt::CBIndex::c_18;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
+    tt::CBIndex::c_14;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
 
 constexpr uint32_t onetile = 1;
 

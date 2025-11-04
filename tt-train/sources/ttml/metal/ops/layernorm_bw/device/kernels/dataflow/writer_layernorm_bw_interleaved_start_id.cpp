@@ -5,9 +5,9 @@
 #include "dataflow_api.h"
 
 // CBs with output data
-constexpr uint32_t cb_dx_idx = tt::CBIndex::c_10;                // dx (input gradient)
-constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_11;     // dgamma components
-constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_12;      // dbeta components
+constexpr uint32_t cb_dx_idx = tt::CBIndex::c_9;              // dx (input gradient)
+constexpr uint32_t cb_dgamma_components = tt::CBIndex::c_10;  // dgamma components
+constexpr uint32_t cb_dbeta_components = tt::CBIndex::c_11;   // dbeta components
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);

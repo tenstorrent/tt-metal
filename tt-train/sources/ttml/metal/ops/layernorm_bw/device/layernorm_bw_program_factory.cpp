@@ -43,21 +43,20 @@ constexpr auto kGammaCbIndex = tt::CBIndex::c_2;         // gamma (scale paramet
 constexpr auto kXHatCbIndex = tt::CBIndex::c_3;          // x_hat (computed as (input - mean) * rstd)
 constexpr auto kRstdCbIndex = tt::CBIndex::c_4;          // rstd from forward pass
 constexpr auto kDLoutCbIndex = tt::CBIndex::c_5;         // upstream gradient
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // reduction vector
-constexpr auto kInputCbIndex = tt::CBIndex::c_7;         // input tensor
-constexpr auto kMeanCbIndex = tt::CBIndex::c_8;          // mean from forward pass
-constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_9;     // broadcasted mean (to avoid conflict with reader)
+constexpr auto kInputCbIndex = tt::CBIndex::c_6;         // input tensor
+constexpr auto kMeanCbIndex = tt::CBIndex::c_7;          // mean from forward pass
+constexpr auto kMeanBcastCbIndex = tt::CBIndex::c_8;     // broadcasted mean (to avoid conflict with reader)
 
 // CBs with output data
-constexpr auto kDxCbIndex = tt::CBIndex::c_10;                // dx (input gradient)
-constexpr auto kDgammaComponentsCbIndex = tt::CBIndex::c_11;  // dgamma components
-constexpr auto kDbetaComponentsCbIndex = tt::CBIndex::c_12;   // dbeta components
-constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_13;         // broadcasted rstd (to avoid conflict with reader)
+constexpr auto kDxCbIndex = tt::CBIndex::c_9;                 // dx (input gradient)
+constexpr auto kDgammaComponentsCbIndex = tt::CBIndex::c_10;  // dgamma components
+constexpr auto kDbetaComponentsCbIndex = tt::CBIndex::c_11;   // dbeta components
+constexpr auto kRstdBcastCbIndex = tt::CBIndex::c_12;         // broadcasted rstd (to avoid conflict with reader)
 
 // CBs with intermediate computations
-constexpr auto kScaledDyGammaSumCbIndex = tt::CBIndex::c_17;  // (1/N) * sum(dy * gamma) - pre-scaled
+constexpr auto kScaledDyGammaSumCbIndex = tt::CBIndex::c_13;  // (1/N) * sum(dy * gamma) - pre-scaled
 constexpr auto kScaledDyGammaXnormSumCbIndex =
-    tt::CBIndex::c_18;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
+    tt::CBIndex::c_14;  // (1/N) * sum(dy * gamma * x_normalized) - pre-scaled
 
 // CB sizes (some set to 2U for ping-pong)
 constexpr uint32_t kNumScalerTiles = 1U;
@@ -65,7 +64,6 @@ constexpr uint32_t kNumMaskTiles = 1U;
 constexpr uint32_t kNumRstdTiles = 1U;
 constexpr uint32_t kNumRstdBcastTiles = 1U;
 constexpr uint32_t kNumMeanBcastTiles = 1U;
-constexpr uint32_t kNumMatMulReduceTiles = 1U;
 constexpr uint32_t kNumDyGammaSumTiles = 1U;
 constexpr uint32_t kNumDyGammaXnormSumTiles = 1U;
 
@@ -82,21 +80,21 @@ bool fits_in_l1_check(
     const uint32_t available_L1_in_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
+    const uint32_t bf16_row_memory = Wt * bfloat16_single_tile_size_bytes;
     // Memory for input data CBs
     const uint64_t scaler_memory = kNumScalerTiles * bfloat16_single_tile_size_bytes;
     const uint64_t mask_memory = kNumMaskTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t gamma_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t x_hat_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t input_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t gamma_memory = bf16_row_memory;
+    const uint64_t x_hat_memory = bf16_row_memory;
+    const uint64_t input_memory = bf16_row_memory;
     const uint64_t mean_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;  // same shape as rstd
     const uint64_t rstd_memory = kNumRstdTiles * bfloat16_single_tile_size_bytes;
-    const uint64_t dL_dout_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t matmul_reduce_memory = kNumMatMulReduceTiles * bfloat16_single_tile_size_bytes;
+    const uint64_t dL_dout_memory = bf16_row_memory;
 
     // Memory for output CBs
-    const uint64_t dx_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t dgamma_components_memory = Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t dbeta_components_memory = Wt * bfloat16_single_tile_size_bytes;
+    const uint64_t dx_memory = bf16_row_memory;
+    const uint64_t dgamma_components_memory = bf16_row_memory;
+    const uint64_t dbeta_components_memory = bf16_row_memory;
 
     // Memory for intermediate computation CBs
     const uint64_t dy_gamma_sum_memory = kNumDyGammaSumTiles * float32_single_tile_size_bytes;
@@ -105,10 +103,10 @@ bool fits_in_l1_check(
     const uint64_t mean_bcast_memory = kNumMeanBcastTiles * bfloat16_single_tile_size_bytes;
 
     // Total L1 memory required
-    const uint64_t required_L1_in_bytes =
-        scaler_memory + mask_memory + gamma_memory + x_hat_memory + input_memory + mean_memory + rstd_memory +
-        dL_dout_memory + matmul_reduce_memory + dx_memory + dgamma_components_memory + dbeta_components_memory +
-        dy_gamma_sum_memory + dy_gamma_xnorm_sum_memory + rstd_bcast_memory + mean_bcast_memory;
+    const uint64_t required_L1_in_bytes = scaler_memory + mask_memory + gamma_memory + x_hat_memory + input_memory +
+                                          mean_memory + rstd_memory + dL_dout_memory + dx_memory +
+                                          dgamma_components_memory + dbeta_components_memory + dy_gamma_sum_memory +
+                                          dy_gamma_xnorm_sum_memory + rstd_bcast_memory + mean_bcast_memory;
 
     return required_L1_in_bytes <= available_L1_in_bytes;
 }
@@ -198,7 +196,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     // Check gamma shape is [1, 1, 1, C]
     const auto& gamma_shape = gamma.logical_shape();
-    std::cout << "Gamma shape: " << gamma_shape << std::endl;
     TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
 
     // Check mean shape is [B*N*S, 1]
@@ -247,8 +244,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     uint32_t block_size = get_block_size(Wt, 2U);  // Need 2 extra registers for layernorm backward
     // uint32_t block_size = 1;
 
-    std::cout << "Block total_rows_to_process: " << total_rows_to_process << std::endl;
-
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
 
@@ -261,8 +256,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     const bool everything_fits_in_l1 =
         fits_in_l1_check(Wt, block_size, bfloat16_single_tile_size_bytes, float32_single_tile_size_bytes, device);
-
-    std::cout << "Everything fits in L1: " << everything_fits_in_l1 << std::endl;
 
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
     const uint32_t num_x_hat_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
@@ -284,8 +277,6 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
         program, all_cores, kRstdCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRstdTiles);
     [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles);
     [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
     [[maybe_unused]] auto cb_mean = create_circular_buffer(

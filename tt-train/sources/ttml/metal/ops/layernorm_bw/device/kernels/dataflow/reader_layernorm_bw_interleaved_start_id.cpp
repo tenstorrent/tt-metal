@@ -11,8 +11,8 @@ constexpr uint32_t cb_mask_w_idx = tt::CBIndex::c_1;      // mask for width dime
 constexpr uint32_t cb_gamma_idx = tt::CBIndex::c_2;       // gamma (scale parameter)
 constexpr uint32_t cb_rstd_idx = tt::CBIndex::c_4;        // rstd from forward pass
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_5;      // upstream gradient
-constexpr uint32_t cb_input_idx = tt::CBIndex::c_7;       // input tensor
-constexpr uint32_t cb_mean_idx = tt::CBIndex::c_8;        // mean from forward pass
+constexpr uint32_t cb_input_idx = tt::CBIndex::c_6;       // input tensor
+constexpr uint32_t cb_mean_idx = tt::CBIndex::c_7;        // mean from forward pass
 
 constexpr uint32_t packed_scaler = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
@@ -99,6 +99,14 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_gamma_idx, Wt);
         }
+        // if (r == start_row) {
+        //     DPRINT << "READER: dL_out tile " << 0 << ":" << ENDL();
+        //     print_tile(cb_dL_out_idx, 0, false);
+        // }
+        // if (r == start_row) {
+        //     DPRINT << "READER: gamma tile " << 0 << ":" << ENDL();
+        //     print_tile(cb_gamma_idx, 0, false);
+        // }
 
 #else
         // If not everything fits in L1, we need to read data multiple times per row
