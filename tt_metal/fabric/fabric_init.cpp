@@ -296,7 +296,7 @@ void build_tt_fabric_program(
                 auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
                 // if not the link used by dispatch, get the fabric router config with tensix extension.
                 if (fabric_tensix_extension_enabled && !is_dispatch_link) {
-                    fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
+                    fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
                 }
                 return fabric_context.get_fabric_router_config(
                     fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
@@ -341,7 +341,7 @@ void build_tt_fabric_program(
                 if (!dispatch_link) {
                     auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
                         device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
-                    tensix_builders.insert({eth_chan, tensix_builder});
+                    tensix_builders.emplace(eth_chan, std::move(tensix_builder));
                 }
             }
         }

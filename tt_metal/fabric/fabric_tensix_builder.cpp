@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fabric_tensix_builder.hpp"
+#include "fabric_tensix_builder_impl.hpp"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal.hpp>
@@ -98,7 +99,7 @@ FabricTensixDatamoverConfig::FabricTensixDatamoverConfig() {
         return;
     }
     calculate_buffer_allocations();
-    create_mux_configs();
+    create_configs();  // Mode-aware config creation
 }
 
 bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
@@ -146,15 +147,29 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
     TT_FATAL(!logical_fabric_mux_cores_.empty(), "logical_fabric_mux_cores_ is empty before division");
 
-    // Calculate number of configs per core and riscs needed BEFORE using them
+    // Calculate number of configs per core (should always be 1: one eth channel per core)
     num_configs_per_core_ =
         (max_eth_channels + logical_fabric_mux_cores_.size() - 1) / logical_fabric_mux_cores_.size();
-    num_used_riscs_per_tensix_ = num_configs_per_core_;
-
     TT_FATAL(
-        num_used_riscs_per_tensix_ == 1,
-        "Currently only support one mux per tensix but got {} muxes per tensix",
-        num_used_riscs_per_tensix_);
+        num_configs_per_core_ == 1,
+        "Expected 1 config per core (one eth channel per core), but got {} configs per core",
+        num_configs_per_core_);
+
+    // Set num_used_riscs_per_tensix based on mode
+    // This determines how many RISC IDs we use on each core
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    switch (fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::MUX:
+            // MUX mode: only 1 RISC (BRISC) is used per core
+            num_used_riscs_per_tensix_ = 1;
+            break;
+        case tt::tt_fabric::FabricTensixConfig::UDM:
+            // UDM mode: 2 RISCs (BRISC for MUX + NCRISC for Relay) per core
+            num_used_riscs_per_tensix_ = 2;
+            break;
+        case tt::tt_fabric::FabricTensixConfig::DISABLED: num_used_riscs_per_tensix_ = 0; break;
+        default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
+    }
 
     // Second pass: create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
@@ -166,7 +181,7 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
 
         // Initialize per-device mappings
         eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
-        eth_chan_to_risc_id_[dev_id] = std::unordered_map<size_t, size_t>();
+        eth_chan_to_risc_id_[dev_id] = std::unordered_map<size_t, FabricTensixRiscId>();
 
         // Create round-robin mapping using the actual ethernet channel IDs from active_channels
         size_t channel_index = 0;
@@ -174,9 +189,9 @@ bool FabricTensixDatamoverConfig::initialize_channel_mappings() {
             size_t core_index = channel_index % logical_fabric_mux_cores_.size();
             eth_chan_to_core_index_[dev_id][eth_chan_id] = core_index;
 
-            // Determine RISC ID: round-robin assignment (0 = BRISC, 1 = NCRISC, etc.)
-            size_t channels_on_core = (channel_index / logical_fabric_mux_cores_.size());
-            size_t risc_id = channels_on_core % num_used_riscs_per_tensix_;
+            // Determine RISC ID: In both MUX and UDM modes, all worker channels go to MUX (RISC 0)
+            // The RELAY (RISC 1) in UDM mode handles fabric-to-fabric routing, not worker channels
+            FabricTensixRiscId risc_id = FabricTensixRiscId::MUX;  // Always assign to MUX
             eth_chan_to_risc_id_[dev_id][eth_chan_id] = risc_id;
 
             channel_index++;
@@ -207,50 +222,91 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     size_t space_per_risc = l1_size / num_used_riscs_per_tensix_;     // Split between BRISC and NCRISC
     space_per_risc = (space_per_risc / l1_alignment) * l1_alignment;  // Align down to L1 alignment
 
-    // Get the maximum number of channels per RISC based on fabric topology from fabric context
+    // Get the maximum number of channels per RISC based on fabric topology and mode
     auto topology = fabric_context.get_fabric_topology();
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
-    switch (topology) {
-        case tt::tt_fabric::Topology::Linear:
-        case tt::tt_fabric::Topology::Ring:
-            num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
-            break;
-        case tt::tt_fabric::Topology::Mesh:
-        case tt::tt_fabric::Topology::Torus:
-            num_channels_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
-            break;
-        default: TT_THROW("unknown fabric topology: {}", topology); break;
+    // Determine num_channels_for_mux based on mode
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        // UDM mode: MUX temporarily has 1 channel (will be changed later based on compute grid cores)
+        // RELAY permanently has 1 channel (configured separately in its constructor)
+        num_channels_for_mux_ = 1;
+    } else {
+        // MUX mode: use topology-based channel count
+        switch (topology) {
+            case tt::tt_fabric::Topology::Linear:
+            case tt::tt_fabric::Topology::Ring:
+                num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_1d_linear;
+                break;
+            case tt::tt_fabric::Topology::Mesh:
+            case tt::tt_fabric::Topology::Torus:
+                num_channels_for_mux_ = tt::tt_fabric::builder_config::num_sender_channels_2d_mesh;
+                break;
+            default: TT_THROW("unknown fabric topology: {}", topology); break;
+        }
     }
 
     // Calculate buffers per channel based on available space and max channels
-    size_t space_needed_for_max_channels = num_channels_ * buffer_size_bytes_full_size_channel_;
+    size_t space_needed_for_max_channels = num_channels_for_mux_ * buffer_size_bytes_full_size_channel_;
     num_buffers_per_channel_ = std::bit_floor(space_per_risc / space_needed_for_max_channels);
 
     // Set base addresses for each RISC ID with proper L1 alignment
-    for (size_t risc_id = 0; risc_id < num_used_riscs_per_tensix_; ++risc_id) {
-        base_l1_addresses_[risc_id] = l1_base + (risc_id * space_per_risc);
+    for (size_t i = 0; i < num_used_riscs_per_tensix_; ++i) {
+        FabricTensixRiscId risc_id = static_cast<FabricTensixRiscId>(i);
+        base_l1_addresses_[risc_id] = l1_base + (i * space_per_risc);
     }
 }
 
-void FabricTensixDatamoverConfig::create_mux_configs() {
-    // Create mux configs for the number of RISCs we actually need - much cleaner!
-    for (size_t risc_id = 0; risc_id < num_used_riscs_per_tensix_; ++risc_id) {
-        mux_configs_[risc_id] = std::make_shared<tt::tt_fabric::FabricMuxConfig>(
-            static_cast<uint8_t>(num_channels_),             // num_full_size_channels
-            0,                                               // num_header_only_channels (set to 0 for now)
-            static_cast<uint8_t>(num_buffers_per_channel_),  // num_buffers_full_size_channel
-            0,                                               // num_buffers_header_only_channel
-            buffer_size_bytes_full_size_channel_,            // buffer_size_bytes_full_size_channel
-            base_l1_addresses_[risc_id],                     // base_l1_address
-            CoreType::WORKER                                 // core_type (always tensix)
-        );
+void FabricTensixDatamoverConfig::create_configs() {
+    // Get the fabric tensix config mode
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+    switch (fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::MUX: {
+            // MUX mode: only create mux config for BRISC
+            configs_[FabricTensixRiscId::MUX] = std::make_shared<FabricTensixDatamoverMuxConfig>(
+                static_cast<uint8_t>(num_channels_for_mux_),     // num_full_size_channels
+                0,                                               // num_header_only_channels
+                static_cast<uint8_t>(num_buffers_per_channel_),  // num_buffers_full_size_channel
+                0,                                               // num_buffers_header_only_channel
+                buffer_size_bytes_full_size_channel_,            // buffer_size_bytes_full_size_channel
+                base_l1_addresses_[FabricTensixRiscId::MUX],     // base_l1_address
+                CoreType::WORKER                                 // core_type
+            );
+            break;
+        }
+        case tt::tt_fabric::FabricTensixConfig::UDM: {
+            // UDM mode: create mux config for BRISC and relay config for NCRISC
+            configs_[FabricTensixRiscId::MUX] = std::make_shared<FabricTensixDatamoverMuxConfig>(
+                static_cast<uint8_t>(num_channels_for_mux_),     // num_full_size_channels
+                0,                                               // num_header_only_channels
+                static_cast<uint8_t>(num_buffers_per_channel_),  // num_buffers_full_size_channel
+                0,                                               // num_buffers_header_only_channel
+                buffer_size_bytes_full_size_channel_,            // buffer_size_bytes_full_size_channel
+                base_l1_addresses_[FabricTensixRiscId::MUX],     // base_l1_address (BRISC)
+                CoreType::WORKER                                 // core_type
+            );
+
+            // Create relay config for NCRISC (always in UDM mode)
+            configs_[FabricTensixRiscId::RELAY] = std::make_shared<FabricTensixDatamoverRelayConfig>(
+                static_cast<uint8_t>(num_buffers_per_channel_),  // num_buffers_per_channel
+                buffer_size_bytes_full_size_channel_,            // buffer_size_bytes
+                base_l1_addresses_[FabricTensixRiscId::RELAY],   // base_l1_address (NCRISC)
+                CoreType::WORKER                                 // core_type
+            );
+            break;
+        }
+        case tt::tt_fabric::FabricTensixConfig::DISABLED:
+        default:
+            // No configs to create in disabled mode
+            break;
     }
 }
 
 // Getter implementations
-size_t FabricTensixDatamoverConfig::get_base_l1_address(size_t risc_id) const {
+size_t FabricTensixDatamoverConfig::get_base_l1_address(FabricTensixRiscId risc_id) const {
     auto it = base_l1_addresses_.find(risc_id);
-    TT_FATAL(it != base_l1_addresses_.end(), "Base L1 address not found for RISC ID {}", risc_id);
+    TT_FATAL(it != base_l1_addresses_.end(), "Base L1 address not found for RISC ID {}", static_cast<int>(risc_id));
     return it->second;
 }
 
@@ -261,13 +317,13 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_noc_xy(
     return {physical_core.x, physical_core.y};
 }
 
-size_t FabricTensixDatamoverConfig::get_channels_base_address(size_t risc_id, uint8_t tensix_channel_id) const {
-    auto mux_config = get_mux_config(risc_id);
-    return mux_config->get_channel_base_address(
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, tensix_channel_id);
+size_t FabricTensixDatamoverConfig::get_channels_base_address(
+    FabricTensixRiscId risc_id, uint8_t tensix_channel_id) const {
+    auto config = get_config(risc_id);
+    return config->get_channel_base_address(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL, tensix_channel_id);
 }
 
-size_t FabricTensixDatamoverConfig::get_risc_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const {
+FabricTensixRiscId FabricTensixDatamoverConfig::get_risc_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const {
     auto device_it = eth_chan_to_risc_id_.find(device_id);
     TT_FATAL(device_it != eth_chan_to_risc_id_.end(), "Device {} not found in risc mapping", device_id);
 
@@ -296,91 +352,68 @@ CoreCoord FabricTensixDatamoverConfig::get_core_for_channel(ChipId device_id, ui
     return logical_fabric_mux_cores_[core_index];
 }
 
-std::shared_ptr<tt::tt_fabric::FabricMuxConfig> FabricTensixDatamoverConfig::get_mux_config(size_t risc_id) const {
-    auto it = mux_configs_.find(risc_id);
-    TT_FATAL(it != mux_configs_.end(), "Mux config not found for RISC ID {}", risc_id);
+std::shared_ptr<FabricTensixDatamoverBaseConfig> FabricTensixDatamoverConfig::get_config(
+    FabricTensixRiscId risc_id) const {
+    auto it = configs_.find(risc_id);
+    TT_FATAL(it != configs_.end(), "Config not found for RISC ID {}", static_cast<int>(risc_id));
     return it->second;
 }
 
-bool FabricTensixDatamoverConfig::is_risc_id_active(size_t risc_id) const {
-    return mux_configs_.find(risc_id) != mux_configs_.end();
+bool FabricTensixDatamoverConfig::is_risc_id_active(FabricTensixRiscId risc_id) const {
+    return configs_.find(risc_id) != configs_.end();
 }
 
 size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
-    auto mux_config = get_mux_config(risc_id);
+    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const {
+    auto config = get_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    return mux_config->get_flow_control_address(channel_type, channel_id);
+    return config->get_flow_control_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_connection_semaphore_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
-    auto mux_config = get_mux_config(risc_id);
+    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const {
+    auto config = get_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    return mux_config->get_connection_handshake_address(channel_type, channel_id);
+    return config->get_connection_handshake_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_worker_conn_info_base_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
-    auto mux_config = get_mux_config(risc_id);
+    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const {
+    auto config = get_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    return mux_config->get_connection_info_address(channel_type, channel_id);
+    return config->get_connection_info_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_buffer_index_semaphore_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
-    auto mux_config = get_mux_config(risc_id);
+    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const {
+    auto config = get_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    return mux_config->get_buffer_index_address(channel_type, channel_id);
+    return config->get_buffer_index_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_channel_credits_stream_id(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const {
-    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
-    auto mux_config = get_mux_config(risc_id);
+    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const {
+    auto config = get_config(risc_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-    return mux_config->get_channel_credits_stream_id(channel_type, channel_id);
+    return config->get_channel_credits_stream_id(channel_type, channel_id);
 }
 
 std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_address_and_signal(
-    ChipId device_id, uint32_t eth_chan_id) const {
-    auto risc_id = get_risc_id_for_channel(device_id, eth_chan_id);
-    TT_FATAL(is_risc_id_active(risc_id), "RISC ID {} is not active in fabric tensix config", risc_id);
+    ChipId device_id, uint32_t eth_chan_id, FabricTensixRiscId risc_id) const {
+    TT_FATAL(is_risc_id_active(risc_id), "RISC ID {} is not active in fabric tensix config", static_cast<int>(risc_id));
 
-    auto mux_config = get_mux_config(risc_id);
+    auto config = get_config(risc_id);
     return std::make_pair(
-        mux_config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+        config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 }
 
 // FabricTensixDatamoverBuilder implementation
 
 FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
-    const CoreCoord& my_core_logical,
-    tt::tt_fabric::FabricNodeId local_fabric_node_id,
-    tt::tt_fabric::FabricNodeId remote_fabric_node_id,
-    uint32_t ethernet_channel_id,
-    uint32_t link_idx,
-    size_t risc_id,
-    uint32_t noc_x,
-    uint32_t noc_y,
-    std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config,
-    eth_chan_directions direction) :
-    my_core_logical_(my_core_logical),
-    local_fabric_node_id_(local_fabric_node_id),
-    remote_fabric_node_id_(remote_fabric_node_id),
-    ethernet_channel_id_(ethernet_channel_id),
-    link_idx_(link_idx),
-    risc_id_(risc_id),
-    noc_x_(noc_x),
-    noc_y_(noc_y),
-    fabric_mux_config_(std::move(fabric_mux_config)),
-    direction_(direction) {
-    channel_connection_liveness_check_disable_array_.fill(false);
-    TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
+    std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder,
+    std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder) :
+    mux_builder_(std::move(mux_builder)), relay_builder_(std::move(relay_builder)) {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder cannot be null");
 }
 
 FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
@@ -392,11 +425,8 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     eth_chan_directions direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
-
     const auto& tensix_config = fabric_context.get_tensix_config();
-
-    // Get RISC ID for this ethernet channel
-    size_t risc_id = tensix_config.get_risc_id_for_channel(device->id(), ethernet_channel_id);
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
 
     // Get core for this ethernet channel
     CoreCoord my_core_logical = tensix_config.get_core_for_channel(device->id(), ethernet_channel_id);
@@ -407,167 +437,136 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     // Get link index (routing plane ID) from control plane using channel ID
     uint32_t link_idx = control_plane.get_routing_plane_id(local_fabric_node_id, ethernet_channel_id);
 
-    // Get mux config for this RISC ID
-    auto fabric_mux_config = tensix_config.get_mux_config(risc_id);
+    std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder = nullptr;
+    std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder = nullptr;
 
-    return FabricTensixDatamoverBuilder(
-        my_core_logical,
-        local_fabric_node_id,
-        remote_fabric_node_id,
-        ethernet_channel_id,
-        link_idx,
-        risc_id,
-        noc_x,
-        noc_y,
-        fabric_mux_config,
-        direction);
+    switch (fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::MUX: {
+            // MUX mode: only create mux builder for BRISC
+            auto mux_config_base = tensix_config.get_config(FabricTensixRiscId::MUX);
+            auto mux_config = std::dynamic_pointer_cast<FabricTensixDatamoverMuxConfig>(mux_config_base);
+            TT_FATAL(mux_config != nullptr, "Expected mux config for MUX RISC");
+
+            mux_builder = std::make_unique<FabricTensixDatamoverMuxBuilder>(
+                my_core_logical,
+                local_fabric_node_id,
+                remote_fabric_node_id,
+                ethernet_channel_id,
+                link_idx,
+                FabricTensixRiscId::MUX,
+                noc_x,
+                noc_y,
+                mux_config,
+                direction);
+            break;
+        }
+        case tt::tt_fabric::FabricTensixConfig::UDM: {
+            // UDM mode: create both mux builder (BRISC) and relay builder (NCRISC)
+
+            // Create mux builder for BRISC
+            auto mux_config_base = tensix_config.get_config(FabricTensixRiscId::MUX);
+            auto mux_config = std::dynamic_pointer_cast<FabricTensixDatamoverMuxConfig>(mux_config_base);
+            TT_FATAL(mux_config != nullptr, "Expected mux config for MUX RISC");
+
+            mux_builder = std::make_unique<FabricTensixDatamoverMuxBuilder>(
+                my_core_logical,
+                local_fabric_node_id,
+                remote_fabric_node_id,
+                ethernet_channel_id,
+                link_idx,
+                FabricTensixRiscId::MUX,
+                noc_x,
+                noc_y,
+                mux_config,
+                direction);
+
+            // Create relay builder for NCRISC
+            if (tensix_config.is_risc_id_active(FabricTensixRiscId::RELAY)) {
+                auto relay_config_base = tensix_config.get_config(FabricTensixRiscId::RELAY);
+                auto relay_config = std::dynamic_pointer_cast<FabricTensixDatamoverRelayConfig>(relay_config_base);
+                TT_FATAL(relay_config != nullptr, "Expected relay config for RELAY RISC");
+
+                relay_builder = std::make_unique<FabricTensixDatamoverRelayBuilder>(
+                    my_core_logical,
+                    local_fabric_node_id,
+                    remote_fabric_node_id,
+                    ethernet_channel_id,
+                    link_idx,
+                    FabricTensixRiscId::RELAY,
+                    noc_x,
+                    noc_y,
+                    relay_config,
+                    direction);
+            }
+            break;
+        }
+        default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
+    }
+
+    return FabricTensixDatamoverBuilder(std::move(mux_builder), std::move(relay_builder));
 }
 
 void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-    // Select processor and NOC based on RISC ID
-    tt::tt_metal::DataMovementProcessor processor =
-        (risc_id_ == 0) ? tt::tt_metal::DataMovementProcessor::RISCV_0 : tt::tt_metal::DataMovementProcessor::RISCV_1;
+    // Always create and compile mux builder
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    mux_builder_->create_and_compile(device, program);
 
-    tt::tt_metal::NOC noc = (risc_id_ == 0) ? tt::tt_metal::NOC::RISCV_0_default : tt::tt_metal::NOC::RISCV_1_default;
-
-    // Create the mux kernel using the fabric mux kernel file
-    auto mux_kernel = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_router_extension.cpp",
-        my_core_logical_,
-        tt::tt_metal::DataMovementConfig{
-            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(device), .defines = {}});
-
-    // Set runtime arguments
-    tt::tt_metal::SetRuntimeArgs(program, mux_kernel, my_core_logical_, get_runtime_args(program));
+    // In UDM mode, also create and compile relay builder
+    if (relay_builder_ != nullptr) {
+        relay_builder_->create_and_compile(device, program);
+    }
 }
 
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_connection_to_fabric_channel(
     uint32_t channel_id) const {
-    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
-
-    // skip the channel liveness check if it is used for upstream connection (persistent)
-    channel_connection_liveness_check_disable_array_[channel_id] = true;
-
-    return tt::tt_fabric::SenderWorkerAdapterSpec{
-        noc_x_,                                                                  // edm_noc_x
-        noc_y_,                                                                  // edm_noc_y
-        fabric_mux_config_->get_channel_base_address(channel_type, channel_id),  // edm_buffer_base_addr
-        fabric_mux_config_->get_num_buffers(channel_type),                       // num_buffers_per_channel
-        fabric_mux_config_->get_flow_control_address(channel_type, channel_id),  // edm_l1_sem_addr
-        fabric_mux_config_->get_connection_handshake_address(
-            channel_type, channel_id),                                              // edm_connection_handshake_addr
-        fabric_mux_config_->get_connection_info_address(channel_type, channel_id),  // edm_worker_location_info_addr
-        fabric_mux_config_->get_buffer_size_bytes(channel_type),                    // buffer_size_bytes
-        fabric_mux_config_->get_buffer_index_address(channel_type, channel_id),     // buffer_index_semaphore_id
-        tt::tt_fabric::eth_chan_directions::EAST                                    // edm_direction
-    };
+    // Delegate to mux builder
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->build_connection_to_fabric_channel(channel_id);
 }
 
-std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt_metal::IDevice* device) const {
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-
-    const bool has_dispatch_tunnel = device_has_dispatch_tunnel(device->id());
-    uint32_t dispatch_link_idx =
-        tt_metal::RelayMux::get_dispatch_link_index(local_fabric_node_id_, remote_fabric_node_id_, device);
-    bool is_dispatch_link = has_dispatch_tunnel && link_idx_ == dispatch_link_idx;
-
-    // use normal router config for dispatch link, since it doesn't have tensix extension
-    const auto& fabric_router_config = [&]() {
-        if (is_dispatch_link) {
-            return fabric_context.get_fabric_router_config();
-        } else {
-            return fabric_context.get_fabric_router_config(
-                tt::tt_fabric::FabricEriscDatamoverType::Default,
-                tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-                fabric_tensix_config);
-        }
-    }();
-
-    auto channel_allocator_base = fabric_router_config.channel_allocator.get();
-    const auto channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base);
-    TT_FATAL(channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-    fabric_mux_config_->set_fabric_endpoint_channel_num_buffers(
-        channel_allocator->get_sender_channel_number_of_slots(0));
-    fabric_mux_config_->set_wait_for_fabric_endpoint_ready(true);
-    fabric_mux_config_->set_fabric_endpoint_status_address(fabric_router_config.edm_status_address);
-    auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args(fabric_router_config);
-
-    // Add number of upstream routers and sync address
-    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
-
-    // Get topology-specific fabric router stream IDs based on topology
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
-
-    const auto worker_channel = is_2d_fabric ? direction_ : 0;
-    const auto& tensix_config = fabric_context.get_tensix_config();
-    const auto worker_stream_id =
-        tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel);
-
-    std::vector<uint32_t> fabric_stream_ids_ack_to_upstream;
-    std::vector<uint32_t> fabric_stream_ids_check_by_local;
-    switch (topology) {
-        case tt::tt_fabric::Topology::Linear:
-        case tt::tt_fabric::Topology::Ring:
-            fabric_stream_ids_check_by_local = {
-                worker_stream_id,                                                             // default 17
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};  // 18
-            break;
-        case tt::tt_fabric::Topology::Mesh:
-        case tt::tt_fabric::Topology::Torus:
-            fabric_stream_ids_check_by_local = {
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
-                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,  // 19
-                tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,  // 20
-                tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id   // 21
-            };
-            break;
-        default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
-    }
-
-    // override the worker channel stream id
-    fabric_stream_ids_check_by_local[worker_channel] = worker_stream_id;
-
-    uint8_t num_full_size_channels =
-        fabric_mux_config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
-    TT_FATAL(
-        num_full_size_channels == fabric_stream_ids_check_by_local.size(),
-        "the number of fabric stream ids used must equal to the number of mux channels");
-    // Add fabric router stream IDs for full size channels
-    ct_args.insert(ct_args.end(), fabric_stream_ids_check_by_local.begin(), fabric_stream_ids_check_by_local.end());
-
-    // Add persistent channels flags - all channels are persistent except the worker channel.
-    std::vector<uint32_t> is_persistent_channels(num_full_size_channels, 0);
-    for (uint8_t i = 0; i < num_full_size_channels; i++) {
-        if (channel_connection_liveness_check_disable_array_[i]) {
-            is_persistent_channels[i] = 1;
-        }
-    }
-    ct_args.insert(ct_args.end(), is_persistent_channels.begin(), is_persistent_channels.end());
-
-    return ct_args;
+const CoreCoord& FabricTensixDatamoverBuilder::get_logical_core() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_logical_core();
 }
 
-std::vector<uint32_t> FabricTensixDatamoverBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
-    std::vector<uint32_t> runtime_args;
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_x_.begin(), upstream_routers_noc_x_.end());
-    runtime_args.insert(runtime_args.end(), upstream_routers_noc_y_.begin(), upstream_routers_noc_y_.end());
+tt::tt_fabric::FabricNodeId FabricTensixDatamoverBuilder::get_local_fabric_node_id() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_local_fabric_node_id();
+}
 
-    // Get base runtime args from the underlying mux config
-    auto mux_runtime_args = fabric_mux_config_->get_fabric_mux_run_time_args(
-        local_fabric_node_id_, remote_fabric_node_id_, link_idx_, program, {my_core_logical_});
+tt::tt_fabric::FabricNodeId FabricTensixDatamoverBuilder::get_remote_fabric_node_id() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_remote_fabric_node_id();
+}
 
-    runtime_args.insert(runtime_args.end(), mux_runtime_args.begin(), mux_runtime_args.end());
-    return runtime_args;
+uint32_t FabricTensixDatamoverBuilder::get_ethernet_channel_id() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_ethernet_channel_id();
+}
+
+FabricTensixRiscId FabricTensixDatamoverBuilder::get_risc_id() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_risc_id();
+}
+
+uint32_t FabricTensixDatamoverBuilder::get_noc_x() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_noc_x();
+}
+
+uint32_t FabricTensixDatamoverBuilder::get_noc_y() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_noc_y();
+}
+
+eth_chan_directions FabricTensixDatamoverBuilder::get_direction() const {
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    return mux_builder_->get_direction();
 }
 
 void FabricTensixDatamoverBuilder::append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y) {
-    upstream_routers_noc_x_.push_back(noc_x);
-    upstream_routers_noc_y_.push_back(noc_y);
+    TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
+    mux_builder_->append_upstream_routers_noc_xy(noc_x, noc_y);
 }
 
 }  // namespace tt::tt_fabric
