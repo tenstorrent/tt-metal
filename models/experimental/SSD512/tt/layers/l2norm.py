@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+
 """TTNN implementation of L2 normalization with learned scale, matching the reference L2Norm module."""
 
 import ttnn
@@ -35,6 +40,7 @@ class TtL2Norm:
         # Compute L2 norm across channel dimension (dim=1)
         # Square -> sum across channels -> sqrt -> add eps
         squared = ttnn.mul(x, x)  # Element-wise square
+        squared = ttnn.to_layout(squared, layout=ttnn.TILE_LAYOUT)
         norm = ttnn.sqrt(ttnn.sum(squared, dim=1, keepdim=True)) + self.eps
 
         # Convert norm back to same layout as input for division
@@ -46,7 +52,44 @@ class TtL2Norm:
         x_norm = tt_to_torch_tensor(x_norm)
         x_norm = torch.permute(x_norm, (0, 3, 1, 2))
         x_norm = torch_to_tt_tensor_rm(x_norm, device=self.device)
+
+        # weight_torch = tt_to_torch_tensor(self.weight)
+        # Permute from [1, C, 1, 1] (NCHW) to [1, 1, 1, C] (NHWC)
+        # weight_nhwc_torch = weight_torch.permute(0, 2, 3, 1)  # [1, C, 1, 1] -> [1, 1, 1, C]
+        # weight_nhwc = torch_to_tt_tensor_rm(weight_nhwc_torch, device=self.device)
+
         # Scale each channel by learned weight (broadcasts [1,C,1,1] across N,H,W)
-        out = ttnn.mul(x_norm, self.weight)  # weight: [1,C,1,1], x_norm: [N,C,H,W]
+        out = ttnn.mul(x_norm, self.weight)  # weight: [1,1,1,C], x_norm: [N,C,H,W]
 
         return out
+
+
+def l2norm(input_tensor, num_channels=512, scale=20.0, device=None):
+    """
+    Function wrapper for TtL2Norm for convenience.
+
+    Args:
+        input_tensor: Input tensor (torch.Tensor in NCHW format)
+        num_channels: Number of channels (default: 512)
+        scale: Scale parameter (default: 20.0)
+        device: TTNN device object
+
+    Returns:
+        Normalized and scaled tensor (ttnn.Tensor in NCHW format)
+    """
+    # Create L2Norm instance
+    l2norm_module = TtL2Norm(n_channels=num_channels, scale=scale, device=device)
+
+    # Apply L2Norm
+    # Note: TtL2Norm expects input in NCHW format and returns TTNN tensor
+    # If input is torch tensor, convert to TTNN first
+    if isinstance(input_tensor, torch.Tensor):
+        # Convert torch tensor to TTNN tensor in NCHW format
+        # TtL2Norm expects NCHW format
+        input_ttnn = torch_to_tt_tensor_rm(input_tensor, device=device)
+        output = l2norm_module(input_ttnn)
+        return output
+    else:
+        # Already TTNN tensor, apply directly
+        output = l2norm_module(input_tensor)
+        return output

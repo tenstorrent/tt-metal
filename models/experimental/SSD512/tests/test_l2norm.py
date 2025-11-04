@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for TTNN L2Norm layer implementation."""
 
 import pytest
@@ -7,7 +11,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import tt_to_torch_tensor
-from models.common.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_pcc
 from models.experimental.SSD512.tt.layers.l2norm import TtL2Norm
 
 
@@ -48,7 +52,5 @@ def test_l2norm(device):
     # Compare outputs
     output_pass, pcc_value = comp_pcc(torch_output, tt_output_torch, 0.99)
     logger.info(f"L2Norm PCC: {pcc_value}")
-    allclose = comp_allclose(torch_output, tt_output_torch)
-    logger.info(f"L2Norm allclose: {allclose}")
 
-    assert output_pass, f"L2Norm output does not meet PCC requirement {pcc}"
+    assert output_pass, f"L2Norm output does not meet PCC requirement"

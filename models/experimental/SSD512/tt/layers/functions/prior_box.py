@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+
 """TTNN implementation of prior (default) box generation for SSD.
 
 Matches functionality of reference PriorBox using TTNN ops.
