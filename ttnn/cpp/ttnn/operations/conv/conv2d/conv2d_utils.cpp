@@ -1285,7 +1285,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
 
     uint32_t max_memory_consumed = 0;
     uint32_t old_max_memory_consumed = 0;
-    uint32_t max_memory_index = 0;
+    [[maybe_unused]] uint32_t max_memory_index = 0;
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
