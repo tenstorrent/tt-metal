@@ -99,7 +99,7 @@ class TtGemmaImageFeedForward(LightweightModule):
             per_core_N=math.ceil(N / 32 / cores_x),  # N / TILE_WIDTH / grid width
             transpose_mcast=False,
             fused_activation=None,
-            fuse_batch=False,
+            # fuse_batch=False,
         )
 
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
