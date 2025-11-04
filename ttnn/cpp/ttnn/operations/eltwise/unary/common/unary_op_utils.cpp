@@ -484,6 +484,8 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             std::string where_call;
             if (input_dtype == DataType::INT32) {
                 where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
+            } else if (input_dtype == DataType::UINT32) {
+                where_call = fmt::format("where_uint32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else if (input_dtype == DataType::FLOAT32) {
                 where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else {
@@ -1050,11 +1052,29 @@ std::string get_compute_kernel_path(
     }
 }
 
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype) {
-    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
-        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+template <typename T>
+uint32_t pack_scalar_runtime_arg_impl(const T& param, DataType dtype) {
+    // if ((dtype == DataType::UINT32 || dtype == DataType::INT32) && std::same_as<T, float>) {
+    //     return std::bit_cast<uint32_t>(static_cast<int32_t>(param));
+    // }
+    if constexpr (std::same_as<T, uint32_t>) {
+        return param;
+    } else {
+        return std::bit_cast<uint32_t>(param);
     }
-    return std::bit_cast<uint32_t>(scalar);
+}
+
+uint32_t pack_scalar_runtime_arg(const EltwiseUnaryWithParam& op, size_t index, DataType dtype) {
+    return std::visit(
+        [index, dtype](const auto& variant) -> uint32_t {
+            if constexpr (requires { variant.get_param_if(index); }) {
+                if (auto param = variant.get_param_if(index)) {
+                    return pack_scalar_runtime_arg_impl(*param, dtype);
+                }
+            }
+            TT_THROW("Unsupported parameter type for index {}", index);
+        },
+        op.base);
 }
 
 }  // namespace ttnn::operations::unary::utils
