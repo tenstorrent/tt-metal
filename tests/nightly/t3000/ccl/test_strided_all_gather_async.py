@@ -33,6 +33,7 @@ def run_strided_all_gather_impl(
     layout,
     mem_config_input,
     mem_config_ag,
+    mem_config_mm,
     all_gather_topology,
     mm_cores_y,
     mm_block_m,
@@ -210,7 +211,7 @@ def run_strided_all_gather_impl(
                 mm_block_w=mm_block_k // 32,
             )
 
-            tt_matmul_output = ttnn.experimental.minimal_matmul(
+            tt_matmul_out_tensor = ttnn.experimental.minimal_matmul(
                 tt_all_gather_out_tensor,
                 weight_tensor_mesh_list[i],
                 bias_tensor=bias_tensor_mesh_list[i] if use_bias else None,
@@ -228,9 +229,9 @@ def run_strided_all_gather_impl(
                 num_links=num_links,
                 memory_config_ag=mem_config_ag,
                 topology=all_gather_topology,
-                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                barrier_semaphore=barrier_semaphore_handles[i],
                 subdevice_id=worker_sub_device_id,
-                bias_tensor=bias_tensor_mesh_list[i] if use_bias else None,
+                bias=bias_tensor_mesh_list[i] if use_bias else None,
                 fused_activation=activation_fn,
                 config=matmul_config,
                 memory_config_mm=mem_config_mm,
@@ -238,9 +239,8 @@ def run_strided_all_gather_impl(
                 tiles_per_chunk=tiles_per_chunk,
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
-                core_grid=mm_core_grid,
             )
-        return tt_all_gather_out_tensor, tt_matmul_output
+        return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
     if enable_trace:
         # Compile the op
@@ -316,7 +316,7 @@ def run_strided_all_gather_impl(
 @pytest.mark.parametrize(
     "M, K, N, dim, num_workers_per_link, tiles_per_chunk, layout, ag_input_dtype, mm_cores_y, mm_block_m, mm_block_k, mm_block_n, subblock_h, subblock_w, mm_core_grid",
     [
-        (32, 256, 256, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32, 32, 1, 1, ttnn.CoreCoord(8, 6)),
+        (32, 256, 256, 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32, 32, 1, 1, ttnn.CoreCoord(2, 2)),
         # ([1, 1, 32, 512], 3, 2, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
         # ([1, 1, 32, 512], 3, 1, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 32),
         # ([1, 1, 32, 512], 3, 1, 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, 1, 32, 64),
@@ -357,9 +357,10 @@ def run_strided_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_input, mem_config_ag",
+    "mem_config_input, mem_config_ag, mem_config_mm",
     [
         (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         )
@@ -401,6 +402,7 @@ def test_strided_all_gather_async(
     layout,
     mem_config_input,
     mem_config_ag,
+    mem_config_mm,
     enable_trace,
     all_gather_topology,
     num_iters,
@@ -427,6 +429,7 @@ def test_strided_all_gather_async(
         layout,
         mem_config_input,
         mem_config_ag,
+        mem_config_mm,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
