@@ -545,8 +545,8 @@ class WanTransformer3DModel:
     def __call__(self, spatial, prompt, timestep, y=None):
         """
         Inputs are all torch tensors
-            y is an optional argument for image-to-video generation
-            We assume that preprocessing has already been done for y.
+            y is an optional argument for image-to-video generation.
+            We assume that preprocessing has already been done for y and y has the same shape as spatial.
         Output is torch tensor
         """
 
@@ -561,6 +561,10 @@ class WanTransformer3DModel:
         rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare_rope_features(spatial)
 
         temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(timestep, prompt)
+
+        # Concatenate spatial and y along the channel dimension
+        if self.model_type == "i2v":
+            spatial = ttnn.concat([spatial, y], dim=1)
 
         spatial_1BNI, N = self.preprocess_spatial_input(spatial)
 
