@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-// #include <string.h>
 #ifdef TTSIM_ENABLED
 #include <cstring>
 #include "debug/dprint.h"
