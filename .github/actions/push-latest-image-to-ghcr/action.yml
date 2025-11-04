@@ -10,6 +10,11 @@ inputs:
     description: 'GH Token for registry login'
     required: true
     type: string
+  new-tag:
+    description: 'New tag to use, for example latest or v0.65.0'
+    required: false
+    type: string
+    default: 'latest'
 
 outputs:
   repo-name:
@@ -54,6 +59,6 @@ runs:
     - name: Pull, tag and push image
       shell: bash
       run: |
-        LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:latest"
+        LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:${{ inputs.new-tag }}"
         echo "Copying ${{ inputs.docker-image-tag }} to ${LATEST_TAG}"
         regctl image copy ${{ inputs.docker-image-tag }} ${LATEST_TAG}
