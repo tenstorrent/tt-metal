@@ -323,6 +323,8 @@ Tensor set_tensor_id(const Tensor& tensor);
 
 namespace ops {
 Tensor to_dtype(const Tensor& tensor, DataType dtype);
+
+std::string to_string(const Tensor& tensor);
 }  // namespace ops
 
 }  // namespace tt_metal
