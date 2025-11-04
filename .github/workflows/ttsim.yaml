@@ -10,12 +10,12 @@ on:
         required: true
         type: string
       package-artifact-name:
-        required: true
+        required: false
         type: string
       wheel-artifact-name:
-        required: true
+        required: false
         type: string
-      build-artifact-name: # Used only when run-metal-cpp-unit-tests is true
+      build-artifact-name:
         required: false
         type: string
       ttsim-ref:
@@ -26,6 +26,10 @@ on:
         required: false
         type: number
         default: 15
+      run-ttsim-integration-tests:
+        required: false
+        type: boolean
+        default: false
       run-metal-cpp-unit-tests:
         required: false
         type: boolean
@@ -33,6 +37,7 @@ on:
 
 jobs:
   ttsim-integration:
+    if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: tt-ubuntu-2204-small-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Integration - ${{ matrix.arch }}"
@@ -137,6 +142,7 @@ jobs:
             fi
           done
   ttnn-pytests:
+    if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTNN Pytests - ${{ matrix.arch }}"
