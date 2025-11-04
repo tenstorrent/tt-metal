@@ -76,6 +76,13 @@ Tensor to_layout_impl(
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
 
+    if (memory_config.has_value() && tensor.is_sharded()) {
+        output_memory_config = memory_config.value();
+        if (output_memory_config != ttnn::get_memory_config(tensor)) {
+            tensor = ttnn::to_memory_config(tensor, output_memory_config);
+        }
+    }
+
     TensorSpec tile_spec(
         tensor_arg.logical_shape(),
         tt::tt_metal::TensorLayout(

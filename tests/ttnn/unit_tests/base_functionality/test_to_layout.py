@@ -513,3 +513,41 @@ def test_sigmoid_fruit(device, h, w, memory_type, shard_shape, vector_mode, appr
         approx_mode=approx_mode,
         pcc=0.999,
     )
+
+
+def test_shard_untilize(device):
+    torch.manual_seed(2005)
+
+    torch_tensor = torch.rand(1, 1, 29640, 128, dtype=torch.bfloat16)
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [
+            480,
+            128,
+        ],
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(7, 6),
+                ),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 7),
+                    ttnn.CoreCoord(5, 7),
+                ),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    input_tensor = ttnn.from_torch(
+        torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_memory_config
+    )
+
+    output_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert output_tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG, "Memory config is not DRAM"
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert torch_tensor.shape == output_tensor.shape
+    assert_with_pcc(torch_tensor, output_tensor, 0.9999)
