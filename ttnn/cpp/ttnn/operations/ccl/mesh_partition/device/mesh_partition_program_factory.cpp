@@ -88,7 +88,7 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
         .slice_start = begins,
         .slice_end = ends,
         .step = strides,
-        .output_mem_config = operation_attributes.output_mem_config};  // here
+        .output_mem_config = operation_attributes.output_mem_config};
 
     auto input_tensors = std::vector<ttnn::Tensor>{tensor_args.input_tensor};
     auto output_tensors = std::vector<ttnn::Tensor>{tensor_return_value};

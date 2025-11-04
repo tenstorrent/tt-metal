@@ -58,6 +58,8 @@ void bind_slice(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<Tensor>& optional_output_tensor,
                const std::optional<float>& pad_value,
+               // used to calculate the output shape for slice op with tensor args running on device
+               // to avoid host-device data transfer for mesh dveice and trace cases
                const std::optional<uint32_t>& slice_dim,
                const std::optional<uint32_t>& num_devices) {
                 return self(

@@ -65,40 +65,20 @@ void kernel_main() {
     }
     cb_pop_front(cb_id_tensor, 1);
 
-    // Debug the tensor indices we read
-    DPRINT << "TENSOR_ARGS_DEBUG: start_indices=[";
-    for (uint32_t i = 0; i < num_dims; i++) {
-        DPRINT << start_indices[i];
-        if (i < num_dims - 1) {
-            DPRINT << ",";
-        }
-    }
-    DPRINT << "], end_indices=[";
-    for (uint32_t i = 0; i < num_dims; i++) {
-        DPRINT << end_indices[i];
-        if (i < num_dims - 1) {
-            DPRINT << ",";
-        }
-    }
-    DPRINT << "]" << ENDL();
+    uint32_t start_offset = 0;
 
-    uint32_t calculated_start_offset = 0;
-
-    // For the last 2 dimensions (height and width in tiles)
     if (num_dims >= 2) {
         uint32_t start_h_tiles = start_indices[num_dims - 2] / tile_height;
         uint32_t start_w_tiles = start_indices[num_dims - 1] / tile_width;
 
-        // Get input shape from common args to calculate pages per row
         volatile tt_l1_ptr uint32_t* input_shape_args =
             (volatile tt_l1_ptr uint32_t*)(get_common_arg_addr(3 + 2 * num_dims));
         uint32_t input_width = input_shape_args[num_dims - 1];
         uint32_t input_height = input_shape_args[num_dims - 2];
         uint32_t num_pages_width = input_width / tile_width;
 
-        calculated_start_offset += start_h_tiles * num_pages_width + start_w_tiles;
+        start_offset += start_h_tiles * num_pages_width + start_w_tiles;
 
-        // For higher dimensions, add their contribution
         if (num_dims > 2) {
             uint32_t upper_dims_offset = 0;
             uint32_t multiplier = (input_height / tile_height) * num_pages_width;
@@ -106,31 +86,12 @@ void kernel_main() {
             for (int32_t i = num_dims - 3; i >= 0; i--) {
                 upper_dims_offset = upper_dims_offset * input_shape_args[i] + start_indices[i];
             }
-            calculated_start_offset += upper_dims_offset * multiplier;
+            start_offset += upper_dims_offset * multiplier;
         }
     }
 
     // Add the calculated offset to the base start_id
-    uint32_t src_tile_id = start_id + calculated_start_offset;
-
-    DPRINT << "TENSOR_ARGS_DEBUG: num_unpadded_tiles=[";
-    for (uint32_t i = 0; i < num_dims; i++) {
-        DPRINT << num_unpadded_tiles[i];
-        if (i < num_dims - 1) {
-            DPRINT << ",";
-        }
-    }
-    DPRINT << "], num_padded_tiles=[";
-    for (uint32_t i = 0; i < num_dims; i++) {
-        DPRINT << num_padded_tiles[i];
-        if (i < num_dims - 1) {
-            DPRINT << ",";
-        }
-    }
-    DPRINT << "]" << ENDL();
-
-    DPRINT << "TENSOR_ARGS_DEBUG: start_id=" << start_id << ", num_tiles=" << num_tiles
-           << ", final_src_tile_id=" << src_tile_id << ENDL();
+    uint32_t src_tile_id = start_id + start_offset;
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         uint32_t old_src_tile_id = src_tile_id;
@@ -139,11 +100,6 @@ void kernel_main() {
         uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
         noc_async_read_tile(src_tile_id, s0, src_buffer_l1_addr);
         noc_async_read_barrier();
-        DPRINT << "printing data read from tile " << i << ENDL();
-        volatile tt_l1_ptr uint16_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_buffer_l1_addr);
-        for (uint16_t value = 0; value < 1024; value++) {
-            DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
-        }
         cb_push_back(cb_id_in0, 1);
 
         src_tile_id++;

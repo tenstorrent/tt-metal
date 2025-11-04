@@ -23,7 +23,6 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
-    printf("invoke0\n");
     // Ensure start and end vectors have matching sizes and correct tensor rank
 
     const auto& input_shape = input_tensor.logical_shape();
@@ -31,7 +30,6 @@ ttnn::Tensor SliceOperation::invoke(
     auto input_layout = input_tensor.layout();
 
     if (input_rank == 0) {
-        printf("Input rank is 0, returning input tensor as is.\n");
         return input_tensor;
     }
     TT_FATAL(
@@ -62,16 +60,13 @@ ttnn::Tensor SliceOperation::invoke(
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
             tensor = ttnn::to_layout(tensor, input_layout);
-            printf("Returning adjusted tensor.\n");
             return tensor;
         }
-        printf("Returning input tensor as is.\n");
         return input_tensor;
     });
 
     // No-op check
     if (no_step && starts_zero && ends_max) {
-        printf("No-op slice detected, returning input tensor as is.\n");
         return ret_adjustment(input_tensor);
     }
 
@@ -94,17 +89,10 @@ ttnn::Tensor SliceOperation::invoke(
     }
 
     auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
-        printf(
-            "Calculating output dimension for index %zu: begin=%u, end=%u, step=%u\n",
-            i,
-            modified_begins[i],
-            modified_ends[i],
-            modified_step[i]);
         return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
     };
 
     auto check_handled_tile_alignment = [&modified_begins, &input_rank, &tile_shape]() -> bool {
-        printf("Checking tile alignment for slicing...\n");
         return (
             modified_begins[input_rank - 1] % tile_shape[1] == 0 &&
             modified_begins[input_rank - 2] % tile_shape[0] == 0);
@@ -159,7 +147,6 @@ ttnn::Tensor SliceOperation::invoke(
     if (empty) {
         TT_FATAL(
             input.storage_type() == StorageType::DEVICE, "Host tensor slice cannot return a scalar or empty tensor");
-        printf("Slice results in empty tensor, returning empty tensor of shape \n");
         return ttnn::empty(
             actual_shape,
             input_tensor.dtype(),
@@ -167,7 +154,6 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
-    printf("Proceeding with slice operation...\n");
     auto res = tt::tt_metal::operation::run(
                    SliceDeviceOperation{
                        ttnn::Shape(modified_begins),
@@ -182,14 +168,12 @@ ttnn::Tensor SliceOperation::invoke(
     res = ttnn::experimental::view(res, actual_shape, final_padded_shape);
 
     auto dim_needs_fill = [&input_shape, &actual_shape, &final_padded_shape](int i) {
-        printf("Checking if dimension %d needs fill...\n", i);
         return ((actual_shape[i] != final_padded_shape[i]) && (input_shape[i] != actual_shape[i]));
     };
 
     if (pad_value.has_value() && (dim_needs_fill(-1) || dim_needs_fill(-2))) {
         res = ttnn::fill_implicit_tile_padding(res, pad_value.value());
     }
-    printf("Slice operation completed, returning result tensor.\n");
 
     return ret_adjustment(res);
 }
@@ -203,7 +187,6 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value) {
-    printf("invoke1\n");
     tt::stl::Span<const T> start(output_tensor_start.begin(), output_tensor_start.end());
     tt::stl::Span<const T> end(output_tensor_end.begin(), output_tensor_end.end());
     tt::stl::Span<const T> step_vec(step.begin(), step.end());
@@ -222,7 +205,6 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<float>& pad_value,
     const std::optional<uint32_t>& slice_dim,
     const std::optional<uint32_t>& num_devices) {
-    printf("invoke2 - tensor args path\n");
     TT_FATAL(
         output_tensor_start.logical_shape().rank() == 1,
         "The start tensor for slicing must be in 1D shape, but got {}D",
@@ -237,7 +219,6 @@ ttnn::Tensor SliceOperation::invoke(
 
     // Check if layout is supported (only TILE layout for now)
     if (input_tensor.layout() != Layout::TILE) {
-        printf("Non-TILE layout detected, falling back to host conversion\n");
         use_device_only_path = false;
     }
 
@@ -245,7 +226,6 @@ ttnn::Tensor SliceOperation::invoke(
     if (step.has_value()) {
         for (auto s : step.value()) {
             if (s != 1) {
-                printf("Step > 1 detected, falling back to host conversion\n");
                 use_device_only_path = false;
                 break;
             }
@@ -255,22 +235,22 @@ ttnn::Tensor SliceOperation::invoke(
     // Validate tensors are on device for both paths
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device for tensor args slice");
-    TT_FATAL(
-        output_tensor_start.storage_type() == StorageType::DEVICE,
-        "Start tensor must be on device for tensor args slice");
-    TT_FATAL(
-        output_tensor_end.storage_type() == StorageType::DEVICE, "End tensor must be on device for tensor args slice");
 
     auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                             : memory_config_arg.value_or(input_tensor.memory_config());
 
     if (use_device_only_path) {
-        printf("Using device-only tensor args path for slice operation\n");
-
         // Validate required parameters for device-only path
         TT_FATAL(
             slice_dim.has_value() && num_devices.has_value(),
             "slice_dim and num_devices must be provided for device-only tensor args slice");
+
+        TT_FATAL(
+            output_tensor_start.storage_type() == StorageType::DEVICE,
+            "Start tensor must be on device for tensor args slice");
+        TT_FATAL(
+            output_tensor_end.storage_type() == StorageType::DEVICE,
+            "End tensor must be on device for tensor args slice");
 
         // Create dummy shapes for SliceDeviceOperation (will be ignored when use_tensor_args=true)
         uint32_t input_rank = input_tensor.logical_shape().rank();
@@ -288,12 +268,8 @@ ttnn::Tensor SliceOperation::invoke(
                 {},
                 {optional_output_tensor})
                 .at(0);
-
-        printf("Tensor args slice operation completed\n");
         return res;
     } else {
-        printf("Falling back to host conversion for tensor args slice operation\n");
-
         // convert the Tensor to Vector
         std::vector<T> output_tensor_start_vector = output_tensor_start.to_vector<T>();
         std::vector<T> output_tensor_end_vector = output_tensor_end.to_vector<T>();
@@ -306,7 +282,6 @@ ttnn::Tensor SliceOperation::invoke(
         // generate the step value if it is not provided
         ttnn::SmallVector<T> step_value = step.value_or(ttnn::SmallVector<T>(output_tensor_start_span.size(), 1));
 
-        printf("Calling regular slice operation with converted values\n");
         return SliceOperation::invoke<T>(
             input_tensor,
             output_tensor_start_span,

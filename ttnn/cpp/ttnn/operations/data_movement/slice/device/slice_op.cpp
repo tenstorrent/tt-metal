@@ -192,14 +192,6 @@ std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
             num_parts);
 
         out_shape[slice_dimension] = slice_size;
-
-        printf(
-            "TENSOR_ARGS_SHAPE_DEBUG: input_shape[%u]=%u, num_devices=%u, output_shape[%u]=%u\n",
-            slice_dimension,
-            original_size,
-            num_parts,
-            slice_dimension,
-            slice_size);
     } else {
         // Regular path using slice_start, slice_end, step
         auto output_dim_i = [this](size_t i) {
@@ -232,10 +224,8 @@ operation::ProgramWithCallbacks SliceDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    printf("creating slice program...\n");
-
     if (this->use_tensor_args) {
-        // Use tensor args path
+        // Use tensor args device path
         return detail::slice_multi_core_with_tensor_args(input_tensors, output_tensors);
     } else {
         // Use regular path with Shape args

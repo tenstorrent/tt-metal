@@ -189,7 +189,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    printf("running slice_rm_multi_core...\n");
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
@@ -226,7 +225,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args_vec;
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args_vec);
-    printf("running reader kernel: slice_reader_unary_unpad_dims_rm_interleaved_start_id.cpp\n");
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
@@ -234,7 +232,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
         total_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args_vec));
 
-    printf("running writer kernel: slice_writer_unary_stick_layout_interleaved_start_id.cpp\n");
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
@@ -329,7 +326,6 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const ttnn::Shape& step) {
-    printf("running slice_rm_strided_single_core_n_dims...\n");
     // TODO: multi core implementation - work division is not trivial as we need to determine the N/C/H/W start and end
     // points for each split, and base that off stride
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -587,7 +583,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
 operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    printf("running slice_rm_multi_core_sharded...\n");
     const ttnn::Shape output_shape = output.padded_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -859,7 +854,6 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
 
 operation::ProgramWithCallbacks slice_tile_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    printf("running slice_tile_multi_core...\n");
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // This should allocate a DRAM buffer on the device
@@ -981,7 +975,6 @@ operation::ProgramWithCallbacks slice_multi_core(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const ttnn::Shape& step) {
-    printf("running slice_multi_core.......\n");
     bool has_step = false;
     for (int i = 0; i < step.size(); i++) {
         if (step[i] != 1) {
@@ -1007,8 +1000,6 @@ operation::ProgramWithCallbacks slice_multi_core_with_tensor_args(
     const Tensor& start_tensor = input_tensors[1];
     const Tensor& end_tensor = input_tensors[2];
     Tensor& output = output_tensors[0];
-
-    printf("running slice_multi_core with tensor args.......\n");
 
     switch (a.layout()) {
         case Layout::TILE: return slice_tile_multi_core_tensor_args(a, start_tensor, end_tensor, output);
@@ -1040,8 +1031,6 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
 
 operation::ProgramWithCallbacks slice_tile_multi_core_tensor_args(
     const Tensor& input_tensor, const Tensor& start_tensor, const Tensor& end_tensor, Tensor& output_tensor) {
-    printf("running slice_tile_multi_core_tensor_args...\n");
-
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input_tensor.device();
 
@@ -1212,12 +1201,6 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tensor_args(
         reader_common_args[0] = input_buffer->address();
         reader_common_args[1] = start_tensor.buffer()->address();
         reader_common_args[2] = end_tensor.buffer()->address();
-
-        printf(
-            "TENSOR_ARGS_HOST_DEBUG: input_buffer_addr=0x%x, start_tensor_addr=0x%x, end_tensor_addr=0x%x\n",
-            input_buffer->address(),
-            start_tensor.buffer()->address(),
-            end_tensor.buffer()->address());
 
         num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
         num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
