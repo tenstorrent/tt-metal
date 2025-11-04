@@ -52,7 +52,7 @@ static_assert(
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MAILBOX_ADDR);
 volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = &mailboxes->subordinate_sync.dm1;
 
-uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
+uint8_t noc_index = 0;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -137,6 +137,7 @@ int main() {
             my_logical_x_ - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_x;
         my_relative_y_ =
             my_logical_y_ - mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.sub_device_origin_y;
+        noc_index = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.brisc_noc_id;
 
         WAYPOINT("R");
         uint32_t kernel_lma =
