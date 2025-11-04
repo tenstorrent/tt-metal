@@ -37,8 +37,8 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_weight = torch.ones((w,), dtype=torch.bfloat16)
-    torch_bias = torch.zeros((w,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
 
     torch_output_tensor = torch.nn.functional.layer_norm(
         torch_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
