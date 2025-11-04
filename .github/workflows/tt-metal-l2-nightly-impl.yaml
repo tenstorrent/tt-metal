@@ -435,7 +435,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     name: ttnn nightly bos ${{ matrix.test_type }} tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     strategy:
       matrix:
         test_type: [conv, pool, group_norm]
