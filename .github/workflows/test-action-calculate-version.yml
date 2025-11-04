@@ -458,24 +458,24 @@ jobs:
           git reset --hard v1.0.0
 
           # Create first commit to ignore
-          echo "breaking1" > breaking1.txt
-          git add breaking1.txt
-          git commit -m "Breaking change 1 (MINOR)"
-          MAJOR_SHA1=$(git rev-parse HEAD)
+          echo "fixing1" > fixing1.txt
+          git add fixing1.txt
+          git commit -m "Fix bug 1 (PATCH)"
+          PATCH_SHA1=$(git rev-parse HEAD)
 
           # Create second commit to ignore
-          echo "breaking2" > breaking2.txt
-          git add breaking2.txt
-          git commit -m "Breaking change 2 (MINOR)"
-          MAJOR_SHA2=$(git rev-parse HEAD)
+          echo "fixing2" > fixing2.txt
+          git add fixing2.txt
+          git commit -m "Fix bug 2 (PATCH)"
+          PATCH_SHA2=$(git rev-parse HEAD)
 
           # Create commit to keep
           echo "patch fix" > patch.txt
           git add patch.txt
-          git commit -m "Fix bug (PATCH)"
+          git commit -m "Fix bug"
 
-          echo "MAJOR_SHA1=$MAJOR_SHA1" >> $GITHUB_ENV
-          echo "MAJOR_SHA2=$MAJOR_SHA2" >> $GITHUB_ENV
+          echo "PATCH_SHA1=$PATCH_SHA1" >> $GITHUB_ENV
+          echo "PATCH_SHA2=$PATCH_SHA2" >> $GITHUB_ENV
 
             # Test multiple ignored commits
       - name: Create additional commits for multiple ignore test
