@@ -357,6 +357,125 @@ def test_validation_matmul_metric_spec(ttnn_mesh_device: ttnn.MeshDevice):
 
 
 # ============================================================================
+# Example 6: Validating with non-decorator use of compare_to_torch
+#            between a class instance and a reference class instance!
+# ============================================================================
+
+
+def test_validation_non_decorator_class_vs_class_torch(ttnn_mesh_device: ttnn.MeshDevice):
+    """Validate a callable class against a reference class using non-decorator style."""
+    registry = get_validation_registry()
+    before = len(registry.results)
+
+    # Simple linear layer implemented in TTNN (__call__) vs Torch reference (forward)
+    m, n, k = 8, 10, 6
+    x = torch.randn(1, m, k, dtype=torch.bfloat16)
+    w = torch.randn(1, k, n, dtype=torch.bfloat16)
+
+    class TTLinear:
+        def __init__(self, weight: torch.Tensor, device: ttnn.MeshDevice):
+            # Weight expected as [1, k, n]; add device batch dim for TTNN tensor
+            self.weight = ttnn.from_torch(
+                weight.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+
+        def __call__(self, inp):
+            return ttnn.matmul(inp, self.weight)
+
+    class TorchLinearRef:
+        def __init__(self, weight: torch.Tensor):
+            self.weight = weight
+
+        def forward(self, inp: torch.Tensor):
+            return torch.matmul(inp, self.weight)
+
+    # Instantiate both implementations
+    layer = TTLinear(w, ttnn_mesh_device)
+    ref_layer = TorchLinearRef(w)
+
+    # Convert input to TTNN tensor (add device batch dim)
+    x_tt = ttnn.from_torch(x.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # Non-decorator usage: wrap the unbound __call__ so we can pass (self, x)
+    validated_call = compare_to_torch(
+        reference_fn=lambda self, inp: ref_layer.forward(inp),
+        metric_tolerances={
+            Metric.MAX_ABS_ERROR: 1.5e-1,
+            Metric.PCC: 0.99,
+        },
+    )(TTLinear.__call__)
+
+    _ = validated_call(layer, x_tt)
+
+    assert len(registry.results) == before + 1
+    assert registry.results[-1].passed
+
+
+# ============================================================================
+# Example 7: Validating with non-decorator use of compare_to_ttnn
+#            between a class instance (return torch tensor) and a reference class instance
+#            (return TTNN tensor)
+# NOTE: This use of compare_to_ttnn could come in handy in situations where a module instance
+#       within torch implementation is being replaced by a TTNN module instance and
+#       we want to check the output of the TTNN module instance against the output of
+#       the torch module instance during end2end testing.
+# ============================================================================
+
+
+def test_validation_non_decorator_class_vs_class_ttnn(ttnn_mesh_device: ttnn.MeshDevice):
+    """Validate a callable TTNN class against a TTNN reference class using non-decorator style."""
+    registry = get_validation_registry()
+    before = len(registry.results)
+
+    # Simple linear layer implemented in TTNN (__call__) vs TTNN reference (forward)
+    m, n, k = 8, 10, 6
+    x = torch.randn(1, m, k, dtype=torch.bfloat16)
+    w = torch.randn(1, k, n, dtype=torch.bfloat16)
+
+    class TTLinear:
+        def __init__(self, weight: torch.Tensor, device: ttnn.MeshDevice):
+            # Weight expected as [1, k, n]; add device batch dim for TTNN tensor
+            self.weight = ttnn.from_torch(
+                weight.unsqueeze(0), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+
+        def __call__(self, inp):
+            return ttnn.matmul(inp, self.weight)
+
+    class TTLinearRef:
+        def __init__(self, weight: torch.Tensor, device: ttnn.MeshDevice):
+            self.weight = weight
+
+        def forward(self, inp):
+            return torch.matmul(inp, self.weight)
+
+    # Instantiate both implementations
+    layer = TTLinear(w, ttnn_mesh_device)
+    ref_layer = TTLinearRef(w, ttnn_mesh_device)
+
+    # # Convert input to TTNN tensor (add device batch dim)
+    # x_tt = ttnn.from_torch(x.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    # Non-decorator usage: wrap the unbound __call__ so we can pass (self, x)
+    validated_call = compare_to_ttnn(
+        reference_fn=lambda inp: layer(inp),
+        input_to_ttnn=lambda self, inp: (
+            ttnn.from_torch(inp, device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+        ),
+        metric_tolerances={
+            Metric.MAX_ABS_ERROR: 1.5e-1,
+            Metric.PCC: 0.99,
+        },
+    )(TTLinearRef.forward)
+
+    ttnn.SetDefaultDevice(ttnn_mesh_device)
+    _ = validated_call(ref_layer, x.unsqueeze(0))
+
+    assert len(registry.results) == before + 1
+    assert registry.results[-1].passed
+
+
+# ============================================================================
 # Additional test functions
 # ============================================================================
 
@@ -376,15 +495,6 @@ def test_validation_enable_disable(ttnn_mesh_device: ttnn.MeshDevice):
 
     # Re-enable for subsequent tests
     enable_validation(True)
-
-
-# todo)) add a test case to show non_decorator use of host_validate_against between a class instance and a reference class instance!
-# e.g., validated_layer = host_validate_against(reference_fn=lambda _, x: hf_layer.forward(x))(layer) # layer has __call__
-# validated_layer(input) will call layer.__call__(input) and then validate the output against the reference function!
-
-# todo)) add a test case to show non_decorator use of device_validate_against between a class instance and a reference class instance!
-# e.g., validated_layer = device_validate_against(reference_fn=lambda _, x: hf_layer.forward(x))(layer) # layer has __call__
-# validated_layer(input) will call layer.__call__(input) and then validate the output against the reference function!
 
 
 def test_validation_non_decorator_host(ttnn_mesh_device: ttnn.MeshDevice):
