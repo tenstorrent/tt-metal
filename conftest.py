@@ -339,23 +339,6 @@ def pcie_devices(request, device_params):
     ttnn.CloseDevices(devices)
 
 
-@pytest.fixture(scope="function")
-def all_devices(request, device_params):
-    import ttnn
-
-    num_devices = ttnn.GetNumAvailableDevices()
-    device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
-
-    # Get only physical devices
-    updated_device_params = get_updated_device_params(device_params)
-    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
-
-    yield [devices[i] for i in range(num_devices)]
-
-    ttnn.CloseDevices(devices)
-
-
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
@@ -649,8 +632,6 @@ def reset_default_device():
 def get_devices(request):
     if "device" in request.fixturenames:
         devices = [request.getfixturevalue("device")]
-    elif "all_devices" in request.fixturenames:
-        devices = request.getfixturevalue("all_devices")
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
