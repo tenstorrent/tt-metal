@@ -131,9 +131,9 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
     const uint32_t intermediate_cb_id = tt::CBIndex::c_2;
     const uint32_t output_cb_id = tt::CBIndex::c_3;
 
-    create_cb(input_cb_id, program, core_grid, input_tile_size, input_cb_num_tiles, input_data_format);
+    tt::tt_metal::create_cb(input_cb_id, program, core_grid, input_tile_size, input_cb_num_tiles, input_data_format);
 
-    create_cb(
+    tt::tt_metal::create_cb(
         reduce_scalar_cb_id,
         program,
         core_grid,
@@ -141,7 +141,7 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
         reduce_scalar_cb_num_tiles,
         reduce_scalar_data_format);
 
-    create_cb(
+    tt::tt_metal::create_cb(
         intermediate_cb_id,
         program,
         core_grid,
@@ -149,7 +149,8 @@ operation::ProgramWithCallbacks fused_rmsnorm_pre_allgather_multi_core(
         intermediate_cb_num_tiles,
         intermediate_data_format);
 
-    create_cb(output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
+    tt::tt_metal::create_cb(
+        output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
 
     float winv = 1.0f;
     auto bfloat_winv_value = bfloat16(winv);

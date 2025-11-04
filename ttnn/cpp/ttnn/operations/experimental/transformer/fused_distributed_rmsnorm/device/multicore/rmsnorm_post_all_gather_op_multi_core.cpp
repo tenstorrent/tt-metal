@@ -203,11 +203,11 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     const uint32_t transformation_mat_cb_num_tiles = 1;
     const uint32_t rope_cos_sin_cb_num_tiles = head_dim_tiles;
 
-    create_cb(input_cb_id, program, core_grid, input_tile_size, input_cb_num_tiles, input_data_format);
+    tt::tt_metal::create_cb(input_cb_id, program, core_grid, input_tile_size, input_cb_num_tiles, input_data_format);
 
-    create_cb(stats_cb_id, program, core_grid, stats_tile_size, stats_cb_num_tiles, stats_data_format);
+    tt::tt_metal::create_cb(stats_cb_id, program, core_grid, stats_tile_size, stats_cb_num_tiles, stats_data_format);
 
-    create_cb(
+    tt::tt_metal::create_cb(
         reduce_scalar_cb_id,
         program,
         core_grid,
@@ -215,10 +215,10 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         reduce_scalar_cb_num_tiles,
         reduce_scalar_data_format);
 
-    create_cb(
+    tt::tt_metal::create_cb(
         epsilon_cb_id, program, core_grid, reduce_scalar_tile_size, epsilon_cb_num_tiles, reduce_scalar_data_format);
 
-    create_cb(
+    tt::tt_metal::create_cb(
         reduce_result_cb_id,
         program,
         core_grid,
@@ -226,14 +226,16 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
         reduce_result_cb_num_tiles,
         intermediate_data_format);
 
-    create_cb(output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
+    tt::tt_metal::create_cb(
+        output_cb_id, program, core_grid, output_tile_size, output_cb_num_tiles, output_data_format);
 
     if (has_weight) {
-        create_cb(weight_cb_id, program, core_grid, weight_tile_size, weight_cb_num_tiles, weight_data_format);
+        tt::tt_metal::create_cb(
+            weight_cb_id, program, core_grid, weight_tile_size, weight_cb_num_tiles, weight_data_format);
     }
 
     if (has_weight || fuse_rope) {
-        create_cb(
+        tt::tt_metal::create_cb(
             intermediate_cb_id,
             program,
             core_grid,
@@ -243,18 +245,18 @@ tt::tt_metal::operation::ProgramWithCallbacks fused_rmsnorm_post_allgather_multi
     }
 
     if (fuse_rope) {
-        create_cb(
+        tt::tt_metal::create_cb(
             transformation_mat_cb_id,
             program,
             core_grid,
             transformation_mat_tile_size,
             transformation_mat_cb_num_tiles,
             transformation_mat_data_format);
-        create_cb(
+        tt::tt_metal::create_cb(
             rope_cos_cb_id, program, core_grid, rope_cos_tile_size, rope_cos_sin_cb_num_tiles, rope_cos_data_format);
-        create_cb(
+        tt::tt_metal::create_cb(
             rope_sin_cb_id, program, core_grid, rope_sin_tile_size, rope_cos_sin_cb_num_tiles, rope_sin_data_format);
-        create_cb(
+        tt::tt_metal::create_cb(
             rotated_input_cb_id, program, core_grid, input_tile_size, intermediate_cb_num_tiles, input_data_format);
     }
 
