@@ -184,9 +184,9 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
     const float epsilon = operation_attributes.epsilon;
     const bool return_mean_rstd = operation_attributes.return_mean_rstd;
 
-    // Check input shape is [B*N*S, C]
+    // Check input shape is [B, N, S, C]
     const auto& input_shape = input.logical_shape();
-    TT_FATAL(input_shape.rank() == 2, "Input tensor must be 2D [B*N*S, C], got shape {}", input_shape);
+    TT_FATAL(input_shape.rank() == 4, "Input tensor must be 4D [B, N, S, C], got shape {}", input_shape);
 
     // Check gamma shape is [1, 1, 1, C]
     const auto& gamma_shape = gamma.logical_shape();
@@ -212,9 +212,10 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
 
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 2U, "Input tensor must be 2D");
+    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
     uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t total_rows_to_process = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t total_rows_to_process =
+        (padded_tensor_shape[-2] * padded_tensor_shape[-3] * padded_tensor_shape[-4]) / tt::constants::TILE_HEIGHT;
 
     // Get the number of inner dimension (assumes divisible by TILE_WIDTH)
     uint32_t num_inner = input.logical_shape()[-1];

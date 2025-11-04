@@ -190,25 +190,25 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
     const auto& rstd = tensor_args.rstd;
     const auto& dLdout = tensor_args.dL_dout;
 
-    // Check input shape is [B*N*S, C]
+    // Check input shape is [B, N, S, C]
     const auto& input_shape = input.logical_shape();
-    TT_FATAL(input_shape.rank() == 2, "Input tensor must be 2D [B*N*S, C], got shape {}", input_shape);
+    TT_FATAL(input_shape.rank() == 4, "Input tensor must be 4D [B, N, S, C], got shape {}", input_shape);
 
     // Check gamma shape is [1, 1, 1, C]
     const auto& gamma_shape = gamma.logical_shape();
     TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
 
-    // Check mean shape is [B*N*S, 1]
+    // Check mean shape is [B, N, S, 1]
     const auto& mean_shape = mean.logical_shape();
-    TT_FATAL(mean_shape.rank() == 2, "Mean tensor must be 4D [B, 1, S, 1], got shape {}", mean_shape);
+    TT_FATAL(mean_shape.rank() == 4, "Mean tensor must be 4D [B, N, S, 1], got shape {}", mean_shape);
 
-    // Check rstd shape is [B*N*S, 1]
+    // Check rstd shape is [B, 1, S, 1]
     const auto& rstd_shape = rstd.logical_shape();
-    TT_FATAL(rstd_shape.rank() == 2, "Rstd tensor must be 2D [B*N*S, 1], got shape {}", rstd_shape);
+    TT_FATAL(rstd_shape.rank() == 4, "Rstd tensor must be 2D [B*N*S, 1], got shape {}", rstd_shape);
 
-    // Check dL_dout shape is [B*N*S, C]
+    // Check dL_dout shape is [B, N, S, C]
     const auto& dL_dout_shape = dLdout.logical_shape();
-    TT_FATAL(dL_dout_shape.rank() == 2, "dL_dout tensor must be 2D [B*N*S, C], got shape {}", dL_dout_shape);
+    TT_FATAL(dL_dout_shape.rank() == 4, "dL_dout tensor must be 4D [B, N, S, C], got shape {}", dL_dout_shape);
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input.device();
@@ -225,9 +225,10 @@ LayerNormBackwardProgramFactory::cached_program_t LayerNormBackwardProgramFactor
 
     TT_FATAL(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 2U, "Input tensor must be 4D");
+    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
     uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t total_rows_to_process = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
+    uint32_t total_rows_to_process =
+        (padded_tensor_shape[-2] * padded_tensor_shape[-3] * padded_tensor_shape[-4]) / tt::constants::TILE_HEIGHT;
 
     // Get the number of inner dimension (assumes divisible by TILE_WIDTH)
     uint32_t num_inner = input.logical_shape()[-1];
