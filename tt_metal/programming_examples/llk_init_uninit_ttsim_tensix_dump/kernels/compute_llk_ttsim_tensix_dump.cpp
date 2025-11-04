@@ -11,16 +11,13 @@
 namespace NAMESPACE {
 
 void MAIN {
-    {
-        UNPACK(TTSIM_TENSIX_DUMP("CALL TO llk_unpack_untilize_init(0)", TTSIM_DUMP_DST));
-        // UNPACK(auto dump_guard = TTSIM_Dump_Guard("init", false));
-        UNPACK((llk_unpack_untilize_init(0)));
-    }
+    TTSIM_TENSIX_DUMP("BEFORE llk_unpack_untilize_init(0)", TTSIM_DUMP_DST);
+    UNPACK((llk_unpack_untilize_init(0)));
+    TTSIM_TENSIX_DUMP("AFTER llk_unpack_untilize_init(0)", TTSIM_DUMP_DST);
 
-    {
-        UNPACK(TTSIM_TENSIX_DUMP("CALL TO llk_unpack_untilize_uninit(0)", false));
-        UNPACK((llk_unpack_untilize_uninit(0)));
-    }
+    TTSIM_TENSIX_DUMP("BEFORE llk_unpack_untilize_uninit(0)", false);
+    UNPACK((llk_unpack_untilize_uninit(0)));
+    TTSIM_TENSIX_DUMP("AFTER llk_unpack_untilize_uninit(0)", false);
 }
 
 }  // namespace NAMESPACE

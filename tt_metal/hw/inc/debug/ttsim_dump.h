@@ -140,46 +140,60 @@ inline void issue_character_instruction(char c) {
         default: break;
     }
 }
-class TTSIM_Dump_Guard {
-private:
-    bool dump_dst;
-    const char* title;
 
-public:
-    TTSIM_Dump_Guard(const char* title, bool dump_dst) {
-        this->dump_dst = dump_dst;
-        this->title = title;
-        if (this->title != nullptr && strlen(this->title) > 0) {
-            for (int i = 0, n = strlen(this->title); i < n; i++) {
-                issue_character_instruction(this->title[i]);
-            }
-        }
-        if (this->dump_dst) {
-            __asm__ volatile(".word 0x400000FF");
-        } else {
-            __asm__ volatile(".word 0x000000FF");
+void ttsim_tensix_dump(const char* title, bool dump_dst) {
+    if (title != nullptr && strlen(title) > 0) {
+        for (int i = 0, n = strlen(title); i < n; i++) {
+            issue_character_instruction(title[i]);
         }
     }
-    ~TTSIM_Dump_Guard() {
-        if (this->title != nullptr && strlen(this->title) > 0) {
-            for (int i = 0, n = strlen(this->title); i < n; i++) {
-                issue_character_instruction(this->title[i]);
-            }
-        }
-        if (this->dump_dst) {
-            __asm__ volatile(".word 0xC00000FF");
-        } else {
-            __asm__ volatile(".word 0x800000FF");
-        }
+    if (dump_dst) {
+        __asm__ volatile(".word 0x800000FF");
+    } else {
+        __asm__ volatile(".word 0x000000FF");
     }
-};
+}
+// class TTSIM_Dump_Guard {
+// private:
+//     bool dump_dst;
+//     const char* title;
+
+// public:
+//     TTSIM_Dump_Guard(const char* title, bool dump_dst) {
+//         this->dump_dst = dump_dst;
+//         this->title = title;
+//         if (this->title != nullptr && strlen(this->title) > 0) {
+//             for (int i = 0, n = strlen(this->title); i < n; i++) {
+//                 issue_character_instruction(this->title[i]);
+//             }
+//         }
+//         if (this->dump_dst) {
+//             __asm__ volatile(".word 0x400000FF");
+//         } else {
+//             __asm__ volatile(".word 0x000000FF");
+//         }
+//     }
+//     ~TTSIM_Dump_Guard() {
+//         if (this->title != nullptr && strlen(this->title) > 0) {
+//             for (int i = 0, n = strlen(this->title); i < n; i++) {
+//                 issue_character_instruction(this->title[i]);
+//             }
+//         }
+//         if (this->dump_dst) {
+//             __asm__ volatile(".word 0xC00000FF");
+//         } else {
+//             __asm__ volatile(".word 0x800000FF");
+//         }
+//     }
+// };
 #define TTSIM_DUMP_DST true
-#define TTSIM_TENSIX_DUMP(title, dump_dst) auto dump_guard = TTSIM_Dump_Guard(title, dump_dst)
-#define TTSIM_START_TENSIX_DUMP(title, dump_dst) auto dump_guard_ptr = new TTSIM_Dump_Guard(title, dump_dst)
-#define TTSIM_END_TENSIX_DUMP delete dump_guard_ptr
+#define TTSIM_TENSIX_DUMP(title, dump_dst) UNPACK(ttsim_tensix_dump(title, dump_dst))
+// #define TTSIM_TENSIX_DUMP(title, dump_dst) auto dump_guard = TTSIM_Dump_Guard(title, dump_dst)
+// #define TTSIM_START_TENSIX_DUMP(title, dump_dst) auto dump_guard_ptr = new TTSIM_Dump_Guard(title, dump_dst)
+// #define TTSIM_END_TENSIX_DUMP delete dump_guard_ptr
 #else
-#define TTSIM_TENSIX_DUMP(title, dump_dst)
-#define TTSIM_START_TENSIX_DUMP(title, dump_dst)
-#define TTSIM_END_TENSIX_DUMP
 #define TTSIM_DUMP_DST
+#define TTSIM_TENSIX_DUMP(title, dump_dst)
+// #define TTSIM_START_TENSIX_DUMP(title, dump_dst)
+// #define TTSIM_END_TENSIX_DUMP
 #endif
