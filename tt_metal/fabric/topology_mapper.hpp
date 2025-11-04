@@ -152,6 +152,22 @@ public:
     HostName get_hostname_for_switch(SwitchId switch_id) const;
 
     /**
+     * @brief Get hostname for a mesh
+     *
+     * @param mesh_id The mesh ID to get hostname for
+     * @return HostName The hostname of the mesh
+     */
+    HostName get_hostname_for_mesh(MeshId mesh_id) const;
+
+    /**
+     * @brief Get hostname for a fabric node id
+     *
+     * @param fabric_node_id The fabric node id to get hostname for
+     * @return HostName The hostname of the fabric node id
+     */
+    HostName get_hostname_for_fabric_node_id(FabricNodeId fabric_node_id) const;
+
+    /**
      * @brief Get the coordinate range for the global mesh or a host's submesh
      *
      * When host_rank is not provided, returns the full logical mesh coordinate range (0..N-1, 0..M-1).
