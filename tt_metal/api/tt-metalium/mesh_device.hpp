@@ -273,6 +273,10 @@ public:
     // Throws if the coordinate is out of bounds of this mesh device.
     bool is_local(const MeshCoordinate& coord) const;
 
+    // Returns the coordinate range of all local devices in this mesh device.
+    // The range is a bounding box that encompasses all local coordinates.
+    MeshCoordinateRange get_local_mesh_coord_range() const;
+
     const MeshShape& shape() const;
 
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.

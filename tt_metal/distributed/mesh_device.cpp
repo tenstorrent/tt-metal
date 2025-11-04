@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <climits>
 #include <cstddef>
 #include <iterator>
 #include <memory>
@@ -525,6 +526,34 @@ size_t MeshDevice::num_cols() const { return view_->num_cols(); }
 const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 
 bool MeshDevice::is_local(const MeshCoordinate& coord) const { return view_->is_local(coord); }
+
+MeshCoordinateRange MeshDevice::get_local_mesh_coord_range() const {
+    const MeshShape& mesh_shape = view_->shape();
+    const size_t num_dims = mesh_shape.dims();
+
+    // Initialize min and max coordinates
+    tt::stl::SmallVector<uint32_t> min_coords(num_dims, UINT32_MAX);
+    tt::stl::SmallVector<uint32_t> max_coords(num_dims, 0);
+    bool found_local = false;
+
+    // Iterate through all coordinates in the mesh
+    for (const auto& coord : MeshCoordinateRange(mesh_shape)) {
+        if (view_->is_local(coord)) {
+            found_local = true;
+            for (size_t dim = 0; dim < num_dims; ++dim) {
+                min_coords[dim] = std::min(min_coords[dim], coord[dim]);
+                max_coords[dim] = std::max(max_coords[dim], coord[dim]);
+            }
+        }
+    }
+
+    TT_FATAL(found_local, "No local devices found in mesh device");
+
+    MeshCoordinate start_coord(tt::stl::Span<const uint32_t>(min_coords.data(), num_dims));
+    MeshCoordinate end_coord(tt::stl::Span<const uint32_t>(max_coords.data(), num_dims));
+
+    return MeshCoordinateRange(start_coord, end_coord);
+}
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
     const auto num_devices = view_->shape().mesh_size();
