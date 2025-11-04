@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
-import { formatFloat } from './utils.js';
+import { formatValue } from './utils.js';
 
 // STATUS BOX COMPONENT - Individual clickable status boxes
 export class StatusBox extends LitElement {
@@ -393,8 +393,9 @@ export class StatusBox extends LitElement {
 
         if (this.type === 'valued') {
             statusClass = 'valued';
-            const valueDisplay = formatFloat(this.value);
-            const unitDisplay = this.unitDisplayLabel ? ` ${this.unitDisplayLabel}` : '';
+            const valueDisplay = formatValue(this.value);
+            // Don't show units for string values
+            const unitDisplay = (typeof this.value !== 'string' && this.unitDisplayLabel) ? ` ${this.unitDisplayLabel}` : '';
             content = html`
                 <div class="valued-name ${scaleClass}">${displayName}</div>
                 <div class="valued-value">${valueDisplay}${unitDisplay}</div>

@@ -191,10 +191,20 @@ export class MetricSidebar extends LitElement {
             this.metricTimestamp.toLocaleString() :
             'Never';
 
+        // Determine data type
+        let dataType;
+        if (typeof this.metricValue === 'boolean') {
+            dataType = 'Boolean Health';
+        } else if (typeof this.metricValue === 'string') {
+            dataType = 'String Value';
+        } else {
+            dataType = 'Numeric Value';
+        }
+
         return {
             lastUpdated,
             updateFrequency: '5 seconds',
-            dataType: typeof this.metricValue === 'boolean' ? 'Boolean Health' : 'Numeric Value',
+            dataType: dataType,
             source: 'Hardware Monitor',
             threshold: typeof this.metricValue === 'boolean' ? 'N/A' : '> 100',
             unit: typeof this.metricValue === 'boolean' ? 'Status' : 'Count',
