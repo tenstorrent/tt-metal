@@ -69,7 +69,7 @@ tt_metal/impl/debug/inspector/ @tt-vjovanovic @adjordjevic-TT @miacim @tenstorre
 tt_metal/impl/device/ @abhullar-tt @aliuTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/dispatch/ @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/event @jbaumanTT @nhuang-tt @mpiseTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
-tt_metal/impl/flatbuffer/ @kmabeeTT @nsmithtt @tenstorrent/metalium-codeowners-large-changes
+tt_metal/impl/flatbuffer/ @cfjchu @kmabeeTT @nsmithtt @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT @tenstorrent/metalium-codeowners-large-changes
 tt_metal/impl/profiler/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-changes
@@ -109,7 +109,7 @@ tt_metal/third_party/umd @broskoTT @pjanevskiTT @tenstorrent/metalium-codeowners
 
 # metal tests
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @tenstorrent/metalium-codeowners-large-changes
-tests/tt_metal/distributed/ @cfjchu @tt-asaigal @tenstorrent/metalium-codeowners-large-changes
+tests/tt_metal/distributed/ @aliuTT @cfjchu @tt-asaigal @tenstorrent/metalium-codeowners-large-changes
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @daminakaTT @tenstorrent/metalium-codeowners-large-changes
 tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @nhuang-tt @tt-aho @cfjchu @tenstorrent/metalium-codeowners-large-changes
@@ -144,7 +144,7 @@ ttnn/cpp/ttnn/deprecated/tt_lib/csrc/ @ayerofieiev-tt @razorback3 @dongjin-na @t
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @nmauriceTT @jbbieniekTT @aczajkowskiTT @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/ccl/ @cfjchu @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @cfjchu @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/point_to_point/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/cpp/ttnn/operations/pool/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
@@ -209,7 +209,7 @@ tests/ttnn/multidevice_perf_tests/ @tenstorrent/metalium-developers-ops-data-mov
 tests/nightly/t3000/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/nightly/tg/ccl/test_all_reduce.py @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/gtests/ccl/ @cfjchu @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
-tests/ttnn/unit_tests/operations/ccl/ @cfjchu @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
+tests/ttnn/unit_tests/operations/ccl/ @tt-aho @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
