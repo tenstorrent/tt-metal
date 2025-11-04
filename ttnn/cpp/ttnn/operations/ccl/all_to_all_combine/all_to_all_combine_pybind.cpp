@@ -46,6 +46,9 @@ void py_bind_all_to_all_combine(py::module& module) {
             output_tensor (ttnn.Tensor, optional): the optional output tensor to use for the combined tokens. Defaults to `None`.
             output_shard_dim (int, optional): the dimension to shard the output tokens along. Defaults to `1`, which is the batch dimension.
 
+        Returns:
+            ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B, S, H] sharded along the output_shard_dim dimension across the number of devices along the cluster axis if it was set, or all devices if it was not set, (e.g. [K, B/D[A], S, H] per device if output_shard_dim is 1 or [K, B, S/D[A], H] per device if output_shard_dim is 2). The tensor is expected to be in Row Major, Interleaved format. The rows are sparsely populated such that each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device.
+
         Example:
             >>> output_tensor = ttnn.all_to_all_combine(
                                     input_tensor,
