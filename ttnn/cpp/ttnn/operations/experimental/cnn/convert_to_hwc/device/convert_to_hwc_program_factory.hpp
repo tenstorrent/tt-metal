@@ -16,31 +16,12 @@ struct BatchTransferInstruction {
     uint32_t src_offset;
     uint32_t dst_offset;
     uint32_t transfer_size;
-
-    BatchTransferInstruction(
-        uint32_t src_idx,
-        uint32_t dst_idx,
-        CoreCoord src_coord,
-        CoreCoord dst_coord,
-        uint32_t src_off,
-        uint32_t dst_off,
-        uint32_t size) :
-        src_core_idx(src_idx),
-        dst_core_idx(dst_idx),
-        src_core_coord(src_coord),
-        dst_core_coord(dst_coord),
-        src_offset(src_off),
-        dst_offset(dst_off),
-        transfer_size(size) {}
 };
 
 struct TransferData {
     uint32_t src_offset;
     uint32_t dst_offset;
     uint32_t size;
-
-    TransferData(uint32_t src_off, uint32_t dst_off, uint32_t transfer_size) :
-        src_offset(src_off), dst_offset(dst_off), size(transfer_size) {}
 };
 
 // Generate individual transfers for a single destination core

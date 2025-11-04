@@ -9,8 +9,8 @@ import torch
 from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 
-CHANNEL_TEST_CASES = [1, 2, 3, 8, 12, 15, 32]
-BATCH_TEST_CASES = [1, 2]
+CHANNEL_TEST_CASES = [1, 2, 3, 4, 8, 12, 15, 16, 32]
+BATCH_TEST_CASES = [1, 2, 4]
 
 
 @pytest.mark.parametrize("B", BATCH_TEST_CASES)
@@ -27,6 +27,15 @@ BATCH_TEST_CASES = [1, 2]
                 }
             ),
             32,
+        ),
+        (
+            128,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                }
+            ),
+            128,
         ),
         (
             128,
@@ -55,8 +64,6 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
     if device_num_cores < requested_num_cores:
         pytest.skip(f"Not enough cores to run test case (need {requested_num_cores} but have {device_num_cores})")
 
-    # input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
-
     input_tensor = torch.concat(
         [
             torch.concat(
@@ -66,6 +73,7 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
         ],
         dim=1,
     )
+    # input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
 
     expected = input_tensor.transpose(2, 3).reshape(1, 1, B * HW, C)
 
@@ -76,6 +84,8 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
     input_tensor = ttnn.Tensor(
         input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
     )
+
+    print(input_tensor)
 
     print(
         input_tensor.shape,
@@ -122,6 +132,21 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
             ),
             32,
             32,
+        ),
+        (
+            64,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                }
+            ),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                }
+            ),
+            64,
+            64,
         ),
         (
             84480,

@@ -234,6 +234,17 @@ std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
     return instructions;
 }
 
+std::vector<std::vector<BatchTransferInstruction>> group_by_destination_core(
+    const std::vector<BatchTransferInstruction>& transfers, int num_output_cores) {
+    log_info(tt::LogType::LogAlways, "grouping {} transfers by {} output cores", transfers.size(), num_output_cores);
+    std::vector<std::vector<BatchTransferInstruction>> output(num_output_cores);
+    for (const auto& transfer : transfers) {
+        log_info(tt::LogType::LogAlways, "dst={}, src={}", transfer.dst_core_idx, transfer.src_core_idx);
+        output[transfer.dst_core_idx].push_back(transfer);
+    }
+    return output;
+}
+
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
     const uint32_t element_size_bytes = input_tensor.element_size();
     const uint32_t l1_alignment_bytes = tt::tt_metal::hal::get_l1_alignment();
@@ -310,6 +321,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     const auto transfers = generate_batch_redistribution_transfers(
         batch_size, input_channels, hw_total, l1_input_cores, l1_input_cores, input_element_size);
+    const auto grouped_transfers = group_by_destination_core(transfers, l1_input_cores.size());
+
+    for (int i = 0; i < grouped_transfers.size(); i++) {
+        log_info(tt::LogType::LogAlways, "i={} - {}", i, grouped_transfers[0][0].src_core_idx);
+    }
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
@@ -363,7 +379,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, output_format, output.buffer());
 
-    const uint32_t total_tiles_per_core = tt::div_up(l1_input_shard_width / batch_size, TILE_HEIGHT);
+    const uint32_t total_tiles_per_core = tt::div_up(l1_input_shard_width, TILE_HEIGHT);
+
     const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
     uint32_t output_stride_sticks = TILE_WIDTH;  // needed to stride output address when doing split writers
@@ -506,6 +523,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              cb_out,
                              is_input_in_dram,
                              l1_input_cores,
+                             grouped_transfers,
                              runtime_args_for_each_core,
                              writer_kernel_id0,
                              writer_kernel_id1,
@@ -518,25 +536,40 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         log_info(tt::LogType::LogAlways, "convert_to_hwc: Setting runtime args, is_input_in_dram={}", is_input_in_dram);
 
         for (uint32_t core_idx = 0; core_idx < l1_input_cores.size(); core_idx++) {
-            const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
+            const auto& args_for_all_segments = grouped_transfers.at(core_idx);
             std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
             std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
             for (const auto& args : args_for_all_segments) {
+                auto core = a.device()->worker_core_from_logical_core(args.src_core_coord);
                 const std::vector<uint32_t> segment_kernel_0 = {
-                    args.write_size, args.read_offset, args.bank_id, args.write_offset};
-                runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
-
-                // Adjust read and write offsets to the correct stick address because we are splitting work across 2
-                // kernels
-                const uint32_t adjusted_read_offset =
-                    args.read_offset + (total_num_sticks_kernel_0 * dram_write_stride_bytes);
-                const uint32_t adjusted_write_offset =
-                    args.write_offset + (total_num_sticks_kernel_0 * dram_read_stride_bytes);
-
+                    core.x, core.y, args.src_offset, args.dst_offset, args.transfer_size};
                 const std::vector<uint32_t> segment_kernel_1 = {
-                    args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
+                    core.x, core.y, args.src_offset, args.dst_offset, args.transfer_size};
+                runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
                 runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
             }
+
+            /*
+        const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
+        std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
+        std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
+        for (const auto& args : args_for_all_segments) {
+            const std::vector<uint32_t> segment_kernel_0 = {
+                args.write_size, args.read_offset, args.bank_id, args.write_offset};
+            runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
+
+            // Adjust read and write offsets to the correct stick address because we are splitting work across 2
+            // kernels
+            const uint32_t adjusted_read_offset =
+                args.read_offset + (total_num_sticks_kernel_0 * dram_write_stride_bytes);
+            const uint32_t adjusted_write_offset =
+                args.write_offset + (total_num_sticks_kernel_0 * dram_read_stride_bytes);
+
+            const std::vector<uint32_t> segment_kernel_1 = {
+                args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
+            runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
+        }
+            */
             log_info(
                 tt::LogType::LogAlways,
                 "convert_to_hwc: Core {} runtime args - writer0_size={}, writer1_size={}",
@@ -549,6 +582,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             SetRuntimeArgs(program, writer_kernel_id1, l1_input_cores[core_idx], runtime_args_1);
         }
         if (is_input_in_dram) {
+            // Do nothing for now
         } else {
             tt::tt_metal::Buffer* a_buffer = a.buffer();
             log_info(tt::LogType::LogAlways, "convert_to_hwc: Updating CB addresses for L1 input");

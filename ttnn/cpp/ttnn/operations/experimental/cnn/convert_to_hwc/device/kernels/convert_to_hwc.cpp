@@ -13,6 +13,7 @@
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     cb_wait_front(cb_in, BatchSize);
+    // UNPACK(tt::compute::common::print_tile_rows(cb_in, 32, 0, false));
 
     tile_regs_acquire();
     tile_regs_wait();
@@ -36,13 +37,13 @@ FORCE_INLINE void tilize(
     uint32_t cb_in, uint32_t total_tiles_per_block, uint32_t total_sticks_per_block, uint32_t cb_out) {
     cb_wait_front(cb_in, total_sticks_per_block);
     cb_reserve_back(cb_out, total_tiles_per_block);
-
     // UNPACK(tt::compute::common::print_tile_rows(cb_in, 32, 0, false));
 
     tilize_block(cb_in, total_tiles_per_block, cb_out);
 
     cb_pop_front(cb_in, total_sticks_per_block);
     cb_push_back(cb_out, total_tiles_per_block);
+    // PACK(tt::compute::common::print_tile_rows(cb_out, 2, 0, true));
 }
 
 namespace NAMESPACE {
@@ -58,6 +59,9 @@ void MAIN {
 
     compute_kernel_hw_startup(cb_in, cb_tiled_in);
 
+    DPRINT << "Total tiles " << total_tiles << ENDL();
+    DPRINT << "Total sticks per block " << total_sticks_per_block << ENDL();
+
     for (uint32_t block_idx = 0; block_idx < total_num_blocks; block_idx++) {
         tilize_init(cb_in, total_tiles, cb_tiled_in);
         tilize(cb_in, total_tiles, total_sticks_per_block, cb_tiled_in);
@@ -69,7 +73,6 @@ void MAIN {
 
         for (uint32_t idx = 0; idx < total_tiles; idx++) {
             const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;
-            DPRINT << "transpose into " << cb_transpose_in << ENDL();
             transpose<1>(cb_tiled_in, cb_transpose_in);
         }
         pack_untilize_uninit(cb_transpose_in0);
