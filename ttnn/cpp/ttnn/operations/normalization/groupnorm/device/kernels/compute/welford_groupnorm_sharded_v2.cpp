@@ -62,6 +62,8 @@ void MAIN {
 
     // dst regs
     constexpr uint32_t dst0 = 0;
+    constexpr uint32_t input_dst = 0;
+    constexpr uint32_t mean_dst = 1;
 
     // input cbs
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
@@ -186,6 +188,9 @@ void MAIN {
             cb_reserve_back(cb_ex_partial, 2);
             welford_init();
             tile_regs_acquire();
+            welford_clear_previous_mean_and_m2();
+            welford_store_mean_m2_to_dst(mean_dst);
+
             for (uint32_t i = 0; i < block_h; ++i) {
                 curr_xy_limit += channels_per_group;
                 index_subblock_w_offset = 0;
@@ -202,22 +207,27 @@ void MAIN {
                         transpose_wh_init_short(cb_in0);
                         transpose_wh_tile(cb_in0, index, 0);
 #endif
-                        welford_tile<dst0, 1, 2, false, 0>(
-                            curr_xy_coord, curr_xy_limit, this_tile_offset, empty_reciprocal_lut);
-                        curr_xy_coord += std::min(32 - this_tile_offset, curr_xy_limit - curr_xy_coord);
+                        auto num_group_cols_in_tile =
+                            std::min(TILE_WIDTH - this_tile_offset, curr_xy_limit - curr_xy_coord);
+                        welford_load_mean_m2_from_dst(mean_dst);
+                        welford_tile<0>(
+                            input_dst, curr_xy_coord, this_tile_offset, num_group_cols_in_tile, empty_reciprocal_lut);
+                        welford_store_mean_m2_to_dst(mean_dst);
+                        curr_xy_coord += num_group_cols_in_tile;
                     }
                     index_subblock_w_offset += subblock_w;
                 }
                 index_h_offset += per_core_N;
             }
-            welford_M2_to_var<1, 2, 0>(curr_xy_limit, empty_reciprocal_lut);  // Convert M2 to variance
-
+            // Convert M2 to variance
+            welford_load_mean_m2_from_dst(mean_dst);
+            welford_store_mean_var_to_dst_raw<0>(mean_dst, curr_xy_limit - 1, empty_reciprocal_lut);
             // Update for next group
             tile_offset = (tile_offset + channels_per_group) % TILE_WIDTH;
 
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile_block(1, cb_ex_partial, 2);
+            pack_tile_block(mean_dst, cb_ex_partial, 2);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 2);
 

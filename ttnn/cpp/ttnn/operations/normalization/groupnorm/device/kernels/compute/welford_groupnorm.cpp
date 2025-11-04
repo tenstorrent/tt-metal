@@ -52,7 +52,6 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
-    constexpr uint32_t var_dst = 2;
 
     // input cbs
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
