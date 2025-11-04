@@ -393,13 +393,23 @@ export class StatusBox extends LitElement {
 
         if (this.type === 'valued') {
             statusClass = 'valued';
-            const valueDisplay = formatValue(this.value);
-            // Don't show units for string values, null, or undefined
-            const unitDisplay = (this.value != null && typeof this.value !== 'string' && this.unitDisplayLabel) ? ` ${this.unitDisplayLabel}` : '';
-            content = html`
-                <div class="valued-name ${scaleClass}">${displayName}</div>
-                <div class="valued-value">${valueDisplay}${unitDisplay}</div>
-            `;
+            
+            // For non-leaf nodes (intermediate nodes), only show the label
+            // For leaf nodes, show both label and value
+            if (this.isLeaf) {
+                const valueDisplay = formatValue(this.value);
+                // Don't show units for string values, null, or undefined
+                const unitDisplay = (this.value != null && typeof this.value !== 'string' && this.unitDisplayLabel) ? ` ${this.unitDisplayLabel}` : '';
+                content = html`
+                    <div class="valued-name ${scaleClass}">${displayName}</div>
+                    <div class="valued-value">${valueDisplay}${unitDisplay}</div>
+                `;
+            } else {
+                // Non-leaf valued node: only show the name
+                content = html`
+                    <div class="valued-name ${scaleClass}">${displayName}</div>
+                `;
+            }
         } else {
             // Default to health type - treat value as boolean for health status
             const isHealthy = typeof this.value === 'boolean' ? this.value : true;
