@@ -240,7 +240,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadBankNumbers) {
     }
 }
 
-/* ========== Directed Ideal Test Case; Test id = 84 ========== */
+/* ========== Directed Ideal Test Case with Transaction IDs; Test id = 87 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMShardedReadTridDirectedIdeal) {
     auto mesh_device = get_mesh_device();
 
