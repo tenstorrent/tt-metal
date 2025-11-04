@@ -438,3 +438,6 @@ tests:
 
   602:
     name: "Transaction ID - Read After Write One Packet Stateful"
+
+  603:
+    name: "PCIe Read Bandwidth"
