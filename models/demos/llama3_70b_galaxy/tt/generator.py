@@ -422,7 +422,7 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
-            sampling_params = format_sampling_params(sampling_params)
+            sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
 
             self.model.tt_sampling.reset_params(
                 k=sampling_params.top_k,

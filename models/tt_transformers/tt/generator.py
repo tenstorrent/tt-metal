@@ -397,8 +397,8 @@ class Generator:
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
         if sampling_on_device:
-            sampling_params = format_sampling_params(sampling_params)
             for i in range(self.data_parallel):
+                sampling_params = format_sampling_params(sampling_params, self.model_args[i].max_batch_size)
                 self.model[i].tt_sampling.reset_params(
                     k=sampling_params.top_k,
                     p=sampling_params.top_p,

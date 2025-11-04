@@ -371,7 +371,7 @@ def clamp(value, min_value, max_value):
     return value
 
 
-def format_sampling_params(sampling_params):
+def format_sampling_params(sampling_params, max_batch_size):
     """
     Format sampling parameters to a dictionary.
     """
@@ -382,7 +382,8 @@ def format_sampling_params(sampling_params):
 
     # Must pad sampling_params to max_batch_size
     default_params = {"temp": 0.0, "p": 1.0, "k": 1}
-    target_len = self.max_batch_size
+    target_len = max_batch_size
+    assert target_len == 32, "Sampling only support batch_size=32"
     for name, tensor in zip(
         ("temp", "p", "k"), (sampling_params.temperature, sampling_params.top_p, sampling_params.top_k)
     ):
