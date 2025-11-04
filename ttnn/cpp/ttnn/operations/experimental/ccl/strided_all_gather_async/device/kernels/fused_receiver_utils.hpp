@@ -29,7 +29,7 @@ struct MinimalMatmulOpReceiver {
 
         // Runtime args
         uint32_t num_transfers = get_arg_val<uint32_t>(rt_args_idx++);  // TODO remove
-        uint32_t num_devices = get_arg_val<uint32_t>(rt_args_idx++);
+        num_devices = get_arg_val<uint32_t>(rt_args_idx++);
         num_k_blocks_per_device = num_k_blocks / num_devices;
         my_chip_id = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t tensor_slice_shape_width = get_arg_val<uint32_t>(rt_args_idx++);  // TODO remove
@@ -50,14 +50,19 @@ struct MinimalMatmulOpReceiver {
         if (k_block_slice_iter == 0) {
             uint32_t device_index = curr_k_block_iter / num_k_blocks_per_device;
             if (device_index == 0) {
-                curr_k_block_source = 1;
+                curr_k_block_source = 0;
                 target_k_block_slice = my_chip_id;
             } else if (device_index % 2) {
-                curr_k_block_source = 0;
-                target_k_block_slice = my_chip_id - (device_index / 2 + 1);
-            } else {
                 curr_k_block_source = 1;
-                target_k_block_slice = my_chip_id + (device_index / 2);
+                uint32_t temp_target_k_block_slice = my_chip_id + (device_index / 2 + 1);
+                target_k_block_slice = temp_target_k_block_slice >= num_devices
+                                           ? temp_target_k_block_slice - num_devices
+                                           : temp_target_k_block_slice;
+            } else {
+                curr_k_block_source = 0;
+                int32_t temp_target_k_block_slice = my_chip_id - (device_index / 2);
+                target_k_block_slice = (temp_target_k_block_slice < 0) ? num_devices + temp_target_k_block_slice
+                                                                       : temp_target_k_block_slice;
             }
         }
         if (wait_for_op_signal) {
