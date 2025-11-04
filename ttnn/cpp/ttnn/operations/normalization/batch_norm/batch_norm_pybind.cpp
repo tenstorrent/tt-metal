@@ -46,8 +46,6 @@ void bind_batch_norm_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): device compute kernel configuration for the operation. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:

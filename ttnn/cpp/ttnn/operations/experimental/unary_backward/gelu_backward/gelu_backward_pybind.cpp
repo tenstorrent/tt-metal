@@ -26,8 +26,6 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for this operation. Defaults to None.
             input_grad (ttnn.Tensor, optional): Preallocated output tensor. Defaults to None.
 
-        Returns:
-            ttnn.Tensor: The output tensor.
 
         Note:
             Supported dtypes, layouts, and ranks:

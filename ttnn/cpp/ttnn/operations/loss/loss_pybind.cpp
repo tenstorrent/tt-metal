@@ -37,8 +37,6 @@ void bind_mse_loss_function(py::module& module) {
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
 
             Example:
 
@@ -85,8 +83,6 @@ void bind_mae_loss_function(py::module& module) {
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
 
             Example:
 

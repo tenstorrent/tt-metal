@@ -30,8 +30,6 @@ void bind_tilize(py::module& module) {
                 dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
 
         )doc";
 

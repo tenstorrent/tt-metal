@@ -53,13 +53,6 @@ void bind_unary_clamp(py::module& module, const unary_operation_t& operation) {
 
             INT32 is supported only for Tensor-scalar-scalar version.
 
-        Returns:
-
-
-            ttnn.Tensor: the output tensor.
-
-
-
         Example:
             >>> input_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
             >>> min_tensor = ttnn.from_torch(torch.tensor([[0, 2], [0,4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

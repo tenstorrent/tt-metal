@@ -33,8 +33,6 @@ void bind_fill_cache_for_user_(py::module& module, const kv_cache_operation_t& o
             batch_index (int): the index into the cache tensor.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor.
 
 
         )doc",
@@ -69,8 +67,6 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
             batch_offset (int): the batch_offset into the cache tensor.
 
 
-        Returns:
-            ttnn.Tensor: the output tensor.
 
 
         )doc",

@@ -522,8 +522,6 @@ void py_module(py::module& module) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Note:
             The input tensors support the following data types and layouts:
@@ -715,8 +713,6 @@ void py_module(py::module& module) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
 
         Example:
             >>> # batched matrix x broadcasted matrix
@@ -821,9 +817,7 @@ void py_module(py::module& module) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of linear is to be written. Defaults to `None`.
 
-        Returns:
-            ttnn.Tensor: the output tensor.
-        )doc",
+                )doc",
         ttnn::pybind_overload_t{
             [](decltype(::ttnn::matmul_batched_weights)& self,
                const ttnn::Tensor& input_tensor_a,
