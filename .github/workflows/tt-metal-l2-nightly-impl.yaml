@@ -30,6 +30,10 @@ on:
         required: false
         type: boolean
         default: true
+      run_fused_tests:
+        required: false
+        type: boolean
+        default: true
       run_experimental_tests:
         required: false
         type: boolean
