@@ -169,6 +169,8 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06Q7ESTFEV # Borys Bradel
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
 
   ttnn-fused-tests:
     if: ${{ inputs.run_fused_tests }}
