@@ -12,7 +12,6 @@
 #include <memory>
 #include <tuple>
 #include <utility>
-#include <boost/pfr.hpp>
 
 namespace ttnn::experimental::lazy {
 
