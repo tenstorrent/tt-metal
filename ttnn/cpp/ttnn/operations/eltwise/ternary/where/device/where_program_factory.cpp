@@ -436,7 +436,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
     // Declare broadcast detection variable at function level
-    bool is_height_bcast = false;  // Track if this is height broadcasting for TTS
+    [[maybe_unused]] bool is_height_bcast = false;  // Track if this is height broadcasting for TTS
 
     WhereVariant variant = operation_attributes.where_variant;
     WhereBroadcastType broadcast_type = operation_attributes.broadcast_type;
@@ -513,9 +513,9 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_true_tensor_cb_handle;
+    [[maybe_unused]] tt::tt_metal::CBHandle value_true_tensor_cb_handle;
     uint32_t value_false_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_false_tensor_cb_handle;
+    [[maybe_unused]] tt::tt_metal::CBHandle value_false_tensor_cb_handle;
 
     if (variant == WhereVariant::TTS) {
         // TTS: c_1 = value_true tensor (value_false is scalar)
