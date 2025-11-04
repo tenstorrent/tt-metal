@@ -240,6 +240,7 @@ jobs:
   ttnn-basic-tests:
     needs: [build-asan, find-changes]
     if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.build-workflows-changed == 'true' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
