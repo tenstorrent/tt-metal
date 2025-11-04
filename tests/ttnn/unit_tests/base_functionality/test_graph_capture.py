@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+# Note: Graph node indices in these tests reflect the behavior after tensor_id deduplication.
+# Tensors now get unique IDs in their constructor, allowing graph capture to properly deduplicate
+# the same tensor when it's tracked multiple times through nested operations. This reduces
+# duplicate tensor nodes in the captured graph, shifting subsequent node indices down by 1.
+
 import pathlib
 import pytest
 import torch
@@ -78,10 +83,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node4[3] == "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]"
     assert node4[4] == "0"
 
-    # PermuteDeviceOperation
-    # NOTE: Graph structure appears to have changed. The indices may need adjustment.
-    # The error showed Shape([1, 4, 2048, 128]) at node6[0], which suggests the graph
-    # structure has shifted. Temporarily using node index 5 instead of 6 to test.
+    # PermuteDeviceOperation (tensor deduplication shifts this from node6 to node5)
     node5 = captured_graph[5]["arguments"]
     assert (
         node5[0]
@@ -92,7 +94,7 @@ def test_graph_capture_with_all_parameters(device):
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::tensor_args_t const>]"
     )
 
-    # tt::tt_metal::create_device_tensor
+    # tt::tt_metal::create_device_tensor (tensor deduplication shifts this from node7 to node6)
     node6 = captured_graph[6]["arguments"]
     assert node6[0] == "Shape([1, 4, 2048, 128])"
     assert node6[1] == "DataType::BFLOAT16"
@@ -143,40 +145,40 @@ def test_graph_capture_without_memory_config(device):
     assert node1[4] == "nullopt"
     assert node1[5] == "nullopt"
 
-    # ttnn::prim::moreh_dot
-    node6 = captured_graph[6]["arguments"]
+    # ttnn::prim::moreh_dot (tensor deduplication shifts this from node6 to node5)
+    node5 = captured_graph[5]["arguments"]
     assert (
-        node6[0]
+        node5[0]
         == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
     assert (
-        node6[1]
+        node5[1]
         == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([1, 1, 1, 32]),tensor_layout=TensorLayout(dtype=DataType::BFLOAT16,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
-    assert node6[2] == "nullopt"
-    assert node6[3] == "DataType::BFLOAT16"
-    assert node6[4] == "nullopt"
-    assert node6[5] == "nullopt"
+    assert node5[2] == "nullopt"
+    assert node5[3] == "DataType::BFLOAT16"
+    assert node5[4] == "nullopt"
+    assert node5[5] == "nullopt"
 
-    # MorehDotOperation
-    node9 = captured_graph[9]["arguments"]
+    # MorehDotOperation (tensor deduplication shifts this from node9 to node8)
+    node8 = captured_graph[8]["arguments"]
     assert (
-        node9[0]
+        node8[0]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>]"
     )
     assert (
-        node9[1]
+        node8[1]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]"
     )
 
-    # tt::tt_metal::create_device_tensor
-    node10 = captured_graph[10]["arguments"]
-    assert node10[0] == "Shape([1, 1, 1, 1])"
-    assert node10[1] == "DataType::BFLOAT16"
-    assert node10[2] == "Layout::TILE"
-    assert node10[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    # tt::tt_metal::create_device_tensor (tensor deduplication shifts this from node10 to node9)
+    node9 = captured_graph[9]["arguments"]
+    assert node9[0] == "Shape([1, 1, 1, 1])"
+    assert node9[1] == "DataType::BFLOAT16"
+    assert node9[2] == "Layout::TILE"
+    assert node9[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
-        node10[4]
+        node9[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
@@ -199,36 +201,36 @@ def test_graph_capture_without_dtype(device):
     assert node1[3] == "nullopt"
     assert node1[4] == "nullopt"
 
-    # ttnn::prim::moreh_full_like
-    node4 = captured_graph[4]["arguments"]
+    # ttnn::prim::moreh_full_like (tensor deduplication shifts this from node4 to node3)
+    node3 = captured_graph[3]["arguments"]
     assert (
-        node4[0]
+        node3[0]
         == "Tensor(storage=DeviceStorage(),tensor_spec=TensorSpec(logical_shape=Shape([32, 32]),tensor_layout=TensorLayout(dtype=DataType::INT32,page_config=PageConfig(config=TilePageConfig(tile=Tile(tile_shape={32, 32},face_shape={16, 16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment=Alignment([32, 32]))))"
     )
-    assert node4[1] == "3"
-    assert node4[2] == "nullopt"
-    assert node4[3] == "nullopt"
-    assert node4[4] == "nullopt"
+    assert node3[1] == "3"
+    assert node3[2] == "nullopt"
+    assert node3[3] == "nullopt"
+    assert node3[4] == "nullopt"
 
-    # FullLikeOperation
-    node6 = captured_graph[6]["arguments"]
+    # FullLikeOperation (tensor deduplication shifts this from node6 to node5)
+    node5 = captured_graph[5]["arguments"]
     assert (
-        node6[0]
+        node5[0]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>]"
     )
     assert (
-        node6[1]
+        node5[1]
         == "[ unsupported type , std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::tensor_args_t const>]"
     )
 
-    # tt::tt_metal::create_device_tensor
-    node7 = captured_graph[7]["arguments"]
-    assert node7[0] == "Shape([32, 32])"
-    assert node7[1] == "DataType::INT32"
-    assert node7[2] == "Layout::TILE"
-    assert node7[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
+    # tt::tt_metal::create_device_tensor (tensor deduplication shifts this from node7 to node6)
+    node6 = captured_graph[6]["arguments"]
+    assert node6[0] == "Shape([32, 32])"
+    assert node6[1] == "DataType::INT32"
+    assert node6[2] == "Layout::TILE"
+    assert node6[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
     assert (
-        node7[4]
+        node6[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
     )
 
@@ -255,6 +257,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     # Content item 0
     assert "content" in data
     assert isinstance(data["content"], list)
+    # Note: serialize_graph extracts operations, tensor deduplication shouldn't affect operation count
     assert len(data["content"]) == 4
 
     item0 = data["content"][0]
