@@ -7,6 +7,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+
 namespace ttnn {
 namespace operations::unary {
 
@@ -326,6 +327,15 @@ struct Rsub {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Where {
+    static Tensor invoke(
+        const Tensor& condition,
+        const ScalarVariant& value_true,
+        const ScalarVariant& value_false,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 // NOLINTBEGIN(bugprone-macro-parentheses)
@@ -469,6 +479,7 @@ constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::opera
 constexpr auto tanh = ttnn::register_operation<"ttnn::tanh", ttnn::operations::unary::Tanh>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto prelu_sfpu = ttnn::register_operation<"ttnn::prelu_sfpu", ttnn::operations::unary::Prelu>();
+constexpr auto where_tss = ttnn::register_operation<"ttnn::where_tss", ttnn::operations::unary::Where>();
 constexpr auto selu = ttnn::register_operation<"ttnn::selu", ttnn::operations::unary::Selu>();
 constexpr auto fill = ttnn::register_operation<
     "ttnn::fill",
