@@ -13,7 +13,6 @@ set_target_properties(
 
 file(
     GLOB_RECURSE kernels
-    all_broadcast_async/device/kernels/*
     all_gather_async/device/kernels/*
     all_gather_concat_heads_fused/device/kernels/*
     all_reduce_async/device/kernels/*
@@ -37,7 +36,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
-            all_broadcast_async/device/all_broadcast_async_op.hpp
             all_reduce_async/all_reduce_async.hpp
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
@@ -56,9 +54,6 @@ target_sources(
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
         all_reduce_async/device/all_reduce_async_op.cpp
         all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
-        reduce_scatter_async/device/reduce_scatter_async_op.cpp
-        reduce_scatter_async/device/reduce_scatter_async_program.cpp
-        reduce_scatter_async/reduce_scatter.cpp
         llama_reduce_scatter/llama_reduce_scatter.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_device_operation.cpp
         llama_reduce_scatter/device/llama_reduce_scatter_program_factory.cpp
@@ -91,9 +86,6 @@ target_sources(
         reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op.cpp
         reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
-        all_broadcast_async/all_broadcast_async.cpp
-        all_broadcast_async/device/all_broadcast_async_op.cpp
-        all_broadcast_async/device/all_broadcast_async_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op.cpp
         send_recv_async/send_async/device/send_async_program.cpp

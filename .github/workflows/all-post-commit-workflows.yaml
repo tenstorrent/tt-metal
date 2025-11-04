@@ -165,6 +165,20 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  ttsim-unit-tests:
+    if: ${{ github.event.pull_request.head.repo.fork == false }}
+    needs: build-artifact
+    secrets: inherit
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    with:
+      basic-docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.build-artifact.outputs.packages-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      run-metal-cpp-unit-tests: true
 
   run-profiler-regression:
     needs: [build-artifact]
@@ -192,23 +206,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  galaxy-apc-fast-tests:
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
-    needs: build-artifact
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: in-service, topology: topology-6u },
-        ]
-    uses: ./.github/workflows/galaxy-apc-fast-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      topology: ${{ matrix.test-group.topology }}
   build-docs:
     needs: build-artifact
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}

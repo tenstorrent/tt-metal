@@ -19,8 +19,6 @@ void bind_normalization_rms_norm(py::module& module) {
         module,
         ttnn::rms_norm,
         R"doc(
-            ``ttnn.rms_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
-
             Computes RMS norm over :attr:`input_tensor`.
             See `Root Mean Square Layer Normalization <https://arxiv.org/pdf/1910.07467>`_ for more details.
 

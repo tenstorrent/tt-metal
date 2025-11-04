@@ -12,6 +12,10 @@ on:
       docker-image:
         required: true
         type: string
+      model:
+        required: false
+        type: string
+        default: "all"
       extra-tag:
         required: false
         type: string
@@ -23,11 +27,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "t3k LLM falcon7b model perf tests", model: "falcon7b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 75, owner_id: U05RWH3QUPM}, # Salar Hosseini
-          { name: "t3k LLM falcon40b model perf tests", model: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
-          { name: "t3k CNN resnet50 model perf tests", model: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U0837MYG788}, # Marko Radosavljevic
-          { name: "t3k CNN sentence_bert model perf tests", model: "sentence_bert", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
-          { name: "t3k DiT SD3.5 model perf tests", model: "stable_diffusion_35_large", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_stable_diffusion_35_large_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
+          { name: "t3k LLM falcon7b model perf tests", model-name: "falcon7b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 75, owner_id: U05RWH3QUPM}, # Salar Hosseini
+          { name: "t3k LLM falcon40b model perf tests", model-name: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
+          { name: "t3k CNN resnet50 model perf tests", model-name: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U0837MYG788}, # Marko Radosavljevic
+          { name: "t3k CNN sentence_bert model perf tests", model-name: "sentence_bert", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
+          { name: "t3k DiT SD3.5 model perf tests", model-name: "stable_diffusion_35_large", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_stable_diffusion_35_large_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
+          { name: "t3k DiT Mochi model perf tests", model-name: "mochi", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_mochi_tests, timeout: 75, owner_id: U09ELB03XRU}, # Stephen Osborne
+          { name: "t3k DiT Wan2.2 model perf tests", model-name: "wan22", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_wan22_tests, timeout: 45, owner_id: U03FJB5TM5Y}, # Colman Glagovich
+          { name: "t3k DiT Flux.1-dev model perf tests", model-name: "flux1-dev", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_flux1_tests, timeout: 75, owner_id: U08TED0JM9D}, # Samuel Adesoye
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
@@ -62,19 +69,13 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Extract files
-        run: tar --zstd -xvf ttm_any.tar.zst
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
       - name: Run model perf regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        if: ${{ inputs.model == 'all' || inputs.model == matrix.test-group.model-name }}
         shell: bash
         run: |
           source /work/tests/scripts/t3000/run_t3000_model_perf_tests.sh
@@ -96,7 +97,7 @@ jobs:
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model }}-bare-metal
+          name: perf-report-csv-${{ matrix.test-group.model-type }}-${{ matrix.test-group.arch }}-${{ matrix.test-group.model-name }}-bare-metal
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

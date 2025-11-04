@@ -33,6 +33,7 @@ def test_downsample2d(
     stride,
     padding,
     dilation,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -59,6 +60,7 @@ def test_downsample2d(
         dilation,
         groups,
         model_config=model_config,
+        debug_mode=debug_mode,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

@@ -24,10 +24,6 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "slice_reshard_async op is only supported for Fast Dispatch");
-
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     uint32_t num_devices;
     auto mesh_device = input_tensor.device();
@@ -37,9 +33,6 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
 
     TT_FATAL(num_devices > 1, "slice_reshard_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology.value_or(ttnn::ccl::Topology::Linear);
-
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     return tt::tt_metal::operation::run(
                ttnn::SliceReshardAsync(
