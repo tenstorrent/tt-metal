@@ -14,13 +14,13 @@ from transformers import AutoConfig
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
-from models.demos.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
+from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_weight_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
+from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict, get_rope_tensors
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
@@ -85,7 +85,6 @@ class DeepseekGenerator:
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
-        self.batch_size = min(USERS_PER_ROW, batch_size)
         self.cache_dir = cache_dir
 
         # Load HF config + tokenizer
@@ -93,7 +92,7 @@ class DeepseekGenerator:
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
         # self._ensure_max_seq_len(self.hf_config)
-        self.hf_config.max_seq_len = 4096  # TODO: Change this when needed?
+        self.hf_config.max_seq_len = 1024  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -115,17 +114,17 @@ class DeepseekGenerator:
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
         # Paged attention setup
-        self.paged_config = MLA1D.get_valid_paged_config(self.hf_config.max_seq_len, USERS_PER_ROW, self.dp_factor)
-        self.page_tables_tt = [
-            MLA1D.create_page_table(
+        self.batch_size_per_row = USERS_PER_ROW
+        self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
+        self.paged_config = MLA2D.get_valid_paged_config(self.hf_config.max_seq_len, self.batch_size, self.dp_factor)
+        self.page_tables_tt = tuple(
+            MLA2D.create_page_table(
                 paged_config=self.paged_config,
-                mesh_device=mesh_device,
+                mesh_device=self.mesh_device,
+                batch_size_per_row=int(self.batch_size_per_row / self.mesh_device.shape[0]),
             )
             for _ in range(self.hf_config.num_hidden_layers)
-        ]
-        self.rope = RotarySetup(device=mesh_device, batch_size_per_row=USERS_PER_ROW, hf_config=self.hf_config)
-
-        # Prepare weights/configs
+        )
         self.random_weights = random_weights
         self.single_layer = single_layer
         self._prepare_weight_configs(cache_dir)
@@ -196,7 +195,7 @@ class DeepseekGenerator:
         # Convert weights to TT tensors-on-disk and build weight_config
         logger.info("Converting weights to TTNN SavedWeight format (RowPipelinedModel)...")
         self.model_weight_config = get_weight_config(
-            ModuleClass=RowPipelinedModel,
+            ModuleClass=RowBatchedModel,
             hf_config=self.hf_config,
             state_dicts=(model_state,),
             weight_cache_path=weight_cache_path,
@@ -206,18 +205,18 @@ class DeepseekGenerator:
 
     def _prepare_model_states(self) -> None:
         logger.info("Creating model states...")
-        self.model_state = RowPipelinedModel.create_state(
+        self.model_state = RowBatchedModel.create_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
         )
         logger.info("Creating model shared states...")
-        self.model_shared_state = RowPipelinedModel.create_shared_state(
+        self.model_shared_state = RowBatchedModel.create_shared_state(
             hf_config=self.hf_config, mesh_device=self.mesh_device
         )
 
     def _prepare_run_configs(self, mode: str) -> None:
         if mode == "prefill":
             logger.info("Creating model prefill config...")
-            self.model_prefill_cfg = RowPipelinedModel.prefill_model_config(
+            self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
             self._prepare_model_states()
@@ -236,7 +235,7 @@ class DeepseekGenerator:
             assert (
                 hasattr(self, "model_shared_state") and self.model_shared_state is not None
             ), "Model shared state must be prepared before creating decode run config. Run _prepare_run_configs('prefill') first."
-            self.model_decode_cfg = RowPipelinedModel.decode_model_config(
+            self.model_decode_cfg = RowBatchedModel.decode_model_config(
                 hf_config=self.hf_config, mesh_device=self.mesh_device
             )
             self.model_run_config_decode = create_run_config(
@@ -380,7 +379,8 @@ class DeepseekGenerator:
         returns: (rope_tensors, tt_positions)
         """
         # Build RoPE tensors for current positions
-        rope_mats = self.rope.get_rot_mats(positions.to(torch.int32))
+        rope_setup = RotarySetup(device=self.mesh_device, batch_size_per_row=USERS_PER_ROW, hf_config=self.hf_config)
+        rope_mats = rope_setup.get_rot_mats_table(seq_len=1)
         rope_tensors = {
             "cos_matrix": rope_mats["cos_matrix"],
             "sin_matrix": rope_mats["sin_matrix"],
@@ -392,19 +392,25 @@ class DeepseekGenerator:
         tt_positions = ttnn.from_torch(
             positions.to(torch.int32),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=mesh_shape),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             dtype=ttnn.int32,
         )
         return rope_tensors, tt_positions
 
-    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def _decode_step(self, tokens_step: torch.Tensor, positions: torch.Tensor, batch_size_per_row: int) -> torch.Tensor:
         """Run a single decode step and return logits on host as torch tensor [1, 1, B, V]."""
         # Prepare TT inputs
         tt_tokens = self._tt_from_tokens_step(tokens_step)
-        rope_tensors, tt_positions = self._tt_from_positions(positions)
+        rope_tensors = get_rope_tensors(self.hf_config, batch_size_per_row, 1, positions, self.mesh_device)
+        tt_positions = ttnn.from_torch(
+            positions,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            dtype=ttnn.int32,
+        )
 
         # RowPipelinedModel forward
-        logits_tt = RowPipelinedModel.forward_decode(
+        logits_tt = RowBatchedModel.forward_decode(
             tt_tokens,
             tt_positions,
             self.model_run_config_decode,
@@ -412,81 +418,32 @@ class DeepseekGenerator:
             self.page_tables_tt,
         )
         # Gather to host
-        logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
-
+        logits = ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        )
         # Free device tensors for this step
         ttnn.deallocate(tt_tokens)
         ttnn.deallocate(logits_tt)
 
         return logits  # [1, 1, B, V]
 
-    def _prefill(self, tokens: torch.Tensor, user_id: int) -> torch.Tensor:
-        """Run prefill for the full prompt sequence and return logits for the last position.
-
-        Args:
-            tokens: [1, 1, seq_len] padded token sequences
-            user_id: user id for the prefill
-
-        Returns:
-            logits: [1, 1, seq_len, V] logits for the full sequence
-        """
-
-        tokens = tokens.view(1, 1, -1)
-        seq_len = tokens.shape[2]
-
-        # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
-        tt_tokens = ttnn.from_torch(
-            tokens,
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
-        # RoPE setup for prefill
-        rope_setup = RotarySetup(
-            device=self.mesh_device,
-            batch_size_per_row=1,
-            hf_config=self.hf_config,
-        )
-
-        rot_mats = rope_setup.get_rot_mats_table(seq_len)
-        rope_tensors = {
-            "cos_matrix": rot_mats["cos_matrix"],
-            "sin_matrix": rot_mats["sin_matrix"],
-            "trans_matrix": rot_mats["trans_matrix"],
-        }
-
-        # RowPipelinedModel forward prefill
-        logits_tt = RowPipelinedModel.forward_prefill(
-            tt_tokens, user_id, self.model_run_config_prefill, rope_tensors, self.page_tables_tt
-        )
-
-        # Gather to host
-        logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
-
-        # Free device tensors for this step
-        ttnn.deallocate(tt_tokens)
-        ttnn.deallocate(logits_tt)
-        return logits  # [1, 1, seq_len, V]
-
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
 
-    def _pad_batch(self, tokens_list: List[List[int]]) -> Tuple[torch.Tensor, List[int]]:
-        """Pad/pack a list of token id sequences to batch of size USERS_PER_ROW.
+    def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, List[int]]:
+        """Pad/pack a list of token id sequences to batch of size batch_size.
 
         Returns
-            tokens_packed: torch.LongTensor [USERS_PER_ROW, S]
+            tokens_packed: torch.LongTensor [batch_size, S]
             valid_counts: list of actual sequence lengths for first N sequences
         """
-        assert len(tokens_list) > 0 and len(tokens_list) <= USERS_PER_ROW
+        assert len(tokens_list) > 0 and len(tokens_list) <= batch_size
         max_len = max(len(t) for t in tokens_list)
         # Round up to nearest multiple of TILE_SIZE
         max_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        out = torch.full((USERS_PER_ROW, max_len), self.tokenizer.pad_token_id, dtype=torch.long)
-        lengths = torch.zeros((USERS_PER_ROW,), dtype=torch.int32)
+        out = torch.full((batch_size, max_len), self.tokenizer.pad_token_id, dtype=torch.long)
+        lengths = torch.zeros((batch_size,), dtype=torch.int32)
         for i, seq in enumerate(tokens_list):
             out[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
             lengths[i] = len(seq)
@@ -513,7 +470,8 @@ class DeepseekGenerator:
 
         prompts = list(prompts)
         num_of_prompts = len(prompts)
-        assert 1 <= num_of_prompts <= USERS_PER_ROW, f"Supports 1..{USERS_PER_ROW} prompts"
+        num_of_users = USERS_PER_ROW * self.mesh_device.shape[0]
+        assert 1 <= num_of_prompts <= num_of_users, f"Supports 1..{num_of_users} prompts"
 
         logger.info("Creating model run configs...")
         profiler.start("preparing_prefill_config")
@@ -527,12 +485,12 @@ class DeepseekGenerator:
         # Tokenize using HF chat template
         profiler.start("tokenizing")
         encoded: List[List[int]] = [self._encode_prompt(p) for p in prompts]
-        tokens_batched, lengths = self._pad_batch(encoded)  # [USERS_PER_ROW, seq_len]
+        tokens_batched, lengths = self._pad_batch(encoded, self.batch_size)
+        logger.info(f"tokens_batched shape: {tokens_batched.shape}")
         profiler.end("tokenizing")
 
         logger.info(f"Lengths of (encoded) prompts: {lengths}")
 
-        # Prefill
         profiler.start("inference_prefill")
         num_of_users = tokens_batched.shape[0]
         last_logits = []
@@ -545,7 +503,7 @@ class DeepseekGenerator:
             logger.info(
                 f"Input to the prefill: {self.tokenizer.decode(tokens_batched[user_id].tolist(), skip_special_tokens=True)}"
             )
-            user_out = self._prefill(tokens_batched[user_id], user_id)
+            user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
             user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
             last_logits.append(user_out)
         last_logits = torch.stack(last_logits)
@@ -557,10 +515,15 @@ class DeepseekGenerator:
 
         # First sampled token after prompt
         next_tokens = self._sample_greedy(last_logits)
+        profiler.end("inference_prefill")
 
-        # Decode
-        positions = torch.zeros(USERS_PER_ROW, dtype=torch.int32) + lengths
+        # First sampled token after prompt
+        last_logits = last_logits.squeeze(0).squeeze(0)
+        next_tokens = self._sample_greedy(last_logits)
+        token_value = int(next_tokens[0].item())
+        logger.info(f"First sampled token: {self.tokenizer.decode(token_value, skip_special_tokens=True)}")
 
+        positions = torch.zeros(self.batch_size, dtype=torch.int32) + lengths[0]
         # If teacher forcing is enabled, collect the model's predicted token and force GT for next step (single prompt)
         if teacher_forcing is not None:
             # Only enforce for the first user to keep scope minimal
@@ -575,8 +538,9 @@ class DeepseekGenerator:
         profiler.start("inference_decode")
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
+            logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
             profiler.start(f"decode_time_{gen_idx}")
-            logits = self._decode_step(next_tokens, positions).squeeze(0).squeeze(0)
+            logits = self._decode_step(next_tokens, positions, self.batch_size_per_row).squeeze(0).squeeze(0)
             profiler.end(f"decode_time_{gen_idx}")
 
             pred_tokens = self._sample_greedy(logits)
@@ -657,6 +621,64 @@ class DeepseekGenerator:
         if vocab > 1:
             out.append(1)
         return out
+
+    def _prefill(self, tokens: torch.Tensor, user_id: int) -> torch.Tensor:
+        """Run prefill for the full prompt sequence and return logits for the last position.
+
+        Args:
+            tokens: [1, 1, seq_len] padded token sequences
+            user_id: user id for the prefill
+
+        Returns:
+            logits: [1, 1, seq_len, V] logits for the full sequence
+        """
+
+        tokens = tokens.view(1, 1, -1)
+        seq_len = tokens.shape[-1]
+
+        # Prepare TT inputs for prefill - reshape to [1, 1, actual_seq_len]
+        tt_tokens = ttnn.from_torch(
+            tokens,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        # RoPE setup for prefill
+        rope_setup = RotarySetup(
+            device=self.mesh_device,
+            batch_size_per_row=1,
+            hf_config=self.hf_config,
+        )
+
+        rot_mats = rope_setup.get_rot_mats_table(seq_len)
+        rope_tensors = {
+            "cos_matrix": rot_mats["cos_matrix"],
+            "sin_matrix": rot_mats["sin_matrix"],
+            "trans_matrix": rot_mats["trans_matrix"],
+        }
+
+        # RowPipelinedModel forward prefill
+        logits_tt = RowBatchedModel.forward_prefill(
+            x=tt_tokens,
+            user_id=user_id,
+            cfg=self.model_run_config_prefill,
+            rope_tensors=rope_tensors,
+            page_tables=self.page_tables_tt,
+        )
+
+        # Gather to host
+        logits = ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        )
+
+        # Free device tensors for this step
+        ttnn.deallocate(tt_tokens)
+        ttnn.deallocate(logits_tt)
+        return logits  # [1, 1, seq_len, V]
 
 
 __all__ = ["DeepseekGenerator", "SamplingParams"]
