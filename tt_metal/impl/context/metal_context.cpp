@@ -222,6 +222,22 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
+    auto all_devices = cluster_->all_chip_ids();
+    // If simulator is enabled, force a teardown of active ethernet cores for WH to prevent return to base FW
+    if (rtoptions_.get_simulator_enabled()) {
+        if (hal_->get_eth_fw_is_cooperative()) {
+            for (ChipId device_id : all_devices) {
+                for (const auto& logical_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+                    CoreCoord virtual_core = cluster_->get_virtual_coordinate_from_logical_coordinates(
+                        device_id, logical_core, CoreType::ETH);
+                    erisc_send_exit_signal(device_id, virtual_core, false);
+                    while (erisc_app_still_running(device_id, virtual_core)) {
+                    }
+                }
+            }
+        }
+    }
+
     // Set internal routing to false to exit active ethernet FW & go back to base FW
     cluster_->set_internal_routing_info_for_ethernet_cores(false);
 
@@ -231,7 +247,6 @@ void MetalContext::teardown() {
         rtoptions_.set_disable_dma_ops(false);
     }
 
-    auto all_devices = cluster_->all_chip_ids();
     watcher_server_->detach_devices();
     watcher_server_.reset();
     for (ChipId device_id : all_devices) {
