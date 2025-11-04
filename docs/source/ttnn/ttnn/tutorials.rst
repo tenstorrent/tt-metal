@@ -40,4 +40,5 @@ Available tutorials:
    tutorials/2025_dx_rework/ttnn_multihead_attention.ipynb
    tutorials/2025_dx_rework/ttnn_basic_conv.ipynb
    tutorials/2025_dx_rework/ttnn_simplecnn_inference.ipynb
+   tutorials/2025_dx_rework/ttnn_clip_zero_shot_classification.ipynb
    tutorials/2025_dx_rework/ttnn_visualizer.md

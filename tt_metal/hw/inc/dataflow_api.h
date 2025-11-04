@@ -2385,6 +2385,7 @@ private:
     }
 
 public:
+    Noc() : noc_id_(noc_index) {}
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
 
     uint8_t get_noc_id() const { return noc_id_; }
