@@ -32,20 +32,6 @@ def is_supported(shape, dim, ttnn_dtype):
         if ttnn_dtype == ttnn.bfloat16 and accumulation_length > 10000:
             return False  # for bfloat16, accmulation errors can happen easily on long tensor
 
-    if ttnn_dtype == ttnn.float32 or ttnn_dtype == ttnn.bfloat16:
-        return True
-
-    if ttnn_dtype != ttnn.int32 and ttnn_dtype != ttnn.uint32:
-        return False
-
-    # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-    if tensor_rank < 3:
-        return False
-
-    # int32/uin32: dim can not be x or y axes
-    if dim == -1 or dim == -2 or dim == tensor_rank - 1 or dim == tensor_rank - 2:
-        return False
-
     return True
 
 
@@ -65,17 +51,11 @@ def is_supported(shape, dim, ttnn_dtype):
         ([1, 19], -1),
         ([1, 151936], -1),
         ([5], -1),
-        ([1, 5], -1),
-        ([1, 128256], -1),
     ],
 )
 @pytest.mark.parametrize(
     "dtypes",
-    [
-        (torch.float32, None),
-        (torch.bfloat16, ttnn.bfloat16),
-        (torch.int32, ttnn.int32),
-    ],
+    [(torch.float32, None), (torch.bfloat16, ttnn.bfloat16), (torch.int32, ttnn.int32)],
 )
 def test_cumsum(size, dim, dtypes, device):
     torch.manual_seed(29112024)
@@ -106,7 +86,7 @@ def test_cumsum(size, dim, dtypes, device):
 
         if torch_output.numel() > 0:
             if torch_dtype is torch.float32:
-                assert_allclose(expected_output, torch_output, atol=4.0, rtol=1e-3)
+                assert_allclose(expected_output, torch_output, atol=0.05, rtol=0.01)
             else:
                 assert_allclose(expected_output, torch_output)
 
@@ -144,10 +124,6 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
-    # For now, test_cumsum_with_preallocated_output ony support bfloat16 and float32
-    if expected_output_dtype == ttnn.int32 or expected_output_dtype == ttnn.uint32:
-        pytest.skip("ttnn.cumsum with preallocated output does not support integer types")
-
     if not is_supported(size, dim, expected_output_dtype):
         pytest.skip("Unsupported configuration by ttnn.cumsum")
 
@@ -168,7 +144,7 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
 
     if torch_output.numel() > 0:
         if torch_dtype is torch.float32:
-            assert_allclose(expected_output, torch_output, atol=4.0, rtol=1e-3)
+            assert_allclose(expected_output, torch_output, atol=0.05, rtol=0.01)
         else:
             assert_allclose(expected_output, torch_output)
 
