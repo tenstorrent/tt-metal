@@ -49,7 +49,7 @@ class TtUpsample2D(LightweightModule):
     def interpolate(self, hidden_states):
         memory_config = ttnn.create_sharded_memory_config(
             shape=hidden_states.shape,
-            core_grid=ttnn.CoreGrid(y=8, x=5),
+            core_grid=ttnn.CoreGrid(y=8, x=5 if hidden_states.shape[3] % 8 != 0 else 8),
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         )
