@@ -43,7 +43,7 @@ def test_tilize_test(input_shapes, tilize_args, device, function_level_defaults)
 def test_tilize_fp32_truncation(device, shape, use_multicore):
     torch.manual_seed(2005)
     input_a = torch.full(shape, 1.9908e-05, dtype=torch.float32)
-    device = ttnn.open_device(device_id=0)
+    # Use the fixture-provided device directly
     input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     input_tensor = ttnn.tilize(input_tensor, use_multicore=use_multicore)
     output_tensor = ttnn.to_torch(input_tensor)
