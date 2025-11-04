@@ -22,7 +22,7 @@ class Cluster;
 }
 
 namespace tt {
-enum class TargetDevice : std::uint8_t;
+enum class TargetDevice: std::uint8_t;
 }
 
 namespace tt::llrt {

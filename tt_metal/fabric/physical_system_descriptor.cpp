@@ -278,8 +278,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
-        auto [tray_id, asic_location] = get_asic_position(
-            cluster_, get_arch(cluster_desc_), src_chip_id, target_device_type_ != TargetDevice::Silicon);
+        auto [tray_id, asic_location] =
+            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
@@ -335,6 +335,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
+
     system_graph_.host_connectivity_graph[hostname] = {};
 }
 

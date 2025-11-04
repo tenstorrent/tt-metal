@@ -207,7 +207,10 @@ def build_mpi_command(
         program_to_run = program
         if debug_gdbserver:
             port = 20000 + binding.rank
-            cmd_str = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}"; exec gdbserver :{port} {" ".join(shlex.quote(arg) for arg in program)}'
+            echo_part = f'echo "Rank {binding.rank} on $(hostname) listening on :{port}";'
+            gdbserver_part = f"exec gdbserver :{port}"
+            quoted_program_args = " ".join(shlex.quote(arg) for arg in program)
+            cmd_str = f"{echo_part} {gdbserver_part} {quoted_program_args}"
             program_to_run = ["bash", "-c", cmd_str]
         cmd.extend(program_to_run)
 
@@ -256,13 +259,13 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     callback=lambda ctx, param, value: shlex.split(value) if value else None,
     help="Additional MPI arguments (quoted)",
 )
+@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
 @click.option(
     "--mock-cluster-rank-binding",
     required=False,
     type=click.Path(exists=True, path_type=Path),
     help="Mock cluster rank binding configuration file (YAML)",
 )
-@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -270,8 +273,8 @@ def main(
     dry_run: bool,
     verbose: bool,
     mpi_args: Optional[List[str]],
-    mock_cluster_rank_binding: Optional[Path],
     debug_gdbserver: bool,
+    mock_cluster_rank_binding: Optional[Path],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -335,20 +338,6 @@ def main(
         - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
 
     \b
-    Mock testing:
-
-    For Control plane internal testing, we can use a mock cluster descriptor to initialize control plane without
-    any hardware dependencies. To enable mock cluster, use the --mock-cluster-rank-binding flag to specify the mock cluster descriptor mapping file.
-    The mock cluster descriptor mapping file is a YAML file that maps each rank to a mock cluster descriptor file.
-
-    Mock Cluster Rank Binding YAML Example:
-        rank_to_cluster_mock_cluster_desc:
-          - rank: 0
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
-          - rank: 1
-            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_1.yaml"
-
-    \b
     Debugging with --debug-gdbserver:
         This flag launches each MPI rank under gdbserver for remote debugging, ideal for multi-machine setups.
         - Each rank runs 'gdbserver :PORT ./program args' where PORT = 20000 + rank.
@@ -379,6 +368,18 @@ def main(
         - Non-stop: set non-stop on
         - Ignore signals: handle SIGPIPE nostop noprint pass
         - MPI issues: Add --mca pml ob1 --mca btl tcp,self to --mpi-args
+    Mock testing:
+
+    For Control plane internal testing, we can use a mock cluster descriptor to initialize control plane without
+    any hardware dependencies. To enable mock cluster, use the --mock-cluster-rank-binding flag to specify the mock cluster descriptor mapping file.
+    The mock cluster descriptor mapping file is a YAML file that maps each rank to a mock cluster descriptor file.
+
+    Mock Cluster Rank Binding YAML Example:
+        rank_to_cluster_mock_cluster_desc:
+          - rank: 0
+            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
+          - rank: 1
+            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_1.yaml"
 
     See examples/ttrun/ for example configuration files.
 
