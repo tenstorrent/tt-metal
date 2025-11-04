@@ -33,14 +33,14 @@ ALWI void welford_clear_previous_mean_and_m2() { MATH((llk_math_welfords_sfpu_cl
  * calculation of statistics in a single pass. The DST register buffer must be in acquired state via
  * @ref tile_regs_acquire call. This call is blocking and is only available on the compute engine.
  *
- * @tparam reciprocal_size   The size of the reciprocal lookup table. If 0, the reciprocal will
- *                           be computed using float division instead.
- * @param input_dst_index   The index of the tile in DST register buffer containing the new input.
- *                           Must be less than the size of the DST register. *
- * @param start_idx       The index of the first element in the tile; used to index the reciprocal
- *                        lookup table.
- * @param reciprocal_lut  The reference to the reciprocal lookup table. If an empty array is passed
- *                        the reciprocal will be computed using float division.
+ * @tparam reciprocal_size The size of the reciprocal lookup table. If 0, the reciprocal will
+ *                         be computed using float division instead.
+ * @param input_dst_idx    The index of the tile in DST register buffer containing the new input.
+ *                         Must be less than the size of the DST register. *
+ * @param start_idx        The index of the first element in the tile; used to index the reciprocal
+ *                         lookup table.
+ * @param reciprocal_lut   The reference to the reciprocal lookup table. If an empty array is passed
+ *                         the reciprocal will be computed using float division.
  *
  * @note All 32x32 elements (TILE_WIDTH * TILE_HEIGHT = 1024) of the input tile are processed by
  * this function.
@@ -50,9 +50,27 @@ ALWI void welford_clear_previous_mean_and_m2() { MATH((llk_math_welfords_sfpu_cl
 
 template <uint32_t reciprocal_size>
 ALWI void welford_tile(
-    uint32_t input_dst_index, uint32_t start_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
-    MATH(
-        (llk_math_welfords_sfpu_calculate_welfords_tile_<reciprocal_size>(input_dst_index, start_idx, reciprocal_lut)));
+    uint32_t input_dst_idx, uint32_t start_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    MATH((llk_math_welfords_sfpu_calculate_welfords_tile_<reciprocal_size>(input_dst_idx, start_idx, reciprocal_lut)));
+}
+
+// ----------------------------------------------------------------------------
+// The below function is a flavor of above to use with row_offset argument. Refer to the docstring
+// of the above 3 functions for more details.
+//
+// @param row_offset The offset of the row to start from. Only rows starting from this offset are
+//                   processed in the tile. Should be 0 <= row_offset <= 31. row_offset should be a
+//                   multiple of 4.
+// ----------------------------------------------------------------------------
+template <uint32_t reciprocal_size>
+ALWI void welford_tile(
+    uint32_t input_dst_idx,
+    uint32_t start_idx,
+    uint32_t start_row,
+    uint32_t num_rows,
+    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    MATH((llk_math_welfords_sfpu_calculate_welfords_tile_<reciprocal_size>(
+        input_dst_idx, start_idx, start_row, num_rows, reciprocal_lut)));
 }
 
 /**
@@ -62,12 +80,12 @@ ALWI void welford_tile(
  * temporarily store the mean and m2 values when using the SFPU for other calculations.
  * This call should be followed by a call to `welford_load_mean_m2_from_dst` to load the values back
  * into the SFPU when choosing to continue with the Welford's algorithm with the next set of values.
- * @param mean_dst_index The index of the tile in the dst reg to store the mean values. The m2
+ * @param mean_dst_idx The index of the tile in the dst reg to store the mean values. The m2
  * values are stored in the consecutive tile after the mean.
  * @return None. The mean and m2 values are stored in the tile in the dst reg.
  */
-ALWI void welford_store_mean_m2_to_dst(uint32_t mean_dst_index) {
-    MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_index)));
+ALWI void welford_store_mean_m2_to_dst(uint32_t mean_dst_idx) {
+    MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx)));
 }
 
 /**
@@ -75,12 +93,12 @@ ALWI void welford_store_mean_m2_to_dst(uint32_t mean_dst_index) {
  *
  * This function loads the mean and m2 values from the tile in the dst reg into the SFPU. It is to
  * be called after a call to `welford_store_mean_m2_to_dst` to load the values back into the SFPU.
- * @param mean_dst_index The index of the tile in the dst reg to load the mean values. The m2
+ * @param mean_dst_idx The index of the tile in the dst reg to load the mean values. The m2
  * values are loaded from the consecutive tile after the mean.
  * @return None. The mean and m2 values are loaded into the SFPU.
  */
-ALWI void welford_load_mean_m2_from_dst(uint32_t mean_dst_index) {
-    MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_index)));
+ALWI void welford_load_mean_m2_from_dst(uint32_t mean_dst_idx) {
+    MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx)));
 }
 /**
  * @brief Converts the accumulated M2 (sum of squares of differences from the mean) to variance and
@@ -94,22 +112,21 @@ ALWI void welford_load_mean_m2_from_dst(uint32_t mean_dst_index) {
  * @tparam reciprocal_size   The size of the reciprocal lookup table. If 0, the reciprocal will
  *                           be computed using float division.
  *
- * @param mean_dst_index     The index of the tile in DST register buffer where the mean values will
- *                           be stored. The variance values are stored in the consecutive tile after
- *                           the mean. Must be less than the size of the DST register.
- * @param scale_idx          The index of the scale value to use for the variance calculation. This
- *                           value is used to convert the M2 to variance.
- * @param reciprocal_lut     The reference to the reciprocal lookup table. If an empty array is
- *                           passed (reciprocal_size is 0), the reciprocal will be computed using
- *                           float division.
- * @return                   None. The mean and variance tiles are updated in place. The first
- *                           column of each tile will hold the respective values.
+ * @param mean_dst_idx     The index of the tile in DST register buffer where the mean values will
+ *                         be stored. The variance values are stored in the consecutive tile after
+ *                         the mean. Must be less than the size of the DST register.
+ * @param scale_idx        The index of the scale value to use for the variance calculation. This
+ *                         value is used to convert the M2 to variance.
+ * @param reciprocal_lut   The reference to the reciprocal lookup table. If an empty array is
+ *                         passed (reciprocal_size is 0), the reciprocal will be computed using
+ *                         float division.
+ * @return                 None. The mean and variance tiles are updated in place. The first
+ *                         column of each tile will hold the respective values.
  */
 template <std::size_t reciprocal_size>
 ALWI void welford_store_mean_var_to_dst_col(
-    uint32_t mean_dst_index, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
-    MATH(
-        (llk_math_welfords_sfpu_store_mean_var_to_dst_col<reciprocal_size>(mean_dst_index, scale_idx, reciprocal_lut)));
+    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_col<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
 }
 
 /**
@@ -122,11 +139,11 @@ ALWI void welford_store_mean_var_to_dst_col(
  * @ref tile_regs_acquire. This call is blocking and is only available on the compute engine.
  * @tparam reciprocal_size The size of the reciprocal lookup table. If 0, the reciprocal will
  *                         be computed using float division.
- * @param mean_dst_index The index of the tile in the dst reg to store the mean values.
- *                       The variance values are stored in the consecutive tile after the mean.
- *                       Must be less than the size of the DST register.
- * @param scale_idx The index of the scale value to use for the variance calculation. This
- *                           value is used to convert the M2 to variance.
+ * @param mean_dst_idx The index of the tile in the dst reg to store the mean values.
+ *                     The variance values are stored in the consecutive tile after the mean.
+ *                     Must be less than the size of the DST register.
+ * @param scale_idx    The index of the scale value to use for the variance calculation. This
+ *                     value is used to convert the M2 to variance.
  * @param reciprocal_lut The lookup table containing the reciprocals of the sample counts.
  * @return None. The mean and variance values are stored in the tile in the dst reg in the "raw"
  *         format. The first four rows of the first face of the tile will hold the values, with a
@@ -134,9 +151,8 @@ ALWI void welford_store_mean_var_to_dst_col(
  */
 template <std::size_t reciprocal_size>
 ALWI void welford_store_mean_var_to_dst_raw(
-    uint32_t mean_dst_index, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
-    MATH(
-        (llk_math_welfords_sfpu_store_mean_var_to_dst_raw<reciprocal_size>(mean_dst_index, scale_idx, reciprocal_lut)));
+    uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+    MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_raw<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
 }
 
 // ----------------------------------------------------------------------------
@@ -144,21 +160,21 @@ ALWI void welford_store_mean_var_to_dst_raw(
 // Refer to the docstring of the above 3 functions for more details.
 // @param group_id The group id to store the data for.
 // ----------------------------------------------------------------------------
-ALWI void welford_store_mean_m2_to_dst(uint32_t mean_dst_index, uint32_t group_id) {
-    MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_index, group_id)));
+ALWI void welford_store_mean_m2_to_dst(uint32_t mean_dst_idx, uint32_t group_id) {
+    MATH((llk_math_welfords_sfpu_store_mean_m2_to_dst(mean_dst_idx, group_id)));
 }
 
-ALWI void welford_load_mean_m2_from_dst(uint32_t mean_dst_index, uint32_t group_id) {
-    MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_index, group_id)));
+ALWI void welford_load_mean_m2_from_dst(uint32_t mean_dst_idx, uint32_t group_id) {
+    MATH((llk_math_welfords_sfpu_load_mean_m2_from_dst(mean_dst_idx, group_id)));
 }
 
 template <std::size_t reciprocal_size>
 ALWI void welford_store_mean_var_to_dst_raw(
-    uint32_t mean_dst_index,
+    uint32_t mean_dst_idx,
+    uint32_t group_id,
     uint32_t scale_idx,
-    const std::array<uint32_t, reciprocal_size>& reciprocal_lut,
-    uint32_t group_id) {
+    const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
     MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_raw<reciprocal_size>(
-        mean_dst_index, scale_idx, reciprocal_lut, group_id)));
+        mean_dst_idx, group_id, scale_idx, reciprocal_lut)));
 }
 }  // namespace ckernel
