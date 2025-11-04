@@ -1129,8 +1129,6 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
 
     uint32_t num_tile_rows = NC * Ht;
-    auto all_device_cores = CoreRange(
-        {0, 0}, {cached_program.shared_variables.grid_size.x - 1, cached_program.shared_variables.grid_size.y - 1});
     auto
         [num_cores,
          all_cores,
