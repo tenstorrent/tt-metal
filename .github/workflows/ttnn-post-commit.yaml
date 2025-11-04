@@ -55,6 +55,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      merge-gate-call:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   ttnn:
@@ -89,8 +93,8 @@ jobs:
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 3 -m "not disable_fast_runtime_mode"
           # - name: ttnn conv group
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
-          # - name: ttnn pool group
-          #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
+          - name: ttnn pool group
+            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
           # - name: ttnn matmul group
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
           # - name: ttnn fused group
@@ -111,6 +115,7 @@ jobs:
           - name: ttnn example tests
             cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    if: ${{ (inputs.merge-gate-call && matrix.test-group.name == 'ttnn example tests') || (!inputs.merge-gate-call && matrix.test-group.name != 'ttnn example tests') }}
     runs-on: >-
       ${{
         (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
