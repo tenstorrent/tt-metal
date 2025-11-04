@@ -471,7 +471,6 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory_helper(
         in1_is_output_writer,
         false,  // is_injector_core
         false,  // fuse_op (unused for receiver)
-        ttnn::ccl::get_topological_dimension(input_tensor, std::nullopt),
     };
     append_accessors(in1_receiver_compile_time_args, weight_tensor, output_tensor, bias_tensor);
     auto in1_receiver_kernels_id = CreateKernel(
