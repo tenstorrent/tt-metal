@@ -704,13 +704,13 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
-namespace operations {
+namespace ops {
 Tensor view(const Tensor& input_tensor, const Shape& new_shape, const Shape& new_padded_shape) {
     return tensor_ops::tensor_view(input_tensor, new_shape, new_padded_shape);
 }
 Tensor view(const Tensor& input_tensor, const Shape& new_shape) {
     return tensor_ops::tensor_view(input_tensor, new_shape);
 }
-}  // namespace operations
+}  // namespace ops
 
 }  // namespace tt::tt_metal
