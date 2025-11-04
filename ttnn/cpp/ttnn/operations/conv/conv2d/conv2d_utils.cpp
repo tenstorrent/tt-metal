@@ -19,7 +19,6 @@
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -1286,7 +1285,7 @@ static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
 
     uint32_t max_memory_consumed = 0;
     uint32_t old_max_memory_consumed = 0;
-    uint32_t max_memory_index = 0;
+    [[maybe_unused]] uint32_t max_memory_index = 0;
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 

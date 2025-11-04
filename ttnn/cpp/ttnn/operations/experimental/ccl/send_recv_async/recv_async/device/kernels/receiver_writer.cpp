@@ -12,9 +12,8 @@
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 constexpr uint32_t scratch_buffer_cb_id = get_compile_time_arg_val(0);
-constexpr uint32_t num_pages = get_compile_time_arg_val(1);
-constexpr uint32_t page_size = get_compile_time_arg_val(2);
-constexpr uint32_t output_args_cta_idx = 3;
+constexpr uint32_t page_size = get_compile_time_arg_val(1);
+constexpr uint32_t output_args_cta_idx = 2;
 constexpr uint32_t output_args_crta_idx = 0;
 
 void kernel_main() {
@@ -25,7 +24,8 @@ void kernel_main() {
     // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t start_page_index = get_arg_val<uint32_t>(rt_args_idx++);  // page start offset
+    uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);         // pages for this core
 
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr, page_size);

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 
 import pytest
 import torch
@@ -348,7 +349,7 @@ def test_combined_timestep_guidance_text_proj_embeddings(
         pooled_projection_dim=pooled_projection_dim,
         mesh_device=mesh_device,
     )
-    tt_model.load_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(torch_model.state_dict())
 
     torch.manual_seed(0)
     timestep = torch.full([batch_size], fill_value=500)
