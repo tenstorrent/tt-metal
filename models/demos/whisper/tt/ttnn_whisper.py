@@ -19,6 +19,21 @@ from models.common.generation_utils import get_logits_processor
 
 from . import ttnn_optimized_functional_whisper
 
+# Default values for quality metrics
+DEFAULT_AVG_LOGPROB = -0.5
+DEFAULT_NO_SPEECH_PROB = 0.0
+
+# Control timestamp generation via the <|notimestamps|> token
+NOTIMESTAMPS_TOKEN_ID = 50364
+# <|nospeech|> token
+NO_SPEECH_TOKEN_ID = 50363
+
+# Whisper timestamp tokens: 50365-51864 represent time intervals
+# Timestamp tokens start at 50365 and represent 0.02 second intervals
+EOS_TOKEN_ID = 50257  # <|endoftext|> token
+TIMESTAMP_TOKEN_START = 50365
+TIMESTAMP_TOKEN_END = 51864  # 1500 tokens = 30 seconds max
+
 
 class TtnnWhisper:
     def __init__(self, config=None, device=None, mesh_mappers=None):
@@ -311,8 +326,10 @@ class TtnnWhisper:
 
                         compression_ratio = self._calculate_compression_ratio(text)
                         # Extract per-batch-item metrics
-                        avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else -0.5
-                        no_speech_prob = no_speech_probs[idx].item() if idx < len(no_speech_probs) else 0.0
+                        avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else DEFAULT_AVG_LOGPROB
+                        no_speech_prob = (
+                            no_speech_probs[idx].item() if idx < len(no_speech_probs) else DEFAULT_NO_SPEECH_PROB
+                        )
 
                         is_good, reason = self._check_generation_quality(
                             text,
@@ -357,8 +374,10 @@ class TtnnWhisper:
 
                         compression_ratio = self._calculate_compression_ratio(text)
                         # Extract per-batch-item metrics
-                        avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else -0.5
-                        no_speech_prob = no_speech_probs[idx].item() if idx < len(no_speech_probs) else 0.0
+                        avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else DEFAULT_AVG_LOGPROB
+                        no_speech_prob = (
+                            no_speech_probs[idx].item() if idx < len(no_speech_probs) else DEFAULT_NO_SPEECH_PROB
+                        )
 
                         is_good, reason = self._check_generation_quality(
                             text,
@@ -457,16 +476,13 @@ class TtnnWhisper:
         forced_decoder_ids = processor.get_decoder_prompt_ids(language=language, task=task)
         logger.debug(f"forced_decoder_ids from processor: {forced_decoder_ids}")
 
-        # Control timestamp generation via the <|notimestamps|> token
-        # In Whisper vocab: 50363 = <|nospeech|>, 50364 = <|notimestamps|>
-        # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
-        # When return_timestamps=False, add <|notimestamps|> to disable timestamps
-        NOTIMESTAMPS_TOKEN_ID = 50364
-
         # Keep forced_decoder_ids as tuples with positions
+        # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
         if return_timestamps:
             # Remove notimestamps token if present
             forced_decoder_ids = [(pos, tok) for pos, tok in forced_decoder_ids if tok != NOTIMESTAMPS_TOKEN_ID]
+
+        # When return_timestamps=False, add <|notimestamps|> to disable timestamps
         else:
             # Add notimestamps token if not present (at the appropriate position)
             if not any(tok == NOTIMESTAMPS_TOKEN_ID for _, tok in forced_decoder_ids):
@@ -569,10 +585,9 @@ class TtnnWhisper:
                 first_token_time = time.time()
                 ttft = first_token_time - start_encode
                 # Extract no_speech probability from first frame logits
-                no_speech_token_id = 50363  # <|nospeech|> token
                 with torch.no_grad():
                     probs = torch.softmax(next_token_logits, dim=-1)
-                    no_speech_probs = probs[:, no_speech_token_id]  # Per-batch probabilities
+                    no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]  # Per-batch probabilities
 
             # Update input_ids and current_decode_pos
             if not kv_cache:
@@ -670,16 +685,13 @@ class TtnnWhisper:
         forced_decoder_ids = processor.get_decoder_prompt_ids(language=language, task=task)
         logger.debug(f"forced_decoder_ids from processor: {forced_decoder_ids}")
 
-        # Control timestamp generation via the <|notimestamps|> token
-        # In Whisper vocab: 50363 = <|nospeech|>, 50364 = <|notimestamps|>
-        # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
-        # When return_timestamps=False, add <|notimestamps|> to disable timestamps
-        NOTIMESTAMPS_TOKEN_ID = 50364
-
         # Keep forced_decoder_ids as tuples with positions
+        # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
         if return_timestamps:
             # Remove notimestamps token if present
             forced_decoder_ids = [(pos, tok) for pos, tok in forced_decoder_ids if tok != NOTIMESTAMPS_TOKEN_ID]
+
+        # When return_timestamps=False, add <|notimestamps|> to disable timestamps
         else:
             # Add notimestamps token if not present (at the appropriate position)
             if not any(tok == NOTIMESTAMPS_TOKEN_ID for _, tok in forced_decoder_ids):
@@ -786,10 +798,9 @@ class TtnnWhisper:
                 first_token_time = time.time()
                 ttft = first_token_time - start_encode
                 # Extract no_speech probability from first frame logits
-                no_speech_token_id = 50363  # <|nospeech|> token
                 with torch.no_grad():
                     probs = torch.softmax(next_token_logits, dim=-1)
-                    no_speech_probs = probs[:, no_speech_token_id]  # Per-batch probabilities
+                    no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]  # Per-batch probabilities
 
             # Update input_ids and current_decode_pos
             if not kv_cache:
@@ -922,13 +933,6 @@ class TtnnWhisper:
         """
         Extract timestamps from generated token IDs and segment the text.
         """
-        # Whisper timestamp tokens: 50365-51864 represent time intervals
-        # Token IDs: 50257 = <|endoftext|>, 50362 = <|startofprev|>, 50363 = <|nospeech|>, 50364 = <|notimestamps|>
-        # Timestamp tokens start at 50365 and represent 0.02 second intervals
-        EOS_TOKEN_ID = 50257  # <|endoftext|> token
-        TIMESTAMP_TOKEN_START = 50365
-        TIMESTAMP_TOKEN_END = 51864  # 1500 tokens = 30 seconds max
-
         # Convert to list for easier processing
         tokens = token_ids.tolist()
         segments = []
