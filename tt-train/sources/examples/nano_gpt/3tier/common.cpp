@@ -9,7 +9,6 @@
 #include "core/distributed/distributed.hpp"
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
-#include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
 // namespace name can't start with a digit

@@ -5,7 +5,6 @@
 #include "utils.hpp"
 
 #include "datasets/in_memory_token_dataset.hpp"
-#include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer_trainer.hpp"
 #include "tokenizers/tokenizer_base.hpp"
 
