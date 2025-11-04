@@ -212,10 +212,12 @@ int __attribute__((noinline)) main(void) {
 
     set_deassert_addresses();
 
+    uint8_t noc_mode;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
@@ -276,9 +278,23 @@ int __attribute__((noinline)) main(void) {
 
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
+            noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
+
+            if (noc_mode == DM_DEDICATED_NOC) {
+                if (prev_noc_mode != noc_mode) {
+                    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                }
+                noc_local_state_init(noc_index);
+            } else {
+                if (prev_noc_mode != noc_mode) {
+                    dynamic_noc_init();
+                }
+                dynamic_noc_local_state_init();
+            }
+            prev_noc_mode = noc_mode;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);
