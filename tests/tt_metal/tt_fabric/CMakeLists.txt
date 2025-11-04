@@ -224,3 +224,40 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+# ---- Bench: unicast_addrgen ----
+add_executable(
+    bench_unicast_addrgen
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/unicast_addrgen/bench_unicast_addrgen_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/unicast_addrgen/run_unicast_once_addrgen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
+)
+
+target_link_libraries(
+    bench_unicast_addrgen
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(bench_unicast_addrgen tt_metal)
+
+target_include_directories(
+    bench_unicast_addrgen
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    bench_unicast_addrgen
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
