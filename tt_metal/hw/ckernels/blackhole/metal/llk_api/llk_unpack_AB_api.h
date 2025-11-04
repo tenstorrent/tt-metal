@@ -145,17 +145,7 @@ inline void llk_unpack_AB_reduce_init(
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_AB_reduce_row_max_init() {
-    if constexpr (is_fp32_dest_acc_en) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
-    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
-    // if we have the flag set with REDUCE_ROW, we don't need to do anything
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
-
-    _llk_unpack_AB_reduce_row_max_set_x_dim_();
-    _llk_unpack_AB_reduce_row_max_mop_config_();                            // Unpack operand and scaler
+    _llk_unpack_AB_reduce_row_max_init_<is_fp32_dest_acc_en>();
 }
 
 // Block-based reduce row max functions
@@ -169,18 +159,7 @@ inline void llk_unpack_AB_reduce_row_max_init() {
  */
 template <uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
 inline void llk_unpack_AB_reduce_block_max_row_init() {
-    if constexpr (is_fp32_dest_acc_en) {
-        // Set necessary config regs for MOVB2D hi16/lo16 to work
-        _llk_unpack_dbg_feature_disable_();
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
-    }
-    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
-    // if we have the flag set with REDUCE_ROW, we don't need to do anything
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
-
-    // Unpack the operand (full tile) and scaler (single face)
-    _llk_unpack_AB_reduce_block_max_row_init_();
-    _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim>();  // Unpack operand and scaler
+    _llk_unpack_AB_reduce_block_max_row_init_<block_ct_dim, is_fp32_dest_acc_en>();
 }
 
 /**
@@ -200,9 +179,6 @@ inline void llk_unpack_AB_reduce_block_max_row(
     std::uint32_t address_a = base_address_a + offset_address_a;
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
 
-    // Always tile index 0 for operandB
-    // TTI_UNPACR(SrcB, 0b00000000 /* Z_ch0_inc and Z_ch1_inc */, 0, 0, 0, 1, 1 /* Set Dvalid */,
-    // p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     _llk_unpack_AB_reduce_block_max_row_(address_a, base_address_b);
 }
 
