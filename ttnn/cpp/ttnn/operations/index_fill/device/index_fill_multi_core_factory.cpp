@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,11 +13,6 @@ using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::constants;
 using namespace tt::tt_metal::detail;
-
-union datatype {
-    uint32_t u32;
-    float f32;
-} u_fill_value;
 
 namespace ttnn::operations::index_fill {
 IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::create(
@@ -38,14 +33,18 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         num_rows_to_fill_per_index *= input_shape[i];
     }
 
-    auto fill_value = operation_attributes.value;
-    if (std::holds_alternative<int>(fill_value)) {
-        u_fill_value.u32 = std::get<int>(fill_value);
-    } else if (std::holds_alternative<float>(fill_value)) {
-        u_fill_value.f32 = std::get<float>(fill_value);
+    auto fill_value_ = operation_attributes.value;
+    uint32_t fill_value{};
+    switch (dtype) {
+        case DataType::BFLOAT16:
+            fill_value = pack_two_bfloat16_into_uint32({bfloat16(std::get<float>(fill_value_)), bfloat16(0.0f)});
+            break;
+        case DataType::FLOAT32: fill_value = std::bit_cast<uint32_t>(std::get<float>(fill_value_)); break;
+        case DataType::INT32: fill_value = static_cast<uint32_t>(std::get<int>(fill_value_)); break;
+        default: TT_FATAL(false, "Unsupported datatype"); break;
     }
 
-    auto num_rows = input.physical_volume() / input.logical_shape()[-1];
+    auto num_rows = input.physical_volume() / input.padded_shape()[-1];
     Program program{};
     IDevice* device = input.device();
 
@@ -58,42 +57,24 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     auto input_data_format = datatype_to_dataformat_converter(dtype);
     auto index_data_format = datatype_to_dataformat_converter(index.dtype());
-    auto output_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_unit_size = input.logical_shape()[-1] * input.element_size();
-    uint32_t rounded_input_unit_size = round_up_to_mul32(input_unit_size);
-
-    uint32_t index_unit_size = index.physical_volume() * index.element_size();
-    uint32_t rounded_index_unit_size = round_up_to_mul32(index_unit_size);
-
-    uint32_t output_unit_size = output.logical_shape()[-1] * output.element_size();
-    uint32_t rounded_output_unit_size = round_up_to_mul32(output_unit_size);
+    uint32_t input_page_size = input.buffer()->aligned_page_size();
+    uint32_t index_page_size = index.buffer()->aligned_page_size();
+    uint32_t output_page_size = output.buffer()->aligned_page_size();
 
     auto src_cb_index = CBIndex::c_0;
-    CircularBufferConfig cb_src_config =
-        CircularBufferConfig(rounded_input_unit_size, {{src_cb_index, input_data_format}})
-            .set_page_size(src_cb_index, rounded_input_unit_size);
-    CreateCircularBuffer(program, all_cores, cb_src_config);
-    std::map<std::string, std::string> reader_defines;
-
-    switch (dtype) {
-        case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
-        case DataType::INT32: reader_defines["OUTPUT_DTYPE_INT32"] = "1"; break;
-        case DataType::FLOAT32: reader_defines["OUTPUT_DTYPE_FLOAT32"] = "1"; break;
-        default: TT_FATAL(false, "Unsupported datatype"); break;
-    }
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(input_page_size, {{src_cb_index, input_data_format}})
+            .set_page_size(src_cb_index, input_page_size));
 
     auto index_cb_index = CBIndex::c_1;
-    CircularBufferConfig cb_index_config =
-        CircularBufferConfig(rounded_index_unit_size, {{index_cb_index, index_data_format}})
-            .set_page_size(index_cb_index, rounded_index_unit_size);
-    CreateCircularBuffer(program, all_cores, cb_index_config);
-
-    auto dst_cb_index = CBIndex::c_16;
-    CircularBufferConfig dst_cb_config =
-        CircularBufferConfig(rounded_output_unit_size, {{dst_cb_index, output_data_format}})
-            .set_page_size(dst_cb_index, rounded_output_unit_size);
-    CreateCircularBuffer(program, all_cores, dst_cb_config);
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(index_page_size, {{index_cb_index, index_data_format}})
+            .set_page_size(index_cb_index, index_page_size));
 
     // Create Kernels
     // reader
@@ -102,8 +83,10 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         (std::uint32_t)index_cb_index,
         (std::uint32_t)(dim == n - 1),
         (std::uint32_t)index.physical_volume(),
-        (std::uint32_t)rounded_input_unit_size,
-        (std::uint32_t)rounded_index_unit_size};
+        (std::uint32_t)input_page_size,
+        (std::uint32_t)index_page_size,
+        (std::uint32_t)input.element_size(),
+        (std::uint32_t)input.padded_shape()[-1]};
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
 
@@ -113,7 +96,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)rounded_output_unit_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_page_size};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
@@ -141,7 +124,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
             core,
             {input.buffer()->address(),
              index.buffer()->address(),
-             u_fill_value.u32,
+             fill_value,
              unit_offset,
              num_rows_per_core,
              num_rows_to_fill_per_index,

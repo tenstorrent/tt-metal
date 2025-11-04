@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@ void kernel_main() {
     uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t dst_cb_id = tt::CBIndex::c_16;
     constexpr uint32_t src_cb_id = tt::CBIndex::c_0;
     constexpr uint32_t output_unit_size = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
