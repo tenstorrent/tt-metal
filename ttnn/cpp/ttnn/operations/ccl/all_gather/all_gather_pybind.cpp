@@ -33,6 +33,9 @@ void py_bind_all_gather(py::module& module) {
             num_links (int, optional): The number of links to use for the all-gather operation. Defaults to `None`, for which the number of links is determined automatically.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
 
+        Returns:
+            ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
+
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))

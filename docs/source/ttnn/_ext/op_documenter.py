@@ -246,15 +246,12 @@ class FastOperationDocumenter(FunctionDocumenter):
 
                         # Only skip truly generic Returns sections that provide no useful information
                         # Generic patterns: exact matches with minimal descriptive content
+                        # Keep List and Tuple returns as they provide useful type information
                         is_truly_generic = returns_text.strip() in [
                             "ttnn.Tensor: the output tensor",
                             "ttnn.Tensor: the output tensor.",
                             "* **ttnn.Tensor**: the output tensor",
                             "* **ttnn.Tensor**: the output tensor.",
-                            "List of ttnn.Tensor: the output tensor",
-                            "List of ttnn.Tensor: the output tensor.",
-                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor",
-                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.",
                         ]
 
                         if is_truly_generic:
@@ -399,15 +396,12 @@ class OperationDocumenter(FunctionDocumenter):
 
                         # Only skip truly generic Returns sections that provide no useful information
                         # Generic patterns: exact matches with minimal descriptive content
+                        # Keep List and Tuple returns as they provide useful type information
                         is_truly_generic = returns_text.strip() in [
                             "ttnn.Tensor: the output tensor",
                             "ttnn.Tensor: the output tensor.",
                             "* **ttnn.Tensor**: the output tensor",
                             "* **ttnn.Tensor**: the output tensor.",
-                            "List of ttnn.Tensor: the output tensor",
-                            "List of ttnn.Tensor: the output tensor.",
-                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor",
-                            "Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.",
                         ]
 
                         if is_truly_generic:
