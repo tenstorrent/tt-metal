@@ -12,6 +12,7 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/tilize_utils.hpp>
 #include <sstream>
+#include <iostream>
 
 using std::vector;
 using namespace tt;
@@ -115,7 +116,8 @@ static bool test_sdpa_reduce_c_transposed(
     auto cb_tile_size = tt::tile_size(cb_df);
 
     uint32_t qk_im_num_tiles = q_chunk_size * k_chunk_size;
-    uint32_t stats_num_tiles = q_chunk_size;
+    uint32_t stats_num_tiles = q_chunk_size;     // rows
+    uint32_t out_cols_num_tiles = k_chunk_size;  // cols
 
     auto qk_im_buffer_config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
@@ -143,6 +145,20 @@ static bool test_sdpa_reduce_c_transposed(
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {stats_num_tiles, 1})};
 
+    // Output buffer sized by cols (k_chunk_size)
+    auto cols_buffer_config = tt::tt_metal::ShardedBufferConfig{
+        .device = device,
+        .size = out_cols_num_tiles * cb_tile_size,
+        .page_size = cb_tile_size,
+        .buffer_type = tt::tt_metal::BufferType::L1,
+        .buffer_layout = tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        .shard_parameters = tt::tt_metal::ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(core, core)})),
+            {out_cols_num_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {out_cols_num_tiles, 1})};
+
     auto one_tile_buffer_config = tt::tt_metal::ShardedBufferConfig{
         .device = device,
         .size = cb_tile_size,
@@ -158,7 +174,7 @@ static bool test_sdpa_reduce_c_transposed(
 
     auto qk_im_buffer = CreateBuffer(qk_im_buffer_config);
     auto prev_max_buffer = CreateBuffer(stats_buffer_config);
-    auto out_max_buffer = CreateBuffer(stats_buffer_config);
+    auto out_max_buffer = CreateBuffer(cols_buffer_config);
     auto identity_scale_buffer = CreateBuffer(one_tile_buffer_config);
 
     auto cb_qk_im_id = tt::CBIndex::c_0;
@@ -176,7 +192,7 @@ static bool test_sdpa_reduce_c_transposed(
 
     auto cb_out_max_id = tt::CBIndex::c_2;
     auto cb_out_max_config =
-        tt::tt_metal::CircularBufferConfig(stats_num_tiles * cb_tile_size, {{cb_out_max_id, cb_df}})
+        tt::tt_metal::CircularBufferConfig(out_cols_num_tiles * cb_tile_size, {{cb_out_max_id, cb_df}})
             .set_page_size(cb_out_max_id, cb_tile_size)
             .set_globally_allocated_address(*out_max_buffer);
     tt_metal::CreateCircularBuffer(program, core, cb_out_max_config);
@@ -257,11 +273,70 @@ static bool test_sdpa_reduce_c_transposed(
     std::vector<uint32_t> out_max_vec;
     tt_metal::detail::ReadFromBuffer(out_max_buffer, out_max_vec);
     auto out_max_bfp16 = unpack_uint32_vec_into_bfloat16_vec(out_max_vec);
-    auto out_max_rm = untilize_nfaces(out_max_bfp16, rows, 32);
+    // Kernel outputs 1 x k_chunk_size tiles; untilize to 32 x (k_chunk_size*32)
+    auto out_max_rm = untilize_nfaces(out_max_bfp16, 32, k_chunk_size * 32);
 
     auto golden_rm = golden_reduce_c_transposed(qk_rm, prev_max_first_col, q_chunk_size, k_chunk_size, do_eltwise_max);
 
     float mse = compare_first_col_mse(out_max_rm, golden_rm);
+
+    // Debug: print first row of OUT and GOLDEN per tile in paired order
+    {
+        uint32_t out_width = k_chunk_size * 32;
+        // GOLDEN per-column maxima for row0 per tile (matches 1xcols reduction semantics)
+        uint32_t rows_total = q_chunk_size * 32;
+        uint32_t width_total = k_chunk_size * 32;
+
+        auto print_golden_row_for_tile = [&](uint32_t tile_col_idx) {
+            std::ostringstream gs;
+            gs << "GOLDEN row0 tile" << tile_col_idx << ": ";
+            for (uint32_t c = 0; c < 32; ++c) {
+                float gmax = -std::numeric_limits<float>::infinity();
+                uint32_t col_index = tile_col_idx * 32 + c;
+                for (uint32_t jr = 0; jr < rows_total; ++jr) {
+                    float v = static_cast<float>(qk_rm[jr * width_total + col_index]);
+                    if (v > gmax) {
+                        gmax = v;
+                    }
+                }
+                gs << gmax;
+                if (c != 31) {
+                    gs << ' ';
+                }
+            }
+            std::cout << gs.str() << std::endl;
+        };
+
+        // OUT tile 0, row 0 then GOLDEN tile 0
+        {
+            std::ostringstream oss0;
+            oss0 << "OUT row0 tile0:    ";
+            for (uint32_t c = 0; c < 32; ++c) {
+                float v = static_cast<float>(out_max_rm[0 * out_width + 0 + c]);
+                oss0 << v;
+                if (c != 31) {
+                    oss0 << ' ';
+                }
+            }
+            std::cout << oss0.str() << std::endl;
+            print_golden_row_for_tile(0);
+        }
+
+        // OUT tile 1, row 0 then GOLDEN tile 1 (if exists)
+        if (k_chunk_size >= 2) {
+            std::ostringstream oss1;
+            oss1 << "OUT row0 tile1:    ";
+            for (uint32_t c = 0; c < 32; ++c) {
+                float v = static_cast<float>(out_max_rm[0 * out_width + 32 + c]);
+                oss1 << v;
+                if (c != 31) {
+                    oss1 << ' ';
+                }
+            }
+            std::cout << oss1.str() << std::endl;
+            print_golden_row_for_tile(1);
+        }
+    }
 
     if (mse > 0.0f) {
         log_error(LogTest, "reduce_c_transposed mse: {} > 0", mse);
@@ -282,8 +357,8 @@ int main(int argc, char** argv) {
     /**
      * Parameters to sweep over for correctness.
      */
-    std::vector<uint32_t> q_chunk_sizes = {4};      //, 4, 8};
-    std::vector<uint32_t> k_chunk_sizes = {2};      //, 4}; //, 2, 4, 8, 16};
+    std::vector<uint32_t> q_chunk_sizes = {4};      // rows
+    std::vector<uint32_t> k_chunk_sizes = {2};      // cols
     std::vector<bool> fp32_dest_acc_ens = {false};  //, true};
     std::vector<bool> do_eltwise = {false};         //, true};
 

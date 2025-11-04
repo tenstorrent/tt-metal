@@ -102,48 +102,72 @@ void reduce_c_transposed(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max 
     constexpr uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
-    cb_reserve_back(out_cb, rows);
+    cb_reserve_back(out_cb, cols);
 
     max_tile_init();
     constexpr uint32_t dst_base = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
-    uint32_t dst_stride = cols == 1 ? 1 : 2;
-
     UNPACK((DPRINT << cols << " cols x " << rows << " rows" << ENDL()));
 
-    for (uint32_t i = 0; i < cols; i++) {
-        acquire_dst();
-        // Load this row's tiles into a bounded DST window starting at dst_base
-        copy_tile_to_dst_init_short(in0_cb);
-        for (uint32_t j = 0; j < rows; j++) {
-            uint32_t src_idx = j * cols + i;     // row-major index
-            uint32_t dst_idx = j * 2 + (i & 1);  // interleave in DST: 0,2,4,6 then 1,3,5,7
-            copy_tile(in0_cb, src_idx, dst_idx);
-            UNPACK((DPRINT << "Copied tile " << src_idx << " to " << dst_idx << ENDL()));
-        }
+    // for (uint32_t i = 0; i < cols; i++) {
+    //     acquire_dst();
+    //     // Load this row's tiles into a bounded DST window starting at dst_base
+    //     copy_tile_to_dst_init_short(in0_cb);
+    //     for (uint32_t j = 0; j < rows; j++) {
+    //         uint32_t src_idx = j * cols + i;     // row-major index
+    //         uint32_t dst_idx = j * 2 + (i & 1);  // interleave in DST: 0,2,4,6 then 1,3,5,7
+    //         copy_tile(in0_cb, src_idx, dst_idx);
+    //         UNPACK((DPRINT << "Copied tile " << src_idx << " to " << dst_idx << ENDL()));
+    //     }
 
-        // Run SFPU reduce over the loaded tiles
-        sfpu_reduce_max_sdpa_init();
-        PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
-        PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i & 1)));
-        sfpu_reduce_max_sdpa((i & 1), rows, static_cast<int>(VectorMode::RC_custom));
-        PACK((_llk_math_eltwise_unary_sfpu_done_()));
+    //     // Run SFPU reduce over the loaded tiles
+    //     sfpu_reduce_max_sdpa_init();
+    //     PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::reduce>()));
+    //     PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(i & 1)));
+    //     sfpu_reduce_max_sdpa((i & 1), rows, static_cast<int>(VectorMode::RC_custom));
+    //     PACK((_llk_math_eltwise_unary_sfpu_done_()));
 
-        // Optional elementwise max against previous max
-        if (do_eltwise_max) {
-            copy_tile_to_dst_init_short(prev_cb);
-            copy_tile(prev_cb, i, prev_max_dst_idx);
-            max_tile(dst_base, prev_max_dst_idx, static_cast<int>(VectorMode::R));
-        }
+    //     // Optional elementwise max against previous max
+    //     if (do_eltwise_max) {
+    //         copy_tile_to_dst_init_short(prev_cb);
+    //         copy_tile(prev_cb, i, prev_max_dst_idx);
+    //         max_tile(dst_base, prev_max_dst_idx, static_cast<int>(VectorMode::R));
+    //     }
 
-        // Pack the reduced result from dst_base
-        pack_tile(i, out_cb);
-        release_dst();
-    }
+    //     // Pack the reduced result from dst_base
+    //     pack_tile(i, out_cb);
+    //     release_dst();
+    // }
 
-    cb_push_back(out_cb, rows);
-    // DPRINT << "PACKED OUT" << ENDL();
+    acquire_dst();
+    copy_tile_to_dst_init_short(in0_cb);
+    copy_tile(in0_cb, 0, 0);
+    copy_tile(in0_cb, 2, 2);
+    copy_tile(in0_cb, 4, 4);
+    copy_tile(in0_cb, 6, 6);
+
+    copy_tile(in0_cb, 1, 1);
+    copy_tile(in0_cb, 3, 3);
+    copy_tile(in0_cb, 5, 5);
+    copy_tile(in0_cb, 7, 7);
+
+    PACK((llk_packer_wait_for_math_done()));
+
+    sfpu_reduce_max_sdpa_init();
+
+    PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0)));
+    sfpu_reduce_max_sdpa(0, 4, static_cast<int>(VectorMode::RC_custom));
+
+    PACK((_llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(1)));
+    sfpu_reduce_max_sdpa(1, 4, static_cast<int>(VectorMode::RC_custom));
+    PACK((_llk_math_eltwise_unary_sfpu_done_()));
+
+    pack_tile(0, out_cb, 0);
+    pack_tile(1, out_cb, 1);
+    release_dst();
+
+    cb_push_back(out_cb, cols);
 }
 
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
