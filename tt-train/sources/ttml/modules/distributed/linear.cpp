@@ -38,6 +38,12 @@ autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& ten
     }
     // do not pass bias
     x = ops::linear_op(x, m_weight, /* bias */ nullptr);
+
+    /*
+        All reduce with noop backward to avoid double all reduce in backward pass. This happens due to broadcast (no op in forward pass)
+        does all reduce in backward pass. See similar implementation in fairscale for more details.
+        https://github.com/facebookresearch/fairscale/blob/main/fairscale/nn/model_parallel/mappings.py#L102
+    */
     x = ops::distributed::all_reduce(x, /* noop_backward */ true);
     if (m_bias != nullptr) {
         x = ops::add(x, m_bias);
