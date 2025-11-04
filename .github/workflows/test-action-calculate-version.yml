@@ -460,13 +460,13 @@ jobs:
           # Create first commit to ignore
           echo "breaking1" > breaking1.txt
           git add breaking1.txt
-          git commit -m "Breaking change 1 (MAJOR)"
+          git commit -m "Breaking change 1 (MINOR)"
           MAJOR_SHA1=$(git rev-parse HEAD)
 
           # Create second commit to ignore
           echo "breaking2" > breaking2.txt
           git add breaking2.txt
-          git commit -m "Breaking change 2 (MAJOR)"
+          git commit -m "Breaking change 2 (MINOR)"
           MAJOR_SHA2=$(git rev-parse HEAD)
 
           # Create commit to keep
