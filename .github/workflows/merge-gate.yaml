@@ -261,11 +261,7 @@ jobs:
 
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+            needs.find-changes.outputs.any-code-changed == 'true'
         }}
     needs: [build, find-changes]
     secrets: inherit
