@@ -236,11 +236,7 @@ tt::tt_metal::operation::ProgramWithCallbacks recv_async_multicore(
 
             uint32_t pages_for_this_core = pages_per_core + (core_idx < remainder_pages ? 1 : 0);
 
-            uint32_t page_start_offset = 0;
-            for (uint32_t prev_idx = 0; prev_idx < core_idx; ++prev_idx) {
-                uint32_t prev_pages = pages_per_core + (prev_idx < remainder_pages ? 1 : 0);
-                page_start_offset += prev_pages;
-            }
+            uint32_t page_start_offset = core_idx * pages_per_core + std::min(core_idx, remainder_pages);
 
             uint32_t num_whole_packets = 0, num_pages_remainder_core = 0;
             if (num_pages_per_packet > 0) {
