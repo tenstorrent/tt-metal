@@ -183,10 +183,6 @@ class MaxPool2dStaticSamePadding(nn.MaxPool2d):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.pool = nn.MaxPool2d(*args, **kwargs)
-        self.stride = self.pool.stride
-        self.kernel_size = self.pool.kernel_size
-
         if isinstance(self.stride, int):
             self.stride = [self.stride] * 2
         elif len(self.stride) == 1:
@@ -210,7 +206,8 @@ class MaxPool2dStaticSamePadding(nn.MaxPool2d):
 
         x = F.pad(x, [left, right, top, bottom])
 
-        x = self.pool(x)
+        # x = self.pool(x)
+        x = F.max_pool2d(x, self.kernel_size, self.stride, self.padding, self.dilation)
         return x
 
 

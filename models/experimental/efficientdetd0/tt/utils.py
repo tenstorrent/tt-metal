@@ -52,17 +52,17 @@ class EfficientDetd0Maxpool2D:
         self.batch_size = maxpool_params.batch_size
         self.input_height = maxpool_params.input_height
         self.input_width = maxpool_params.input_width
-        self.channels = maxpool_params.channels
         self.kernel_size = maxpool_params.kernel_size
         self.padding = maxpool_params.padding
         self.stride = maxpool_params.stride
-        self.ceil_mode = maxpool_params.ceil_mode
-        # self.ceil_mode = ceil_mode
+        # self.ceil_mode = maxpool_params.ceil_mode
+        self.ceil_mode = ceil_mode
         self.deallocate_activation = deallocate_activation
         self.cache = cache
         self.dtype = dtype
-        self.memory_config = (memory_config,)
-        self.in_place_halo = (in_place_halo,)
+        self.memory_config = memory_config
+        self.in_place_halo = in_place_halo
+
         self.shard_layout = shard_layout
         self.output_layout = output_layout
         self.dilation = dilation
@@ -73,7 +73,7 @@ class EfficientDetd0Maxpool2D:
             batch_size=self.batch_size,
             input_h=self.input_height,
             input_w=self.input_width,
-            channels=self.channels,
+            channels=x.shape[-1],
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
@@ -85,7 +85,7 @@ class EfficientDetd0Maxpool2D:
             deallocate_input=self.deallocate_activation,
             reallocate_halo_output=True,
             dtype=self.dtype,
-            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            output_layout=self.output_layout,
         )
 
 
@@ -103,11 +103,10 @@ class MaxPool2dDynamicSamePadding:
         self.device = device
         self.batch = batch
         self.parameters = parameters
-        self.in_channels = maxpool_params.in_channels
+        self.groups = maxpool_params.groups
         self.kernel_size = maxpool_params.kernel_size
         self.stride = maxpool_params.stride
         self.dilation = maxpool_params.dilation
-        self.groups = maxpool_params.groups
         self.input_height = maxpool_params.input_height
         self.input_width = maxpool_params.input_width
         self.shard_layout = shard_layout
@@ -115,8 +114,8 @@ class MaxPool2dDynamicSamePadding:
         kh, kw = self.kernel_size
         sh, sw = self.stride
         oh, ow = math.ceil(ih / sh), math.ceil(iw / sw)  # change the output size according to stride ! ! !
-        self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation[0] + 1 - ih, 0)
-        self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
+        self.pad_h = max((oh - 1) * self.stride[0] + (kh - 1) * self.dilation + 1 - ih, 0)
+        self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation + 1 - iw, 0)
 
         if self.pad_h > 0 or self.pad_w > 0:
             pad_offset_width = self.pad_w // 2 + self.pad_w - self.pad_w // 2
@@ -130,6 +129,10 @@ class MaxPool2dDynamicSamePadding:
                 pad_right = pad_left + pad_offset_width % 2
                 maxpool_params.padding = (pad_top, pad_bottom, pad_left, pad_right)
 
+        if isinstance(maxpool_params.kernel_size, int):
+            maxpool_params.kernel_size = [maxpool_params.kernel_size, maxpool_params.kernel_size]
+        if isinstance(maxpool_params.stride, int):
+            maxpool_params.stride = [maxpool_params.stride, maxpool_params.stride]
         self.dynamic_conv = EfficientDetd0Maxpool2D(
             maxpool_params,
             device=device,

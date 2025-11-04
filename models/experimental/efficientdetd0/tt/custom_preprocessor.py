@@ -15,7 +15,7 @@ from ttnn.model_preprocessing import (
 )
 
 from models.experimental.efficientdetd0.reference.efficientdet import EfficientDetBackbone
-from models.experimental.efficientdetd0.reference.modules import Regressor, Classifier
+from models.experimental.efficientdetd0.reference.modules import Regressor, Classifier, BiFPN
 from models.experimental.efficientdetd0.reference.modules import SeparableConvBlock
 
 
@@ -89,6 +89,86 @@ def custom_preprocessor(
                 # parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id])
                 parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id], bn)
             parameters["header_list"][layer_num] = _extract_seperable_conv(model.header)
+
+    if isinstance(model, BiFPN):
+        # Process all separable conv blocks for upsampling path
+        parameters["conv6_up"] = _extract_seperable_conv(model.conv6_up)
+        parameters["conv5_up"] = _extract_seperable_conv(model.conv5_up)
+        parameters["conv4_up"] = _extract_seperable_conv(model.conv4_up)
+        parameters["conv3_up"] = _extract_seperable_conv(model.conv3_up)
+
+        # Process all separable conv blocks for downsampling path
+        parameters["conv4_down"] = _extract_seperable_conv(model.conv4_down)
+        parameters["conv5_down"] = _extract_seperable_conv(model.conv5_down)
+        parameters["conv6_down"] = _extract_seperable_conv(model.conv6_down)
+        parameters["conv7_down"] = _extract_seperable_conv(model.conv7_down)
+
+        if model.use_p8:
+            parameters["conv7_up"] = _extract_seperable_conv(model.conv7_up)
+            parameters["conv8_down"] = _extract_seperable_conv(model.conv8_down)
+
+        # Process first_time channel reduction layers
+        if model.first_time:
+            # Extract conv + batchnorm for channel reduction
+            parameters["p3_down_channel"] = {}
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p3_down_channel[0], model.p3_down_channel[1])
+            parameters["p3_down_channel"]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+            parameters["p3_down_channel"]["bias"] = ttnn.from_torch(
+                conv_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32
+            )
+
+            parameters["p4_down_channel"] = {}
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p4_down_channel[0], model.p4_down_channel[1])
+            parameters["p4_down_channel"]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+            parameters["p4_down_channel"]["bias"] = ttnn.from_torch(
+                conv_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32
+            )
+
+            parameters["p5_down_channel"] = {}
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p5_down_channel[0], model.p5_down_channel[1])
+            parameters["p5_down_channel"]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+            parameters["p5_down_channel"]["bias"] = ttnn.from_torch(
+                conv_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32
+            )
+
+            # P5 to P6 conversion (conv + bn + maxpool)
+            parameters["p5_to_p6_conv"] = {}
+            # import pdb; pdb.set_trace()
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(model.p5_to_p6[0], model.p5_to_p6[1])
+            parameters["p5_to_p6_conv"]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+            parameters["p5_to_p6_conv"]["bias"] = ttnn.from_torch(conv_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32)
+            # Note: p5_to_p6[2] is MaxPool2d, handled separately in conv_params
+
+            # Additional channel reduction for bottom-up path
+            parameters["p4_down_channel_2"] = {}
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
+                model.p4_down_channel_2[0], model.p4_down_channel_2[1]
+            )
+            parameters["p4_down_channel_2"]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+            parameters["p4_down_channel_2"]["bias"] = ttnn.from_torch(
+                conv_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32
+            )
+
+            parameters["p5_down_channel_2"] = {}
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
+                model.p5_down_channel_2[0], model.p5_down_channel_2[1]
+            )
+            parameters["p5_down_channel_2"]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.float32)
+            parameters["p5_down_channel_2"]["bias"] = ttnn.from_torch(
+                conv_bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32
+            )
+
+        # Store attention weights if using fast attention
+        if model.attention:
+            parameters["p6_w1"] = model.p6_w1.data
+            parameters["p5_w1"] = model.p5_w1.data
+            parameters["p4_w1"] = model.p4_w1.data
+            parameters["p3_w1"] = model.p3_w1.data
+            parameters["p4_w2"] = model.p4_w2.data
+            parameters["p5_w2"] = model.p5_w2.data
+            parameters["p6_w2"] = model.p6_w2.data
+            parameters["p7_w2"] = model.p7_w2.data
+
     elif isinstance(
         model,
         (EfficientDetBackbone,),
@@ -116,6 +196,14 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
 
 
 class ConvArgs(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
+
+
+class Args(ModuleArgs):
     __getattr__ = dict.__getitem__
     __delattr__ = dict.__delitem__
 
@@ -165,7 +253,7 @@ def register_layer_hooks(model, layer_type):
         input_shape = tuple(input[0].shape) if isinstance(input, (tuple, list)) else tuple(input.shape)
         output_shape = tuple(output.shape) if isinstance(output, torch.Tensor) else tuple(output[0].shape)
 
-        layer_info[len(layer_info)] = ConvArgs(
+        layer_info[len(layer_info)] = Args(
             kernel_size=getattr(module, "kernel_size", None),
             stride=getattr(module, "stride", None),
             padding=getattr(module, "padding", None),
