@@ -189,12 +189,7 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 
 
 @parametrize_mesh_with_fabric()
-@parametrize_batch_seq(
-    [
-        (1, 1),
-        # (1, 128)
-    ]
-)
+@parametrize_batch_seq([(1, 1), (1, 16), (1, 128)])
 @pytest.mark.parametrize("mesh_shape", [(1, 4)])
 def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, reset_seeds):
     """Test complete decoder layer - combines attention + MLP + norms"""
@@ -352,7 +347,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         tt_output = decoder_layer(
             tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
         )
-        pcc_threshold = 0.93 if seq_len == 1 else 0.88
+        pcc_threshold = 0.99
         passing, output = run_component_comparison(
             tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
         )

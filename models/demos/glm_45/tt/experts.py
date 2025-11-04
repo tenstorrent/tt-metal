@@ -281,6 +281,7 @@ class Experts:
         rw_2d = (
             routing_weights if len(routing_weights.shape) == 2 else ttnn.reshape(routing_weights, (tokens_total, -1))
         )
+        print("rw_2d: ", rw_2d)
         rw_rm = ttnn.to_layout(rw_2d, ttnn.ROW_MAJOR_LAYOUT)
         weights_3d = ttnn.reshape(rw_rm, (1, tokens_total, self.num_experts))
         # Binary mask for expert selection (top-k), used in sparse matmuls to compute only selected experts
@@ -366,7 +367,8 @@ class Experts:
             ttnn.deallocate(down_in_s)
             # Match next_states pre-allreduce shape: [B, 1, S, H]
             shared_out = ttnn.reshape(shared_out, (batch_size, 1, seq_len, self.hidden_size))
-            next_states = next_states + shared_out
+            print("shared_out: ", shared_out)
+            next_states = next_states + shared_out * 4
 
         # EP allreduce then TP allreduce (single path for routed + shared)
         if self.mesh_config.ep > 1:

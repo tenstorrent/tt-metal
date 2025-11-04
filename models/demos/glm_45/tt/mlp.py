@@ -136,11 +136,7 @@ class MLP:
         mesh_config=None,
     ):
         # Decide between MoE and dense MLP based on available keys
-        # Router can be under "router" (GPT-OSS style) or "gate" (GLM style)
-        router_state_router = substate(state_dict, "router")
-        router_state_gate = substate(state_dict, "gate")
-        # Pick whichever substate includes a weight key
-        router_state_dict = router_state_router if ("weight" in router_state_router) else router_state_gate
+        router_state_dict = substate(state_dict, "gate")
 
         experts_state_dict = substate(state_dict, "experts")
         shared_state_dict = substate(state_dict, "shared_experts")
