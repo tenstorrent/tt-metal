@@ -80,6 +80,38 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     cb_push_back(out_cb, rows);
 }
 
+#ifdef TRISC_MATH
+/**
+ * legacy_compat recip_tile on a single column of a tile
+ */
+template <bool legacy_compat = true>
+void calculate_recip_first_column() {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
+        // Note: negate check removed since in always >= 0.0
+        // v_if (in < 0.0)
+        // {
+        //     out = -out;
+        // }
+        // v_endif;
+        if constexpr (DST_ACCUM_MODE || APPROX) {
+            sfpi::dst_reg[0] = out;
+        } else {
+            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(float_to_fp16b(out, 0));
+        }
+        sfpi::dst_reg += 2;
+    }
+}
+
+template <bool legacy_compat = true>
+void recip_tile_first_column(uint32_t idst) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROX /*APPROXIMATE*/>(
+        calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+}
+#endif
+
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
@@ -92,7 +124,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        recip_tile(0, static_cast<int>(VectorMode::C));
+        // recip_tile(0, static_cast<int>(VectorMode::C));
+        MATH((recip_tile_first_column(0)));
         pack_tile(0, in_cb);
         release_dst();
     }
@@ -313,6 +346,39 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     }
 }
 
+#ifdef TRISC_MATH
+void calculate_exponential_first_column(int scale_bf16) {
+    constexpr int ITERATIONS_HALF_FACE = 4;
+    if constexpr (EXP_APPROX_MODE) {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = ckernel::sfpu::
+                _calculate_exponential_piecewise_<EXP_APPROX_MODE, true /*SCALE_EN*/, true /*SKIP_POSITIVE_CHECK*/>(
+                    val, scale_bf16);
+            sfpi::dst_reg[0] = result;
+
+            // Stride by 2 to skip columns 8:16 of the face
+            sfpi::dst_reg += 2;
+        }
+    } else {
+        for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            val = val * sfpi::s2vFloat16b(scale_bf16);
+            sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_improved_<DST_ACCUM_MODE>(val);
+            sfpi::dst_reg[0] = result;
+
+            // Stride by 2 to skip columns 8:16 of the face
+            sfpi::dst_reg += 2;
+        }
+    }
+}
+
+void exp_tile_first_column(uint32_t idst, int scale_bf16) {
+    _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
+        calculate_exponential_first_column, idst, (int)VectorMode::C, scale_bf16);
+}
+#endif
+
 template <uint32_t scale_fp32>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
@@ -333,7 +399,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
         sub_tiles(in0_cb, in1_cb, i, i, 0);
 
-        exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
+        // exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
+        MATH((exp_tile_first_column(0, scale_bf16)));
 
         pack_tile(0, out_cb);
 
