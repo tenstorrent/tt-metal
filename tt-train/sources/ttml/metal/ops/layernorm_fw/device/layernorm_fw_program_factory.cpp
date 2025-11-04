@@ -190,7 +190,6 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
 
     // Check gamma shape is [1, 1, 1, C]
     const auto& gamma_shape = gamma.logical_shape();
-    std::cout << "Gamma shape: " << gamma_shape << std::endl;
     TT_FATAL(gamma_shape.rank() == 4, "Gamma tensor must be 4D [1, 1, 1, C], got shape {}", gamma_shape);
 
     // Check beta shape is [1, 1, 1, C]
