@@ -15,8 +15,6 @@ on:
           - resnet50
           - sentence_bert
           - stable_diffusion_35_large
-          - mochi
-          - flux1-dev
   schedule:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 

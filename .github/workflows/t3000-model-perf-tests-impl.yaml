@@ -83,7 +83,6 @@ jobs:
           env python3 models/perf/merge_perf_results.py
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ inputs.model == 'all' || inputs.model == matrix.test-group.model-name }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"
@@ -95,7 +94,6 @@ jobs:
             exit 1
           fi
       - name: Upload Models perf report
-        if: ${{ inputs.model == 'all' || inputs.model == matrix.test-group.model-name }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
@@ -108,7 +106,7 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ (inputs.model == 'all' || inputs.model == matrix.test-group.model-name) && !cancelled() }}
+        if: ${{ !cancelled() }}
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
