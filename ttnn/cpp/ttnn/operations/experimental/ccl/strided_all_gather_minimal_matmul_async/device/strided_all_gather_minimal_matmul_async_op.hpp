@@ -42,10 +42,9 @@ struct StridedAllGatherMinimalMatmulAsync {
     std::vector<IDevice*> devices;
 
     /* General */
-    void validate_with_output_tensors(
+    void validate(
         const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        const std::vector<std::optional<Tensor>>& output_tensors) const;
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
@@ -127,7 +126,6 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<operations::unary::UnaryWithParam> fused_activation = std::nullopt,
     const std::optional<const operations::experimental::minimal_matmul::MinimalMatmulConfig> config = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const ttnn::CoreGrid> core_grid = std::nullopt,
     std::optional<uint32_t> tiles_per_chunk = std::nullopt,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt);
