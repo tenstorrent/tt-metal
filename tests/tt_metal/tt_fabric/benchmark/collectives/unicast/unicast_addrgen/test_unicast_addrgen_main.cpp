@@ -6,7 +6,7 @@
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-// Existing fixture from bench_unicast_addrgen_main.cpp
+// Existing fixture from original test
 struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
     Fixture() :
         ::tt::tt_metal::MeshDeviceFixtureBase(Config{
@@ -16,9 +16,18 @@ struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
     void teardown() { this->TearDown(); }
 };
 
-TEST(AddrgenUnicast, BasicWrite) {
+// Parameterized test for different API variants
+class AddrgenApiVariantTest : public ::testing::TestWithParam<tt::tt_fabric::bench::AddrgenApiVariant> {
+protected:
     Fixture fixture;
-    fixture.setup();
+
+    void SetUp() override { fixture.setup(); }
+
+    void TearDown() override { fixture.teardown(); }
+};
+
+TEST_P(AddrgenApiVariantTest, Write) {
+    auto api_variant = GetParam();
 
     // Hardcoded parameters - minimal test case
     tt::tt_fabric::bench::PerfParams p{
@@ -30,18 +39,24 @@ TEST(AddrgenUnicast, BasicWrite) {
         .page_size = 4096,
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
-        .trace_iters = 1  // minimal trace
+        .trace_iters = 1,
+        .api_variant = api_variant  // Test parameter
     };
 
-    // Call existing benchmark function (returns PerfPoint with timing)
+    // Call existing benchmark function
     auto result = tt::tt_fabric::bench::run_unicast_once(&fixture, p);
 
-    // Test passes if no assertion failures occurred in run_unicast_once
-    // (it already validates data with ADD_FAILURE)
+    // Test passes if no assertion failures occurred
     EXPECT_GT(result.bytes, 0u);
-
-    fixture.teardown();
 }
+
+// Instantiate with both variants
+INSTANTIATE_TEST_SUITE_P(
+    AddrgenOverloads,
+    AddrgenApiVariantTest,
+    ::testing::Values(
+        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite,
+        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState));
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

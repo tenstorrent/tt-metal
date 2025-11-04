@@ -206,6 +206,16 @@ Notes:
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/unicast_addrgen/kernels/";
 
+    // Helper to select writer kernel based on API variant
+    auto get_writer_kernel_path = [](AddrgenApiVariant variant) -> std::string {
+        switch (variant) {
+            case AddrgenApiVariant::UnicastWrite: return std::string(KDIR) + "unicast_tx_writer_cb_to_dst_addrgen.cpp";
+            case AddrgenApiVariant::UnicastWriteWithState:
+                return std::string(KDIR) + "unicast_tx_writer_with_state_addrgen.cpp";
+            default: TT_FATAL(false, "Unknown API variant"); return "";
+        }
+    };
+
     auto rx_wait_k = tt::tt_metal::CreateKernel(
         receiver_prog,
         std::string(KDIR) + "unicast_rx_addrgen.cpp",
@@ -249,7 +259,7 @@ Notes:
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "unicast_tx_writer_cb_to_dst_addrgen.cpp",
+        get_writer_kernel_path(p.api_variant),  // Use helper to select kernel
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
