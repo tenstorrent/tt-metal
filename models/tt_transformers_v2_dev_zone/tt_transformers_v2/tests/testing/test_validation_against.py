@@ -475,6 +475,48 @@ def test_validation_non_decorator_class_vs_class_ttnn(ttnn_mesh_device: ttnn.Mes
     assert registry.results[-1].passed
 
 
+def test_return_reference_output_torch(ttnn_mesh_device: ttnn.MeshDevice):
+    """Demonstrate return_reference_output=True returns the reference (torch) output.
+
+    The decorator computes torch.matmul on host for reference, then returns that
+    reference result converted back to a TTNN tensor distributed like the impl output.
+    """
+    registry = get_validation_registry()
+    before = len(registry.results)
+
+    m, n, k = 8, 10, 6
+    a = torch.randn(1, m, k, dtype=torch.bfloat16)
+    b = torch.randn(1, k, n, dtype=torch.bfloat16)
+    a_tt = ttnn.from_torch(a.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    b_tt = ttnn.from_torch(b.unsqueeze(0), device=ttnn_mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    ref_host = torch.ones(m, n, dtype=torch.bfloat16)
+
+    @compare_to_torch(
+        # mock a reference function that returns a torch tensor with the same shape as the decorated function output
+        reference_fn=lambda a, b: ref_host,
+        metric_tolerances={
+            Metric.MAX_ABS_ERROR: 1,  # outrageous tolerance to confirm the mock
+            Metric.PCC: 0.99,
+        },
+        return_reference_output=True,
+    )
+    def _impl_matmul(a, b):
+        return ttnn.matmul(a, b)
+
+    # Call impl; returned value should be the reference result (distributed as impl output)
+    out_tt = _impl_matmul(a_tt, b_tt)
+
+    # Registry records one validation
+    assert len(registry.results) == before + 1
+    assert not registry.results[-1].metrics[Metric.MAX_ABS_ERROR].passed
+    assert registry.results[-1].metrics[Metric.PCC].passed
+
+    # Convert both outputs to host and verify numerical equivalence
+    out_host = to_torch_auto_compose(out_tt)
+    assert torch.allclose(out_host, ref_host)
+
+
 # ============================================================================
 # Additional test functions
 # ============================================================================

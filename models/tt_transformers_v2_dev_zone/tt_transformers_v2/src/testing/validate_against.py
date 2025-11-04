@@ -28,6 +28,7 @@ import torch
 import ttnn
 
 from .auto_compose import to_torch_auto_compose
+from .distribute_as import from_torch_dist_as
 from .metrics import DEFAULT_METRICS
 
 # ============================================================================
@@ -60,6 +61,7 @@ def compare_to_ttnn(
     metric_tolerances: Optional[Dict[Any, Any]] = None,
     enabled: bool = True,
     raise_exceptions: bool = False,
+    return_reference_output: bool = False,
 ):
     """
     Convenience wrapper for TTNN-on-device comparison. Provides useful visual cue to users that the reference function is a TTNN-native function.
@@ -109,6 +111,8 @@ def compare_to_ttnn(
         ref_kwargs = _map_structure(kwargs, _to_ttnn_auto)
         return ref_args, ref_kwargs
 
+    map_fn_to_match_sig = lambda tt_tensor, filler: to_torch_auto_compose(tt_tensor)
+
     return __validate_against(
         reference_fn=reference_fn,
         input_map=input_to_ttnn or _default_input_map,
@@ -116,6 +120,7 @@ def compare_to_ttnn(
         metric_tolerances=metric_tolerances,
         enabled=enabled,
         raise_exceptions=raise_exceptions,
+        reference_output_map_fn=map_fn_to_match_sig if return_reference_output else None,
     )
 
 
@@ -127,6 +132,7 @@ def compare_to_torch(
     metric_tolerances: Optional[Dict[Any, Any]] = None,
     enabled: bool = True,
     raise_exceptions: bool = False,
+    return_reference_output: Optional[Callable[..., bool] | bool] = False,
 ):
     """
     Convenience wrapper for host/CPU comparison using torch.
@@ -171,6 +177,7 @@ def compare_to_torch(
         metric_tolerances=metric_tolerances,
         enabled=enabled,
         raise_exceptions=raise_exceptions,
+        reference_output_map_fn=from_torch_dist_as if return_reference_output else None,
     )
 
 
@@ -390,8 +397,36 @@ def _prepare_metric_config(metric_tolerances_input):
     return metrics_map, hib, tol_map, logs_local
 
 
-# todo)) add capability to run the reference function instead of the decorated function on a per-module basis!
-# this is where distribute_as.py comes in handy!
+def _align_ref_output_to_impl(ref_output: Any, impl_output: Any) -> Any:
+    """Convert reference output to have the same type/distribution as impl output.
+
+    Fast-paths only for common single-output cases; otherwise pass through ref.
+    """
+    # Same type – return as-is
+    if isinstance(ref_output, ttnn.Tensor) and isinstance(impl_output, ttnn.Tensor):
+        return ref_output
+    if torch.is_tensor(ref_output) and torch.is_tensor(impl_output):
+        return ref_output
+
+    # Impl is TTNN, ref is Torch: distribute ref like impl
+    if isinstance(impl_output, ttnn.Tensor) and torch.is_tensor(ref_output):
+        try:
+            return from_torch_dist_as(ref_output, impl_output)
+        except Exception:
+            # Fallback: basic from_torch to default device/layout
+            dev = getattr(impl_output, "device", None) or ttnn.GetDefaultDevice()
+            return ttnn.from_torch(ref_output, device=dev)
+
+    # Impl is Torch, ref is TTNN: compose to Torch
+    if torch.is_tensor(impl_output) and isinstance(ref_output, ttnn.Tensor):
+        try:
+            return to_torch_auto_compose(ref_output)
+        except Exception:
+            return ttnn.to_torch(ref_output)
+
+    # Unknown structures – default to reference
+    return ref_output
+
 
 # todo)) also allow raise an exception from the a failed metric!
 
@@ -419,6 +454,7 @@ def __validate_against(
     metric_tolerances: Optional[Dict[Any, Any]] = None,
     enabled: bool = True,
     raise_exceptions: bool = False,
+    reference_output_map_fn: Optional[Callable] = None,
 ):
     """
     Decorator to validate a function against a reference implementation.
@@ -624,11 +660,24 @@ def __validate_against(
                             err = f"{metric_name}={value:.6e} exceeds tolerance {threshold:.6e}"
                         computed_metrics[metric_key] = MetricResult(value=value, passed=ok, error=err)
                 except Exception as e:
-                    if raise_exceptions:
-                        raise
                     msg = f"Metric {metric_name} failed: {str(e)}"
                     computed_metrics[metric_key] = MetricResult(value=None, passed=False, error=msg)
                     passed = False
+                    if raise_exceptions:
+                        raise
+
+            # Optionally return the (aligned) reference output instead of impl output
+            backup_impl_output = impl_output
+            try:
+                if reference_output_map_fn:
+                    impl_output = reference_output_map_fn(ref_output, impl_output)
+            except Exception as e:
+                # If alignment fails, fall back to impl output
+                impl_output = backup_impl_output
+                # Re-raise exception if raise_exceptions is True after logging the error
+                logs.append(f"reference_output_mapping_error={str(e)}")
+                if raise_exceptions:
+                    raise
 
             # Record results
             pass_count = sum(1 for v in computed_metrics.values() if v.passed)
