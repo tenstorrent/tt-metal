@@ -1942,17 +1942,18 @@ FORCE_INLINE void noc_inline_dw_write_set_state(
  *
  * Return value: None
  *
- * | Argument                            | Description                                         | Data type | Valid range   | required |
- * |-------------------------------------|-----------------------------------------------------|-----------|---------------|----------|
- * | val                                 | The value to be written                             | uint32_t  | Any uint32_t  | True     |
- * | addr                                | The local address to write to (if not set in state) | uint32_t  | 0..1MB        | False    |
- * | cmd_buf                             | Command buffer to use for the transaction           | uint8_t   | 0-3           | False    |
- * | noc                                 | NOC to use for the transaction                      | uint8_t   | 0 or 1        | False    |
- * | update_addr_lo (template parameter) | Whether to update the lower 32 bits of the address  | bool      | true or false | False    |
- * | update_counter (template parameter) | Whether to update the write counters                | bool      | true or false | False    |
- * | posted (template parameter)         | Whether the call is posted (i.e. ack requirement)   | bool      | true or false | False    |
- * | update_addr_hi (template parameter) | Whether to update the upper 32 bits of the address  | bool      | true or false | False    |
- * | update_val (template parameter)     | Whether to set the value to be written              | bool      | true or false | False    |
+ * | Argument                                   | Description                                            | Data type | Valid range   | required |
+ * |--------------------------------------------|--------------------------------------------------------|-----------|---------------|----------|
+ * | val                                        | The value to be written                                | uint32_t  | Any uint32_t  | True     |
+ * | addr                                       | The local address to write to (if not set in state)    | uint32_t  | 0..1MB        | False    |
+ * | cmd_buf                                    | Command buffer to use for the transaction              | uint8_t   | 0-3           | False    |
+ * | noc                                        | NOC to use for the transaction                         | uint8_t   | 0 or 1        | False    |
+ * | update_addr_lo (template parameter)        | Whether to update the lower 32 bits of the address     | bool      | true or false | False    |
+ * | update_counter (template parameter)        | Whether to update the write counters                   | bool      | true or false | False    |
+ * | posted (template parameter)                | Whether the call is posted (i.e. ack requirement)      | bool      | true or false | False    |
+ * | update_addr_hi (template parameter)        | Whether to update the upper 32 bits of the address     | bool      | true or false | False    |
+ * | update_val (template parameter)            | Whether to set the value to be written                 | bool      | true or false | False    |
+ * | dst_type (template parameter)              | Whether the write is targeting L1 or a Stream Register | InlineWriteDst| DEFAULT, L1, REG | False    |
  */
 // clang-format on
 template <
@@ -1960,7 +1961,8 @@ template <
     bool update_counter = true,
     bool posted = false,
     bool update_addr_hi = false,
-    bool update_val = false>
+    bool update_val = false,
+    InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
 #ifdef ARCH_BLACKHOLE
@@ -1979,7 +1981,8 @@ FORCE_INLINE void noc_inline_dw_write_with_state(
         update_addr_hi,
         update_val,
         posted,
-        update_counter_in_callee>(noc, cmd_buf, val, addr);
+        update_counter_in_callee,
+        dst_type>(noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
 
@@ -2080,6 +2083,26 @@ void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = 
     WAYPOINT("NSTW");
     ncrisc_noc_set_transaction_id(noc, read_cmd_buf, trid);
     WAYPOINT("NSTD");
+}
+
+// clang-format off
+/**
+ * Sets the transaction id for a noc write.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | False    |
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_SET_TRID);
+    WAYPOINT("NWSW");
+    ncrisc_noc_set_transaction_id(noc, write_cmd_buf, trid);
+    WAYPOINT("NWSD");
 }
 
 // clang-format off
@@ -2278,6 +2301,31 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 
 // clang-format off
 /**
+ * This blocking call waits for all outstanding enqueued write transactions
+ * with the given transaction id to depart, but will not wait
+ * for them to complete.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                          | Type     | Valid Range | Required |
+ * |----------|--------------------------------------|----------|-------------|----------|
+ * | trid     | Transaction id for the transaction   | uint32_t | 0x0 - 0xF   | True     |
+ * | noc      | Which NOC to use for the transaction | uint8_t  | 0 or 1      | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
+    RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID);
+    WAYPOINT("NFTW");
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
+        continue;
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NFTD");
+}
+
+// clang-format off
+/**
  * This resets the barrier counter for a given transaction id on a given NOC using a mask.
  * Only the N bits up to the number of transaction ids are used.
  *
@@ -2340,6 +2388,7 @@ private:
     }
 
 public:
+    Noc() : noc_id_(noc_index) {}
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
 
     uint8_t get_noc_id() const { return noc_id_; }

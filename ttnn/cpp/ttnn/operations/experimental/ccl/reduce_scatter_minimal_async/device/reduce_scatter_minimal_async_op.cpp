@@ -359,10 +359,6 @@ Tensor reduce_scatter_minimal_async_impl(
 
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-
     bool using_persistent_buffers = persistent_output_buffers.has_value();
 
     std::vector<std::optional<Tensor>> optional_output_tensors =

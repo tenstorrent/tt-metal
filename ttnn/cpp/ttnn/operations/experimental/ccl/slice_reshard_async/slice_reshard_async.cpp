@@ -34,9 +34,6 @@ ttnn::Tensor ExecuteSliceReshardAsync::invoke(
 
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
 
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-
     return tt::tt_metal::operation::run(
                ttnn::SliceReshardAsync(
                    devices,
