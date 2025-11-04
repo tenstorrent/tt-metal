@@ -67,6 +67,9 @@ class Generator:
         self.trace_output_prefill = defaultdict(lambda: None)
         self.prev_page_table = None
         self.prefill_traces_warmup = False
+        self.trace_ids_decode = defaultdict(lambda: None)  # {return_logits: {device_id: trace_id}}
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
 
     def warmup_prefill_traces(
         self,
@@ -255,6 +258,8 @@ class Generator:
                 tt_out_logits_all_users[id] = tt_out_logits_saved
 
         if return_logits:
+            # TODO: the current solution runs the argmax even if we are returning logits
+            # This is inefficient and should be fixed
             # Return logits instead of tokens
             # batch x seq x padded_vocab_size -> batch x seq x vocab_size
             tt_out_logits_all_users = tt_out_logits_all_users[:, :, : self.model.vocab_size]
@@ -305,6 +310,8 @@ class Generator:
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
         """
+        # Trace is independent of whether we are returning logits or sampling on device
+        # The difference happens outside of the trace, in process_output_prefill
         trace_key = f"{prefill_seq_len}_{batch_size}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -339,7 +346,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Captures a trace for the decode_forward method.
+        Captures a trace for the prefill_forward method.
         """
 
         # Compile run
@@ -378,7 +385,7 @@ class Generator:
         batch_size=1,
     ):
         """
-        Executes the trace for the decode_forward method but does not read back outputs.
+        Executes the trace for the prefill_forward method but does not read back outputs.
         """
         host_inputs = self.model.prepare_prefill_inputs_host(tokens, user_id, page_table, batch_size=batch_size)
 
@@ -474,7 +481,9 @@ class Generator:
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:
-            tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits)
+            tt_tok = self._decode_easy_trace_text(
+                **decode_kwargs, reset_inputs=reset_inputs, return_logits=return_logits
+            )
         else:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
 
@@ -582,7 +591,7 @@ class Generator:
 
         return tt_out_trace
 
-    def _easy_trace_text(
+    def _decode_easy_trace_text(
         self,
         tokens,
         current_pos,
@@ -594,11 +603,11 @@ class Generator:
         return_logits=False,
     ):
         """
-        Tracing is easy! Just call this method and we'll handle tracing for you.
+        Run decode forward text with tracing
         """
         tokens = tokens.view(-1, 1)
-
-        if not hasattr(self, "trace_id_text"):
+        # The trace is different depending on whether we are returning logits or sampling on device
+        if not self.trace_ids_decode[return_logits]:
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
                 tokens,
                 current_pos,
@@ -608,9 +617,9 @@ class Generator:
                 is_page_table_sharded=is_page_table_sharded,
                 return_logits=return_logits,
             )
-            self.trace_id_text = trace_id
-            self.trace_inputs_text = device_inputs
-            self.trace_output_text = tt_out_tok
+            self.trace_ids_decode[return_logits] = trace_id
+            self.trace_inputs_decode[return_logits] = device_inputs
+            self.trace_output_decode[return_logits] = tt_out_tok
         if reset_inputs:
             host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
@@ -618,13 +627,13 @@ class Generator:
             shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
-                device_tensors=self.trace_inputs_text,
+                device_tensors=self.trace_inputs_decode[return_logits],
                 shard_specs=shard_specs,
             )
         trace_tok_rm = self._decode_forward_trace_text(
-            self.trace_id_text,
-            self.trace_inputs_text,
-            self.trace_output_text,
+            self.trace_ids_decode[return_logits],
+            self.trace_inputs_decode[return_logits],
+            self.trace_output_decode[return_logits],
             tokens,
             current_pos,
             page_table=page_table,
