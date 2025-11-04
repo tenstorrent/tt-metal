@@ -541,7 +541,7 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
             core_range_cliff,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_llk_acc,
-                .compile_args = compute_args,
+                .compile_args = compute_args_cliff,
             });
     }
 
