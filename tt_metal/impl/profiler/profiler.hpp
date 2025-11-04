@@ -179,6 +179,7 @@ private:
         ChipId device_id,
         const CoreCoord& physical_core,
         tracy::RiscType risc_type,
+        uint64_t buffer_index,
         uint64_t data,
         uint32_t timer_id,
         uint64_t timestamp);
@@ -207,6 +208,9 @@ private:
 
     // Get the trace id and trace id count
     std::pair<uint64_t, uint64_t> getTraceIdAndCount(uint32_t run_host_id, uint32_t device_trace_counter) const;
+
+    std::string getProfilerBufferWindow(
+        const tracy::TTDeviceMarker& marker, size_t radius, size_t* out_window_size = nullptr) const;
 
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);

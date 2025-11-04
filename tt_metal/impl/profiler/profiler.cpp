@@ -85,17 +85,8 @@ std::string format_indexed_dec_slice(const std::vector<uint32_t>& buffer, size_t
 
 bool should_dump_profiler_debug_logs(ChipId device_id, const CoreCoord& phys_coord) {
     // Extend this list with additional (device_id, x, y) triples as needed for deeper debugging.
-    static const std::array<std::tuple<ChipId, int, int>, 10> kProfilerDebugTargetDeviceCores = {
+    static const std::array<std::tuple<ChipId, int, int>, 1> kProfilerDebugTargetDeviceCores = {
         std::tuple{7, 9, 2},
-        std::tuple{7, 9, 3},
-        std::tuple{7, 9, 4},
-        std::tuple{3, 9, 8},
-        std::tuple{3, 1, 2},
-        std::tuple{3, 3, 2},
-        std::tuple{3, 3, 7},
-        std::tuple{3, 7, 10},
-        std::tuple{3, 8, 5},
-        std::tuple{3, 9, 10},
     };
 
     return std::any_of(
@@ -1040,13 +1031,13 @@ void DeviceProfiler::clearProfilerDramBuffer(const IDevice* device) {
     const DeviceAddr profiler_addr = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
     const uint32_t num_dram_views = soc_desc.get_num_dram_views();
 
-    std::vector<uint32_t> zero_buffer(bank_size_bytes / sizeof(uint32_t), 0);
+    std::vector<uint32_t> zero_buffer(bank_size_bytes / sizeof(uint32_t), 1);
     for (uint32_t view = 0; view < num_dram_views; ++view) {
         cluster.write_dram_vec(zero_buffer.data(), bank_size_bytes, device_id, view, profiler_addr);
     }
 
     if (!profile_buffer.empty()) {
-        std::fill(profile_buffer.begin(), profile_buffer.end(), 0);
+        std::fill(profile_buffer.begin(), profile_buffer.end(), 1);
     }
 #endif
 }
@@ -1279,6 +1270,7 @@ void DeviceProfiler::readRiscProfilerResults(
         (data_source == ProfilerDataBufferSource::DRAM) ? profile_buffer : core_l1_data_buffers.at(worker_core);
 
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const bool is_dram_source = (data_source == ProfilerDataBufferSource::DRAM);
 
     if (!rtoptions.get_profiler_trace_only()) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
@@ -1356,17 +1348,37 @@ void DeviceProfiler::readRiscProfilerResults(
             const size_t device_end_index = static_cast<size_t>(kernel_profiler::DEVICE_BUFFER_END_INDEX_T1);
             const size_t dropped_index = static_cast<size_t>(kernel_profiler::DROPPED_ZONES);
             const size_t profiler_done_index = static_cast<size_t>(kernel_profiler::PROFILER_DONE);
+            const size_t fw_reset_l_index = static_cast<size_t>(kernel_profiler::FW_RESET_L);
             const size_t current_trace_index = static_cast<size_t>(kernel_profiler::CURRENT_TRACE_ID);
 
             const uint32_t host_end_words = control_buffer[host_end_index];
             const int64_t host_capacity_words = static_cast<int64_t>(PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC);
             const int64_t host_remaining_words = host_capacity_words - static_cast<int64_t>(host_end_words);
 
+            auto read_control_range = [&control_buffer](size_t start_idx, size_t count) {
+                std::string joined = "[";
+                for (size_t offset = 0; offset < count; ++offset) {
+                    size_t idx = start_idx + offset;
+                    if (offset != 0) {
+                        joined += ", ";
+                    }
+                    if (idx < control_buffer.size()) {
+                        joined += fmt::format("{}:{}", idx, control_buffer[idx]);
+                    } else {
+                        joined += fmt::format("{}:<out-of-range>", idx);
+                    }
+                }
+                joined += "]";
+                return joined;
+            };
+            const std::string current_trace_following = read_control_range(current_trace_index + 1, 5);
+
             log_info(
                 tt::LogMetal,
                 "[profiler debug] chip {} core ({}, {}) risc {}: control buffer tail {} (size={}, host_end_words={}, "
                 "capacity_words={}, remaining_words={}, device_end={}, dropped_zones={}, profiler_done={}, "
-                "current_trace_id={})",
+                "fw_reset_l={}, "
+                "current_trace_id={}, next_values={})",
                 device_id,
                 phys_coord.x,
                 phys_coord.y,
@@ -1379,7 +1391,9 @@ void DeviceProfiler::readRiscProfilerResults(
                 read_control_value(device_end_index),
                 read_control_value(dropped_index),
                 read_control_value(profiler_done_index),
-                read_control_value(current_trace_index));
+                read_control_value(fw_reset_l_index),
+                read_control_value(current_trace_index),
+                current_trace_following);
 
             if (bufferEndIndex > 0 && (bufferRiscShift + bufferEndIndex) <= data_buffer.size()) {
                 constexpr size_t kDataSliceWords = 16;
@@ -1391,19 +1405,19 @@ void DeviceProfiler::readRiscProfilerResults(
                 const std::string data_head = format_indexed_dec_slice(data_buffer, bufferRiscShift, data_head_end);
                 const std::string data_tail = format_indexed_dec_slice(data_buffer, data_tail_start, data_tail_end);
 
-                log_info(
-                    tt::LogMetal,
-                    "[profiler debug] chip {} core ({}, {}) risc {}: data buffer shift={} end_index={} "
-                    "data_buffer_size={} head {} tail {}",
-                    device_id,
-                    phys_coord.x,
-                    phys_coord.y,
-                    enchantum::to_string(riscType),
-                    bufferRiscShift,
-                    bufferEndIndex,
-                    data_buffer.size(),
-                    data_head,
-                    data_tail);
+                // log_info(
+                //     tt::LogMetal,
+                //     "[profiler debug] chip {} core ({}, {}) risc {}: data buffer shift={} end_index={} "
+                //     "data_buffer_size={} head {} tail {}",
+                //     device_id,
+                //     phys_coord.x,
+                //     phys_coord.y,
+                //     enchantum::to_string(riscType),
+                //     bufferRiscShift,
+                //     bufferEndIndex,
+                //     data_buffer.size(),
+                //     data_head,
+                //     data_tail);
             } else if (bufferEndIndex > 0) {
                 log_warning(
                     tt::LogMetal,
@@ -1485,6 +1499,9 @@ void DeviceProfiler::readRiscProfilerResults(
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
                 } else if (oneStartFound) {
+                    const uint32_t entry_start_index = index;
+                    const uint64_t buffer_index_for_marker =
+                        is_dram_source ? static_cast<uint64_t>(entry_start_index) : tracy::TTDeviceMarker::INVALID_NUM;
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
@@ -1531,6 +1548,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                     device_id,
                                     phys_coord,
                                     riscType,
+                                    buffer_index_for_marker,
                                     0,
                                     timer_id,
                                     (uint64_t(time_H) << 32) | time_L);
@@ -1549,6 +1567,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 device_id,
                                 phys_coord,
                                 riscType,
+                                buffer_index_for_marker,
                                 sum,
                                 timer_id,
                                 (uint64_t(time_H) << 32) | time_L);
@@ -1568,6 +1587,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 device_id,
                                 phys_coord,
                                 riscType,
+                                buffer_index_for_marker,
                                 (uint64_t(data_H) << 32) | data_L,
                                 timer_id,
                                 (uint64_t(time_H) << 32) | time_L);
@@ -1584,6 +1604,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 device_id,
                                 phys_coord,
                                 riscType,
+                                buffer_index_for_marker,
                                 0,
                                 timer_id,
                                 (uint64_t(time_H) << 32) | time_L);
@@ -1604,6 +1625,27 @@ void DeviceProfiler::readRiscProfilerResults(
 
 void DeviceProfiler::updateFirstTimestamp(uint64_t timestamp) {
     smallest_timestamp = std::min(timestamp, smallest_timestamp);
+}
+
+std::string DeviceProfiler::getProfilerBufferWindow(
+    const tracy::TTDeviceMarker& marker, size_t radius, size_t* out_window_size) const {
+    if (profile_buffer.empty()) {
+        return "<profiler buffer empty>";
+    }
+
+    const size_t buffer_size = profile_buffer.size();
+    size_t center_idx;
+    if (marker.buffer_index != tracy::TTDeviceMarker::INVALID_NUM && marker.buffer_index < buffer_size) {
+        center_idx = static_cast<size_t>(marker.buffer_index);
+    } else {
+        center_idx = static_cast<size_t>(std::min<uint64_t>(marker.timestamp, buffer_size - 1));
+    }
+    const size_t start = (center_idx > radius) ? (center_idx - radius) : 0;
+    const size_t end = std::min(buffer_size, center_idx + radius + 1);
+    if (out_window_size != nullptr) {
+        *out_window_size = (end > start) ? (end - start) : 0;
+    }
+    return format_indexed_dec_slice(profile_buffer, start, end);
 }
 
 tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
@@ -1652,6 +1694,7 @@ void DeviceProfiler::readDeviceMarkerData(
     ChipId device_id,
     const CoreCoord& physical_core,
     tracy::RiscType risc_type,
+    uint64_t buffer_index,
     uint64_t data,
     uint32_t timer_id,
     uint64_t timestamp) {
@@ -1672,6 +1715,7 @@ void DeviceProfiler::readDeviceMarkerData(
         risc_type,
         timer_id,
         timestamp,
+        buffer_index,
         data,
         op_name,
         marker_details.source_line_num,
@@ -1746,22 +1790,26 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
-                TT_FATAL(
-                    !start_marker_stack.empty(),
-                    "End marker runtime_host_id {}, trace_id {}, trace_id_counter {}, chip_id {}, core_x {}, core_y "
-                    "{}, risc {}, marker_type {}, marker_name {}, timestamp {}, marker_id {} found without a "
-                    "corresponding start marker",
-                    marker.runtime_host_id,
-                    marker.trace_id,
-                    marker.trace_id_counter,
-                    marker.chip_id,
-                    marker.core_x,
-                    marker.core_y,
-                    enchantum::to_string(marker.risc),
-                    enchantum::to_string(marker.marker_type),
-                    marker.marker_name,
-                    marker.timestamp,
-                    marker.marker_id);
+                if (start_marker_stack.empty()) {
+                    auto dram_window = this->getProfilerBufferWindow(marker, /*radius=*/10);
+                    TT_FATAL(
+                        false,
+                        "Profiler marker mismatch detected. End marker without start. Details: runtime_host_id={}, "
+                        "trace_id={}, trace_id_counter={}, chip_id={}, core=({}, {}), risc={}, marker_type={}, "
+                        "marker_name='{}', timestamp={}, marker_id={}. Surrounding profiler buffer data: {}",
+                        marker.runtime_host_id,
+                        marker.trace_id,
+                        marker.trace_id_counter,
+                        marker.chip_id,
+                        marker.core_x,
+                        marker.core_y,
+                        enchantum::to_string(marker.risc),
+                        enchantum::to_string(marker.marker_type),
+                        marker.marker_name,
+                        marker.timestamp,
+                        marker.marker_id,
+                        dram_window);
+                }
 
                 const auto& start_marker_it = start_marker_stack.top();
 
@@ -1858,10 +1906,39 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         device_marker_it = next_device_marker_it;
     }
 
-    TT_FATAL(
-        start_marker_stack.empty(),
-        "{} start markers detected without corresponding end markers",
-        start_marker_stack.size());
+    if (!start_marker_stack.empty()) {
+        const tracy::TTDeviceMarker& unmatched_marker = *start_marker_stack.top();
+        constexpr size_t kWindowRadius = 10;
+        size_t window_size = 0;
+        const std::string dram_window = this->getProfilerBufferWindow(unmatched_marker, kWindowRadius, &window_size);
+
+        if (should_dump_profiler_debug_logs(
+                unmatched_marker.chip_id,
+                {static_cast<int>(unmatched_marker.core_x), static_cast<int>(unmatched_marker.core_y)})) {
+            TT_FATAL(
+                false,
+                "Profiler marker mismatch detected: {} start markers remain without matching end markers. Example "
+                "unmatched start marker details -> runtime_host_id={}, trace_id={}, trace_id_counter={}, chip_id={}, "
+                "core=({}, {}), risc={}, marker_type={}, marker_name='{}', timestamp={}, marker_id={}, "
+                "buffer_index={}. "
+                "Surrounding DRAM profiler data [{} entries around index]: {}",
+                start_marker_stack.size(),
+                unmatched_marker.runtime_host_id,
+                unmatched_marker.trace_id,
+                unmatched_marker.trace_id_counter,
+                unmatched_marker.chip_id,
+                unmatched_marker.core_x,
+                unmatched_marker.core_y,
+                enchantum::to_string(unmatched_marker.risc),
+                enchantum::to_string(unmatched_marker.marker_type),
+                unmatched_marker.marker_name,
+                unmatched_marker.timestamp,
+                unmatched_marker.marker_id,
+                unmatched_marker.buffer_index,
+                window_size,
+                dram_window);
+        }
+    }
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }
@@ -2172,6 +2249,7 @@ void DeviceProfiler::pushTracyDeviceResults(
                 orig_marker.risc,
                 orig_marker.marker_id,
                 adjusted_timestamp,
+                orig_marker.buffer_index,
                 orig_marker.data,
                 orig_marker.op_name,
                 orig_marker.line,

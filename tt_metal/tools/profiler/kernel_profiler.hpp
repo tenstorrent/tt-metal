@@ -260,14 +260,14 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     ncrisc_noc_fast_write_any_len<noc_mode>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
+        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, false);
     WAYPOINT("NAWD");
 }
 
 FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
+    while (!ncrisc_noc_nonposted_writes_flushed(noc));
     WAYPOINT("NPPD");
 }
 
@@ -312,8 +312,15 @@ __attribute__((noinline)) void finish_profiler() {
                               profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
                 send_size = profiler_control_buffer[deviceIndex] * sizeof(uint32_t);
-
+                if (riscID == 2) {
+                    profiler_control_buffer[CURRENT_TRACE_ID + 1] = profiler_control_buffer[hostIndex];
+                    profiler_control_buffer[CURRENT_TRACE_ID + 2] = dram_offset;
+                    profiler_control_buffer[CURRENT_TRACE_ID + 3] = send_size;
+                    profiler_control_buffer[CURRENT_TRACE_ID + 4] = core_flat_id;
+                    profiler_control_buffer[CURRENT_TRACE_ID + 5] = profiler_core_count_per_dram;
+                }
                 profiler_control_buffer[hostIndex] = currEndIndex;
+
             } else if (profiler_control_buffer[RUN_COUNTER] < 1) {
                 dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
                                   PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
