@@ -17,6 +17,7 @@ on:
           - sd35
           - flux1-dev
           - sentence_bert
+          - wan2-2
           - mochi
   schedule:
     - cron: "0 10 * * *"  # Every day at 10:00 UTC
