@@ -250,50 +250,28 @@ class TtnnWhisper:
             logger.info(f"Trying generation with temperature: {temperature}")
 
             try:
-                if stream_generation:
-                    output = self._generate_with_temperature_streaming(
-                        temperature=temperature,
-                        config=config,
-                        start_encode=start_encode,
-                        generation_config=generation_config,
-                        encoder_hidden_states=encoder_hidden_states,
-                        input_features=input_features,
-                        parameters=parameters,
-                        processor=processor,
-                        ttnn_linear_weight=ttnn_linear_weight,
-                        mesh_device=mesh_device,
-                        input_mesh_mapper=input_mesh_mapper,
-                        output_mesh_composer=output_mesh_composer,
-                        kv_cache=kv_cache,
-                        unpadded_batch_size=unpadded_batch_size,
-                        return_perf_metrics=return_perf_metrics,
-                        return_timestamps=return_timestamps,
-                        audio_durations=audio_durations,
-                        language=language,
-                        task=task,
-                    )
-                else:
-                    output = self._generate_with_temperature_non_streaming(
-                        temperature=temperature,
-                        config=config,
-                        start_encode=start_encode,
-                        generation_config=generation_config,
-                        encoder_hidden_states=encoder_hidden_states,
-                        input_features=input_features,
-                        parameters=parameters,
-                        processor=processor,
-                        ttnn_linear_weight=ttnn_linear_weight,
-                        mesh_device=mesh_device,
-                        input_mesh_mapper=input_mesh_mapper,
-                        output_mesh_composer=output_mesh_composer,
-                        kv_cache=kv_cache,
-                        unpadded_batch_size=unpadded_batch_size,
-                        return_perf_metrics=return_perf_metrics,
-                        return_timestamps=return_timestamps,
-                        audio_durations=audio_durations,
-                        language=language,
-                        task=task,
-                    )
+                output = self._generate_with_temperature(
+                    temperature=temperature,
+                    config=config,
+                    start_encode=start_encode,
+                    generation_config=generation_config,
+                    encoder_hidden_states=encoder_hidden_states,
+                    input_features=input_features,
+                    parameters=parameters,
+                    processor=processor,
+                    ttnn_linear_weight=ttnn_linear_weight,
+                    mesh_device=mesh_device,
+                    input_mesh_mapper=input_mesh_mapper,
+                    output_mesh_composer=output_mesh_composer,
+                    kv_cache=kv_cache,
+                    unpadded_batch_size=unpadded_batch_size,
+                    return_perf_metrics=return_perf_metrics,
+                    return_timestamps=return_timestamps,
+                    audio_durations=audio_durations,
+                    language=language,
+                    task=task,
+                    streaming=stream_generation,
+                )
 
                 if stream_generation:
                     # For streaming, collect all results to check quality
@@ -447,7 +425,7 @@ class TtnnWhisper:
                         torch.zeros(unpadded_batch_size),
                     )
 
-    def _generate_with_temperature_streaming(
+    def _generate_with_temperature(
         self,
         temperature,
         config,
@@ -468,9 +446,11 @@ class TtnnWhisper:
         audio_durations=None,
         language="en",
         task="transcribe",
+        streaming=False,
     ):
         """
-        Generate text with a specific temperature (streaming mode).
+        Generate text with a specific temperature.
+        Supports both streaming and non-streaming modes.
         """
         # Input ids - use forced decoder IDs for translation
         forced_decoder_ids = processor.get_decoder_prompt_ids(language=language, task=task)
@@ -523,221 +503,13 @@ class TtnnWhisper:
         # Track full token sequences for timestamp extraction
         full_token_sequences = [[] for _ in range(unpadded_batch_size)] if return_timestamps else None
 
-        # Streaming generation - yield results as they're generated
-        for i in tqdm(range(MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
-            start_iter = time.time()
-
-            decoder_hidden_states, decoder_attention_mask = self.preprocess_decoder_inputs(
-                config=config,
-                input_ids=input_ids,
-                attention_mask=None,
-                parameters=parameters.decoder,
-                device=mesh_device,
-                decode_pos=i if kv_cache else None,
-                create_attention_mask=(not kv_cache),
-                input_mesh_mapper=input_mesh_mapper,
-            )
-
-            output = self.decoder(
-                config,
-                decoder_hidden_states,
-                decoder_attention_mask=decoder_attention_mask,
-                encoder_hidden_states=encoder_hidden_states,
-                kv_cache=kv_cache,
-                current_decode_pos=current_decode_pos,
-                parameters=parameters.decoder,
-            )
-
-            if not kv_cache:
-                # Note: if not using a kv cache, the entire sequence is recomputed at each step
-                # Only run the lm head on the last tile to fix bad outputs and reduce redundant computation
-                last_tile_start_idx = i // 32 * 32
-                output_idx = i % 32
-                output = output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
-            else:
-                output_idx = 0
-
-            output = output @ ttnn_linear_weight
-            logits_to_torch = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
-            next_token_logits = logits_to_torch[:, output_idx, :]
-            next_tokens_scores = logits_processor(input_features, next_token_logits)
-
-            # Force tokens at specific positions based on forced_tokens_dict
-            if i in forced_tokens_dict:
-                next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
-            else:
-                next_tokens = self._sample_token(next_tokens_scores, temperature)
-
-            # Track log probabilities
-            with torch.no_grad():
-                log_probs.append(
-                    torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
-                )
-
-            output_ids.append(next_tokens)
-
-            # Track full token sequences for timestamp extraction
-            if return_timestamps:
-                for batch_idx in range(unpadded_batch_size):
-                    full_token_sequences[batch_idx].append(next_tokens[batch_idx].item())
-
-            if i == 0:
-                first_token_time = time.time()
-                ttft = first_token_time - start_encode
-                # Extract no_speech probability from first frame logits
-                with torch.no_grad():
-                    probs = torch.softmax(next_token_logits, dim=-1)
-                    no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]  # Per-batch probabilities
-
-            # Update input_ids and current_decode_pos
-            if not kv_cache:
-                if (i + 1) % 32 == 0:
-                    input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
-                input_ids[:, i + 1] = next_tokens[:, None]
-            else:
-                input_ids = next_tokens[:, None]
-                ttnn.plus_one(current_decode_pos)
-
-            total_decode_time += time.time() - start_iter
-            avg_decode_throughput = (i + 1) / total_decode_time
-
-            for user_id, user_decode_id in enumerate(next_tokens[:unpadded_batch_size]):
-                if user_decode_id == config.eos_token_id:
-                    prompt_is_done[user_id] = True
-                if prompt_is_done[user_id]:
-                    next_tokens[user_id] = config.eos_token_id
-
-            ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
-
-            # Calculate current average log probability for each batch item
-            if log_probs:
-                current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
-            else:
-                current_avg_logprob = torch.zeros(input_features.shape[0])
-
-            # Use zeros for no_speech_probs if not yet calculated
-            if no_speech_probs is None:
-                current_no_speech_probs = torch.zeros(input_features.shape[0])
-            else:
-                current_no_speech_probs = no_speech_probs
-
-            # For streaming, we yield the current transcription without timestamps
-            # Timestamps will be processed at the end if return_timestamps=True
-            if return_perf_metrics:
-                yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput
-            else:
-                yield ttnn_transcription, current_avg_logprob, current_no_speech_probs
-
-            if all(prompt_is_done):
-                break
-        total_generate_time = time.time() - start_encode
-        logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
-        logger.info(f"Total decode time: {total_decode_time:.3f}s")
-        logger.info(f"Total generate time: {total_generate_time:.3f}s")
-        logger.info(f"Average decode throughput (per user): {avg_decode_throughput:.3f} t/s/u")
-        logger.info(f"Average decode throughput (total batch): {(avg_decode_throughput * unpadded_batch_size):.3f} t/s")
-
-        # Process timestamps if requested
-        if return_timestamps and full_token_sequences:
-            # Extract timestamps for each batch item
-            segments_with_timestamps = []
-            for batch_idx in range(unpadded_batch_size):
-                if full_token_sequences[batch_idx]:
-                    token_sequence = torch.tensor(full_token_sequences[batch_idx])
-                    audio_duration = audio_durations[batch_idx] if audio_durations else None
-                    segments = self._extract_timestamps_from_tokens(token_sequence, processor, audio_duration)
-                    segments_with_timestamps.append(segments)
-                else:
-                    segments_with_timestamps.append([])
-
-            # Yield final result with timestamps
-            if return_perf_metrics:
-                yield segments_with_timestamps, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput
-            else:
-                yield segments_with_timestamps, current_avg_logprob, current_no_speech_probs
-
-    def _generate_with_temperature_non_streaming(
-        self,
-        temperature,
-        config,
-        start_encode,
-        generation_config,
-        encoder_hidden_states,
-        input_features,
-        parameters,
-        processor,
-        ttnn_linear_weight,
-        mesh_device,
-        input_mesh_mapper,
-        output_mesh_composer,
-        kv_cache,
-        unpadded_batch_size,
-        return_perf_metrics=False,
-        return_timestamps=False,
-        audio_durations=None,
-        language="en",
-        task="transcribe",
-    ):
-        """
-        Generate text with a specific temperature (non-streaming mode).
-        """
-        # Input ids - use forced decoder IDs for translation
-        forced_decoder_ids = processor.get_decoder_prompt_ids(language=language, task=task)
-        logger.debug(f"forced_decoder_ids from processor: {forced_decoder_ids}")
-
-        # Keep forced_decoder_ids as tuples with positions
-        # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
-        if return_timestamps:
-            # Remove notimestamps token if present
-            forced_decoder_ids = [(pos, tok) for pos, tok in forced_decoder_ids if tok != NOTIMESTAMPS_TOKEN_ID]
-
-        # When return_timestamps=False, add <|notimestamps|> to disable timestamps
-        else:
-            # Add notimestamps token if not present (at the appropriate position)
-            if not any(tok == NOTIMESTAMPS_TOKEN_ID for _, tok in forced_decoder_ids):
-                # Find the last position and add notimestamps after it
-                max_pos = max((pos for pos, _ in forced_decoder_ids), default=0)
-                forced_decoder_ids.append((max_pos + 1, NOTIMESTAMPS_TOKEN_ID))
-
-        # Create a position-to-token mapping instead of a simple list
-        # This preserves the actual positions (which may be 1-indexed or have gaps)
-        forced_tokens_dict = {pos: token_id for pos, token_id in forced_decoder_ids}
-        logger.debug(f"forced_tokens_dict after manipulation: {forced_tokens_dict}")
-
-        # Start with simple start token
-        input_ids = torch.tensor([[1]]) * config.decoder_start_token_id
-        input_ids = input_ids.repeat(input_features.shape[0], 1)
-        logits_processor = get_logits_processor(input_ids, config)
-
-        if not kv_cache:
-            input_ids = self._pad_input_32(input_ids, config.pad_token_id).to(torch.long)
-            decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
-
-        # Initial decode position
-        current_decode_pos = (
-            ttnn.from_torch(
-                torch.zeros(unpadded_batch_size), device=mesh_device, dtype=ttnn.int32, mesh_mapper=input_mesh_mapper
-            )
-            if kv_cache
-            else None
-        )
-
-        MAX_GEN_LEN = config.max_length
-        output_ids = []
-        total_decode_time = 0
-        prompt_is_done = [False for _ in range(unpadded_batch_size)]
-        log_probs = []  # Track log probabilities
-        no_speech_probs = None  # Will be extracted from first frame
-
-        # Track full token sequences for timestamp extraction
-        full_token_sequences = [[] for _ in range(unpadded_batch_size)] if return_timestamps else None
-
-        # Non-streaming generation - collect all results and return final output
-        output = [[] for _ in range(input_features.shape[0])]
+        # Non-streaming mode: collect all results in a list
+        if not streaming:
+            output = [[] for _ in range(input_features.shape[0])]
         ttft = 0.0
         avg_decode_throughput = 0.0
 
-        # Process the generation loop directly
+        # Generation loop
         for i in tqdm(range(MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
             start_iter = time.time()
 
@@ -763,6 +535,8 @@ class TtnnWhisper:
             )
 
             if not kv_cache:
+                # Note: if not using a kv cache, the entire sequence is recomputed at each step
+                # Only run the lm head on the last tile to fix bad outputs and reduce redundant computation
                 last_tile_start_idx = i // 32 * 32
                 output_idx = i % 32
                 decoder_output = decoder_output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
@@ -778,7 +552,6 @@ class TtnnWhisper:
             if i in forced_tokens_dict:
                 next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
             else:
-                # Apply temperature and sample
                 next_tokens = self._sample_token(next_tokens_scores, temperature)
 
             # Track log probabilities
@@ -822,12 +595,34 @@ class TtnnWhisper:
 
             ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)
 
-            # Collect results
-            for idx in range(input_features.shape[0]):
-                output[idx].append(ttnn_transcription[idx])
+            # Streaming mode: yield incremental results
+            if streaming:
+                # Calculate current average log probability for each batch item
+                if log_probs:
+                    current_avg_logprob = torch.stack(log_probs, dim=1).mean(dim=1)
+                else:
+                    current_avg_logprob = torch.zeros(input_features.shape[0])
+
+                # Use zeros for no_speech_probs if not yet calculated
+                if no_speech_probs is None:
+                    current_no_speech_probs = torch.zeros(input_features.shape[0])
+                else:
+                    current_no_speech_probs = no_speech_probs
+
+                # For streaming, we yield the current transcription without timestamps
+                # Timestamps will be processed at the end if return_timestamps=True
+                if return_perf_metrics:
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs, ttft, avg_decode_throughput
+                else:
+                    yield ttnn_transcription, current_avg_logprob, current_no_speech_probs
+            else:
+                # Non-streaming mode: collect results
+                for idx in range(input_features.shape[0]):
+                    output[idx].append(ttnn_transcription[idx])
 
             if all(prompt_is_done):
                 break
+
         total_generate_time = time.time() - start_encode
         logger.info(f"Time to first token: {(ttft*1000):.3f}ms")
         logger.info(f"Total decode time: {total_decode_time:.3f}s")
@@ -849,7 +644,7 @@ class TtnnWhisper:
         if return_timestamps and full_token_sequences:
             # Extract timestamps for each batch item
             segments_with_timestamps = []
-            for batch_idx in range(input_features.shape[0]):
+            for batch_idx in range(unpadded_batch_size):
                 if full_token_sequences[batch_idx]:
                     token_sequence = torch.tensor(full_token_sequences[batch_idx])
                     audio_duration = audio_durations[batch_idx] if audio_durations else None
@@ -858,17 +653,30 @@ class TtnnWhisper:
                 else:
                     segments_with_timestamps.append([])
 
-            if return_perf_metrics:
-                return (segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+            if streaming:
+                # Yield final result with timestamps
+                if return_perf_metrics:
+                    yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+                else:
+                    yield segments_with_timestamps, avg_logprob, no_speech_probs
             else:
-                return (segments_with_timestamps, avg_logprob, no_speech_probs)
+                # Return final result with timestamps
+                if return_perf_metrics:
+                    return (segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+                else:
+                    return (segments_with_timestamps, avg_logprob, no_speech_probs)
         else:
-            # Join the collected tokens into final text
-            output = ["".join(tokens) for tokens in output]
-            if return_perf_metrics:
-                return (output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+            if streaming:
+                # For streaming without timestamps, we've already yielded all results
+                # This should not be reached, but included for completeness
+                return
             else:
-                return (output, avg_logprob, no_speech_probs)
+                # Join the collected tokens into final text
+                output = ["".join(tokens) for tokens in output]
+                if return_perf_metrics:
+                    return (output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+                else:
+                    return (output, avg_logprob, no_speech_probs)
 
     def _pad_input_32(self, tensor, value):
         """Pad input to multiple of 32."""
