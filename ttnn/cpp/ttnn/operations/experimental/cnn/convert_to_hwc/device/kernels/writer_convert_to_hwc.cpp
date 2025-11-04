@@ -97,6 +97,9 @@ void kernel_main() {
     const uint32_t dram_base_read_addr = is_input_in_dram ? get_arg_val<uint32_t>(0) : get_read_ptr(cb_full_input);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
 
+    ASSERT(num_segments == input_num_blocks);
+    DPRINT << "num_segments=" << num_segments << "  input_num_blocks=" << input_num_blocks << ENDL();
+
     constexpr uint32_t tile_size_stick_bytes = TILE_SIZE * element_size_bytes;
 
     constexpr uint32_t initial_l1_write_addr_offset = initial_l1_write_stick_offset * channel_size;
@@ -110,7 +113,7 @@ void kernel_main() {
 
     for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {
         if constexpr (should_wait) {
-            cb_reserve_back(cb_in, 2 * input_block_size_sticks_per_core);
+            cb_reserve_back(cb_in, input_block_size_sticks_per_core);
 
             uint32_t src_x = args[args_idx++];
             uint32_t src_y = args[args_idx++];
@@ -119,11 +122,11 @@ void kernel_main() {
             uint32_t size = args[args_idx++];
 
             uint64_t src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_full_input));
-            uint32_t block_size_bytes = (input_block_size_sticks_per_core * 2 * channel_size);
+            uint32_t block_size_bytes = (input_block_size_sticks_per_core * channel_size);
             noc_async_read(src_addr_base + src_offset, get_write_ptr(cb_in) + (dst_offset % block_size_bytes), size);
             noc_async_read_barrier();
 
-            cb_push_back(cb_in, 2 * input_block_size_sticks_per_core);
+            cb_push_back(cb_in, input_block_size_sticks_per_core);
         }
 
         for (uint32_t i = 0; i < num_full_tiles; i++) {

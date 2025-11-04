@@ -426,7 +426,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     log_info(tt::LogType::LogAlways, "runtime_args_for_each_core[0]={}", runtime_args_for_each_core[0]);
 
     // Split DRAM read across each kernel along tensor height since this is the best way to split work evenly
-    const uint32_t total_num_sticks_kernel_0 = (l1_input_shard_height / batch_size) / 2;
+    const uint32_t total_num_sticks_kernel_0 = (l1_input_shard_height / batch_size);
     const uint32_t total_num_sticks_kernel_1 = (l1_input_shard_height / batch_size) - total_num_sticks_kernel_0;
 
     const uint32_t num_sticks_block_size_kernel_0 = total_num_sticks_kernel_0;
