@@ -135,11 +135,11 @@ jobs:
   push-image-to-ghcr:
     needs: build-artifact
     uses: ./.github/actions/push-latest-image-to-ghcr
+    secrets: inherit
     with:
       docker-image-tag: ${{ needs.build-artifact.outputs.dev-docker-image }}
       github-token: ${{ secrets.GITHUB_TOKEN }}
       new-tag: ${{ inputs.tag-version }}
-    secrets: inherit
 
   create-docker-release-image:
     needs:
