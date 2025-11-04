@@ -4,9 +4,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # --- Configuration ---
-TT_SMI_REPO="https://github.com/tenstorrent/tt-smi"
-EXALENS_WHEEL="ttexalens-0.1.251013+dev.f3eb0e2-cp310-cp310-linux_x86_64.whl"
 VENV_DIR=".venv"
+
+# Source centralized version configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../.github/scripts/versions.sh
+source "${SCRIPT_DIR}/../.github/scripts/versions.sh"
 
 # --- Functions ---
 
@@ -67,7 +70,7 @@ done
 # Handle --clean flag
 if [[ "$CLEAN" == true ]]; then
     echo "Cleaning up environment..."
-    rm -rf tt-smi sfpi "$VENV_DIR" arch.dump sfpi-release.tgz
+    rm -rf sfpi "$VENV_DIR" arch.dump sfpi-release.tgz
     echo "Cleanup complete."
     exit 0
 fi
@@ -91,14 +94,6 @@ if [[ "$REUSE" == false || ! -d "$VENV_DIR" ]]; then
     sudo apt-get update
     sudo apt-get install -y curl cmake software-properties-common build-essential libyaml-cpp-dev libhwloc-dev libzmq3-dev git-lfs xxd wget
 
-    # Clone tt-smi repository
-    if [ ! -d "tt-smi" ]; then
-        echo "Cloning tt-smi repository..."
-        git clone "$TT_SMI_REPO"
-    else
-        echo "tt-smi repository already exists. Skipping clone."
-    fi
-
     # Create virtual environment
     echo "Creating Python virtual environment..."
     rm -rf "$VENV_DIR"
@@ -110,18 +105,18 @@ if [[ "$REUSE" == false || ! -d "$VENV_DIR" ]]; then
     echo "Upgrading pip..."
     pip install --upgrade pip
 
-    # Download tt-exalens wheel to a temporary directory
+    # Download wheels to a temporary directory
     TEMP_DIR=$(mktemp -d)
-    EXALENS_TAG_PLUS_DEV=${EXALENS_WHEEL#ttexalens-}
-    EXALENS_TAG=${EXALENS_TAG_PLUS_DEV%%+*}
-    DOWNLOAD_URL="https://github.com/tenstorrent/tt-exalens/releases/download/${EXALENS_TAG}/${EXALENS_WHEEL}"
 
-    echo "Downloading tt-exalens from ${DOWNLOAD_URL}"
-    wget -O "$TEMP_DIR/$EXALENS_WHEEL" "$DOWNLOAD_URL"
+    echo "Downloading tt-exalens from ${EXALENS_URL}"
+    wget -O "$TEMP_DIR/$EXALENS_WHEEL" "$EXALENS_URL"
+
+    echo "Downloading tt-smi from ${TT_SMI_URL}"
+    wget -O "$TEMP_DIR/$TT_SMI_WHEEL" "$TT_SMI_URL"
 
     # Install all Python dependencies in one command for better resolution
     echo "Installing Python dependencies..."
-    pip install -r requirements.txt "./tt-smi" "$TEMP_DIR/$EXALENS_WHEEL"
+    pip install -r requirements.txt "$TEMP_DIR/$TT_SMI_WHEEL" "$TEMP_DIR/$EXALENS_WHEEL"
 
     # Download and extract SFPI release
     ./setup_testing_env.sh

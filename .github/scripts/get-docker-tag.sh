@@ -13,6 +13,7 @@ DOCKERFILE_HASH_FILES=".github/Dockerfile.base \
     .github/scripts/build-docker-images.sh \
     .github/scripts/install-exalens.sh \
     .github/scripts/install-smi.sh \
-    .github/scripts/install-tests-dependencies.sh"
+    .github/scripts/install-tests-dependencies.sh \
+    .github/scripts/versions.sh"
 DOCKERFILE_HASH=$(sha256sum $DOCKERFILE_HASH_FILES | sha256sum | cut -d ' ' -f 1)
 echo dt-$DOCKERFILE_HASH

@@ -5,11 +5,11 @@
 
 set -e
 
-EXALENS_VERSION="0.1.251103+dev.7172499-cp310-cp310-linux_x86_64"
-EXALENS_TAG="${EXALENS_VERSION%%+*}"
-EXALENS_WHEEL="ttexalens-${EXALENS_VERSION}.whl"
+# Source centralized version configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=.github/scripts/versions.sh
+source "${SCRIPT_DIR}/versions.sh"
 
-wget -O ${EXALENS_WHEEL} \
-    https://github.com/tenstorrent/tt-exalens/releases/download/${EXALENS_TAG}/${EXALENS_WHEEL} || exit 1
-pip install --no-cache-dir ${EXALENS_WHEEL}
-rm ${EXALENS_WHEEL}
+wget -O "${EXALENS_WHEEL}" "${EXALENS_URL}" || exit 1
+pip install --no-cache-dir "${EXALENS_WHEEL}"
+rm "${EXALENS_WHEEL}"
