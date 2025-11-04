@@ -363,8 +363,8 @@ inline void configure_unpack_AB(
     }
 
     uint unpA_x_end = (unpA_face_r_dim == 0) ? 1 : (unpA_face_r_dim << 4) - 1;
-    TTI_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
-    TTI_SETADCXX(p_setadc::UNP_B, (unpB_face_r_dim << 4) - 1, 0x0);
+    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP_B, (unpB_face_r_dim << 4) - 1, 0x0);
 
     // Program base address for all 2 sections (each section address is loaded to corresponding context)
     // Load dummy data to unused location if face height is 0
