@@ -10,7 +10,7 @@ from tests.ttnn.utils_for_testing import assert_equal
 from tests.ttnn.unit_tests.operations.test_utils import round_up
 
 CHANNEL_TEST_CASES = [1, 2, 3, 4, 8, 12, 15, 16, 32]
-BATCH_TEST_CASES = [1, 2, 4]
+BATCH_TEST_CASES = [1, 2, 4, 8]
 
 
 @pytest.mark.parametrize("B", BATCH_TEST_CASES)

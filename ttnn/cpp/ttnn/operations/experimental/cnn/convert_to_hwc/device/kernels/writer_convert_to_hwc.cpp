@@ -11,8 +11,6 @@ constexpr uint32_t TILE_SIZE = 32;
 template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
 FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
     noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);
-    DPRINT << "copy padded sticks read_base=" << l1_read_addr << "  l1_write_base=" << l1_write_addr
-           << " size=" << StickSize << ENDL();
     for (uint32_t row = 0; row < NumSticks; row++) {
         // DPRINT << "copy stick from tile cb at " << l1_read_addr << "  to output cb at " << l1_write_addr << ENDL();
         // tt::data_movement::common::print_bf16_pages(l1_read_addr, 32, 1);
@@ -38,8 +36,6 @@ FORCE_INLINE void copy_segment(
     } else {
         noc_read_addr = get_noc_addr(read_addr);
     }
-    DPRINT << "STARTING COPY SEGMENT - BASE_READ=" << base_read_addr << " offset=" << read_offset
-           << " - BASE_WRITE=" << base_write_addr << " offset=" << write_offset << ENDL();
     noc_async_read_one_packet_set_state(noc_read_addr, copy_size);
     for (uint32_t j = 0; j < NumSticks; ++j) {
         // DPRINT << "copy stick from input at " << noc_read_addr << "  to output at " << l1_write_addr << ENDL();
@@ -112,11 +108,8 @@ void kernel_main() {
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
     uint32_t args_idx = 0;
 
-    DPRINT << "INPUT NUM BLOCKS " << input_num_blocks << ENDL();
-
     for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {
         if constexpr (should_wait) {
-            DPRINT << "resrvering " << 2 * input_block_size_sticks_per_core << " sticks" << ENDL();
             cb_reserve_back(cb_in, 2 * input_block_size_sticks_per_core);
 
             uint32_t src_x = args[args_idx++];
@@ -124,26 +117,14 @@ void kernel_main() {
             uint32_t src_offset = args[args_idx++];  // only used if source is in DRAM
             uint32_t dst_offset = args[args_idx++];
             uint32_t size = args[args_idx++];
-            DPRINT << "write to x=" << src_x << " y=" << src_y << " src_offset=" << src_offset
-                   << " dst_offset=" << dst_offset << " size=" << size << ENDL();
 
             uint64_t src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_full_input));
-            uint32_t block_size_bytes = (hw * input_block_size_sticks_per_core * 2);
-            DPRINT << "block_size_bytes=" << block_size_bytes << " src_addr_base=" << src_addr_base
-                   << " dst_addr_base=" << get_write_ptr(cb_in) << ENDL();
-            DPRINT << "src_addr=" << src_addr_base + src_offset << " dst_addr"
-                   << get_write_ptr(cb_in) + (dst_offset % block_size_bytes) << ENDL();
+            uint32_t block_size_bytes = (input_block_size_sticks_per_core * 2 * channel_size);
             noc_async_read(src_addr_base + src_offset, get_write_ptr(cb_in) + (dst_offset % block_size_bytes), size);
             noc_async_read_barrier();
 
-            // tt::data_movement::common::print_bf16_pages(get_write_ptr(cb_in), 64, 2);
-
             cb_push_back(cb_in, 2 * input_block_size_sticks_per_core);
         }
-
-        DPRINT << "pushed block " << block_id << ENDL();
-        DPRINT << "   num tiles?=" << num_full_tiles << ENDL();
-        DPRINT << "   l1_write_addr_stride=" << l1_write_addr_stride << ENDL();
 
         for (uint32_t i = 0; i < num_full_tiles; i++) {
             cb_wait_front(cb_in_transpose, 1);

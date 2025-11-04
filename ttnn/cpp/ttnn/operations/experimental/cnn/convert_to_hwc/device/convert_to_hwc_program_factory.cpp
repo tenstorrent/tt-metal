@@ -42,7 +42,9 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
         uint32_t src_core = hw_idx / hw_per_input_core;
         uint32_t src_hw_offset = hw_idx % hw_per_input_core;
 
-        // Calculate source offset: [B, C, HW_per_input_core] layout
+        // Calculate source offset: [B*C, HW_per_input_core] layout (interleaved batch-channel)
+        // For batch_id and hw_offset, we need to find the position in the flattened [B*C, HW] layout
+        // Each batch occupies 'channels' consecutive rows starting at batch_id * channels
         uint32_t src_offset = (batch_id * channels * hw_per_input_core + src_hw_offset * channels) * element_size_bytes;
 
         // Calculate destination offset: [1, C, BHW_per_output_core] layout
@@ -91,6 +93,8 @@ std::vector<BatchTransferInstruction> optimize_transfers_batch_aware(
 
         for (const TransferData& transfer : sorted_transfers) {
             // Determine which batch this transfer belongs to
+            // The src_offset was calculated as: batch_id * channels * hw_per_input_core + src_hw_offset * channels
+            // Let's use the original calculation that worked before for now
             uint32_t batch_id = transfer.src_offset / batch_size_bytes;
             transfers_by_batch[batch_id].push_back(transfer);
         }
@@ -531,12 +535,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              total_num_sticks_kernel_1,
                              remote_address,
                              dram_read_stride_bytes,
-                             dram_write_stride_bytes](
-                                tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
+                             dram_write_stride_bytes,
+                             batch_size](tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
         log_info(tt::LogType::LogAlways, "convert_to_hwc: Setting runtime args, is_input_in_dram={}", is_input_in_dram);
 
         for (uint32_t core_idx = 0; core_idx < l1_input_cores.size(); core_idx++) {
             const auto& args_for_all_segments = grouped_transfers.at(core_idx);
+            log_info(
+                tt::LogType::LogAlways,
+                "convert_to_hwc: Core {} has {} transfer segments, batch_size={}",
+                core_idx,
+                args_for_all_segments.size(),
+                batch_size);
             std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
             std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
             for (const auto& args : args_for_all_segments) {
