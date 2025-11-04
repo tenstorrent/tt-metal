@@ -62,6 +62,5 @@ class TtGemmaImageTransformer(LightweightModule):
                 out.append(x)
             x = r(x, mask=mask)
         if return_intermediate is not None:
-            assert False  # mstojko temp
             return x, out
         return x

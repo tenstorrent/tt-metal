@@ -48,14 +48,12 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     head_dim = hidden_size // n_heads
     seq_len = model_args.vision_chunk_ntok
 
-    model_args.num_devices = 1
     tt_model = TtGemmaImageAttention(
         mesh_device=mesh_device,
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
-        # weight_cache_path=model_args.weight_cache_path(dtype),
-        weight_cache_path=None,
+        weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
     )

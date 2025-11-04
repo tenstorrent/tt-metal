@@ -38,7 +38,7 @@ class TtGemmaImageFeedForward(LightweightModule):
         )
         torch_bias = lambda name, suffix: self.state_dict[f"{state_dict_prefix}{name}.{suffix}"]
 
-        if args.dummy_weights or weight_cache_path is None:
+        if args.dummy_weights:
             cache_name = lambda *_: None
         else:
             cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")
@@ -60,10 +60,10 @@ class TtGemmaImageFeedForward(LightweightModule):
         )
 
         # Sharded weights
-        self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=None)
-        self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=None)
+        self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=-1)
+        self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=-1)
         self.c_fc_bias = ttnn.reshape(self.c_fc_bias, [1, -1])
-        self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=None)
+        self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=-2)
         self.c_proj_bias = as_interleaved_tensor("c_proj", "bias", ttnn.bfloat16, dim=None)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -83,6 +83,8 @@ class TtGemmaImageFeedForward(LightweightModule):
         if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
             # Reshape input to to fit on device and parallelize computation
             x_in = ttnn.reshape(x_in, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+        pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
+        pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
         cores_x = 8
         cores_y = 8
@@ -121,14 +123,11 @@ class TtGemmaImageFeedForward(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # TODO - unsqeeze samo?
         # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
         c_proj_out = ttnn.reshape(c_proj_out, [batch_size, 1, seq_len, -1])
 
-        DO_ALL_REDUCE = False
         # All reduce
-        if self.args.num_devices > 1 and DO_ALL_REDUCE:  # replace with reduce_scatter and all_gather
-            assert False
+        if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
             w2_out_gathered = ttnn.experimental.all_gather_async(
                 c_proj_out,
                 persistent_output_buffer=None,
