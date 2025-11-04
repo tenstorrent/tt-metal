@@ -80,6 +80,7 @@ inline void reblock_and_untilize(
 }
 
 void MAIN {
+    DeviceZoneScopedN("L1ZONE");
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg_val<uint32_t>(0) == 1;

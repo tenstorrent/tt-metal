@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 using std::uint32_t;
 
@@ -13,6 +14,7 @@ using std::uint32_t;
 //
 namespace NAMESPACE {
 void MAIN {
+    DeviceZoneScopedN("L1ZONE");
     constexpr int onetile = 1;
 
     int dst_tile_index = 0;
