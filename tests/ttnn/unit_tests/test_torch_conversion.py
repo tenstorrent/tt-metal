@@ -9,9 +9,6 @@ import pytest
 import numpy as np
 
 
-torch.manual_seed(0)
-
-
 def is_ttnn_float_type(tt_dtype) -> bool:
     match tt_dtype:
         case ttnn.bfloat16 | ttnn.float32 | ttnn.bfloat8_b | ttnn.bfloat4_b:
@@ -65,6 +62,7 @@ def create_from_torch_test_tensors(
     max_range=100,
     memory_config=None,
 ):
+    torch.manual_seed(0)
     if torch_dtype in TORCH_FLOAT_TYPES:
         torch_input_tensor = torch.rand(shape, dtype=torch_dtype) * max_range
 
