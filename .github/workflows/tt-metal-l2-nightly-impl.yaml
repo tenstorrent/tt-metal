@@ -434,7 +434,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent ${{ matrix.docker_options }}"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -443,8 +443,6 @@ jobs:
     runs-on: >-
       ${{
         ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || (matrix.test_type == 'group_norm' && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     strategy:
       matrix:
@@ -453,20 +451,14 @@ jobs:
           - test_type: conv
             test_path: tests/ttnn/nightly/unit_tests/operations/conv
             test_filter: "panoptic or _oft"
-            hf_home: /mnt/MLPerf/tt_dnn-models/hf_home
-            docker_options: "-v /mnt/MLPerf:/mnt/MLPerf:ro"
             owner: U052J2QDDKQ # Pavle Josipovic
           - test_type: pool
             test_path: tests/ttnn/nightly/unit_tests/operations/pool
             test_filter: "panoptic or _oft"
-            hf_home: /mnt/MLPerf/tt_dnn-models/hf_home
-            docker_options: "-v /mnt/MLPerf:/mnt/MLPerf:ro"
             owner: U052J2QDDKQ # Pavle Josipovic
           - test_type: group_norm
             test_path: tests/ttnn/unit_tests/operations/fused
             test_filter: "_oft"
-            hf_home: ""
-            docker_options: "-e TT_GH_CI_INFRA"
             owner: U06Q7ESTFEV # Borys Bradel
     steps:
       - name: ⬇️  Setup Job
@@ -475,8 +467,6 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-        env:
-          HF_HOME: ${{ matrix.hf_home }}
       - name: ttnn nightly bos ${{ matrix.test_type }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest -n auto ${{ matrix.test_path }} -v -m "not disable_fast_runtime_mode" -k "${{ matrix.test_filter }}" --timeout=${{ env.TEST_BUDGET_SECONDS }}
