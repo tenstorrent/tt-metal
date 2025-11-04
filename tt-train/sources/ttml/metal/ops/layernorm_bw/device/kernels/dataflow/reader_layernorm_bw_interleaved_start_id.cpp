@@ -99,14 +99,6 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_gamma_idx, Wt);
         }
-        // if (r == start_row) {
-        //     DPRINT << "READER: dL_out tile " << 0 << ":" << ENDL();
-        //     print_tile(cb_dL_out_idx, 0, false);
-        // }
-        // if (r == start_row) {
-        //     DPRINT << "READER: gamma tile " << 0 << ":" << ENDL();
-        //     print_tile(cb_gamma_idx, 0, false);
-        // }
 
 #else
         // If not everything fits in L1, we need to read data multiple times per row
