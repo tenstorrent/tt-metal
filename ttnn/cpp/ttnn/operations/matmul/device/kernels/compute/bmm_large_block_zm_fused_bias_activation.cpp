@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "mod_div_lib.h"
 
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #ifdef FUSE_BIAS
 #include "compute_kernel_api/bcast.h"
 #endif
