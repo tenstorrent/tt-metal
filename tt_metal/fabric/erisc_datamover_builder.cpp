@@ -382,7 +382,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     std::size_t channel_buffer_size_bytes, Topology topology, FabricEriscDatamoverOptions options) :
     FabricEriscDatamoverConfig(topology) {
     // Update sender channel servicing based on fabric tensix configuration
-    if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+    if (options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
         // Use default direction (EAST) for the constructor case since direction isn't available here
         update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, options.direction, topology);
     }
