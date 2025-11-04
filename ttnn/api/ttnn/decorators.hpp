@@ -134,38 +134,39 @@ private:
     template <typename... args_t>
         requires(LazifyableCompositeOperationConcept<operation_t, args_t && ...>)
     auto invoke(args_t&&... args) const {
+        auto operation = operation_t(std::forward<args_t>(args)...);
+        auto [inputs, optional_inputs, optional_outputs] =
+            operation_t::get_tensor_inputs(std::forward<args_t>(args)...);
+        operation.validate(inputs, optional_inputs, optional_outputs);
+
         if (ttnn::experimental::lazy::is_lazy_enabled()) {
-            // TODO: This shouldn't ignore optional tensors
-            // Create lazy operation wrapper
-            auto lazy_op = ttnn::experimental::lazy::make_lazy_composite_operation<operation_t, args_t&&...>(
-                std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()),
-                std::forward<args_t>(args)...);
-
-            // Extract input tensors from tensor_args
-            auto inputs = lazy_op->operation().get_tensor_inputs(std::forward<args_t>(args)...);
-            auto input_tensors = std::get<0>(inputs);
-
-            lazy_op->validate(input_tensors);
-
             // Get output specs to create placeholder tensors
-            auto output_specs = lazy_op->compute_output_specs(input_tensors);
+            auto output_specs = operation.compute_output_specs(inputs, optional_inputs, optional_outputs);
 
+            // Create lazy operation wrapper
+            auto lazy_op = ttnn::experimental::lazy::make_lazy_composite_operation<operation_t>(
+                operation, std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
+
+            // TODO: We shouldn't ignore optional tensors
+            // TODO: Support other return types for lazy execution
             if constexpr (std::same_as<typename operation_t::tensor_return_value_t, Tensor>) {
                 // Single tensor output
-                TT_FATAL(!output_specs.empty(), "Expected at least one output spec");
-                return Tensor::make_lazy_tensor(input_tensors, lazy_op, output_specs[0]);
+                static_assert(
+                    std::same_as<typename operation_t::spec_return_value_t, TensorSpec>,
+                    "Unsupported return type for lazy execution");
+                return Tensor::make_lazy_tensor(inputs, lazy_op, output_specs);
             } else if constexpr (std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>) {
                 // Multiple tensor outputs (vector)
-                return Tensor::make_lazy_tensors(input_tensors, lazy_op, output_specs);
+                static_assert(
+                    std::same_as<typename operation_t::spec_return_value_t, std::vector<TensorSpec>>,
+                    "Unsupported return type for lazy execution");
+                return Tensor::make_lazy_tensors(inputs, lazy_op, output_specs);
             } else {
                 static_assert(
                     std::same_as<typename operation_t::tensor_return_value_t, void>,
                     "Unsupported return type for lazy execution");
             }
         }
-        auto operation = operation_t(std::forward<args_t>(args)...);
-        auto [inputs, optional_inputs, optional_outputs] = operation.get_tensor_inputs(std::forward<args_t>(args)...);
-        operation.validate(inputs, optional_inputs, optional_outputs);
         return operation.invoke(inputs, optional_inputs, optional_outputs);
     }
 
