@@ -36,7 +36,7 @@ message MeshGraphDescriptor {
     repeated MeshDescriptor mesh_descriptors = 1;
 
     // Reusable switch templates (definitions) referenced by graphs and instances.
-    // Switches are single-host external interconnects between meshes.
+    // Switches are single-host external interconnects between meshes or graphs.
     // Required fields inside each SwitchDescriptor: name, arch, device_topology.dims,
     // and channels.count. Note: switches do not have host_topology as they are always single host.
     repeated SwitchDescriptor switch_descriptors = 4;
@@ -153,8 +153,9 @@ message SwitchDescriptor {
 
 // -----------------------------------------------------------------------------
 // GraphDescriptor
-// Groups instances of a single kind (all MeshRef OR all GraphRef OR all SwitchRef) and defines
-// connectivity among them.
+// Groups instances of a single kind (all MeshRef OR all GraphRef) and defines
+// connectivity among them. This is with the exception of SwitchRef,
+// which can be used to with MeshRef and GraphRef to connect meshes and graphs.
 // Required: name, type, instances (uniform node kind).
 // Connectivity: choose ONE style
 //   - Shorthand graph_topology (e.g., ALL_TO_ALL, RING) — commonly paired with `channels`.
@@ -185,7 +186,7 @@ message SwitchDescriptor {
 //   }
 //
 // Pitfalls:
-// - Do not mix meshes, switches, and graphs in the same `instances` list.
+// - Do not mix meshes, and graphs in the same `instances` list.
 // - When using `graph_topology`, include `channels` to define edge multiplicity.
 // - `type` is a freeform grouping label (e.g., "POD", "SUPERPOD", "CLUSTER").
 // - If `instances` are GraphRefs, their referenced GraphDescriptors should share the
@@ -225,12 +226,12 @@ message GraphDescriptor {
 // - A GraphRef can optionally narrow to a sub MeshRef/SwitchRef (and optionally device) that
 //   belongs to that graph. Deep nesting (graph->graph->mesh->device) is allowed.
 // - The nested MeshRef/SwitchRef/GraphRef is interpreted in the context of the parent graph.
-// - device_id is only meaningful when the NodeRef resolves to a MeshRef or SwitchRef. Do not set
+// - device_id is only meaningful when the NodeRef resolves to a MeshRef. Do not set
 //   device_id for a bare GraphRef.
 //
 // Connectivity usage tips:
 // - In GraphDescriptor.connections
-//       - you can specify to the level of meshes/switches/graphs to allow the ethernet connection to live on any device within the mesh/switch/graph
+//       - you can specify to the level of meshes/graphs to allow the ethernet connection to live on any device within the mesh/graph
 //       - you can specify to the level of devices to restrict the ethernet connection to a specific device within the mesh/switch/graph
 //   Provide device_id to connect specific devices inside meshes or switches.
 // - When using GraphTopology (e.g., ALL_TO_ALL), also supply Channels to define the
@@ -432,8 +433,8 @@ enum Policy {
 //
 //   # Edge between a mesh and a switch:
 //   connection {
-//     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 2 } }
-//     nodes { switch { switch_descriptor: "SW0" switch_id: 0 device_id: 2 } }
+//     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+//     nodes { switch { switch_descriptor: "SW0" switch_id: 0 } }
 //     channels { count: 2 }
 //   }
 message Connection {

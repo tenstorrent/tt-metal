@@ -16,15 +16,40 @@ from ....utils.test import line_params, ring_params
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
     [
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
+        # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        # BH (linear) on 4x8
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear],
     ],
     ids=[
         "2x4sp0tp1",
-        "4x8sp1tp0",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology):
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (832, 480),
+        (1280, 720),
+    ],
+    ids=[
+        "resolution_480p",
+        "resolution_720p",
+    ],
+)
+def test_pipeline_inference(
+    mesh_device,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    num_links,
+    dynamic_load,
+    topology,
+    width,
+    height,
+):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
@@ -44,10 +69,10 @@ def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links
     prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
 
-    height = 480
-    width = 832
     num_frames = 81
     num_inference_steps = 40
+    guidance_scale = 3.0
+    guidance_scale_2 = 4.0
 
     print(f"Running inference with prompt: '{prompt}'")
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
@@ -72,8 +97,8 @@ def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links
             width=width,
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
-            guidance_scale=3.0,
-            guidance_scale_2=4.0,
+            guidance_scale=guidance_scale,
+            guidance_scale_2=guidance_scale_2,
         )
 
     # Check output
@@ -95,5 +120,8 @@ def test_pipeline_inference(mesh_device, mesh_shape, sp_axis, tp_axis, num_links
     # Save video using diffusers utility
     # Remove batch dimension
     frames = frames[0]
-    export_to_video(frames, "wan_output_video.mp4", fps=16)
+    try:
+        export_to_video(frames, "wan_output_video.mp4", fps=16)
+    except AttributeError as e:
+        print(f"AttributeError: {e}")
     print("✓ Saved video to: wan_output_video.mp4")

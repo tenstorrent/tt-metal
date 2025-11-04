@@ -589,17 +589,55 @@ on:
           - BH-DeskBox
           - BH-LoudBox
         default: "N150"
+      log-level:
+        description: "Log level for sweep execution. INFO level may overwhelm runners for long sweeps."
+        required: true
+        type: choice
+        options:
+          - DEBUG
+          - INFO
+          - WARNING
+          - CRITICAL
+        default: "INFO"
 
   schedule:
     - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
     - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
-
 concurrency:
-  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch }}-${{ github.event.inputs.runner-label }}
-  cancel-in-progress: true
+  group: ttnn-sweeps-${{ github.ref }}-${{ github.event.inputs.arch || 'wormhole_b0' }}-${{ github.event.inputs.runner-label || 'N150' }}-${{ github.event.inputs.sweep_name }}
 
 jobs:
+  display-workflow-options:
+    name: 📋 Display workflow options
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Display selected workflow options
+        run: |
+          echo "::group::🔧 Workflow Configuration Options"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    TTNN Run Sweeps Configuration            │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Sweep Name:           ${{ github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)' }}"
+          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == true && 'true' || 'false' }}"
+          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == true && 'true' || 'false' }}"
+          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == true && 'true' || 'false' }}"
+          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
+          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
+          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
+
+          echo "::group::📊 Workflow Context Information"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "::endgroup::"
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
@@ -610,12 +648,13 @@ jobs:
       version: "22.04"
       tracy: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.measure_device_perf == 'true') }}
   ttnn-generate-sweeps:
-    name: Generate Sweep Vectors ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
     needs: build-artifact
     strategy:
       matrix:
-        arch:
-          - ${{ inputs.arch }}
+        include:
+          - arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -639,8 +678,8 @@ jobs:
     timeout-minutes: 30
     runs-on: >-
       ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label== 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+        (matrix.runner_label == 'topology-6u' || matrix.runner_label == 'BH-LLMBox' || matrix.runner_label == 'BH-DeskBox' || matrix.runner_label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.runner_label)
       }}
     steps:
       - name: ⬇️  Setup Job
@@ -649,6 +688,23 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 📋 Display workflow configuration
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "::group::🔧 TTNN Run Sweeps - Workflow Configuration"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                    Selected Configuration Options           │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Sweep Name:           ${{ github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)' }}"
+          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Not specified' }}"
+          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
+          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
+          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
+          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
       - name: Run ttnn sweeps generation (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
@@ -739,14 +795,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: ttnn sweep tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-            arch: ${{ inputs.arch }}
-            tt-smi-cmd: ${{ (inputs.runner-label == 'topology-6u' ) && 'tt-smi -glx_reset_auto' || 'tt-smi -r'}}
-            runs-on: >-
-              ${{
-                (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox' ) && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
-                || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-              }}
+          - name: ttnn sweep tests ${{ github.event.inputs['arch'] || 'wormhole_b0' }} ${{ github.event.inputs['runner-label'] || 'N150' }}
+            arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
+            runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -754,11 +805,12 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        LOGURU_LEVEL: INFO
+        LOGURU_LEVEL: ${{ inputs.log-level }}
+        TT_LOGGER_LEVEL: ${{ inputs.log-level }}
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
-        TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -773,7 +825,11 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 720
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: >-
+      ${{
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
+      }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
@@ -781,12 +837,28 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 📋 Display single sweep configuration
+        run: |
+          echo "::group::🔧 Single Sweep Execution - Configuration"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│                 Single Sweep Configuration                  │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Target Sweep:         ${{ github.event.inputs.sweep_name }}"
+          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Default' }}"
+          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
+          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
+          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
+          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
+          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
+          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
       - name: Download sweep vectors
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
-      - name: Run ttnn sweeps (single sweep)
+      - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
         run: |
           SKIP_ON_TIMEOUT_FLAG=""
           if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
@@ -798,7 +870,13 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
-          python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
+          python3 tests/sweep_framework/sweeps_runner.py \
+          --module-name ${{ github.event.inputs.sweep_name }} \
+          --vector-source vectors_export \
+          --result-dest results_export \
+          --tag ci-main \
+          --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG \
+          --suite-name ${{ github.event.inputs.suite_name }} \
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -866,6 +944,21 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: 📋 Display parallel sweep configuration
+        run: |
+          echo "::group::🔧 Parallel Sweeps Execution - Configuration"
+          echo "┌─────────────────────────────────────────────────────────────┐"
+          echo "│              Parallel Sweeps Configuration                  │"
+          echo "├─────────────────────────────────────────────────────────────┤"
+          echo "│ Run Mode:             Parallel Execution (${{ matrix.test-group.name }})"
+          echo "│ Batch:                ${{ matrix.batch }}"
+          echo "│ Architecture:         ${{ matrix.test-group.arch }}"
+          echo "│ Runner:               ${{ matrix.test-group.runs-on }}"
+          echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == true && 'true' || 'false') }}"
+          echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == true && 'true' || 'false') }}"
+          echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == true && 'true' || 'false') }}"
+          echo "└─────────────────────────────────────────────────────────────┘"
+          echo "::endgroup::"
       - name: Download sweep vectors
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:

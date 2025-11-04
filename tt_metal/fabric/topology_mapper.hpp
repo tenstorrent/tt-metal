@@ -24,6 +24,9 @@ namespace tt::tt_fabric {
 
 struct LocalMeshBinding;
 
+// Concise alias for ASIC physical position (tray, location)
+using AsicPosition = std::pair<tt::tt_metal::TrayID, tt::tt_metal::ASICLocation>;
+
 /**
  * @brief TopologyMapper creates and manages mappings between fabric node IDs and physical ASIC IDs
  *
@@ -52,6 +55,14 @@ public:
         const MeshGraph& mesh_graph,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const LocalMeshBinding& local_mesh_binding);
+
+    // Construct a TopologyMapper with fixed ASIC-position pinnings (tray, location).
+    // These pins must reference devices on the current host; if infeasible, construction will throw with details.
+    TopologyMapper(
+        const MeshGraph& mesh_graph,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const LocalMeshBinding& local_mesh_binding,
+        const std::vector<std::pair<AsicPosition, FabricNodeId>>& fixed_asic_position_pinnings);
 
     /**
      * @brief Get logical mesh graph connectivity
@@ -185,6 +196,14 @@ public:
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
 
     /**
+     * @brief Get the host rank that owns a logical chip in a mesh
+     *
+     * The chip_id parameter is the Fabric Node (logical) chip id for mesh_id.
+     * The returned rank is derived from TopologyMapper's host-rank coordinate ranges.
+     */
+    std::optional<MeshHostRankId> get_host_rank_for_coord(MeshId mesh_id, const MeshCoordinate& coord) const;
+
+    /**
      * @brief Get the logical chip ids for a mesh or a host submesh
      *
      * When host_rank is not provided, returns a container of all logical chip
@@ -296,6 +315,8 @@ private:
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;
     const LocalMeshBinding& local_mesh_binding_;
+    const std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings_;
+    bool generate_mapping_locally_ = false;
 
     // Bidirectional mapping between FabricNodeId and AsicID
     std::unordered_map<FabricNodeId, tt::tt_metal::AsicID> fabric_node_id_to_asic_id_;

@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "hal_types.hpp"
-#include "llrt/hal.hpp"
 #include "jit_build_options.hpp"
 
 namespace tt::tt_metal {
@@ -48,7 +47,7 @@ class JitBuildEnv {
 public:
     JitBuildEnv();
     void init(
-        uint32_t build_key,
+        uint64_t build_key,
         size_t fw_compile_hash,
         tt::ARCH arch,
         const std::map<std::string, std::string>& device_kernel_defines);
@@ -60,6 +59,7 @@ public:
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
+    uint64_t get_build_key() const { return build_key_; }
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
@@ -79,6 +79,8 @@ private:
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+
+    std::uint64_t build_key_{};
 };
 
 // All the state used for a build in an abstract base class
@@ -123,9 +125,7 @@ protected:
         const std::string& obj) const;
     void link(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
     void weaken(const std::string& log_file, const std::string& out_path) const;
-    void copy_kernel(const std::string& kernel_in_path, const std::string& op_out_path) const;
     void extract_zone_src_locations(const std::string& log_file) const;
-    void finish_init(HalProgrammableCoreType core_type, HalProcessorClassType processor_class);
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
