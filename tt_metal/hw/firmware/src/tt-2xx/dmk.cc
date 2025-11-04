@@ -44,7 +44,7 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
-    // asm("FENCE.i"); // TODO revisit once TT-SIM implemetnsor we run several kernels
+    // asm("FENCE.i"); // TODO revisit once TT-SIM implements or we run several kernels
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
