@@ -95,10 +95,10 @@ def convert_vision_hf_to_meta(state_dict, head_dim):
 
 def convert_hf_to_meta_mllama(state_dict, head_dim, config):
     state_dict = split_hf_keys(state_dict)
-    exempt_vision_keys = [k for k in state_dict.keys() if "vision" in k]
-    exempt_vision_dict = {k: state_dict.pop(k) for k in exempt_vision_keys}
+    # exempt_vision_keys = [k for k in state_dict.keys() if "vision" in k]
+    # exempt_vision_dict = {k: state_dict.pop(k) for k in exempt_vision_keys}
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
-    state_dict.update(exempt_vision_dict)
+    # state_dict.update(exempt_vision_dict)
     state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
     state_dict = convert_pos_embeddings(state_dict)
     state_dict = flatten_conv_linear(state_dict)
