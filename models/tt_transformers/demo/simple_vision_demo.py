@@ -533,7 +533,7 @@ def test_multimodal_demo_text(
         }
         targets_decode_tok_s_u = {
             ("N300", "Llama-3.2-11B", 16): 17,
-            ("T3K", "Llama-3.2-90B", 1): 4.3,
+            ("T3K", "Llama-3.2-90B", 1): 12.3,
         }
 
         perf_targets = {}
