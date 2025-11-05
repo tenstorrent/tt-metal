@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <ostream>
 #include <stdexcept>
 
 #include <fmt/base.h>
