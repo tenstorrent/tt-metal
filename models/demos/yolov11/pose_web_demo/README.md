@@ -18,7 +18,32 @@ This web demo consists of:
 
 ## Setup and Running
 
-### 1. Server Setup
+### Simple Method (Recommended - Like YOLOv4)
+
+**Server (Ubuntu with TTNN):**
+```bash
+cd pose_web_demo/server
+./run_uvicorn.sh
+```
+
+**Client (Mac - via SSH tunnel):**
+```bash
+# SSH tunnel from Mac to Ubuntu
+ssh -L 8000:localhost:8000 ubuntu@UBUNTU_IP
+
+# In another terminal, run simple client
+cd pose_web_demo/client
+pip install -r requirements.txt
+./run_simple.sh --api-url http://localhost:8000
+```
+
+**Open browser:** `http://localhost:8501`
+
+---
+
+### Advanced HTTPS Method
+
+#### 1. Server Setup
 
 ```bash
 cd pose/tt-metal/models/demos/yolov11/pose_web_demo/server
@@ -189,17 +214,18 @@ Each keypoint includes (x, y, visibility) values.
 
 ## Troubleshooting
 
-1. **Python 3.13 compatibility**: Some packages may not support Python 3.13. Use Python 3.11-3.12 or conda for installation
-2. **Server won't start**: Check TTNN device availability
-3. **Client can't connect**: Ensure server is running on port 8000 and accessible from client machine
-4. **Remote server connection fails**: Verify server is bound to `0.0.0.0` and firewall allows port 8000
-5. **No detections**: Check confidence threshold and lighting conditions
-6. **Performance issues**: Reduce frame processing rate in client code
-7. **Network timeout**: Check network connectivity between client and server machines
-8. **WebRTC/camera errors**: Try Chrome browser, refresh page, or check camera permissions
-9. **"navigator.mediaDevices is undefined"**: Page not loaded securely - use HTTPS (see HTTPS Setup section)
-10. **"net::ERR_CERT_AUTHORITY_INVALID"**: Use `https://localhost:8501` not `https://0.0.0.0:8501`, click "Advanced" → "Proceed to localhost"
-11. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
+1. **HTTPS/Camera issues**: Try the **Simple Method** above - it works with HTTP and SSH tunneling
+2. **Python 3.13 compatibility**: Some packages may not support Python 3.13. Use Python 3.11-3.12 or conda for installation
+3. **Server won't start**: Check TTNN device availability
+4. **Client can't connect**: Ensure server is running on port 8000 and accessible from client machine
+5. **Remote server connection fails**: Verify server is bound to `0.0.0.0` and firewall allows port 8000
+6. **No detections**: Check confidence threshold and lighting conditions
+7. **Performance issues**: Reduce frame processing rate in client code
+8. **Network timeout**: Check network connectivity between client and server machines
+9. **WebRTC/camera errors**: Try Chrome browser, refresh page, or check camera permissions
+10. **"navigator.mediaDevices is undefined"**: Page not loaded securely - use HTTPS (see HTTPS Setup section)
+11. **"net::ERR_CERT_AUTHORITY_INVALID"**: Use `https://localhost:8501` not `https://0.0.0.0:8501`, click "Advanced" → "Proceed to localhost"
+12. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
 
 ## Comparison with Object Detection Demo
 
