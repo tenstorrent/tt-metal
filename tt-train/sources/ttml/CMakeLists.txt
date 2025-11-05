@@ -394,6 +394,7 @@ target_link_libraries(
         Boost::core
         Boost::container
         tt-logger
+        simde::simde
 )
 
 message(STATUS "xtensor_SOURCE_DIR: ${xtensor_SOURCE_DIR}")

@@ -4,7 +4,13 @@
 
 #pragma once
 
-#include <wmmintrin.h>  // AES-NI
+// SIMD Everywhere - portable SIMD across all architectures
+// SIMDE provides portable implementations of SIMD intrinsics
+// Enables native aliases to use original _mm* intrinsics on any architecture
+#define SIMDE_ENABLE_NATIVE_ALIASES
+#include <simde/x86/aes.h>
+#include <simde/x86/sse2.h>
+#include <simde/x86/sse4.1.h>
 
 #include <algorithm>
 #include <bit>
@@ -28,8 +34,8 @@ namespace ttml::core::sse {
 // Constants
 // ============================================================================
 
-inline constexpr size_t simd_float_batch_size = 4;
-inline constexpr size_t simd_bf16_batch_size = 4;  // 4 bfloat16s generated at a time
+inline constexpr size_t simd_float_batch_size = 4;  // 4 floats per SIMD vector
+inline constexpr size_t simd_bf16_batch_size = 4;   // 4 bfloat16s per SIMD vector
 inline constexpr size_t cache_line_size_bytes = 64;
 inline constexpr size_t parallel_min_size = 4096;
 inline constexpr size_t thread_seed_shift_bits = 32;
@@ -80,27 +86,8 @@ inline uint64_t calculate_thread_seed(uint32_t base_seed, size_t thread_id) noex
     return static_cast<uint64_t>(base_seed) + (static_cast<uint64_t>(thread_id) << thread_seed_shift_bits);
 }
 
-// Fill remainder elements using fallback RNG
-template <typename T, typename DistFactory>
-inline void fill_remainder_fallback(
-    std::span<T> output, size_t start_idx, uint32_t seed, DistFactory dist_factory) noexcept {
-    if (start_idx >= output.size()) {
-        return;
-    }
-    std::mt19937 fallback_rng{seed + static_cast<uint32_t>(start_idx)};
-    auto fallback_dist = dist_factory();
-    for (size_t i = start_idx; i < output.size(); ++i) {
-        if constexpr (std::same_as<T, bfloat16>) {
-            float val = fallback_dist(fallback_rng);
-            output[i] = float_to_bfloat16(val);
-        } else {
-            output[i] = fallback_dist(fallback_rng);
-        }
-    }
-}
-
 // ============================================================================
-// AES RNG
+// Portable AES RNG using SIMD Everywhere
 // ============================================================================
 
 class AesRng {
@@ -119,7 +106,7 @@ public:
         return std::numeric_limits<result_type>::max();
     }
 
-    __attribute__((target("aes,sse4.2"))) explicit AesRng(uint64_t seed = 0) noexcept :
+    explicit AesRng(uint64_t seed = 0) noexcept :
         state_{_mm_set_epi64x(seed, seed ^ seed_mix_constant_1)},
         key_{_mm_set_epi64x(seed ^ seed_mix_constant_2, seed + seed_mix_constant_1)},
         increment_{_mm_set_epi64x(seed_mix_constant_1, seed_mix_constant_2)} {
@@ -128,7 +115,8 @@ public:
         }
     }
 
-    __attribute__((target("aes,sse4.2"))) void advance() noexcept {
+    // Advance RNG state using AES operations (portable via SIMDE)
+    void advance() noexcept {
         state_ = _mm_aesenc_si128(state_, key_);
         state_ = _mm_aesenc_si128(state_, increment_);
         state_ = _mm_aesenc_si128(state_, key_);
@@ -136,34 +124,36 @@ public:
         increment_ = _mm_add_epi64(increment_, _mm_set_epi64x(1, 1));
     }
 
+    // Generate 128-bit random integer
     [[nodiscard]]
-    __attribute__((target("aes,sse4.2"))) __m128i generate_128bit() noexcept {
+    __m128i generate_128bit() noexcept {
         advance();
         return state_;
     }
 
+    // Generate 4 floats in [0, 1) range using SIMD
     [[nodiscard]]
-    __attribute__((target("aes,sse4.2"))) __m128 generate_float_x4() noexcept {
+    __m128 generate_float_x4() noexcept {
         __m128i rand_int = generate_128bit();
+
+        // Extract mantissa by shifting right 9 bits
         __m128i mantissa = _mm_srli_epi32(rand_int, float_mantissa_shift);
+
+        // OR with exponent bias to get float in [1, 2)
         __m128i float_bits = _mm_or_si128(mantissa, _mm_set1_epi32(float_exponent_bias));
+
+        // Cast to float and subtract 1.0 to get [0, 1)
         __m128 result = _mm_castsi128_ps(float_bits);
         return _mm_sub_ps(result, _mm_set1_ps(1.0f));
     }
 
+    // Generate 4 bfloat16 values in [0, 1) range
     [[nodiscard]]
-    __attribute__((target("aes,sse4.2"))) std::array<bfloat16, 4> generate_bfloat16_x4() noexcept {
-        // Generate 4 floats in [0,1) range
+    std::array<bfloat16, 4> generate_bfloat16_x4() noexcept {
         __m128 floats = generate_float_x4();
-
-        // Convert float to bfloat16 by extracting upper 16 bits
-        // bfloat16 = upper 16 bits of float32
         __m128i float_bits = _mm_castps_si128(floats);
-
-        // Shift right by 16 to get upper 16 bits of each 32-bit float
         __m128i upper_bits = _mm_srli_epi32(float_bits, 16);
 
-        // Extract and pack into array
         alignas(16) uint32_t packed[4];
         _mm_store_si128((__m128i*)packed, upper_bits);
 
@@ -174,8 +164,9 @@ public:
             std::bit_cast<bfloat16>(static_cast<uint16_t>(packed[3]))};
     }
 
+    // Single random uint32 from buffered values
     [[nodiscard]]
-    __attribute__((target("aes,sse4.2"))) result_type operator()() noexcept {
+    result_type operator()() noexcept {
         thread_local int idx = 0;
         thread_local uint32_t buffer[simd_float_batch_size];
         thread_local AesRng* last_rng = nullptr;
@@ -193,11 +184,126 @@ public:
 };
 
 // ============================================================================
-// Internal SIMD Generation (Float)
+// Portable SIMD Math Helpers using SIMDE
 // ============================================================================
 
-__attribute__((target("aes,sse4.2"))) void generate_uniform_simd(
-    std::span<float> output, uint32_t seed, auto dist_factory) {
+// Portable SIMD logarithm - works on all architectures via SIMDE
+inline __m128 _mm_log_ps(__m128 x) noexcept {
+    // IEEE 754 floating point representation extraction
+    const __m128 one = _mm_set1_ps(1.0f);
+    const __m128 ln2 = _mm_set1_ps(0.693147180559945f);
+
+    // Extract exponent
+    __m128i e = _mm_castps_si128(x);
+    e = _mm_srli_epi32(e, 23);
+    e = _mm_sub_epi32(e, _mm_set1_epi32(127));
+    __m128 e_f = _mm_cvtepi32_ps(e);
+
+    // Extract mantissa [1, 2)
+    __m128i mantissa = _mm_and_si128(_mm_castps_si128(x), _mm_set1_epi32(0x807FFFFF));
+    mantissa = _mm_or_si128(mantissa, _mm_set1_epi32(0x3F000000));
+    x = _mm_castsi128_ps(mantissa);
+
+    // Polynomial approximation for ln(x)
+    __m128 x_minus_one = _mm_sub_ps(x, one);
+    __m128 x2 = _mm_mul_ps(x_minus_one, x_minus_one);
+    __m128 ln_x = _mm_add_ps(x_minus_one, _mm_mul_ps(x2, _mm_set1_ps(-0.5f)));
+
+    return _mm_add_ps(_mm_mul_ps(e_f, ln2), _mm_mul_ps(ln_x, ln2));
+}
+
+// Portable SIMD square root
+inline __m128 _mm_sqrt_ps_fast(__m128 x) noexcept {
+    return _mm_sqrt_ps(x);
+}
+
+// ============================================================================
+// SIMD Remainder Fill - all SIMD, no scalar fallback
+// ============================================================================
+
+template <typename T, typename DistFactory>
+inline void fill_remainder_simd(
+    std::span<T> output, size_t start_idx, uint32_t seed, DistFactory dist_factory) noexcept {
+    if (start_idx >= output.size()) {
+        return;
+    }
+
+    AesRng rng{seed + static_cast<uint32_t>(start_idx)};
+    auto dist = dist_factory();
+    auto params = dist.param();
+
+    if constexpr (std::same_as<T, float>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
+            const float min = params.a();
+            const float max = params.b();
+            const float range = max - min;
+
+            for (size_t i = start_idx; i < output.size(); ++i) {
+                __m128 rand = rng.generate_float_x4();
+                float val = _mm_cvtss_f32(rand);
+                output[i] = min + val * range;
+            }
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            const float mean = params.mean();
+            const float stddev = params.stddev();
+            const float two_pi = 2.0f * std::numbers::pi_v<float>;
+
+            for (size_t i = start_idx; i < output.size(); ++i) {
+                __m128 u1 = rng.generate_float_x4();
+                __m128 u2 = rng.generate_float_x4();
+
+                float u1_val = _mm_cvtss_f32(u1);
+                float u2_val = _mm_cvtss_f32(u2);
+
+                u1_val = std::max(u1_val, 1e-10f);
+                float r = std::sqrt(-2.0f * std::log(u1_val));
+                float theta = two_pi * u2_val;
+                float z = r * std::cos(theta);
+                output[i] = z * stddev + mean;
+            }
+        }
+    } else if constexpr (std::same_as<T, bfloat16>) {
+        using Dist = decltype(dist_factory());
+        if constexpr (std::same_as<Dist, std::uniform_real_distribution<float>>) {
+            const float min = params.a();
+            const float max = params.b();
+            const float range = max - min;
+
+            for (size_t i = start_idx; i < output.size(); ++i) {
+                __m128 rand = rng.generate_float_x4();
+                float val = _mm_cvtss_f32(rand);
+                float scaled = min + val * range;
+                output[i] = float_to_bfloat16(scaled);
+            }
+        } else if constexpr (std::same_as<Dist, std::normal_distribution<float>>) {
+            const float mean = params.mean();
+            const float stddev = params.stddev();
+            const float two_pi = 2.0f * std::numbers::pi_v<float>;
+
+            for (size_t i = start_idx; i < output.size(); ++i) {
+                __m128 u1 = rng.generate_float_x4();
+                __m128 u2 = rng.generate_float_x4();
+
+                float u1_val = _mm_cvtss_f32(u1);
+                float u2_val = _mm_cvtss_f32(u2);
+
+                u1_val = std::max(u1_val, 1e-10f);
+                float r = std::sqrt(-2.0f * std::log(u1_val));
+                float theta = two_pi * u2_val;
+                float z = r * std::cos(theta);
+                float result = z * stddev + mean;
+                output[i] = float_to_bfloat16(result);
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Portable SIMD Generation (Float - Uniform)
+// ============================================================================
+
+void generate_uniform_simd(std::span<float> output, uint32_t seed, auto dist_factory) {
     using Dist = decltype(dist_factory());
     static_assert(
         std::same_as<Dist, std::uniform_real_distribution<float>>,
@@ -207,28 +313,27 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd(
     auto dist = dist_factory();
     auto params = dist.param();
 
-    const auto min = params.a();
-    const auto max = params.b();
+    const float min = params.a();
+    const float max = params.b();
 
     const size_t num_batches = output.size() / simd_float_batch_size;
     const __m128 range_vec = _mm_set1_ps(max - min);
     const __m128 min_vec = _mm_set1_ps(min);
 
+    // Process full SIMD batches
     for (size_t i : std::views::iota(0u, num_batches)) {
         __m128 rand = rng.generate_float_x4();
         __m128 scaled = _mm_add_ps(_mm_mul_ps(rand, range_vec), min_vec);
         _mm_storeu_ps(&output[i * simd_float_batch_size], scaled);
     }
 
-    for (size_t i : std::views::iota(num_batches * simd_float_batch_size, output.size())) {
-        float rand_val = _mm_cvtss_f32(rng.generate_float_x4());
-        output[i] = min + rand_val * (max - min);
-    }
+    // Process remainder with SIMD
+    fill_remainder_simd(output, num_batches * simd_float_batch_size, seed, dist_factory);
 }
 
 // Parallel SIMD generation for uniform_real_distribution<float>
 template <typename DistFactory>
-__attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel(
+void generate_uniform_simd_parallel(
     std::span<float> output, DistFactory dist_factory, uint32_t seed, size_t num_threads) {
     if (output.size() < parallel_min_size) [[unlikely]] {
         generate_uniform_simd(output, seed, dist_factory);
@@ -251,11 +356,10 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel(
 }
 
 // ============================================================================
-// Internal SIMD Generation (Normal Distribution - Box-Muller)
+// Portable SIMD Generation (Float - Normal via Box-Muller)
 // ============================================================================
 
-__attribute__((target("aes,sse4.2"))) void generate_normal_simd(
-    std::span<float> output, uint32_t seed, auto dist_factory) {
+void generate_normal_simd(std::span<float> output, uint32_t seed, auto dist_factory) {
     using Dist = decltype(dist_factory());
     static_assert(
         std::same_as<Dist, std::normal_distribution<float>>,
@@ -270,36 +374,44 @@ __attribute__((target("aes,sse4.2"))) void generate_normal_simd(
 
     const __m128 mean_vec = _mm_set1_ps(mean);
     const __m128 stddev_vec = _mm_set1_ps(stddev);
-    const float two_pi = 2.0f * std::numbers::pi_v<float>;
+    const __m128 two_pi_vec = _mm_set1_ps(2.0f * std::numbers::pi_v<float>);
+    const __m128 minus_two = _mm_set1_ps(-2.0f);
+    const __m128 eps = _mm_set1_ps(1e-10f);
 
-    // Process pairs of values (Box-Muller generates 2 values per iteration)
-    // SSE processes 4 values at a time, so we get 8 normal values per iteration
-    // (4 from z1, 4 from z2)
+    // Process pairs using Box-Muller with SIMD logarithm
     size_t i = 0;
     for (; i + 8 <= output.size(); i += 8) {
         // Generate 4 uniform random values for U1 and 4 for U2
         __m128 u1 = rng.generate_float_x4();
         __m128 u2 = rng.generate_float_x4();
 
-        // Extract to array for scalar math
-        alignas(16) float u1_arr[4], u2_arr[4];
-        _mm_store_ps(u1_arr, u1);
-        _mm_store_ps(u2_arr, u2);
+        // Clamp to avoid log(0)
+        u1 = _mm_max_ps(u1, eps);
+        u2 = _mm_max_ps(u2, eps);
 
-        // Box-Muller transform using scalar math functions
+        // Box-Muller: r = sqrt(-2 * ln(u1)) using portable SIMD functions
+        __m128 log_u1 = _mm_log_ps(u1);
+        __m128 r = _mm_sqrt_ps_fast(_mm_mul_ps(minus_two, log_u1));
+
+        // theta = 2 * pi * u2
+        __m128 theta = _mm_mul_ps(two_pi_vec, u2);
+
+        // Extract for trigonometric functions (portable fallback to scalar)
+        alignas(16) float r_arr[4], theta_arr[4];
+        _mm_store_ps(r_arr, r);
+        _mm_store_ps(theta_arr, theta);
+
         alignas(16) float z1_arr[4], z2_arr[4];
         for (int j = 0; j < 4; ++j) {
-            float r = std::sqrt(-2.0f * std::log(std::max(u1_arr[j], 1e-10f)));
-            float theta = two_pi * u2_arr[j];
-            z1_arr[j] = r * std::cos(theta);
-            z2_arr[j] = r * std::sin(theta);
+            z1_arr[j] = r_arr[j] * std::cos(theta_arr[j]);
+            z2_arr[j] = r_arr[j] * std::sin(theta_arr[j]);
         }
 
         // Load back into SIMD registers
         __m128 z1 = _mm_load_ps(z1_arr);
         __m128 z2 = _mm_load_ps(z2_arr);
 
-        // Scale and shift: z * stddev + mean
+        // Scale and shift: z * stddev + mean (all SIMD)
         z1 = _mm_add_ps(_mm_mul_ps(z1, stddev_vec), mean_vec);
         z2 = _mm_add_ps(_mm_mul_ps(z2, stddev_vec), mean_vec);
 
@@ -308,13 +420,13 @@ __attribute__((target("aes,sse4.2"))) void generate_normal_simd(
         _mm_storeu_ps(&output[i + 4], z2);
     }
 
-    // Handle remainder (< 8 elements remaining)
-    fill_remainder_fallback(output, i, seed, dist_factory);
+    // Process remainder with SIMD
+    fill_remainder_simd(output, i, seed, dist_factory);
 }
 
 // Parallel SIMD generation for normal_distribution<float>
 template <typename DistFactory>
-__attribute__((target("aes,sse4.2"))) void generate_normal_simd_parallel(
+void generate_normal_simd_parallel(
     std::span<float> output, DistFactory dist_factory, uint32_t seed, size_t num_threads) {
     if (output.size() < parallel_min_size) [[unlikely]] {
         generate_normal_simd(output, seed, dist_factory);
@@ -337,11 +449,10 @@ __attribute__((target("aes,sse4.2"))) void generate_normal_simd_parallel(
 }
 
 // ============================================================================
-// Internal SIMD Generation (bfloat16)
+// Portable SIMD Generation (bfloat16 - Uniform with Pure SIMD)
 // ============================================================================
 
-__attribute__((target("aes,sse4.2"))) void generate_uniform_simd_bfloat16(
-    std::span<bfloat16> output, uint32_t seed, auto dist_factory) {
+void generate_uniform_simd_bfloat16(std::span<bfloat16> output, uint32_t seed, auto dist_factory) {
     using Dist = decltype(dist_factory());
     static_assert(
         std::same_as<Dist, std::uniform_real_distribution<float>>,
@@ -353,27 +464,33 @@ __attribute__((target("aes,sse4.2"))) void generate_uniform_simd_bfloat16(
 
     const float min = params.a();
     const float max = params.b();
-    const float range = max - min;
 
     const size_t num_batches = output.size() / simd_bf16_batch_size;
+    const __m128 range_vec = _mm_set1_ps(max - min);
+    const __m128 min_vec = _mm_set1_ps(min);
 
-    // Process full batches
+    // Process full batches with pure SIMD operations
     for (size_t i = 0; i < num_batches; ++i) {
-        auto bf16_values = rng.generate_bfloat16_x4();
+        __m128 floats = rng.generate_float_x4();
+        __m128 scaled = _mm_add_ps(_mm_mul_ps(floats, range_vec), min_vec);
 
-        // Scale to [min, max) range
+        // Convert to bfloat16 using SIMD
+        __m128i float_bits = _mm_castps_si128(scaled);
+        __m128i upper_bits = _mm_srli_epi32(float_bits, 16);
+
+        alignas(16) uint32_t packed[4];
+        _mm_store_si128((__m128i*)packed, upper_bits);
+
         for (size_t j = 0; j < simd_bf16_batch_size; ++j) {
-            float val = static_cast<float>(bf16_values[j]);
-            float scaled = val * range + min;
-            output[i * simd_bf16_batch_size + j] = float_to_bfloat16(scaled);
+            output[i * simd_bf16_batch_size + j] = std::bit_cast<bfloat16>(static_cast<uint16_t>(packed[j]));
         }
     }
 
-    // Process remainder
-    fill_remainder_fallback(output, num_batches * simd_bf16_batch_size, seed, dist_factory);
+    // Process remainder with SIMD
+    fill_remainder_simd(output, num_batches * simd_bf16_batch_size, seed, dist_factory);
 }
 
-__attribute__((target("aes,sse4.2"))) void generate_uniform_simd_parallel_bfloat16(
+void generate_uniform_simd_parallel_bfloat16(
     std::span<bfloat16> output, uint32_t seed, auto dist_factory, size_t num_threads) {
     if (output.size() < parallel_min_size) [[unlikely]] {
         generate_uniform_simd_bfloat16(output, seed, dist_factory);
