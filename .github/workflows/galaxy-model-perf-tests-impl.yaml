@@ -72,7 +72,7 @@ jobs:
               "arch": "wormhole_b0",
               "save-perf-data": true,
               "timeout": 60,
-              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode \"\"", 
+              "cmd": "./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode \"\"",
               "owner_id": "U03PUAKE719"
             },
             {
@@ -109,7 +109,7 @@ jobs:
               "owner_id": "U03FJB5TM5Y"
             },
             {
-              "name": "Galaxy DiT Flux.1 model perf tests", 
+              "name": "Galaxy DiT Flux.1 model perf tests",
               "model-type": "Flux.1-Dev",
               "model-name": "flux1-dev",
               "arch": "wormhole_b0",
@@ -120,7 +120,7 @@ jobs:
             },
             {
               "name": "Galaxy Sentence Bert tests",
-              "arch": "wormhole_b0", 
+              "arch": "wormhole_b0",
               "model-type": "sentence_bert",
               "model-name": "sentence_bert",
               "save-perf-data": false,
