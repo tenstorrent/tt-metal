@@ -23,8 +23,8 @@ from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -22
-NUM_OPS_IN_SAMPLING = 12
+DECODER_OP_END_INDEX = -21
+NUM_OPS_IN_SAMPLING = 11
 
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"

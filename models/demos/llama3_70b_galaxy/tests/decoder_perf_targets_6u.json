@@ -314,15 +314,6 @@
       "op_to_op_duration_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.5
     },
-    "TypecastDeviceOperation_2": {
-      "op_name": "TypecastDeviceOperation_1",
-      "kernel_duration": 1906.3125,
-      "op_to_op": 655.5333333333333,
-      "non-overlapped-dispatch-time": 3771.0,
-      "kernel_duration_relative_margin": 0.2,
-      "op_to_op_duration_relative_margin": 0.2,
-      "dispatch_duration_relative_margin": 1.5
-    },
     "BinaryDeviceOperation_0": {
       "op_name": "BinaryDeviceOperation_Last_Residual",
       "kernel_duration": 849.73125,
