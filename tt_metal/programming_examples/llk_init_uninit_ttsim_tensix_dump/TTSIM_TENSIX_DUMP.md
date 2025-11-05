@@ -1,4 +1,4 @@
-# Using TTSIM_TENSIX_DUMP to Dump Tensix States while Debugging Kernels
+# Using TTSIM_TENSIX_DUMP to Dump Tensix States While Debugging Kernels
 
 This example demonstrates how to use the TTSIM_TENSIX_DUMP debug feature to dump the Tensix states on TTSIM. The example launches a simple kernel calling LLK APIs `llk_unpack_untilize_init` and `llk_unpack_untilize_uninit`.
 
@@ -15,7 +15,7 @@ To build and execute, you may use the following commands:
 
 To use this debug feature, we need to do a few things:
 
-1. Ensure ttsim is enabled with `export TT_METAL_SIMULATOR=~/sim/libttsim.so`, i.e., `TT_METAL_SIMULATOR` must be set to the location of libttsim.so.
+1. Ensure TTSIM is enabled with `export TT_METAL_SIMULATOR=~/sim/libttsim.so`, i.e., `TT_METAL_SIMULATOR` must be set to the location of `libttsim.so`.
 2. The environment variable `TT_METAL_DPRINT_CORES` must also be set to select which Tensix cores to perform the Tensix dump on. For instance to dump the Tensix states for one single Tensix core (0,0), set:
 ```
 export TT_METAL_DPRINT_CORES=0,0                    # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
@@ -27,9 +27,9 @@ At the point where you wish to perform the Tensix dump, there are a few options 
 
 1. Calling `TTSIM_TENSIX_DUMP(title, dump_dst)` where `title` is a string and `dump_dst` is a boolean. This will print the string `title` right before TTSIM prints the dump of the Tensix state. Users can use this argument to provide a descriptive title (e.g., by putting the name of the LLK api before/after which the dump triggered) so that it is easier to track where in the kernel the Tensix state dump was triggered. `dump_dst` is a boolean that when true, will include a dump of the contents of the DST register file along with the Tensix state dump. Note that the macro `TTSIM_DUMP_DST` is defined as true, so a call to `TTSIM_TENSIX_DUMP(title, TTSIM_DUMP_DST)` will dump the DST register file contents.
 
-2. Calling `TTSIM_TENSIX_DUMP(title)` where `title` is a string is the same as calling `TTSIM_TENSIX_DUMP(title, false)`. That is dump_dst is false by default.
+2. Calling `TTSIM_TENSIX_DUMP(title)` where `title` is a string is the same as calling `TTSIM_TENSIX_DUMP(title, false)`. That is, dump_dst is false by default.
 
-3. Calling `TTSIM_TENSIX_DUMP(dump_dst)` where `dump_dst` is a boolean is the same as calling `TTSIM_TENSIX_DUMP("", dump_dst)`. That is `title` is an empty string by default.
+3. Calling `TTSIM_TENSIX_DUMP(dump_dst)` where `dump_dst` is a boolean is the same as calling `TTSIM_TENSIX_DUMP("", dump_dst)`. That is, `title` is an empty string by default.
 
 4. Calling `TTSIM_TENSIX_DUMP()` is the same as calling `TTSIM_TENSIX_DUMP("", false)`.
 
@@ -55,7 +55,9 @@ void MAIN {
 ```
 
 
-##Output of the Demo Tensix Dumps
+## Output of the Demo Tensix Dumps
+
+Below is the output of running the demo kernel with `export TT_METAL_DPRINT_CORES=0,0`.
 
 ```
 0:(x=0,y=0):TR0: BEFORE llk_unpack_untilize_init(0)
