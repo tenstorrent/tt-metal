@@ -15,7 +15,7 @@
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
-#include "core_coord.hpp"
+#include "common/core_coord.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "metal_soc_descriptor.h"
