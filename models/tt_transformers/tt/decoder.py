@@ -120,7 +120,7 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
         )
 
-        if f"layers.{self.layer_num}.ffn_norm.weight" in state_dict:
+        if self.args.is_ffn_norm:
             self.ff_norm = DistributedNorm(
                 RMSNorm(
                     device=mesh_device,
@@ -142,7 +142,7 @@ class TransformerBlock(LightweightModule):
                 tt_ccl=self.tt_ccl,
                 TG=args.is_galaxy,
             )
-        if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
+        if self.args.pre_feedforward_layernorm:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
                 RMSNorm(
                     device=mesh_device,
@@ -168,7 +168,7 @@ class TransformerBlock(LightweightModule):
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
             self.pre_ff_norm = None
 
-        if f"layers.{layer_num}.post_feedforward_layernorm.weight" in state_dict:
+        if self.args.post_feedforward_layernorm:
             self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
                 RMSNorm(
                     device=mesh_device,

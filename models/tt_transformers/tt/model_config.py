@@ -493,6 +493,10 @@ class ModelArgs:
         self.parallel_model = ["phi-1", "phi-1_5"]
         self.ffn2_model = ["phi-1", "phi-1_5"]
 
+        self.is_ffn_norm = False
+        self.pre_feedforward_layernorm = False
+        self.post_feedforward_layernorm = False
+
         assert not os.getenv(
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
@@ -1943,6 +1947,12 @@ class ModelArgs:
                 self.layernorm = any(["final_layernorm" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+        if f"layers.0.ffn_norm.weight" in state_dict:
+            self.is_ffn_norm = True
+        if f"layers.0.pre_feedforward_layernorm.weight" in state_dict:
+            self.pre_feedforward_layernorm = True
+        if f"layers.0.post_feedforward_layernorm.weight" in state_dict:
+            self.post_feedforward_layernorm = True
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
