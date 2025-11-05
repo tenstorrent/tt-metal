@@ -65,7 +65,7 @@ inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
-    uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager) :
+    uint32_t command_queue_id, IDevice* /*device*/, SystemMemoryManager& manager) :
     command_queue_id(command_queue_id), manager(manager) {}
 
 void EnqueueTerminateCommand::process() {

@@ -39,7 +39,7 @@ constexpr std::string_view get_type_name() {
 }
 
 template <typename T>
-constexpr std::string_view get_type_name(const T& object) {
+constexpr std::string_view get_type_name(const T& /*object*/) {
     return get_type_name<T>();
 }
 
@@ -525,7 +525,7 @@ struct visit_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    void operator()(auto&& callback, T&& value) const {
+    void operator()(auto&& /*callback*/, T&& /*value*/) const {
         throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
     }
 
@@ -537,7 +537,7 @@ struct visit_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    void operator()(auto&& callback, const T& value) const {
+    void operator()(auto&& /*callback*/, const T& /*value*/) const {
         throw std::runtime_error("Unsupported visit of object of type: " + get_type_name<T>());
     }
 };
@@ -664,7 +664,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, T&& value) const {
+    T operator()(auto&& /*callback*/, T&& value) const {
         log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
@@ -677,7 +677,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, const T& value) const {
+    T operator()(auto&& /*callback*/, const T& value) const {
         log_debug(tt::LogAlways, "Unsupported transform of object of type: {}. Do nothing.", get_type_name<T>());
         return value;
     }
@@ -742,7 +742,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, T&& object) const {
+    T operator()(auto&& /*callback*/, T&& /*object*/) const {
         static_assert(ttsl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 
@@ -754,7 +754,7 @@ struct transform_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    T operator()(auto&& callback, const T& object) const {
+    T operator()(auto&& /*callback*/, const T& /*object*/) const {
         static_assert(ttsl::concepts::always_false_v<T>, "Unsupported transform of object of type");
     }
 };
@@ -814,7 +814,7 @@ struct get_first_object_of_type_t<T> {
 
     template <typename object_t>
         requires(not std::same_as<std::decay_t<T>, object_t>)
-    auto operator()(const T& value) const {
+    auto operator()(const T& /*value*/) const {
         throw std::runtime_error("Unsupported get first object of type: " + get_type_name<T>());
     }
 };
@@ -1268,7 +1268,7 @@ struct to_json_t<const char*> {
 
 template <>
 struct from_json_t<const char*> {
-    const char* operator()(const nlohmann::json& json_object) {
+    const char* operator()(const nlohmann::json& /*json_object*/) {
         throw std::runtime_error("Cannot load const char* from JSON");
     }
 };
@@ -1577,7 +1577,7 @@ struct from_json_t<T> {
 
 template <typename T>
 struct to_json_t {
-    nlohmann::json operator()(const T& optional) noexcept {
+    nlohmann::json operator()(const T& /*optional*/) noexcept {
         return fmt::format("ttsl::json::to_json_t: Unsupported type {}", get_type_name<T>());
     }
 };

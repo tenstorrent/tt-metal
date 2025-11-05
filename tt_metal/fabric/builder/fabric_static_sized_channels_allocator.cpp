@@ -547,9 +547,9 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(
     std::vector<uint32_t>& ct_args,
-    size_t num_fwd_paths,
-    size_t num_used_sender_channels,
-    size_t num_used_receiver_channels) const {
+    size_t /*num_fwd_paths*/,
+    size_t /*num_used_sender_channels*/,
+    size_t /*num_used_receiver_channels*/) const {
     for (size_t i = 0; i < this->num_used_sender_channels; ++i) {
         ct_args.push_back(static_cast<uint32_t>(this->sender_channels_base_address[i]));
         ct_args.push_back(this->sender_channels_num_buffers[i]);

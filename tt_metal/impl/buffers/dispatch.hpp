@@ -76,7 +76,7 @@ struct BufferReadDispatchParams {
 
     virtual ~BufferReadDispatchParams() = default;
 
-    virtual void update_params_to_be_within_bounds(const Buffer& buffer) {
+    virtual void update_params_to_be_within_bounds(const Buffer& /*buffer*/) {
         const uint32_t num_pages_per_bank = this->src_page_index / this->num_banks;
         this->address += num_pages_per_bank * this->padded_page_size;
         this->src_page_index = this->src_page_index % this->num_banks;

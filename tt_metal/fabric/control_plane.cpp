@@ -171,7 +171,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
+            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& /*golden_link_counts*/,
             size_t& val) {
             if (skip_direction(fabric_node_id, direction)) {
                 return;
