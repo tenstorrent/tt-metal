@@ -741,8 +741,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
-        y = self.prepare_image(image).unsqueeze(0)
-        # y = torch.load("y_with_msk.pt").unsqueeze(0)
+        # y = self.prepare_image(image).unsqueeze(0)
+        y = torch.load("y_with_msk.pt").unsqueeze(0)
 
         # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
