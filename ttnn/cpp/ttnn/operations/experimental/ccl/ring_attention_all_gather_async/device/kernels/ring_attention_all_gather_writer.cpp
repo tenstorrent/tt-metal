@@ -124,15 +124,15 @@ void kernel_main() {
                 if (num_pages_to_read == 2) {
                     uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
 
-                    if constexpr (direction == 1) {
-                        // Backwards does local write
-                        noc_async_write(
-                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
-                        noc_async_write(
-                            l1_read_addr + output_page_size,
-                            output_addrgens[input_idx].get_noc_addr(second_tile_id),
-                            output_page_size);
-                    }
+                    // if constexpr (direction == 1) {
+                    //     // Backwards does local write
+                    //     noc_async_write(
+                    //         l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
+                    //     noc_async_write(
+                    //         l1_read_addr + output_page_size,
+                    //         output_addrgens[input_idx].get_noc_addr(second_tile_id),
+                    //         output_page_size);
+                    // }
 
                     if constexpr (num_targets_in_direction) {
                         scatter_fabric_write_unidir(
@@ -152,10 +152,10 @@ void kernel_main() {
                     }
                 } else {
                     ASSERT(num_pages_to_read == 1);
-                    if constexpr (direction == 1) {
-                        noc_async_write(
-                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
-                    }
+                    // if constexpr (direction == 1) {
+                    //     noc_async_write(
+                    //         l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
+                    // }
                     if constexpr (num_targets_in_direction) {
                         // Has valid targets to send to
                         fabric_write_unidir(
