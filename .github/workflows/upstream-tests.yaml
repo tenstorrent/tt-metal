@@ -224,22 +224,27 @@ jobs:
         bh-config:
           - runner-label: BH-LLMBox
             image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+            extra-tag: pipeline-perf
           - runner-label: BH-DeskBox
             image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+            extra-tag: pipeline-functional
           - runner-label: BH-LoudBox
             image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
+            extra-tag: pipeline-perf
           - runner-label: BH-QB-GE
             image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
+            extra-tag: pipeline-perf
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - in-service
-      - pipeline-perf
+      - ${{ matrix.bh-config.extra-tag }}
     steps:
       - name: Run image
         timeout-minutes: 30
         env:
-          HF_MODEL: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-          TT_CACHE_PATH: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+          # For different environments, BH VLAN vs. cloud
+          HF_MODEL: ${{ matrix.bh-config.extra-tag == 'pipeline-perf' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: ${{ matrix.bh-config.extra-tag == 'pipeline-perf' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
   test-bh-p300-image:
     needs:
