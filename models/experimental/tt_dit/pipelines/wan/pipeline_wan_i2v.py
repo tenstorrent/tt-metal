@@ -339,6 +339,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
 
         img = TF.to_tensor(image).sub_(0.5).div_(0.5)
 
+        breakpoint()
+
         F = num_frames
         h, w = img.shape[1:]
         aspect_ratio = h / w
@@ -730,7 +732,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         num_channels_latents = self.torch_transformer.config.in_channels
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
-            num_channels_latents,
+            # num_channels_latents,
+            16,
             height,
             width,
             num_frames,
@@ -741,8 +744,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
-        # y = self.prepare_image(image).unsqueeze(0)
-        y = torch.load("y_with_msk.pt").unsqueeze(0)
+        y = self.prepare_image(image).unsqueeze(0)
+        # y = torch.load("y_with_msk.pt").unsqueeze(0)
 
         # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
