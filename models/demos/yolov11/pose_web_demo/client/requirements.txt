@@ -1,5 +1,5 @@
-streamlit==1.28.1
-streamlit-webrtc==0.47.1
+streamlit>=1.28.1
+streamlit-webrtc>=0.47.1
 opencv-python==4.8.1.78
 numpy==1.24.3
 requests==2.31.0

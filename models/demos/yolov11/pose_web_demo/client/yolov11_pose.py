@@ -248,13 +248,20 @@ def main():
     def create_video_processor():
         return VideoProcessor(server_url=args.server_url)
 
-    # Start webcam stream
-    ctx = webrtc_streamer(
-        key="pose-estimation",
-        video_processor_factory=create_video_processor,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        media_stream_constraints={"video": {"deviceId": args.device}, "audio": False},
-    )
+    # Start webcam stream with error handling
+    try:
+        ctx = webrtc_streamer(
+            key="pose-estimation",
+            video_processor_factory=create_video_processor,
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            media_stream_constraints={"video": {"deviceId": args.device}, "audio": False},
+        )
+    except Exception as e:
+        st.error(f"WebRTC Error: {e}")
+        st.error("This might be due to browser compatibility issues.")
+        st.info("Try refreshing the page or using a different browser (Chrome recommended)")
+        st.info("Make sure to allow camera permissions when prompted.")
+        return
 
     st.markdown("---")
     st.markdown("**Instructions:**")

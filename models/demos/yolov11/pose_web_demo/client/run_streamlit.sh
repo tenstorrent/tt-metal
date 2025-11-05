@@ -10,5 +10,13 @@ cd /home/ubuntu/pose/tt-metal/models/demos/yolov11/pose_web_demo/client
 SERVER_URL="${SERVER_URL:-http://localhost:8000}"
 DEVICE="${DEVICE:-0}"
 
+echo "Starting YOLOv11 Pose Estimation Client..."
+echo "Server URL: $SERVER_URL"
+echo "Camera Device: $DEVICE"
+echo ""
+echo "Make sure the pose estimation server is running and accessible!"
+echo "If using remote server, ensure SSH port forwarding is active."
+echo ""
+
 # Run streamlit with server URL and device parameters
 streamlit run yolov11_pose.py --server.port 8501 --server.address 0.0.0.0 -- --server-url "$SERVER_URL" --device "$DEVICE"

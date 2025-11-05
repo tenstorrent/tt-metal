@@ -60,6 +60,8 @@ streamlit run yolov11_pose.py --server.port 8501 --server.address 0.0.0.0 -- --s
 
 **Note:** Ensure the server machine's firewall allows connections on port 8000, and the server is bound to `0.0.0.0` (not just localhost).
 
+**Browser Compatibility:** Use Chrome or Firefox for best WebRTC support. Allow camera permissions when prompted.
+
 ### 3. Alternative Manual Run
 
 **Server:**
@@ -125,6 +127,8 @@ Each keypoint includes (x, y, visibility) values.
 4. **No detections**: Check confidence threshold and lighting conditions
 5. **Performance issues**: Reduce frame processing rate in client code
 6. **Network timeout**: Check network connectivity between client and server machines
+7. **WebRTC/camera errors**: Try Chrome browser, refresh page, or check camera permissions
+8. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
 
 ## Comparison with Object Detection Demo
 
