@@ -117,7 +117,7 @@ void PagedUpdateCacheDeviceOperation::validate(
                                           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                           const std::vector<uint32_t>& update_idxs) {
         TT_FATAL(
-            (optional_input_tensors.at(0).has_value()) != (update_idxs.size() > 0),
+            (optional_input_tensors.at(0).has_value()) != (!update_idxs.empty()),
             "Only an update tensor or an update vector can be provided. Not both or neither.");
 
         uint32_t num_indices = 0;
@@ -177,10 +177,13 @@ void PagedUpdateCacheDeviceOperation::validate(
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
-                "Expect input_tensor to have memory layout WIDTH SHARDED");
+                "Expect input_tensor to NOT have memory layout WIDTH SHARDED");
             TT_FATAL(
                 input_tensor.shard_spec().value().shape[1] == input_tensor.padded_shape()[-1],
-                "Expect input_tensor to have ");
+                "Expect input_tensor to have shard width ({}) equal to the last dimension of the input tensor padded "
+                "shape ({})",
+                input_tensor.shard_spec().value().shape[1],
+                input_tensor.padded_shape()[-1]);
             TT_FATAL(
                 (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) %
                         input_tensor.shard_spec().value().shape[0] ==

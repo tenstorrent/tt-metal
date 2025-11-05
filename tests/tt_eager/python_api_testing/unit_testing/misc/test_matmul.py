@@ -4,8 +4,8 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import is_wormhole_b0, is_grayskull
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
@@ -110,7 +110,6 @@ def test_matmul_1d_in0_batched(
         assert passing
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
 @pytest.mark.parametrize("batch", [16, 96])
@@ -189,7 +188,8 @@ def test_linear_fp32_acc_l1(
             mcast_in0=True,
         )
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
@@ -216,7 +216,6 @@ def test_linear_fp32_acc_l1(
         assert passing
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize("fp32_acc_mode", [True, False], ids=["fp32", "no_fp32"])
 @pytest.mark.parametrize("in0_sharded", [True, False], ids=["in0_sharded", "in0_unsharded"])
@@ -294,7 +293,8 @@ def test_matmul_no_mcast_fp32_acc_l1(
             per_core_N=N // 32,
         )
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
@@ -321,7 +321,6 @@ def test_matmul_no_mcast_fp32_acc_l1(
         assert passing
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",
@@ -406,7 +405,8 @@ def test_matmul_1d_fp32_input_output(
             mcast_in0=True,
         )
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
@@ -433,7 +433,6 @@ def test_matmul_1d_fp32_input_output(
         assert passing
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
 @pytest.mark.parametrize(
     "fp32_acc_mode",
@@ -517,7 +516,8 @@ def test_matmul_no_mcast_fp32_input_output(
             per_core_N=N // 32,
         )
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
             fp32_dest_acc_en=fp32_acc_mode,
@@ -583,8 +583,6 @@ def test_matmul_no_untilize_output_param(
     compute_grid_size = device.compute_with_storage_grid_size()
     if grid_size[0] > compute_grid_size.x or grid_size[1] > compute_grid_size.y:
         pytest.skip(f"Need {grid_size} grid size to run this test but core grid is {compute_grid_size}")
-    if is_grayskull() and (fp32_acc_mode or packer_l1_acc):
-        pytest.skip(f"Need Grayskull doesn't support fp32_acc_mode or packer_l1_acc")
     num_cores = grid_size[0] * grid_size[1]
     in0_shape = [B, H, M, K]
     in1_shape = [B, H, K, N]
@@ -632,18 +630,13 @@ def test_matmul_no_untilize_output_param(
             per_core_N=N // 32,
         )
 
-        if is_grayskull():
-            compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-            )
-        else:
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.LoFi,
-                math_approx_mode=True,
-                fp32_dest_acc_en=fp32_acc_mode,
-                packer_l1_acc=packer_l1_acc,
-            )
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=fp32_acc_mode,
+            packer_l1_acc=packer_l1_acc,
+        )
 
         output_t = ttnn.matmul(
             in0_t,

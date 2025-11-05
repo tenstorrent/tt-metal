@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,17 @@ enum class FabricTensixConfig : uint32_t {
     MUX = 1,       // using mux kernel as tensix extension
 };
 
+enum class FabricType {
+    MESH = 1 << 0,
+    TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
+    TORUS_Y = 1 << 2,  // Connections along mesh_coord[0]
+    TORUS_XY = (TORUS_X | TORUS_Y),
+};
+
+FabricType operator|(FabricType lhs, FabricType rhs);
+FabricType operator&(FabricType lhs, FabricType rhs);
+bool has_flag(FabricType flags, FabricType test_flag);
+
 enum class FabricReliabilityMode : uint32_t {
 
     // When fabric is initialized, user expects live links/devices to exactly match the mesh graph descriptor.
@@ -46,7 +57,7 @@ enum class FabricReliabilityMode : uint32_t {
     DYNAMIC_RECONFIGURATION_SETUP_MODE = 2,
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_fabric {
 
@@ -54,3 +65,14 @@ using MeshId = tt::stl::StrongType<uint32_t, struct MeshIdTag>;
 using MeshHostRankId = tt::stl::StrongType<uint32_t, struct HostRankTag>;
 
 }  // namespace tt::tt_fabric
+namespace tt::tt_metal {
+
+using AsicID = tt::stl::StrongType<uint64_t, struct AsicIDTag>;
+using TrayID = tt::stl::StrongType<uint32_t, struct TrayIDTag>;
+using ASICLocation = tt::stl::StrongType<uint32_t, struct ASICLocationTag>;
+using RackID = tt::stl::StrongType<uint32_t, struct RackIDTag>;
+using UID = tt::stl::StrongType<uint32_t, struct UIDTag>;
+using HallID = tt::stl::StrongType<uint32_t, struct HallIDTag>;
+using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
+
+}  // namespace tt::tt_metal

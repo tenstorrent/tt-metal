@@ -1,0 +1,421 @@
+name: "[impl] TTSim Integration Tests"
+
+on:
+  workflow_call:
+    inputs:
+      basic-docker-image:
+        required: true
+        type: string
+      test-docker-image:
+        required: true
+        type: string
+      package-artifact-name:
+        required: false
+        type: string
+      wheel-artifact-name:
+        required: false
+        type: string
+      build-artifact-name:
+        required: false
+        type: string
+      ttsim-ref:
+        required: false
+        type: string
+        default: "4f05a65a961d4a3ca14f65ff9633030e0a35358e"
+      job-timeout:
+        required: false
+        type: number
+        default: 15
+      run-ttsim-integration-tests:
+        required: false
+        type: boolean
+        default: false
+      run-metal-cpp-unit-tests:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  ttsim-integration:
+    if: ${{ inputs.run-ttsim-integration-tests }}
+    runs-on: tt-ubuntu-2204-small-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
+    name: "TTSim Integration - ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole_b0
+            build_suffix: release_wh
+            soc_desc: wormhole_b0_80_arch.yaml
+          - arch: blackhole
+            build_suffix: release_bh
+            soc_desc: blackhole_140_arch.yaml
+    permissions:
+      contents: read
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      CC: gcc-12
+      CXX: g++-12
+      TT_METAL_HOME: /usr/libexec/tt-metalium
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+    steps:
+
+      - name: Download packages artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        timeout-minutes: 10
+        with:
+          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          path: /work/pkgs/
+
+      - name: Install packages
+        run: |
+          set -euo pipefail
+          apt update
+          apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
+
+      - name: Install System Packages
+        run: |
+          apt update
+          apt install -y git
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: ${{ inputs.ttsim-ref }}
+          path: docker-job/ttsim
+          token: ${{ secrets.TTSIM_TOKEN }}
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: Build and Run Metal Examples
+        timeout-minutes: 3
+        run: |
+          working_examples=(
+            "add_2_integers_in_compute"
+            "add_2_integers_in_riscv"
+            "eltwise_binary"
+            "eltwise_sfpu"
+            "hello_world_compute_kernel"
+            "hello_world_datamovement_kernel"
+            "matmul_multi_core"
+            "matmul_multicore_reuse"
+          )
+          for example_name in "${working_examples[@]}"; do
+            example_path="/usr/share/tt-metalium/examples/${example_name}"
+            if [[ -d "$example_path" ]]; then
+              echo "::group::${example_name} - build and run"
+              build_dir=$(mktemp -d)
+              cd "$build_dir"
+              # Build the example
+              cmake -G Ninja -S "$example_path" -B .
+              cmake --build .
+              # Find and run the built executable
+              readarray -t exec_paths < <(find . -maxdepth 2 -type f -executable -not -name "*.so")
+              for exe in "${exec_paths[@]}"; do
+                exe_basename=$(basename "$exe")
+                echo "Running ${exe_basename}"
+                "$exe"
+              done
+              echo "::endgroup::"
+            else
+              echo "Warning: Example directory not found: $example_path"
+            fi
+          done
+  ttnn-pytests:
+    if: ${{ inputs.run-ttsim-integration-tests }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job-timeout }}
+    name: "TTNN Pytests - ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole_b0
+            build_suffix: release_wh
+            soc_desc: wormhole_b0_80_arch.yaml
+          - arch: blackhole
+            build_suffix: release_bh
+            soc_desc: blackhole_140_arch.yaml
+    container:
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+      env:
+        ARCH_NAME: ${{ matrix.arch }}
+        TT_METAL_SIMULATOR_HOME: /work/sim
+        TT_METAL_SIMULATOR: /work/sim/libttsim.so
+        TT_METAL_SLOW_DISPATCH_MODE: 1
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        PYTHONHASHSEED: 0
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: ${{ inputs.ttsim-ref }}
+          path: docker-job/ttsim
+          token: ${{ secrets.TTSIM_TOKEN }}
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: Run TTNN Pytests
+        timeout-minutes: 5
+        run: |
+          pytest \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/ \
+            tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py \
+            tests/nightly/t3000/ccl/test_all_to_all_combine.py \
+            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py \
+            tests/nightly/t3000/ccl/test_all_to_all_dispatch.py \
+            tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_prefill_ccl_ops_perf_nightly_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_6U.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_async_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_llama_reduce_scatter_create_heads_async_TG.py \
+            tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_6U.py \
+            tests/nightly/t3000/ccl/test_mesh_partition.py \
+            tests/ttnn/unit_tests/operations/ccl/test_minimals.py \
+            tests/nightly/t3000/ccl/test_moe_ccl_end_to_end.py\
+            tests/nightly/t3000/ccl/test_new_all_broadcast.py \
+            tests/ttnn/unit_tests/operations/ccl/test_new_all_reduce.py \
+            tests/ttnn/unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py \
+            tests/ttnn/unit_tests/operations/ccl/test_qkv_all_reduce_minimal.py \
+            tests/nightly/t3000/ccl/test_send_recv_async.py \
+            tests/nightly/t3000/ccl/test_moe_expert_token_remap.py \
+            tests/nightly/t3000/ccl/test_apply_device_delay.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_add.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_complex_mul.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_conj.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_imag.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/complex_ops/test_backward_real.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_abs.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addalpha.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_addcmul.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_assign.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_ceil.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clamp.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_clip.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_concat.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_deg2rad.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_fill_zero.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_floor.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_frac.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_i0.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_lerp.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_max.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_min.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_neg.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rad2deg.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_relu.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_repeat.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_round.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_rsub.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_sign.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_square.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_squared_difference.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_subalpha.py \
+            tests/ttnn/unit_tests/operations/eltwise/backward/test_backward_trunc.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_complex_tensor.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_eltwise_logical_and_.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_eltwise_softplus_inf.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_inplace.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_mul_bcast.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_signbit.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_sub.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_unary_uint16.py \
+            tests/ttnn/unit_tests/operations/point_to_point/test_moe_p2p.py \
+            tests/nightly/t3000/ccl/test_point_to_point.py \
+            tests/ttnn/unit_tests/operations/transformers/test_concatenate_heads.py \
+            tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm.py \
+            tests/ttnn/unit_tests/operations/debug/test_examples.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_full.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_full_like.py \
+            tests/ttnn/unit_tests/operations/debug/test_generic_op.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_hardtanh.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_index_fill.py \
+            tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_full.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py \
+            tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py \
+            tests/ttnn/unit_tests/operations/eltwise/test_polyval.py \
+            tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_reallocate.py \
+            tests/ttnn/unit_tests/operations/data_movement/test_tosa_gather.py
+  ttsim-cpp-unit-tests:
+    if: ${{ inputs.run-metal-cpp-unit-tests }}
+    runs-on: tt-ubuntu-2204-small-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
+    name: "TTSim C++ tests - ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole_b0
+            build_suffix: release_wh
+            soc_desc: wormhole_b0_80_arch.yaml
+          - arch: blackhole
+            build_suffix: release_bh
+            soc_desc: blackhole_140_arch.yaml
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+    steps:
+      - name: Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: ${{ inputs.ttsim-ref }}
+          path: docker-job/ttsim
+          token: ${{ secrets.TTSIM_TOKEN }}
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: C++ tests
+        timeout-minutes: 5
+        run: |
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
+          ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.IdleEthTestPrint"
+          # BH doesn't work on watcher, triggers: ERROR: decode_and_execute_fence: unsupported fence_mode=0x31
+          if [[ "${{ matrix.arch }}" != "blackhole" ]]; then
+            # WH works (very long test, by default for erisc runs at least 0x5f5e1000U cycles)
+            # ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TensixTestWatcherPause"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherRingBufferIErisc"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage0"
+            ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="MeshWatcherFixture.TestWatcherStackUsage16"
+          fi
+          ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.TensixIdleEthTestSemaphores"
+          ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="MeshDispatchFixture.EthTestBlank"
+          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc0"
+          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnIdleErisc1"
+          ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
+  ttsim-galaxy-cpp-unit-tests:
+    if: ${{ inputs.run-metal-cpp-unit-tests }}
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
+    name: "TTSim Galaxy C++ tests - ${{ matrix.arch }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: wormhole_b0
+            build_suffix: release_wh
+            cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml
+            soc_desc: wormhole_b0_80_arch.yaml
+          - arch: blackhole
+            build_suffix: release_bh
+            cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
+            soc_desc: blackhole_140_arch.yaml
+    container:
+      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    env:
+      TT_METAL_SIMULATOR_HOME: /work/sim
+      TT_METAL_SIMULATOR: /work/sim/libttsim.so
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
+    steps:
+      - name: Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Checkout ttsim
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/ttsim
+          ref: ${{ inputs.ttsim-ref }}
+          path: docker-job/ttsim
+          token: ${{ secrets.TTSIM_TOKEN }}
+
+      - name: Build ttsim
+        run: |
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
+
+      - name: Install ttsim
+        run: |
+          mkdir -p $TT_METAL_SIMULATOR_HOME
+          cp /work/ttsim/src/_out/${{ matrix.build_suffix }}/libttsim.so $TT_METAL_SIMULATOR_HOME/
+          cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
+
+      - name: C++ tests
+        timeout-minutes: 5
+        run: |
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="*StreamRegWrite*"
+          ./build/test/tt_metal/unit_tests_api --gtest_filter="*InlineWrite*"

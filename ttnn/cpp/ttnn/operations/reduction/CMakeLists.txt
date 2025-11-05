@@ -6,15 +6,20 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_reduction)
 set_target_properties(
     ttnn_op_reduction
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
+    accumulation/device/kernels/*
     argmax/device/kernels/*
     generic/device/kernels/*
+    moe/device/kernels/*
+    prod/device/kernels/*
+    sampling/device/kernels/*
+    topk/device/kernels/*
 )
 target_sources(
     ttnn_op_reduction
@@ -22,7 +27,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES generic/generic_reductions.hpp
+        FILES argmax/argmax.hpp generic/generic_reductions.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -34,6 +39,9 @@ target_sources(
         accumulation/accumulation_common.cpp
         accumulation/cumprod/cumprod.cpp
         accumulation/cumsum/cumsum.cpp
+        accumulation/ema/ema.cpp
+        accumulation/ema/ema_op.cpp
+        accumulation/ema/ema_multicore.cpp
         accumulation/device/accumulation_device_operation.cpp
         accumulation/device/accumulation_program_factory.cpp
         sampling/device/sampling_op.cpp
@@ -60,12 +68,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_reduction
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_reduction PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

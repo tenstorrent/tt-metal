@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -31,6 +31,7 @@ class RotarySetup(LightweightModule):
         super().__init__()
 
         self.batch_size = batch_size
+        self.rope_deltas = torch.zeros(batch_size, dtype=torch.int32)
         self.head_dim = head_dim
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
@@ -51,9 +52,6 @@ class RotarySetup(LightweightModule):
             orig_context_len=rope_scaling.original_max_position_embeddings if rope_scaling is not None else None,
             position_ids=torch.arange(max_seq_len),
         )
-        # [INFO] Qwen2.5 VL produces cos and sin matrices with shape [batch_size, 1, seq_len, head_dim]; clone to allocate memory for the expanded tensor
-        self.cos_matrix_pt = self.cos_matrix_pt.expand(self.batch_size, -1, -1, -1).clone()
-        self.sin_matrix_pt = self.sin_matrix_pt.expand(self.batch_size, -1, -1, -1).clone()
         self.setup_cos_sin()
 
         self.batch_grid = (
@@ -154,14 +152,14 @@ class RotarySetup(LightweightModule):
 
         if on_host:  # If tensor is on host, don't pass a mesh mapper if single-device
             rot_idxs = ttnn.as_tensor(
-                position_idxs,
+                position_idxs + self.rope_deltas,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
-                position_idxs,
+                position_idxs + self.rope_deltas,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
@@ -185,14 +183,13 @@ class RotarySetup(LightweightModule):
         cos, sin = None, None
         for i in range(batch_size):
             pos_i = position_idxs[i : i + 1]
-            cos_i = ttnn.embedding(pos_i, self.cos_matrix[i : i + 1, ...])  # [1, head_dim]
-            sin_i = ttnn.embedding(pos_i, self.sin_matrix[i : i + 1, ...])  # [1, head_dim]
+            cos_i = ttnn.embedding(pos_i, self.cos_matrix)  # [1, head_dim]
+            sin_i = ttnn.embedding(pos_i, self.sin_matrix)  # [1, head_dim]
             cos = cos_i if cos is None else ttnn.concat([cos, cos_i], dim=0)  # towards [batch_size, head_dim]
             sin = sin_i if sin is None else ttnn.concat([sin, sin_i], dim=0)  # towards [batch_size, head_dim]
 
         cos = ttnn.to_layout(cos, ttnn.TILE_LAYOUT)
         sin = ttnn.to_layout(sin, ttnn.TILE_LAYOUT)
-        # } todo))
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch_size, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch_size, head_dim]

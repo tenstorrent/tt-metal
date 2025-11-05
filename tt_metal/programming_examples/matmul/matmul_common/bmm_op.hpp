@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <optional>
 #include <array>
 
 #include <algorithm>
@@ -12,16 +11,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 #include <tt-metalium/work_split.hpp>
 
-using std::pair;
 using CoreCoord = tt_xy_pair;
 
-using namespace tt::constants;
-
-std::vector<uint32_t> get_prime_factors(uint32_t n) {
+inline std::vector<uint32_t> get_prime_factors(uint32_t n) {
     uint32_t i = 2;
 
     std::vector<uint32_t> prime_factors;
@@ -40,18 +36,18 @@ std::vector<uint32_t> get_prime_factors(uint32_t n) {
     return prime_factors;
 }
 
-std::vector<uint32_t> get_possible_products(std::vector<uint32_t> factors) {
-    if (factors.size() == 0) {
+inline std::vector<uint32_t> get_possible_products(const std::vector<uint32_t>& factors) {
+    if (factors.empty()) {
         return {1};
     }
 
     std::vector<uint32_t> products;
-    for (uint32_t& fac : factors) {
+    for (const uint32_t& fac : factors) {
         std::vector<uint32_t> new_products;
         if (not std::count(products.begin(), products.end(), fac)) {
             new_products.push_back(fac);
         }
-        for (uint32_t& prod : products) {
+        for (const uint32_t& prod : products) {
             if (not std::count(products.begin(), products.end(), fac * prod)) {
                 new_products.push_back(fac * prod);
             }
@@ -68,7 +64,7 @@ std::vector<uint32_t> get_possible_products(std::vector<uint32_t> factors) {
     return products;
 }
 
-uint32_t get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
+inline uint32_t get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     int32_t other_dim = (400 - 2 * in0_block_w * block_dim) / (2 * in0_block_w + block_dim);
     if (other_dim > 0) {
         return other_dim;
@@ -82,8 +78,8 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
     float y_mean = 0.0f;
 
     for (size_t i = 0; i < vec_a.size(); i++) {
-        x_mean += vec_a[i].to_float();
-        y_mean += vec_b[i].to_float();
+        x_mean += static_cast<float>(vec_a[i]);
+        y_mean += static_cast<float>(vec_b[i]);
     }
 
     x_mean /= vec_a.size();
@@ -95,8 +91,8 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
     float y_stddev = 0.0f;
 
     for (size_t i = 0; i < vec_a.size(); i++) {
-        float x_diff = vec_a[i].to_float() - x_mean;
-        float y_diff = vec_b[i].to_float() - y_mean;
+        float x_diff = static_cast<float>(vec_a[i]) - x_mean;
+        float y_diff = static_cast<float>(vec_b[i]) - y_mean;
 
         covariance += x_diff * y_diff;
         x_stddev += x_diff * x_diff;
@@ -119,7 +115,7 @@ constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {
     {5, 1}, {1, 5}, {2, 2}, {4, 1}, {1, 4}, {3, 1}, {1, 3}, {2, 1}, {1, 2}, {1, 1},
 }};
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
+inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
     auto Nt_fac = get_prime_factors(Nt);
     auto Mt_fac = get_prime_factors(Mt);
@@ -225,7 +221,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     return {0, 0, 0, 0};
 }
 
-CoreCoord get_core_range(
+inline CoreCoord get_core_range(
     uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols) {
     CoreCoord core_range(0, 0);
     if (!(num_blocks_rows == 1 && num_blocks_cols == 1) && num_blocks_rows <= max_num_rows &&

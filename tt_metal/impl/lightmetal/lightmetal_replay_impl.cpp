@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,11 +13,12 @@
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include "trace/trace_buffer.hpp"
-#include <tt-metalium/command_queue.hpp>
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
-#include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
+
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -241,7 +242,7 @@ void LightMetalReplayImpl::setup_devices() {
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
-    const chip_id_t mmio_device_id = 0;
+    const ChipId mmio_device_id = 0;
     auto devices_map = tt::tt_metal::detail::CreateDevices(
         {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
     this->device_ = devices_map.at(mmio_device_id);
@@ -254,27 +255,27 @@ void LightMetalReplayImpl::close_devices() { CloseDevice(this->device_); }
 // Later can update these to be asserts once all paths covered properly.
 void LightMetalReplayImpl::clear_object_maps() {
     // Later can update these to be asserts.
-    if (buffer_map_.size()) {
+    if (!buffer_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay BufferMap: {} entries", buffer_map_.size());
         buffer_map_.clear();
     }
 
-    if (program_map_.size()) {
+    if (!program_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay ProgramMap: {} entries", program_map_.size());
         program_map_.clear();
     }
 
-    if (kernel_handle_map_.size()) {
+    if (!kernel_handle_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelHandleMap: {} entries", kernel_handle_map_.size());
         kernel_handle_map_.clear();
     }
 
-    if (kernel_map_.size()) {
+    if (!kernel_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelMap: {} entries", kernel_map_.size());
         kernel_map_.clear();
     }
 
-    if (cb_handle_map_.size()) {
+    if (!cb_handle_map_.empty()) {
         log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay CBHandleMap: {} entries", cb_handle_map_.size());
         cb_handle_map_.clear();
     }
@@ -331,10 +332,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
             execute(command->cmd_as_ProgramConstructorCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand: {
-            execute(command->cmd_as_EnqueueProgramCommand());
-            break;
-        }
         case ::tt::tt_metal::flatbuffer::CommandType::CreateKernelCommand: {
             execute(command->cmd_as_CreateKernelCommand());
             break;
@@ -345,10 +342,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
         }
         case ::tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand: {
             execute(command->cmd_as_SetRuntimeArgsUint32VecPerCoreCommand());
-            break;
-        }
-        case ::tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsCommand: {
-            execute(command->cmd_as_SetRuntimeArgsCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::CreateCircularBufferCommand: {
@@ -362,25 +355,25 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
         case ::tt::tt_metal::flatbuffer::CommandType::NONE:
             TT_THROW("LightMetalReplay execute encountered unsupported cmd type NONE");
             break;
+        default: TT_THROW("LightMetalReplay execute encountered unsupported cmd type {}", command->cmd_type()); break;
     }
 }
 
 // Per API command handlers.
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(EnqueueTrace) cq_id: {} tid: {} blocking: {}",
         cmd->cq_id(),
         cmd->tid(),
         cmd->blocking());
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_id());
     TT_THROW("Light Metal Trace is no longer supported.");
     // EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(ReplayTrace) cq_id: {} tid: {} blocking: {}",
@@ -392,7 +385,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // Get the trace descriptor from flatbuffer and load it to device.
@@ -401,7 +394,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceComm
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // ReleaseTrace(this->device_, cmd->tid());
@@ -484,8 +477,9 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueWriteB
         buffer->address());
 
     // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // Issue #24955: Enable after Light-Metal rearchitecture
+    // EnqueueWriteBuffer(cq, buffer, cmd->src()->data(), cmd->blocking());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBufferCommand* cmd) {
@@ -504,9 +498,10 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
         buffer->size());
 
     // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
     std::vector<uint32_t> readback_data(buffer->size() / sizeof(uint32_t), 0);
-    EnqueueReadBuffer(cq, buffer, readback_data.data(), cmd->blocking());
+    // Issue #24955: Enable after Light-Metal rearchitecture
+    // EnqueueReadBuffer(cq, buffer, readback_data.data(), cmd->blocking());
 
     // TODO (kmabee) - TBD what to do with readback data. For now, optionally print.
     // One idea is to store in map by global_read_id that caller can access.
@@ -519,32 +514,15 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueReadBu
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::FinishCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(Finish) cq_global_id: {}", cmd->cq_global_id());
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
     auto sub_device_ids = from_flatbuffer(cmd->sub_device_ids());
-    Finish(cq, sub_device_ids);
+    // Issue #24955: Enable after Light-Metal rearchitecture
+    // Finish(cq, sub_device_ids);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ProgramConstructor) global_id: {} ", cmd->global_id());
     add_program_to_map(cmd->global_id(), std::make_shared<Program>());
-}
-
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* cmd) {
-    auto program = get_program_from_map(cmd->program_global_id());
-    TT_FATAL(
-        program,
-        "Attempted to EnqueueProgram() program w/ global_id: {} that was not previously created.",
-        cmd->program_global_id());
-
-    log_debug(
-        tt::LogMetalTrace,
-        "LightMetalReplay(EnqueueProgram) program_global_id: {} cq_global_id: {}",
-        cmd->program_global_id(),
-        cmd->cq_global_id());
-
-    // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
-    EnqueueProgram(cq, *program, cmd->blocking());
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelCommand* cmd) {
@@ -564,7 +542,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
     auto kernel_id = CreateKernel(*program, cmd->file_name()->c_str(), core_spec, kernel_config);
     add_kernel_handle_to_map(cmd->global_id(), kernel_id);
     // Some APIs use Kernel, so convert to and store Kernel.
-    std::shared_ptr<Kernel> kernel = program->get_kernel(kernel_id);
+    std::shared_ptr<Kernel> kernel = program->impl().get_kernel(kernel_id);
     add_kernel_to_map(cmd->global_id(), kernel);
 }
 
@@ -611,22 +589,6 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
     auto core_spec = from_flatbuffer(cmd->core_spec());
     auto runtime_args = from_flatbuffer(cmd->args());
     SetRuntimeArgs(*program, kernel_id, core_spec, runtime_args);
-}
-
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* cmd) {
-    log_debug(
-        tt::LogMetalTrace,
-        "LightMetalReplay(SetRuntimeArgs). kernel_global_id: {} rt_args_size: {}",
-        cmd->kernel_global_id(),
-        cmd->args()->size());
-    auto core_spec = core_spec_from_flatbuffer(cmd);
-    auto runtime_args = rt_args_from_flatbuffer(cmd->args());
-    auto kernel = get_kernel_from_map(cmd->kernel_global_id());
-    TT_FATAL(
-        kernel,
-        "Attempted to SetRuntimeArgs() using a Kernel w/ global_id: {} that was not previously created.",
-        cmd->kernel_global_id());
-    SetRuntimeArgs(this->device_, kernel, core_spec, runtime_args);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircularBufferCommand* cmd) {
@@ -678,9 +640,9 @@ void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalC
         cmd->buffer_global_id());
 
     // TODO (kmabee) - consider storing/getting CQ from global map instead.
-    CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
+    // CommandQueue& cq = this->device_->command_queue(cmd->cq_global_id());
     std::vector<uint32_t> rd_data(buffer->size() / sizeof(uint32_t), 0);
-    EnqueueReadBuffer(cq, buffer, rd_data.data(), true);
+    // EnqueueReadBuffer(cq, buffer, rd_data.data(), true);
 
     if (disable_checking_) {
         log_debug(
@@ -744,7 +706,7 @@ bool LightMetalReplayImpl::run() {
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0.
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
-        uint32_t idx = 1;
+        [[maybe_unused]] uint32_t idx = 1;
         for (const auto* cmd : *commands) {
             auto str_name = std::string(EnumNameCommandType(cmd->cmd_type()));
             log_trace(tt::LogMetalTrace, "Executing Binary CMD {}/{} (Type: {})", idx++, commands->size(), str_name);

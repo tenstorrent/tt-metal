@@ -11,10 +11,8 @@ from models.demos.wormhole.mamba.benchmarks.loglikelihood import (
     compute_loglikelihood_given_prompt_and_target,
 )
 from models.demos.wormhole.mamba.reference.decode_model import MambaDecode, MambaPretrainedModelName
-from models.utility_functions import skip_for_grayskull
 
 
-@skip_for_grayskull()
 def test_loglikelihood():
     logits = torch.tensor([[0.5, 1.0], [1.5, 2.5]]).reshape(1, 2, 2)
     labels = torch.tensor([[0, 1]]).reshape(1, 2, 1)
@@ -42,7 +40,6 @@ def get_compute(model_version: MambaPretrainedModelName):
     return compute
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "model_version",
     (("state-spaces/mamba-370m"), ("state-spaces/mamba-2.8b")),

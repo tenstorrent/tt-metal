@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 // Binary maximum
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_binary_max_init() {

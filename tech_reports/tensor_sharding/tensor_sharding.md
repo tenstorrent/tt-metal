@@ -1,12 +1,14 @@
 # Tensor Sharding
 
 # Table of Contents
-- [Introduction](#introduction)
-- [2D Sharding](#2d-sharding)
-   - [Height Sharding](#height-sharding)
-   - [Width Sharding](#width-sharding)
-   - [Block Sharding](#block-sharding)
-- [ND Sharding (experimental)](#nd-sharding-experimental)
+- [Tensor Sharding](#tensor-sharding)
+- [Table of Contents](#table-of-contents)
+  - [Introduction](#introduction)
+  - [2D Sharding](#2d-sharding)
+    - [Height Sharding](#height-sharding)
+    - [Width Sharding](#width-sharding)
+    - [Block Sharding](#block-sharding)
+  - [ND Sharding (experimental)](#nd-sharding-experimental)
 
 ## Introduction
 Tensor sharding is the process of dividing a large tensor into smaller, non-overlapping pieces—called shards—which are then distributed across multiple memory banks. This technique is essential for achieving high performance on Tenstorrent devices.
@@ -42,10 +44,10 @@ tensor_spec = ttnn.TensorSpec(
 ).height_sharded(core_ranges)
 
 # Create tensor from PyTorch tensor (using shape from spec)
-torch_tensor = torch.randn(tensor_spec.shape)
+torch_tensor = torch.randn(tuple(tensor_spec.shape))
 tt_tensor = ttnn.from_torch(torch_tensor, spec=tensor_spec, device=device)
 
-# Each core gets: 16 rows × 256 columns (total height 128 / 8 cores = 16 rows per core)
+# Each core gets: 32 rows × 256 columns (total height 128 * 2 / 8 cores = 32 rows per core)
 ```
 
 <details>
@@ -62,20 +64,21 @@ memory_config = ttnn.MemoryConfig(
     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ttnn.BufferType.L1,
     ttnn.ShardSpec(
-        core_ranges=ttnn.num_cores_to_corerangeset(8, [8, 7], True),
-        shard_shape=[64, 128],  # Each shard: 64 rows x 128 columns
+        grid=ttnn.num_cores_to_corerangeset(
+            target_num_cores=8,
+            grid_size=[8, 7],
+            row_wise=True,
+        ),  # grid: (x=0, y=0), (1, 0), ... (x=7, y=0)
+        # Note: the W dimension of shard should be equal to the W dimension of the tensor
+        shard_shape=[64, 512],  # Each shard: 64 rows x 512 columns
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
     ),
 )
 
 # Create tensor with advanced height sharding configuration
 torch_tensor = torch.randn(512, 512)
 height_sharded_tensor = ttnn.from_torch(
-    torch_tensor,
-    dtype=ttnn.float32,
-    device=device,
-    layout=ttnn.TILE_LAYOUT,
-    memory_config=memory_config
-)
+    torch_tensor, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
 ```
 
 > **Note:** Ensure that the tensor dimensions are compatible with the specified shard shapes and core ranges.
@@ -106,7 +109,7 @@ tensor_spec = ttnn.TensorSpec(
 ).width_sharded(core_ranges)
 
 # Create tensor from PyTorch tensor (using shape from spec)
-torch_tensor = torch.randn(tensor_spec.shape)
+torch_tensor = torch.randn(tuple(tensor_spec.shape))
 tt_tensor = ttnn.from_torch(torch_tensor, spec=tensor_spec, device=device)
 
 # Each core gets: 64 rows × 128 columns (total width 512 / 4 cores = 128 columns per core)
@@ -126,15 +129,17 @@ memory_config = ttnn.MemoryConfig(
     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     ttnn.BufferType.L1,
     ttnn.ShardSpec(
-        core_ranges=ttnn.CoreRangeSet({
+        grid=ttnn.CoreRangeSet({
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))
         }),
-        shard_shape=[32, 64]  # Each shard: 32 rows x 64 columns
+        # Note: the H dimension of shard should be equal to the H dimension of the tensor
+        shard_shape=[128, 64],  # Each shard: 128 rows x 64 columns
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
     ),
 )
 
 # Create tensor with advanced width sharding configuration
-torch_tensor = torch.randn(128, 256)
+torch_tensor = torch.randn(128, 512)
 width_sharded_tensor = ttnn.from_torch(
     torch_tensor,
     dtype=ttnn.float32,
@@ -153,7 +158,7 @@ Block sharding divides a tensor into a 2D grid of rectangular blocks, where each
 
 <img src="images/block_sharding.svg" style="width:500px;"/>
 
-For example, if you have a tensor of shape (H, W) and a 2×2 core grid, the tensor is divided into 4 blocks arranged in a 2×2 pattern. Memory bank (0,0) gets the top-left block, memory bank (0,1) gets the top-right block, memory bank (1,0) gets the bottom-left block, and memory bank (1,1) gets the bottom-right block. This creates optimal data locality since each memory bank operates on a spatially coherent region of the original tensor.
+For example, if you have a tensor of shape (H, W) and a 2×2 core grid, the tensor is divided into 4 blocks arranged in a 2×2 pattern. Memory bank (x=0,y=0) gets the top-left block, memory bank (x=1,y=0) gets the top-right block, memory bank (x=0,y=1) gets the bottom-left block, and memory bank (x=1,y=1) gets the bottom-right block. This creates optimal data locality since each memory bank operates on a spatially coherent region of the original tensor.
 
 **Usage Example:**
 ```python
@@ -174,7 +179,7 @@ tensor_spec = ttnn.TensorSpec(
 ).block_sharded(core_ranges)
 
 # Create tensor from PyTorch tensor (using shape from spec)
-torch_tensor = torch.randn(tensor_spec.shape)
+torch_tensor = torch.randn(tuple(tensor_spec.shape))
 tt_tensor = ttnn.from_torch(torch_tensor, spec=tensor_spec, device=device)
 
 # Each core gets: 64 rows × 64 columns (256/4 = 64 per dimension in 4x4 core grid)
@@ -194,10 +199,11 @@ memory_config = ttnn.MemoryConfig(
     ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ttnn.BufferType.L1,
     ttnn.ShardSpec(
-        core_ranges=ttnn.CoreRangeSet({
+        grid=ttnn.CoreRangeSet({
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))
         }),
-        shard_shape=[64, 64]
+        shard_shape=[64, 64],
+        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR
     ),
 )
 
@@ -296,7 +302,7 @@ nd_spec_batch_seq = ttnn.TensorSpec(
     buffer_type=ttnn.BufferType.L1
 ).sharded_across_dims([0, 1], core_ranges)
 
-torch_tensor = torch.randn(nd_spec_batch_seq.shape)
+torch_tensor = torch.randn(tuple(nd_spec_batch_seq.shape))
 batch_seq_sharded = ttnn.from_torch(torch_tensor, spec=nd_spec_batch_seq, device=device)
 
 # Example 2: Feature dimension sharding only
@@ -308,7 +314,7 @@ nd_spec_features = ttnn.TensorSpec(
     buffer_type=ttnn.BufferType.L1
 ).sharded_across_dims([2], core_ranges)
 
-torch_tensor = torch.randn(nd_spec_features.shape)
+torch_tensor = torch.randn(tuple(nd_spec_features.shape))
 feature_sharded = ttnn.from_torch(torch_tensor, spec=nd_spec_features, device=device)
 ```
 

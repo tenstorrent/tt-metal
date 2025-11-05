@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.reduction_common import run_sum
 
 # Override the default timeout in seconds for hang detection.
@@ -76,6 +76,17 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
 
+    # Validate dim parameter for duplicate dimensions
+    dim = test_vector["dim"]
+    if isinstance(dim, (list, tuple)):
+        input_shape = test_vector["input_shape"]
+        normalized_dims = []
+        for d in dim:
+            normalized_d = d % len(input_shape)
+            if normalized_d in normalized_dims:
+                return True, f"Duplicate dimension {d} found in dim list"
+            normalized_dims.append(normalized_d)
+
     return False, None
 
 
@@ -103,12 +114,12 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "input_shape, dim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
+    "input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config",
     [
         ([7, 32, 4, 96], 3, True, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
     ],
 )
-def test_reduction_sum_localrun_fail_only(
+def test_reduction_sum(
     device, input_shape, dim, keepdim, input_a_dtype, input_a_layout, input_a_memory_config, output_memory_config
 ):
     (result, msg), e2e_perf = run_sum(

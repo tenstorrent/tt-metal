@@ -14,7 +14,7 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -22,9 +22,9 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 class Buffer;
@@ -35,9 +35,9 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-std::map<chip_id_t, IDevice*> CreateDevices(
+std::map<ChipId, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
-    const std::vector<chip_id_t>& device_ids,
+    const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs = 1,
     size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
     size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
@@ -48,7 +48,7 @@ std::map<chip_id_t, IDevice*> CreateDevices(
     bool use_max_eth_core_count_on_all_devices = false,
     bool initialize_fabric_and_dispatch_fw = true);
 
-void CloseDevices(const std::map<chip_id_t, IDevice*>& devices);
+void CloseDevices(const std::map<ChipId, IDevice*>& devices);
 
 /**
  * Copies data from a host buffer into the specified buffer
@@ -81,7 +81,7 @@ void WriteToBuffer(Buffer& buffer, const std::vector<DType>& host_buffer) {
             reinterpret_cast<const uint8_t*>(host_buffer.data()), host_buffer.size() * sizeof(DType)));
 }
 template <typename DType>
-void WriteToBuffer(std::shared_ptr<Buffer> buffer, const std::vector<DType>& host_buffer) {
+void WriteToBuffer(const std::shared_ptr<Buffer>& buffer, const std::vector<DType>& host_buffer) {
     WriteToBuffer(*buffer, host_buffer);
 }
 
@@ -104,7 +104,7 @@ void ReadFromBuffer(Buffer& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()));
 }
 template <typename DType>
-void ReadFromBuffer(std::shared_ptr<Buffer> buffer, std::vector<DType>& host_buffer) {
+void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<DType>& host_buffer) {
     ReadFromBuffer(*buffer, host_buffer);
 }
 
@@ -369,6 +369,13 @@ bool ReadFromDeviceL1(
     CoreType core_type = CoreType::WORKER);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
+
+/**
+ * Return the name of the architecture present.
+ *
+ * Return value: std::string
+ */
+std::string get_platform_architecture_name();
 
 }  // namespace detail
 }  // namespace tt::tt_metal

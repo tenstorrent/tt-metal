@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -65,6 +65,52 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     elif dtype == ttnn.bfloat4_b:
         expected_pcc = 0.989
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
+
+
+@pytest.mark.parametrize("n", [1])
+@pytest.mark.parametrize("c", [1])
+@pytest.mark.parametrize("m", [1024])
+@pytest.mark.parametrize("k", [64])
+@pytest.mark.parametrize("n_out", [512])
+@pytest.mark.parametrize("tile_h", [8, 16])
+@pytest.mark.parametrize("tile_w", [16])
+def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, tile_h, tile_w):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand((n, c, m, k), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.rand((n, c, k, n_out), dtype=torch.bfloat16)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+    torch_opt_output_tensor = torch.zeros_like(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((tile_h, 32)),
+        device=device,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, tile_w)),
+        device=device,
+    )
+    optional_output_tensor = ttnn.from_torch(
+        torch_opt_output_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        device=device,
+    )
+
+    output = ttnn.matmul(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
+    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
+
+    assert output.shape == torch_output_tensor.shape == optional_output_tensor.shape
+    assert_with_pcc(torch_output_tensor, output, 0.999)
+    assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
+    assert_with_pcc(output, optional_output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("n", [1])
@@ -200,7 +246,6 @@ def test_matmul_reuse_config_sharded_fd_column(
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("b", [2])
 @pytest.mark.parametrize("h", [3])
 @pytest.mark.parametrize("m", [256])
@@ -308,7 +353,7 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
+@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -401,7 +446,8 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         fused_activation=None,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
@@ -530,7 +576,8 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         fuse_batch=fuse_batch,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -697,7 +744,8 @@ def run_matmul_2d_tiny_tile(
         fused_activation=None,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -743,7 +791,6 @@ def run_matmul_2d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("m", [512])
 @pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
@@ -854,7 +901,8 @@ def run_matmul_1d_tiny_tile(
         mcast_in0=True,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -900,7 +948,6 @@ def run_matmul_1d_tiny_tile(
     assert_with_pcc(pt_out, output_tensor, 0.999)
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #22103")
 @pytest.mark.parametrize("m", [128])
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1024])
@@ -1061,7 +1108,8 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         mcast_in0=mcast_in0,
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,
@@ -1224,8 +1272,12 @@ def test_padded_2d_matmul(device, side, tile_count):
         act,
         weight,
         program_config=program_config,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         ),
     )
     lower = ttnn.to_torch(lower_tt).float()
@@ -1307,8 +1359,12 @@ def test_padded_1d_matmul(mesh_device, side, has_program_config):
         weight,
         core_grid=None if has_program_config else ttnn.CoreGrid(x=4, y=4),
         program_config=program_config,
-        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        compute_kernel_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         ),
     )
 
@@ -1398,8 +1454,8 @@ def test_matmul_does_dot_product(device, w):
 
     output = ttnn.to_torch(output)
 
-    assert torch_output_tensor.shape == ()
-    assert output.shape == ()
+    assert len(torch_output_tensor.shape) == 0
+    assert len(output.shape) == 0
     assert torch.allclose(torch_output_tensor, output, atol=1e-2)
 
 
@@ -1934,7 +1990,8 @@ def test_matmul_in0_in1_bias_sharded(
         ),
     )
 
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
@@ -2138,6 +2195,30 @@ def test_small_matmul_pcc(device):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
 
+@pytest.mark.parametrize("shape", [(32, 32)])
+def test_linear_with_optional_output_tensor(device, shape):
+    torch.manual_seed(0)
+
+    torch_bias_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    torch_tensor_a = torch.randn(shape, dtype=torch.bfloat16)
+    torch_tensor_b = torch.randn(shape, dtype=torch.bfloat16)
+    torch_out_tensor = torch.zeros(shape, dtype=torch.float32)
+
+    bias_tensor = ttnn.from_torch(torch_bias_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    tensor_a = ttnn.from_torch(torch_tensor_a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    tensor_b = ttnn.from_torch(torch_tensor_b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    optional_output_tensor = ttnn.from_torch(
+        torch_out_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, device=device
+    )
+
+    result_tensor = ttnn.linear(tensor_a, tensor_b, bias=bias_tensor, optional_output_tensor=optional_output_tensor)
+    result_tensor = ttnn.to_torch(result_tensor)
+
+    optional_output_tensor = ttnn.to_torch(optional_output_tensor)
+
+    assert_with_pcc(optional_output_tensor, result_tensor, pcc=0.9999)
+
+
 @pytest.mark.parametrize(
     "out_block_h, out_block_w",
     [
@@ -2163,7 +2244,6 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             (192, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
 
@@ -2175,7 +2255,8 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
     memory_config = ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=None
     )
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=True,
         fp32_dest_acc_en=False,

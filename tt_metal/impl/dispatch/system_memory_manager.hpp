@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,24 +6,26 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/chip_helpers/tlb_manager.h>  // needed because tt_io.hpp requires needs TLBManager
-#include <umd/device/tt_io.hpp>                   // for tt::Writer
-#include <umd/device/tt_xy_pair.h>                // for tt_cxy_pair
+#include <umd/device/chip_helpers/tlb_manager.hpp>  // needed because tt_io.hpp requires needs TLBManager
+#include <umd/device/tt_io.hpp>                     // for umd::Writer
+#include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
 #include <functional>
 #include <mutex>
 #include <vector>
 
-using chip_id_t = int;
+using ChipId = int;
 
 namespace tt::tt_metal {
 
 class SystemMemoryManager {
 public:
-    SystemMemoryManager(chip_id_t device_id, uint8_t num_hw_cqs);
+    SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs);
 
     uint32_t get_next_event(uint8_t cq_id);
+
+    uint32_t get_last_event(uint8_t cq_id);
 
     void reset_event_id(uint8_t cq_id);
 
@@ -59,7 +61,7 @@ public:
 
     uint32_t get_cq_size() const;
 
-    chip_id_t get_device_id() const;
+    ChipId get_device_id() const;
 
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
@@ -85,9 +87,7 @@ public:
     void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
 private:
-    chip_id_t device_id = 0;
-    uint8_t num_hw_cqs = 0;
-    const std::function<void(uint32_t, uint32_t, uint8_t*)> fast_write_callable;
+    ChipId device_id = 0;
     std::vector<uint32_t> completion_byte_addrs;
     char* cq_sysmem_start = nullptr;
     std::vector<SystemMemoryCQInterface> cq_interfaces;
@@ -97,7 +97,8 @@ private:
     std::vector<uint32_t> cq_to_last_completed_event;
     std::vector<std::mutex> cq_to_event_locks;
     std::vector<tt_cxy_pair> prefetcher_cores;
-    std::vector<tt::Writer> prefetch_q_writers;
+    std::vector<umd::Writer> prefetch_q_writers;
+    std::vector<umd::Writer> completion_q_writers;
     std::vector<uint32_t> prefetch_q_dev_ptrs;
     std::vector<uint32_t> prefetch_q_dev_fences;
 

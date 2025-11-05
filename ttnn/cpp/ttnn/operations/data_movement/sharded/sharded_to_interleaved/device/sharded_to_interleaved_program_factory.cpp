@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -42,8 +43,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
     CoreCoord end_core = cores[num_cores - 1];
     if (output.layout() == Layout::TILE) {
-        input_unit_size = tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
@@ -153,7 +154,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_w = 0;
 
 
-    for (const auto& core : cores) {
+    for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
+        const auto& core = cores[core_idx];
         uint32_t shard_height = num_units_per_shard_height;
         uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
         if (input.layout() == Layout::TILE) {
@@ -251,7 +253,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         }
     }
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices](
+        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cores, num_slices, num_cores_unpadded](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -261,7 +263,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
 
             Buffer* dst_buffer = nullptr;
             uint32_t starting_idx_h = 0;
-            const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.size() == 0);
+            const bool partial_op = num_slices > 1 || (num_slices == 1 && output_tensors.empty());
             if (partial_op) {
                 // If we have num_slices > 1, it means that our op is S->I partial.
                 // And currently we store output tensors there as input[1]
@@ -277,7 +279,8 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
             }
             // TODO: Make these common args instead
             auto& runtime_args_by_core = GetRuntimeArgs(program, unary_writer_kernel_id);
-            for (const auto& core : cores) {
+            for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
+                const auto& core = cores[core_idx];
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
                 if (partial_op) {

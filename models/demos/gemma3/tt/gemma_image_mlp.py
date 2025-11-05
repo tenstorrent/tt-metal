@@ -3,7 +3,7 @@ This is the FeedForward submodule for vision block in Gemma-3-4b-it
 We have reused the TtLlamaImageFeedForward with few changes in CoreGrid and program_config configurations
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -72,14 +72,15 @@ class TtGemmaImageFeedForward(LightweightModule):
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
         seq_len = x.shape[-2]
+        batch_size = x.shape[0]
 
         # Depends on whether we are padding or not
-        MAX_MM_SEQ_LEN = seq_len if "gemma-3" in self.args.base_model_name else self.args.VISION_MAX_MM_SEQ
+        MAX_MM_SEQ_LEN = seq_len if self.args.is_gemma else self.args.VISION_MAX_MM_SEQ
 
         x_in = x
         if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
             # Reshape input to to fit on device and parallelize computation
-            x_in = ttnn.reshape(x_in, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+            x_in = ttnn.reshape(x_in, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
         pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
@@ -107,7 +108,7 @@ class TtGemmaImageFeedForward(LightweightModule):
         )
 
         # NOTE: Need to reshape to 4D so that fast_reduce_nc hsa a dim1 to work on
-        c_proj_out = ttnn.reshape(c_proj_out, [1, 1, seq_len, -1])
+        c_proj_out = ttnn.reshape(c_proj_out, [batch_size, 1, seq_len, -1])
 
         # All reduce
         if self.args.num_devices > 1:  # replace with reduce_scatter and all_gather
@@ -117,7 +118,7 @@ class TtGemmaImageFeedForward(LightweightModule):
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,

@@ -1,9 +1,9 @@
-name: "Galaxy unit tests"
+name: "(Galaxy) unit tests"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+    - cron: "0 8 * * *"  # Every day at 8:00 UTC
 
 jobs:
   build-artifact:
@@ -13,11 +13,12 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      build-umd-tests: true
       version: 22.04
-  TG-Unit-tests:
+  galaxy-unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/tg-unit-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

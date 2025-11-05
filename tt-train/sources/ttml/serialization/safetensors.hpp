@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,5 +28,7 @@ public:
         Span can point to the unaligned memory, so it is not safe to copy it to the float buffer before using it.
     */
     static std::vector<float> bytes_to_floats_copy(std::span<const std::byte> bytes);
+
+    static std::vector<float> bytes_to_float_vec(const std::span<const std::byte>& bytes, const std::string& dtype);
 };
 }  // namespace ttml::serialization

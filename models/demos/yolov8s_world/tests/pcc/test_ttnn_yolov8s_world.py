@@ -8,6 +8,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.yolov8s_world.common import YOLOV8SWORLD_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8s_world.reference import yolov8s_world
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import (
@@ -23,7 +24,6 @@ from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import (
     TtYOLOWorld,
 )
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import create_custom_preprocessor, move_to_device
-from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -196,7 +196,7 @@ def test_max_sigmoid_attn_block(device, use_pretrained_weight, reset_seeds, mode
     ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_guide = ttnn.from_torch(guide, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_x = ttnn.permute(ttnn_x, (0, 2, 3, 1))
-
+    ttnn_x = ttnn.reshape(ttnn_x, (1, 1, ttnn_x.shape[0] * ttnn_x.shape[1] * ttnn_x.shape[2], ttnn_x.shape[-1]))
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
     )

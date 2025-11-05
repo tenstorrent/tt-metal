@@ -1,0 +1,134 @@
+name: "Report Workflow Status to Slack"
+description: "Report the workflow status to Slack to help identify breakages faster."
+inputs:
+  slack_webhook_url:
+    description: "Webhook URL for the Slack channel to be posted to. Generated via slack app!"
+    required: true
+  regressed_workflows:
+    description: "JSON array from analyze step output 'regressed_workflows'"
+    required: true
+  alert_all_message:
+    description: "Optional Slack-ready alert text from analyze step output 'alert_all_message'"
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - name: Build Slack message from regressions
+      id: build
+      shell: bash
+      env:
+        ALERT_RAW: ${{ inputs.alert_all_message }}
+        REGRESSED_RAW: ${{ inputs.regressed_workflows }}
+      run: |
+        set -euo pipefail
+        tmp_file="$(mktemp)"
+        printf '%s' "$REGRESSED_RAW" > "$tmp_file"
+        if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
+          echo "⚠️ Failed to parse regression list JSON. Skipping Slack notification."
+          echo "has_regressions=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        # Check if there are any regressions
+        REGRESSION_COUNT=$(jq -r 'if (type=="array") then length else 0 end' "$tmp_file")
+        if [ "$REGRESSION_COUNT" -eq 0 ]; then
+          echo "✅ No regressions detected. Skipping Slack notification (only posting when there are regressions)."
+          echo "has_regressions=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "📊 Found $REGRESSION_COUNT regression(s). Preparing Slack notification..."
+        echo "has_regressions=true" >> "$GITHUB_OUTPUT"
+
+        # Generate the main regression text with detailed information
+        TEXT=$(jq -r '
+          def mentionOwners(owners):
+            if (owners | type) == "array" and (owners | length) > 0 then
+              (owners
+                | map(
+                    if (.id // "") | startswith("S") then "<!subteam^" + .id + "|" + ((.name // "team")) + ">"
+                    elif (.id // "") != "" then "<@" + .id + ">"
+                    elif (.name // "") != "" then .name
+                    else null end
+                  ) | map(select(. != null)) | join(" ")
+              )
+            else "<!subteam^S0985AN7TC5|metal infra team>" end;
+
+          def origOwnerNote(item):
+            # If we forced infra due to missing test and have original owner names, include them as plain text
+            if (item.original_owner_names_for_generic_exit | type) == "array" and (item.original_owner_names_for_generic_exit | length) > 0 then
+              " (error owner unclear. original owners: " + (item.original_owner_names_for_generic_exit | join(", ")) + ")"
+            else "" end;
+
+          def failingJobsNote(item):
+            # If we have failing job names, include them in parentheses
+            if (item.failing_jobs | type) == "array" and (item.failing_jobs | length) > 0 then
+              " (failed " + (item.failing_jobs | join(", ")) + ")"
+            else "" end;
+
+          if (type=="array" and length > 0) then
+            "❌ *Regressions (Pass → Fail):*\n" + (map(
+              "- " + .name
+              + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
+              + (if .run_url then " — <" + .run_url + "|run>" else "" end)
+              + (if .commit_url and .commit_short then " — <" + .commit_url + "|" + .commit_short + ">" else "" end)
+              + " " + mentionOwners(.owners) + origOwnerNote(.) + failingJobsNote(.)
+            ) | join("\n"))
+          else
+            "Malformed regressions payload"
+          end' "$tmp_file")
+
+        # Count total failing workflows from alert_all_message
+        # The alert message format is: "*Alerts: failing workflows on main*\n• Workflow Name <url|open> mentions jobs"
+        # We count lines starting with "• " to get the total number of failing workflows
+        FAILING_WORKFLOWS_COUNT_MESSAGE=""
+        if [ -n "$ALERT_RAW" ]; then
+          # Decode the alert message and count workflow lines
+          decoded_alert=$(printf '%b' "$ALERT_RAW")
+          total_failing_count=$(echo "$decoded_alert" | grep -E '^• ' | wc -l | tr -d ' ')
+
+          # Subtract regressions (already shown in detail) to get "other" failing workflows
+          other_failing_count=$((total_failing_count - REGRESSION_COUNT))
+
+          # Format the message (singular vs plural)
+          if [ "$other_failing_count" -gt 0 ]; then
+            if [ "$other_failing_count" -eq 1 ]; then
+              FAILING_WORKFLOWS_COUNT_MESSAGE="1 other pipeline is failing"
+            else
+              FAILING_WORKFLOWS_COUNT_MESSAGE="$other_failing_count other pipelines are failing"
+            fi
+          fi
+        fi
+
+        # Build the payload using blocks for guaranteed line breaks, with text fallback
+        HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
+
+        PAYLOAD=$(jq -cn \
+          --arg header "$HEADER" \
+          --arg body "$TEXT" \
+          --arg failing_count_msg "$FAILING_WORKFLOWS_COUNT_MESSAGE" \
+          '
+          {
+            "text": ($header + "\n" + $body + (if ($failing_count_msg | length > 0) then "\n\n" + $failing_count_msg else "" end)),
+            "blocks": ([
+              { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
+              { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
+            ] + (if ($failing_count_msg | length > 0) then
+              [ { "type": "section", "text": { "type": "mrkdwn", "text": $failing_count_msg } } ]
+            else [] end))
+          }
+        ')
+
+        echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
+
+    - name: Skip Slack notification (no regressions)
+      if: steps.build.outputs.has_regressions != 'true'
+      shell: bash
+      run: echo "ℹ️ Skipping Slack notification because there are no regressions to report."
+
+    - name: Report GitHub Pipeline Status Slack Action
+      if: steps.build.outputs.has_regressions == 'true'
+      uses: slackapi/slack-github-action@v1.26.0
+      with:
+        payload: ${{ steps.build.outputs.payload }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}

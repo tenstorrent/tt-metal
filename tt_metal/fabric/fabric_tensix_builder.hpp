@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "core_coord.hpp"
 
@@ -40,10 +40,10 @@ public:
     size_t get_channels_base_address(size_t risc_id, uint8_t tensix_channel_id) const;
 
     // Get the RISC ID for a given ethernet channel on a specific device
-    size_t get_risc_id_for_channel(chip_id_t device_id, uint32_t eth_chan_id) const;
+    size_t get_risc_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
 
     // Get the core for a given ethernet channel on a specific device
-    CoreCoord get_core_for_channel(chip_id_t device_id, uint32_t eth_chan_id) const;
+    CoreCoord get_core_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
 
     // Get the mux config for a specific RISC ID
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> get_mux_config(size_t risc_id) const;
@@ -65,13 +65,12 @@ public:
     }
 
     // Wrapper APIs for mux config access - these takes device_id, eth_chan_id and channel_id (channels inside a mux)
-    size_t get_local_flow_control_semaphore_address(
-        chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
-    size_t get_connection_semaphore_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
-    size_t get_worker_conn_info_base_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
-    size_t get_buffer_index_semaphore_address(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
-    size_t get_channel_credits_stream_id(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
-    std::pair<uint32_t, uint32_t> get_termination_address_and_signal(chip_id_t device_id, uint32_t eth_chan_id) const;
+    size_t get_local_flow_control_semaphore_address(ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_connection_semaphore_address(ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_worker_conn_info_base_address(ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_buffer_index_semaphore_address(ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    size_t get_channel_credits_stream_id(ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
+    std::pair<uint32_t, uint32_t> get_termination_address_and_signal(ChipId device_id, uint32_t eth_chan_id) const;
 
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
@@ -93,16 +92,16 @@ private:
     std::unordered_map<size_t, size_t> base_l1_addresses_;
 
     // [device_id][eth chan] -> [core index] mapping for round-robin assignment
-    std::unordered_map<chip_id_t, std::unordered_map<size_t, size_t>> eth_chan_to_core_index_;
+    std::unordered_map<ChipId, std::unordered_map<size_t, size_t>> eth_chan_to_core_index_;
 
     // [device_id][eth chan] -> [risc id] mapping
-    std::unordered_map<chip_id_t, std::unordered_map<size_t, size_t>> eth_chan_to_risc_id_;
+    std::unordered_map<ChipId, std::unordered_map<size_t, size_t>> eth_chan_to_risc_id_;
 
     // Mux configs per RISC ID, [risc id] -> [mux config] mapping
     std::unordered_map<size_t, std::shared_ptr<tt::tt_fabric::FabricMuxConfig>> mux_configs_;
 
     // Helper methods for initialization
-    void initialize_channel_mappings();
+    bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_mux_configs();
 };
@@ -152,6 +151,8 @@ public:
     uint32_t get_noc_y() const { return noc_y_; }
     eth_chan_directions get_direction() const { return direction_; }
 
+    void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
+
 private:
     // Core and fabric configuration
     CoreCoord my_core_logical_;
@@ -172,8 +173,11 @@ private:
     eth_chan_directions direction_;
 
     // Channel connection liveness check disable array
-    mutable std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
-        channel_connection_liveness_check_disable_array_{};
+    mutable std::array<bool, builder_config::num_sender_channels> channel_connection_liveness_check_disable_array_{};
+
+    // Upstream router coordinates for sync
+    std::vector<uint32_t> upstream_routers_noc_x_;
+    std::vector<uint32_t> upstream_routers_noc_y_;
 
     // Helper methods for kernel compilation
     std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice* device) const;

@@ -4,24 +4,21 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_unet
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention import cross_attention
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("has_encoder_hidden_states", (True, False))
 @pytest.mark.parametrize(
     "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
@@ -29,7 +26,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
 )
 def test_cross_attention_512x512(
     device,
-    model_name,
     input_shape,
     shard_layout,
     shard_end_core,
@@ -39,24 +35,25 @@ def test_cross_attention_512x512(
     block,
     block_index,
     attention_index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
 
     N, C, H, W = input_shape
 
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    model = pipe.unet
-    model.eval()
+    unet = get_reference_unet(is_ci_env, is_ci_v2_env, model_location_generator)
 
     hidden_states_shape = torch.Size(input_shape)
     hidden_states = torch.rand(hidden_states_shape)
 
     if block == "up":
-        basic_transformer = pipe.unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.up_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "down":
-        basic_transformer = pipe.unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
+        basic_transformer = unet.down_blocks[block_index].attentions[attention_index].transformer_blocks[0]
     elif block == "mid":
-        basic_transformer = pipe.unet.mid_block.attentions[0].transformer_blocks[0]
+        basic_transformer = unet.mid_block.attentions[0].transformer_blocks[0]
 
     if has_encoder_hidden_states:
         cross_attn = basic_transformer.attn2

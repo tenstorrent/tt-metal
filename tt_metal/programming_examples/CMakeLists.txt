@@ -23,6 +23,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/NoC_tile_transfer)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpu_eltwise_chain)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_add)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/custom_sfpi_smoothstep)
 
 add_custom_target(
     programming_examples
@@ -44,6 +47,10 @@ install(
         matmul
         shard_data_rm
         NoC_tile_transfer
+        sfpu_eltwise_chain
+        custom_sfpi_add
+        custom_sfpi_smoothstep
+        tests
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
     # /usr/share/doc on a default Docker image. Speculation: some dependency for
@@ -68,6 +75,9 @@ install(
         matmul
         shard_data_rm
         NoC_tile_transfer
+        sfpu_eltwise_chain
+        custom_sfpi_add
+        custom_sfpi_smoothstep
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING

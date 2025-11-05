@@ -24,7 +24,10 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/program.hpp>
-#include "umd/device/tt_core_coordinates.h"
+#include <umd/device/types/core_coordinates.hpp>
+
+// Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
+#include "impl/program/program_impl.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -37,7 +40,7 @@ namespace basic_tests::circular_buffer {
 
 bool test_cb_config_written_to_core(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& cr_set,
     const std::map<uint8_t, std::vector<uint32_t>>& cb_config_per_buffer_index) {
     bool pass = true;
@@ -55,14 +58,12 @@ bool test_cb_config_written_to_core(
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    uint32_t cb_config_buffer_size = program.get_cb_size(device, core_coord, CoreType::WORKER);
+                    uint32_t cb_config_buffer_size =
+                        program.impl().get_cb_size(device, core_coord, tt::CoreType::WORKER);
 
+                    auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, tt::CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
-                        device,
-                        core_coord,
-                        program.get_sem_base_addr(device, core_coord, CoreType::WORKER),
-                        cb_config_buffer_size,
-                        cb_config_vector);
+                        device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 
                     for (const auto& [buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;
@@ -89,7 +90,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program;
     initialize_program(program, cr_set);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t l1_unreserved_base = devices_.at(0)->allocator()->get_base_allocator_addr(HalMemType::L1);

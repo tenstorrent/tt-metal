@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
-from diffusers import AutoencoderKL
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_attention import Attention
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -20,8 +20,11 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 def test_vae_attention(
     device,
     input_shape,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
     torch_attention = vae.decoder.mid_block.attentions[0]
 
     batch_size, in_channels, height, width = input_shape

@@ -17,7 +17,7 @@ using namespace test_utils;
 
 namespace unit_tests::dm::core_to_all::multicast_schemes {
 
-uint32_t determine_max_grid_dimension(shared_ptr<distributed::MeshDevice> mesh_device) {
+uint32_t determine_max_grid_dimension(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     uint32_t smaller_dimension =
         min(mesh_device->get_device(0)->compute_with_storage_grid_size().x,
             mesh_device->get_device(0)->compute_with_storage_grid_size().y);
@@ -97,7 +97,7 @@ pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size, Mul
 }
 
 void test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_case_id,
     uint32_t sub_grid_dimension_size,
     NOC noc_id,
@@ -124,7 +124,8 @@ void test(
         static_cast<uint32_t>(multicast_scheme_type));
 }
 
-void run_all_tests(shared_ptr<distributed::MeshDevice> mesh_device, uint32_t test_case_id, bool loopback = true) {
+void run_all_tests(
+    const shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t test_case_id, bool loopback = true) {
     vector<NOC> noc_ids = {NOC::NOC_0, NOC::NOC_1};
     uint32_t starting_sub_grid_dimension_size = 2;  // Minimum size for sub-grid dimension
     uint32_t sub_grid_dimension_limit = determine_max_grid_dimension(mesh_device);

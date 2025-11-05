@@ -16,10 +16,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: all_to_all
+        iterations: 3
 
   - name: "UnidirLinearMulticast"
     benchmark_mode: true
@@ -34,10 +35,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: unidirectional_linear
+        iterations: 3
 
   - name: "SingleSenderLinearUnicastAllDevices"
     benchmark_mode: true
@@ -52,11 +54,32 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: one_to_all
+        iterations: 3
 
+  - name: "NeighborExchangeLinear"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: neighbor_exchange
+        iterations: 3
+
+  # Full Ring Multicast and Unicast tests have more variation in bandwidth, so we run them for extra iterations
   - name: "FullRingMulticast"
     benchmark_mode: true
     sync: true
@@ -70,10 +93,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 100000
 
     patterns:
       - type: full_ring
+        iterations: 3
 
   - name: "FullRingUnicast"
     benchmark_mode: true
@@ -88,10 +112,11 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 200000
+      num_packets: 100000
 
     patterns:
       - type: full_ring
+        iterations: 3
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
@@ -106,10 +131,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 100000
 
     patterns:
       - type: half_ring
+        iterations: 3
 
   - name: "MeshMulticast"
     benchmark_mode: true
@@ -124,10 +150,30 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: all_to_all
+        iterations: 3
+
+  - name: "SingleSenderMeshUnicastAllDevices"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      size: [2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 20000
+
+    patterns:
+      - type: one_to_all
+        iterations: 3
 
   - name: "MeshMulticastDynamic"
     benchmark_mode: true
@@ -144,25 +190,8 @@ Tests:
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 200000
+      num_packets: 20000
 
     patterns:
       - type: all_to_all
-
-  - name: "SingleSenderMeshUnicastAllDevices"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Mesh
-
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
-
-    defaults:
-      ftype: unicast
-      num_packets: 200000
-
-    patterns:
-      - type: one_to_all
+        iterations: 3

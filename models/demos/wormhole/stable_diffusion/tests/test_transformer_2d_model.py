@@ -4,32 +4,31 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import (
+    STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+    get_reference_stable_diffusion_pipeline,
+)
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     post_process_output_and_move_to_host,
     preprocess_and_push_input_to_device,
 )
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
     TRANSFORMER_PARAMETERIZATIONS,
 )
-@pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 def test_transformer_2d_model_512x512(
     device,
-    model_name,
     input_shape,
     shard_layout,
     shard_end_core,
@@ -39,6 +38,9 @@ def test_transformer_2d_model_512x512(
     block_index,
     attention_index,
     reset_seeds,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
@@ -59,24 +61,25 @@ def test_transformer_2d_model_512x512(
     input = torch.randn(input_shape) * 0.01
     encoder_hidden_states = torch.rand(encoder_hidden_states)
 
-    pipe = StableDiffusionPipeline.from_pretrained(model_name, torch_dtype=torch.float32)
-    unet = pipe.unet
-    unet.eval()
+    unet = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
     config = unet.config
 
     parameters = preprocess_model_parameters(
-        model_name=model_name, initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
+        model_name=STABLE_DIFFUSION_V1_4_MODEL_LOCATION,
+        initialize_model=lambda: unet,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
     )
 
     if block == "up":
         parameters = parameters.up_blocks[block_index].attentions[attention_index]
-        transformer = pipe.unet.up_blocks[block_index].attentions[attention_index]
+        transformer = unet.up_blocks[block_index].attentions[attention_index]
     elif block == "down":
         parameters = parameters.down_blocks[block_index].attentions[attention_index]
-        transformer = pipe.unet.down_blocks[block_index].attentions[attention_index]
+        transformer = unet.down_blocks[block_index].attentions[attention_index]
     elif block == "mid":
         parameters = parameters.mid_block.attentions[0]
-        transformer = pipe.unet.mid_block.attentions[0]
+        transformer = unet.mid_block.attentions[0]
 
     torch_output = transformer(input, encoder_hidden_states.squeeze(0)).sample
 

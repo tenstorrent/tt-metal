@@ -196,14 +196,20 @@ static Tensor reduce_impl(
     }
 
     float pad_value = get_pad_value(reduce_type);
-    bool single_reduce_op = (dim.size() == 0) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
+    bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
-        auto reduce_nd_loop = [&](const bool use_reduce_type) -> Tensor {
+        auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
+            bool first = true;
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
                 bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
                 if (found) {
+                    // Only apply the scalar once when reducing dim-by-dim,
+                    // otherwise the result will be scaled multiple times.
+                    float effective_scalar = first ? scalar : 1.0;
+                    first = false;
+
                     bool transpose = i_dim < rank - 2;
                     int reduce_dim = i_dim;
                     if (transpose) {
@@ -217,7 +223,7 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            effective_scalar,
                             non_height_width_dims);
                     } else {
                         output_tensor = reduce_impl<ReduceType::Sum>(
@@ -226,7 +232,7 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            effective_scalar,
                             non_height_width_dims);
                     }
                     if (transpose) {
@@ -239,18 +245,20 @@ static Tensor reduce_impl(
         constexpr bool linear_type =
             reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min;
         if (dim.size() == 1 || linear_type) {
-            output_tensor = reduce_nd_loop(/*use_reduce_type=*/true);
+            output_tensor = reduce_nd_loop(/*use_reduce_type=*/true, scalar);
         } else if constexpr (reduce_type == ReduceType::Mean) {
+            int reduced_volume = 1;
+            for (int axis : dim) {
+                reduced_volume *= input_shape[axis];
+            }
             output_tensor = reduce_nd_loop(
-                /*use_reduce_type=*/false);
-            float inv_volume = 1.0f / input_tensor_arg.logical_volume();
-            output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
+                /*use_reduce_type=*/false, scalar / reduced_volume);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
     } else {
         tt::tt_metal::ReduceOpDim reduce_op_dim;
-        if ((dim.size() == 0) || (dim.size() == 1 and dim[0] == rank - 1)) {
+        if ((dim.empty()) || (dim.size() == 1 and dim[0] == rank - 1)) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
         } else if (dim.size() == 1 and dim[0] == rank - 2) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
@@ -368,7 +376,7 @@ static Tensor std_var_impl(
     Tensor output_tensor =
         ttnn::subtract(mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
     if constexpr (reduce_type == ReduceType::Std) {
-        output_tensor = ttnn::sqrt(output_tensor, memory_config);
+        output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
     }
     return output_tensor;
 }
@@ -421,11 +429,11 @@ Tensor Reduce<reduce_type>::invoke(
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
 
-        if (non_height_width_dims.size() > 0) {
+        if (!non_height_width_dims.empty()) {
             input_tensor =
                 non_height_width_reduce(input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config);
 
-            if (height_width_dims.size() == 0) {
+            if (height_width_dims.empty()) {
                 return adjust_shape(
                     input_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
             }
@@ -463,11 +471,11 @@ Tensor pool_sum(
         /*non_height_width_dims=*/{});
 }
 
-template class Reduce<ReduceType::Sum>;
-template class Reduce<ReduceType::Mean>;
-template class Reduce<ReduceType::Max>;
-template class Reduce<ReduceType::Min>;
-template class Reduce<ReduceType::Std>;
-template class Reduce<ReduceType::Var>;
+template struct Reduce<ReduceType::Sum>;
+template struct Reduce<ReduceType::Mean>;
+template struct Reduce<ReduceType::Max>;
+template struct Reduce<ReduceType::Min>;
+template struct Reduce<ReduceType::Std>;
+template struct Reduce<ReduceType::Var>;
 }  // namespace operations::reduction
 }  // namespace ttnn

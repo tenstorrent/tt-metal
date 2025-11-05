@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -41,6 +41,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt::tt_metal {
 
@@ -61,7 +62,7 @@ std::tuple<
     uint32_t,
     uint32_t>
 create_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     int start_core_x,
     int start_core_y,
     int num_cores_r,
@@ -78,7 +79,7 @@ create_program(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t single_tile_size = 2 * 1024;
@@ -152,47 +153,73 @@ create_program(
         }
     }
 
+    std::vector<uint32_t> reader_ss_cta;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_ss_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_ss_cta);
     auto mm_reader_kernel_in0_sender_in1_sender = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_sender.cpp",
         in0_sender_in1_sender,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_ss_cta});
 
+    std::vector<uint32_t> reader_sr_cta;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_sr_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_sr_cta);
     auto mm_reader_kernel_in0_sender_in1_receiver = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_receiver.cpp",
         in0_sender_in1_receiver,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_sr_cta});
 
+    std::vector<uint32_t> reader_rs_cta;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rs_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rs_cta);
     auto mm_reader_kernel_in0_receiver_in1_sender = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_sender.cpp",
         in0_receiver_in1_sender,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_rs_cta});
 
+    std::vector<uint32_t> reader_rr_cta;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rr_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rr_cta);
     auto mm_reader_kernel_in0_receiver_in1_receiver = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_receiver.cpp",
         in0_receiver_in1_receiver,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_rr_cta});
 
+    std::vector<uint32_t> writer_cta;
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(writer_cta);
     auto unary_writer_kernel_noc0 = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         all_except_left_column,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_cta});
 
     auto unary_writer_kernel_noc1 = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",
         left_column,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = writer_cta});
 
     int num_blocks = (K / in0_block_w);
 
@@ -248,7 +275,7 @@ create_program(
 }
 
 bool write_runtime_args_to_device(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::MeshWorkload& workload,
     int start_core_x,
     int start_core_y,
@@ -366,10 +393,10 @@ bool write_runtime_args_to_device(
                 (std::uint32_t)in1_mcast_sender_semaphore_id,
                 (std::uint32_t)in1_mcast_receiver_semaphore_id};
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)out_dram_addr,                                          // out_tensor_addr
-                (std::uint32_t)core_idx_x * per_core_N + core_idx_y * per_core_M * N,  // out_tensor_start_tile_id
-                (std::uint32_t)1,                                                      // out_tensor_stride_w
-                (std::uint32_t)N,                                                      // out_tensor_stride_h
+                (std::uint32_t)out_dram_addr,                                              // out_tensor_addr
+                ((std::uint32_t)core_idx_x * per_core_N) + (core_idx_y * per_core_M * N),  // out_tensor_start_tile_id
+                (std::uint32_t)1,                                                          // out_tensor_stride_w
+                (std::uint32_t)N,                                                          // out_tensor_stride_h
                 (std::uint32_t)out_subblock_w,      // out_tensor_next_subblock_stride_w
                 (std::uint32_t)out_subblock_h * N,  // out_tensor_next_subblock_stride_h
 
@@ -403,7 +430,7 @@ bool write_runtime_args_to_device(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(std::shared_ptr<distributed::MeshDevice> mesh_device) {
+bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
     int start_core_x = 0;
     int start_core_y = 0;
@@ -531,7 +558,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(std::shared_ptr<distribute
         auto row = tt_metal::get_row_slice(golden, M, i, M * 32, N * 32);
         for (int j = 0; j < N; j++) {
             auto golden_tile = tt_metal::get_col_slice(row, N, j, 32, N * 32);
-            int tile_id = i * N + j;
+            int tile_id = (i * N) + j;
             int dram_bank = tile_id % device->num_dram_channels();
             uint32_t dram_address = ((tile_id / device->num_dram_channels()) * single_tile_size) + out_dram_addr;
             std::vector<uint32_t> result_vec;

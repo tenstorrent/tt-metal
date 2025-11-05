@@ -210,44 +210,6 @@ model_perf_tg_device() {
 }
 ##########################TG##########################
 
-##########################TGG##########################
-# Run tgg unit tests
-unit_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_unit_tests.sh
-}
-
-# Run tgg frequent tests
-frequent_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_frequent_tests.sh
-}
-
-# Run tgg demo tests
-demos_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_demo_tests.sh
-}
-
-# Run tgg model perf tests
-model_perf_tgg_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    ./tests/scripts/tgg/run_tgg_model_perf_tests.sh --pipeline-type "$pipeline_type"
-}
-##########################TGG##########################
-
 run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -283,18 +245,6 @@ run_pipeline_tests() {
         demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
         model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
-    elif [[ $pipeline_type == "ccl_perf_tg_device" ]]; then
-        ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
-        ./tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t tg
-    # TGG pipelines
-    elif [[ $pipeline_type == "unit_tgg_device" ]]; then
-        unit_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "frequent_tgg_device" ]]; then
-        frequent_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "demos_tgg_device" ]]; then
-        demos_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == *"model_perf_tgg_device" ]]; then
-        model_perf_tgg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     else
         echo "Unknown pipeline: $pipeline_type"
         exit 1

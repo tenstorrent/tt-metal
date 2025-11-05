@@ -51,6 +51,7 @@ target_sources(
     unit_tests_ttnn_basic
     PRIVATE
         test_add.cpp
+        test_add_int.cpp
         test_broadcast_to.cpp
         test_generic_op.cpp
         test_graph_add.cpp
@@ -61,6 +62,9 @@ target_sources(
         test_graph_query_op_runtime.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
+        test_relational_int.cpp
+        test_rsub_int.cpp
+        test_sub_int.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
@@ -148,6 +152,8 @@ target_sources(
         accessor/test_tensor_accessor.cpp
         accessor/test_tensor_accessor_on_device.cpp
 )
+# needs access to "compile_time_args.h"
+target_link_libraries(unit_tests_ttnn_accessor PRIVATE Metalium::Metal::Hardware)
 setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
 # unit_tests_ttnn_tensor
@@ -169,6 +175,7 @@ target_sources(
         tensor/test_tensor_nd_sharding.cpp
         tensor/test_tensor_serialization.cpp
         tensor/test_tensor_sharding.cpp
+        tensor/test_unit_mesh_utils.cpp
         tensor/test_vector_conversion.cpp
         tensor/test_xtensor_adapter.cpp
         tensor/test_xtensor_conversion.cpp
@@ -182,12 +189,7 @@ target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
 # test_ccl_multi_cq_multi_device
 
 add_executable(test_ccl_multi_cq_multi_device)
-target_sources(
-    test_ccl_multi_cq_multi_device
-    PRIVATE
-        multi_thread/test_ccl_multi_cq_multi_device.cpp
-        multi_thread/test_utils.cpp
-)
+target_sources(test_ccl_multi_cq_multi_device PRIVATE multi_thread/test_ccl_multi_cq_multi_device.cpp)
 setup_ttnn_test_target(test_ccl_multi_cq_multi_device)
 target_link_libraries(
     test_ccl_multi_cq_multi_device

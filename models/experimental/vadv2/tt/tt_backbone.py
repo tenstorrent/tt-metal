@@ -12,7 +12,13 @@ class TtResnet50:
         self.maxpool_args = conv_args.maxpool
         self.device = device
 
-        self.conv1 = TtConv2D(conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu", act_block_h=32)
+        self.conv1 = TtConv2D(
+            conv_args.conv1,
+            conv_pth.conv1,
+            device=self.device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            act_block_h=32,
+        )
 
         # Layer 1
         self.layer1_0 = TtBottleneck(

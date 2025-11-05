@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -58,16 +58,16 @@ set to N at compile time. xtensor_fixed<T, xshape<I, J, K> : tensor whose shape 
 namespace ttml::core {
 template <class T>
 xt::xarray<T> span_to_xtensor_view(std::span<T> vec, const ttnn::Shape& shape) {
-    return ttnn::experimental::xtensor::span_to_xtensor_view(vec, shape);
+    return tt::tt_metal::experimental::xtensor::span_to_xtensor_view(vec, shape);
 }
 template <class T>
 auto xtensor_to_span(const xt::xarray<T>& xtensor) {
-    return ttnn::experimental::xtensor::xtensor_to_span(xtensor);
+    return tt::tt_metal::experimental::xtensor::xtensor_to_span(xtensor);
 }
 
 template <typename T>
 xt::xarray<T> concat(const std::vector<xt::xarray<T>>& v, size_t axis = 0) {
-    return ttnn::experimental::xtensor::concat(v, axis).expr();
+    return tt::tt_metal::experimental::xtensor::concat(v, axis).expr();
 }
 
 }  // namespace ttml::core

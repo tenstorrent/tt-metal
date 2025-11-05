@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,17 +21,17 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_flash_multi_latent
 import ttnn
 from loguru import logger
 import pytest
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.tt.mla_1d import MLA1D
+from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as ReferenceRMSNorm
 from models.demos.deepseek_v3.reference.deepseek.rope_helpers import (
     precompute_freqs_cis,
     apply_rotary_emb,
 )
-from models.utility_functions import nearest_y
+from models.common.utility_functions import nearest_y
 from transformers import AutoConfig
 from types import SimpleNamespace
 
@@ -537,14 +537,22 @@ def run_rope_impl(
     #################
     rope_setup = RotarySetup(
         device=device,
-        batch_size=bsz,
+        batch_size_per_row=bsz,
         hf_config=decode_cfg.args,
     )
 
     if mode == "prefill":
-        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats_table(seq_len)
+        match rope_setup.get_rot_mats_table(seq_len):
+            case {"cos_matrix": tt_cos, "sin_matrix": tt_sin, "trans_matrix": tt_trans_mat}:
+                pass
+            case _:
+                raise ValueError("Unexpected return from get_rot_mats_table")
     else:
-        tt_cos, tt_sin, tt_trans_mat = rope_setup.get_rot_mats(position_ids)
+        match rope_setup.get_rot_mats(position_ids):
+            case {"cos_matrix": tt_cos, "sin_matrix": tt_sin, "trans_matrix": tt_trans_mat}:
+                pass
+            case _:
+                raise ValueError("Unexpected return from get_rot_mats")
 
     tt_input = ttnn.from_torch(
         input_torch,

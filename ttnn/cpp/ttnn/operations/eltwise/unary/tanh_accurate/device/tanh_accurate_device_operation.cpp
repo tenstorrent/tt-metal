@@ -126,7 +126,7 @@ bool TanhAccurateDeviceOperation::skip_launch(
 std::tuple<TanhAccurateDeviceOperation::operation_attributes_t, TanhAccurateDeviceOperation::tensor_args_t>
 TanhAccurateDeviceOperation::invoke(
     const Tensor& input,
-    const std::vector<UnaryWithParam>& op_chain,
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     bool fp32_dest_acc_en,

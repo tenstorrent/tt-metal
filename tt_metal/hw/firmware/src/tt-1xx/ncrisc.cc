@@ -51,6 +51,10 @@ int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
+// These arrays are used to store the worker logical to virtual coordinate mapping
+uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
+uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
@@ -64,7 +68,7 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 extern "C" uint32_t wh_iram_trampoline(uint32_t status, uint32_t first_argument);
 #endif
 
-inline __attribute__((always_inline)) void notify_brisc_and_wait() {
+inline __attribute__((always_inline)) void wait_for_brisc_notification() {
     while (true) {
         uint8_t run_value = *ncrisc_run;
         if (run_value == RUN_SYNC_MSG_GO || run_value == RUN_SYNC_MSG_LOAD) {
@@ -103,6 +107,7 @@ int main(int argc, char* argv[]) {
     do_crt1((uint32_t tt_l1_ptr*)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+    noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
     risc_init();
 
@@ -114,14 +119,13 @@ int main(int argc, char* argv[]) {
     DeviceProfilerInit();
     while (1) {
         WAYPOINT("W");
-        notify_brisc_and_wait();
+        wait_for_brisc_notification();
         DeviceZoneScopedMainN("NCRISC-FW");
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uint32_t kernel_config_base =
-            firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM1);
+        uint32_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, PROCESSOR_INDEX);
         int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM1);
 
         uint32_t kernel_lma = kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index];

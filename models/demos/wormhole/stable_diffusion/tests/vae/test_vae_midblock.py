@@ -1,19 +1,19 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
-from diffusers import AutoencoderKL
 
 import ttnn
+from models.common.utility_functions import skip_for_blackhole
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_vae
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_midblock import MidBlock
-from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -26,9 +26,17 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_vae_midblock(
-    device, input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors
+    device,
+    input_channels,
+    input_height,
+    input_width,
+    norm_num_blocks,
+    conv_in_channel_split_factors,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
-    vae = AutoencoderKL.from_pretrained("CompVis/stable-diffusion-v1-4", subfolder="vae")
+    vae = get_reference_vae(is_ci_env, is_ci_v2_env, model_location_generator)
 
     torch_midblock = vae.decoder.mid_block
 

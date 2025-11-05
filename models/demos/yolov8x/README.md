@@ -9,7 +9,6 @@ YOLOv8 is one of the recent iterations in the YOLO series of real-time object de
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 - Use the following command to run the model:
@@ -19,13 +18,13 @@ pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_y
 
 ## Model performant running with Trace+2CQ
 ### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `50` FPS:
+- For `640x640`, end-2-end perf is `66` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant
   ```
 
 ### Multi Device (DP=2, n300):
-- For `640x640`, end-2-end perf is `100` FPS:
+- For `640x640`, end-2-end perf is `124` FPS:
   ```
   pytest --disable-warnings models/demos/yolov8x/tests/perf/test_e2e_performant.py::test_run_yolov8x_performant_dp
   ```

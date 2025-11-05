@@ -7,14 +7,13 @@
 #include <memory>
 
 #include <tt_stl/overloaded.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <ttnn/tensor/storage.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
-#include <ttnn/distributed/distributed_tensor_config.hpp>
 #include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -79,8 +78,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             tensors.reserve(device_storage.coords.size());
             for (const auto& coord : device_storage.coords) {
                 DeviceStorage shard_storage(mesh_buffer, {coord});
-                tensors.push_back(Tensor(
-                    std::move(shard_storage), tensor.tensor_spec(), AllGatherTensor{}, tensor.tensor_topology()));
+                tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
             }
             return tensors;
         } else {
@@ -91,7 +89,7 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     }
 }
 
-Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape) {
+Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShape& mesh_shape, int shard_dim) {
     TT_FATAL(tensor_shards.size() == mesh_shape.mesh_size(), "Number of tensor shards must match mesh size");
     const auto& reference_shard = tensor_shards.at(0);
     for (const auto& shard : tensor_shards) {
@@ -102,20 +100,18 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
 
     auto distributed_host_buffer = DistributedHostBuffer::create(mesh_shape);
     auto shard_it = tensor_shards.begin();
+    std::vector<distributed::MeshCoordinate> coords;
     for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
         HostBuffer buffer = host_buffer::get_host_buffer(*(shard_it++));
         distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
+        coords.push_back(coord);
     }
 
-    // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(
-        HostStorage{std::move(distributed_host_buffer)},
-        reference_shard.tensor_spec(),
-        AllGatherTensor{},
-        TensorTopology{});
+    TensorTopology topology = TensorTopology::create_sharded_tensor_topology(mesh_shape, shard_dim);
+    return Tensor(HostStorage{std::move(distributed_host_buffer)}, reference_shard.tensor_spec(), std::move(topology));
 }
 
-Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
+Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim) {
     TT_FATAL(!tensor_shards.empty(), "At least one tensor shard must be provided");
     const auto& reference_shard = tensor_shards.at(0);
     for (const auto& shard : tensor_shards) {
@@ -143,12 +139,11 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
     auto duplicate =
         std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
     TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
-    // TODO (#25340): Implement correct logic and add test for this
+
+    TensorTopology topology =
+        TensorTopology::create_sharded_tensor_topology(MeshShape(tensor_shards.size()), shard_dim);
     return Tensor(
-        DeviceStorage(std::move(mesh_buffer), std::move(coords)),
-        reference_shard.tensor_spec(),
-        AllGatherTensor{},
-        TensorTopology{});
+        DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), std::move(topology));
 }
 
 }  // namespace ttnn::distributed

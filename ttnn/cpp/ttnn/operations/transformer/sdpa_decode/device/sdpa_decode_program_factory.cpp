@@ -11,7 +11,6 @@
 #include "sdpa_decode_op.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -40,7 +39,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     bool use_mla,
-    uint32_t head_dim_v) {
+    uint32_t head_dim_v,
+    std::optional<uint32_t> sliding_window_size) {
     /*
     Q: 1 x B x PNH x DH
     K: B x NKV x S x DH
@@ -414,14 +414,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     uint32_t intermed_output_tiles = (out0_t + 2 * PNHt) * (num_cores_per_head - 1);
 
-    uint32_t pos_tensor_tile_size = 0;
     uint32_t index_stick_size = 0;
     bool is_cur_pos_tensor_sharded = false;
     CBHandle cb_in8_id = 0;
     if (use_cur_pos_tensor) {
         auto pos_buffer = cur_pos_tensor.value().buffer();
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
-        pos_tensor_tile_size = tt_metal::detail::TileSize(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
 
         // cb pos
@@ -516,7 +514,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto c_tilized_q_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_10, q_df}})
                                   .set_page_size(CBIndex::c_10, q_tile_size)
                                   .set_tile_dims(CBIndex::c_10, q_tile);
-    auto cb_tilized_q_id = CreateCircularBuffer(program, core_grid, c_tilized_q_config);
+    CreateCircularBuffer(program, core_grid, c_tilized_q_config);
 
     // cb_col_identity
     auto col_identity_tile = full_tile;
@@ -532,6 +530,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                              .set_page_size(CBIndex::c_12, scalar_tile_size)
                              .set_tile_dims(CBIndex::c_12, scalar_tile);
     CreateCircularBuffer(program, core_grid, c_zero_config);
+
+    // sliding window mask input (conditionally created based on sliding_window_size)
+    if (sliding_window_size.has_value() && sliding_window_size.value() > 0) {
+        auto c_sliding_window_mask_config = CircularBufferConfig(qk_tiles * mask_tile_size, {{CBIndex::c_13, mask_df}})
+                                                .set_page_size(CBIndex::c_13, mask_tile_size)
+                                                .set_tile_dims(CBIndex::c_13, mask_tile);
+        CreateCircularBuffer(program, core_grid, c_sliding_window_mask_config);
+    }
 
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CBIndex::c_24, im_df}})
@@ -660,7 +666,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_reduce = i % num_cores_per_head - 1;
+        uint32_t worker_id_for_reduce = (i % num_cores_per_head) - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
         if (do_reduce) {
             reduce_core_noc_x = core.x;
@@ -686,7 +692,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+        uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
         bool do_output = (worker_id_for_output == -1);
         if (do_output) {
             output_core_noc_x = core.x;
@@ -742,6 +748,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_cur_pos_tensor_sharded,
         is_page_table_sharded,
         full_tile.get_tile_size(q_df),
+        sliding_window_size.value_or(0),
     };
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
@@ -784,6 +791,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_causal,
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
+        sliding_window_size.value_or(0),
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -817,6 +825,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         q_heads_parallel_factor,
         use_half_tile,
         scale_union.u,
+        sliding_window_size.value_or(0),
     };
 
     // Determine granularity for compute loops
@@ -824,11 +833,19 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     if (Sk_chunk_t > 0) {
         const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
         const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
-        TT_FATAL(sub_exp_granularity == (1 << log2_sub_exp_granularity), "Error");
+        TT_FATAL(
+            sub_exp_granularity == (1 << log2_sub_exp_granularity),
+            "Sub-exp granularity ({}) must be a power of 2 (2^{})",
+            sub_exp_granularity,
+            log2_sub_exp_granularity);
 
         const uint32_t mul_bcast_granularity = std::min(PNHt * Sk_chunk_t, dst_size);
         const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
-        TT_FATAL(mul_bcast_granularity == (1 << log2_mul_bcast_granularity), "Error");
+        TT_FATAL(
+            mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
+            "Mul-bcast granularity ({}) must be a power of 2 (2^{})",
+            mul_bcast_granularity,
+            log2_mul_bcast_granularity);
 
         compute_defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
         compute_defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
@@ -900,8 +917,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // Set rt args
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
-        uint32_t worker_id_for_reduce = i % num_cores_per_head - 1;
-        uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+        uint32_t worker_id_for_reduce = (i % num_cores_per_head) - 1;
+        uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
         bool do_reduce = (worker_id_for_reduce == -1);
         bool do_output = (worker_id_for_output == -1);
 
@@ -1046,8 +1063,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             // Set rt args
             for (uint32_t i = 0; i < num_active_cores; ++i) {
                 CoreCoord core = core_group[i];
-                uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : i % num_cores_per_head - 1;
-                uint32_t worker_id_for_output = i % num_cores_per_batch - 1;
+                uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? -1 : (i % num_cores_per_head) - 1;
+                uint32_t worker_id_for_output = (i % num_cores_per_batch) - 1;
                 bool do_reduce = (worker_id_for_reduce == -1);
                 bool do_output = (worker_id_for_output == -1);
                 uint32_t cur_head = (num_cores_per_head == 0) ? 0 : (i % num_cores_per_batch) / num_cores_per_head;

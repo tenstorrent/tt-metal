@@ -68,9 +68,6 @@ struct ExecuteTernaryCompositeMac {
 }  // namespace ternary
 }  // namespace operations
 
-constexpr auto addcmul = ttnn::register_operation<
-    "ttnn::addcmul",
-    operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCMUL>>();
 constexpr auto addcdiv = ttnn::register_operation<
     "ttnn::addcdiv",
     operations::ternary::ExecuteTernaryCompositeOps<operations::ternary::TernaryCompositeOpType::ADDCDIV>>();

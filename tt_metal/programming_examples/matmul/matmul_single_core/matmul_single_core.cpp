@@ -5,10 +5,9 @@
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
-#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -43,7 +42,7 @@ void golden_matmul(
             std::uint32_t idx_b = j;
             float c_f = 0;
             for (int k_m = 0; k_m < K; k_m++) {
-                c_f += a[idx_a].to_float() * b[idx_b].to_float();
+                c_f += static_cast<float>(a[idx_a]) * static_cast<float>(b[idx_b]);
                 idx_a += 1;
                 idx_b += N;
             }
@@ -61,13 +60,15 @@ void matmul_single_core(
     const std::vector<bfloat16>& a,
     const std::vector<bfloat16>& b,
     std::vector<bfloat16>& output,
-    bool bcast_batch,
+    bool /*bcast_batch*/,
     uint32_t M,
     uint32_t N,
     uint32_t K,
-    IDevice* device) {
-    // Setup the device and command queue. This is a single cored example, so we will use the first core {0, 0}.
-    CommandQueue& cq = device->command_queue();
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    // Set up mesh command queue, workload, device range, and program. This is a single-core example using core {0,0}.
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program{};
     // Core range from x: [0, 0] to y: [0, 0] (single core at {0, 0})
     CoreCoord core({0, 0});
@@ -80,30 +81,19 @@ void matmul_single_core(
     // Create DRAM buffers for the input and output data.
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-    // We allocate DRAM buffers for the input and output data.
+    // We allocate DRAM buffers for the input and output data (replicated per device across the mesh).
     // Setting page_size to single_tile_size is the most common configuration for memory buffers in Metalium
     // as it is generic, works for most cases and achieves good performance.
-    tt_metal::InterleavedBufferConfig dram_config_A{
-        .device = device,
-        .size = sizeof(bfloat16) * a.size(),
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
 
-    tt_metal::InterleavedBufferConfig dram_config_B{
-        .device = device,
-        .size = sizeof(bfloat16) * b.size(),
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = sizeof(bfloat16) * a.size()};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = sizeof(bfloat16) * b.size()};
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = sizeof(bfloat16) * output.size()};
 
-    tt_metal::InterleavedBufferConfig dram_config_C{
-        .device = device,
-        .size = sizeof(bfloat16) * output.size(),
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config_A);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config_B);
-    std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config_C);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
     // Create circular buffers for the input and output data.
     // Using 2 tiles per circular buffer to allow for double buffering (data movement can be reading from one tile while
@@ -183,10 +173,11 @@ void matmul_single_core(
 
     // Upload the input data to the DRAM buffers, execute the kernels, wait for the result to be read into the output
     // buffer
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////
@@ -197,7 +188,7 @@ int main() {
     try {
         // Open device
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
         // parameters for the matrix multiplication
         constexpr uint32_t M = 640;  // user-defined
@@ -236,7 +227,7 @@ int main() {
 
         // Invoke the matrix multiplication on the device
         std::vector<bfloat16> result_vec(M * N, 0);
-        matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, device);
+        matmul_single_core(src0_vec, src1_vec, result_vec, false, M, N, K, mesh_device);
         // Reverse the tilization to get the result in the row-major format that the CPU expects
         result_vec = untilize_nfaces(result_vec, M, N);
 
@@ -249,7 +240,7 @@ int main() {
         fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
         TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
 
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
 
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");

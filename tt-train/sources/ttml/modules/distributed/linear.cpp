@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -32,16 +32,19 @@ RowParallelLinear::RowParallelLinear(
 autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& tensor) {
     auto x = tensor;
     if (!m_input_is_parallel) {
-        // noop during forward and all reduce during backward
-        x = ops::distributed::broadcast(x);
-
         // reduce scatter with mean
         x = ops::distributed::reduce_scatter(x, tensor->get_rank() - 1U);
         x = ops::mul(x, 1.F / static_cast<float>(autograd::ctx().get_device().num_devices()));
     }
     // do not pass bias
     x = ops::linear_op(x, m_weight, /* bias */ nullptr);
-    x = ops::distributed::all_reduce(x);
+
+    /*
+        All reduce with noop backward to avoid double all reduce in backward pass. This happens due to broadcast (no op in forward pass)
+        does all reduce in backward pass. See similar implementation in fairscale for more details.
+        https://github.com/facebookresearch/fairscale/blob/main/fairscale/nn/model_parallel/mappings.py#L102
+    */
+    x = ops::distributed::all_reduce(x, /* noop_backward */ true);
     if (m_bias != nullptr) {
         x = ops::add(x, m_bias);
     }

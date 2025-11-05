@@ -35,6 +35,7 @@ struct ConditionalField {
     ConditionalField() = default;
 };
 
+// NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
 template <typename T>
 struct ConditionalField<false, T> {
     // Constructor that ignores a single argument
@@ -47,6 +48,7 @@ struct ConditionalField<false, T> {
 
     ConditionalField() = default;
 };
+// NOLINTEND(cppcoreguidelines-missing-std-forward)
 
 template <typename T, bool Enable>
 struct ConditionalStaticInstance {};

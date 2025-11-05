@@ -11,7 +11,7 @@
 #include "ethernet/dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
 #include "hostdevcommon/fabric_common.h"
-#include "tt_metal/hw/inc/risc_common.h"
+#include "tt_metal/hw/inc/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
@@ -22,7 +22,7 @@ namespace tt::tt_fabric {
 inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
-    if (dst_mesh_id == routing_table->mesh_id) {
+    if (dst_mesh_id == routing_table->my_mesh_id) {
         return static_cast<eth_chan_directions>(
             routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
     } else {
@@ -33,7 +33,7 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
 
 template <bool mcast = false>
 void fabric_set_route(
-    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     eth_chan_directions direction,
     uint32_t branch_forward,
     uint32_t start_hop,
@@ -46,12 +46,20 @@ void fabric_set_route(
         case eth_chan_directions::EAST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
-            packet_header->routing_fields.branch_east_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_east_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_east_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::WEST:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_EAST;
             forward_packet = LowLatencyMeshRoutingFields::FORWARD_WEST;
-            packet_header->routing_fields.branch_west_offset = start_hop;
+            if constexpr (mcast) {
+                packet_header->routing_fields.branch_west_offset = start_hop;
+            } else {
+                packet_header->routing_fields.branch_west_offset = start_hop + 1;
+            }
             break;
         case eth_chan_directions::NORTH:
             local_packet = LowLatencyMeshRoutingFields::FORWARD_SOUTH;
@@ -117,7 +125,7 @@ void fabric_set_mcast_route(
 }
 
 void fabric_set_unicast_route(
-    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t my_dev_id,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
@@ -125,6 +133,17 @@ void fabric_set_unicast_route(
     uint32_t ns_hops = 0;
     uint32_t target_dev = dst_dev_id;
     uint32_t target_col = 0;
+
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_mesh_id = routing_table->my_mesh_id;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->routing_fields.value = 0;
+    packet_header->mcast_params_16 = 0;
+    if (my_mesh_id != dst_mesh_id) {
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
+        // dst_dev_id = exit_node;
+    }
 
     while (target_dev >= ew_dim) {
         target_dev -= ew_dim;
@@ -166,19 +185,18 @@ void fabric_set_unicast_route(
         // determine the east/west hops
         uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        fabric_set_route(
+            packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops - bool(ew_hops), ew_hops == 0);
         if (ew_hops) {
-            ns_hops--;
-            ew_hops++;
-        }
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops, ew_hops == 0);
-        if (ew_hops) {
-            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, 0, ns_hops, ew_hops, true);
+            // +1 because this branch is now implementing the turn
+            fabric_set_route(
+                packet_header, (eth_chan_directions)turn_direction, 0, ns_hops - bool(ew_hops), ew_hops + 1, true);
         }
     }
 }
 
 void fabric_set_mcast_route(
-    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,   // Ignore this, since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
     uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     uint16_t e_num_hops,
@@ -187,6 +205,20 @@ void fabric_set_mcast_route(
     uint16_t s_num_hops) {
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
+
+    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    uint16_t my_mesh_id = routing_table->my_mesh_id;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->routing_fields.value = 0;
+    packet_header->mcast_params_16 = ((uint16_t)s_num_hops << 12) | ((uint16_t)n_num_hops << 8) |
+                                     ((uint16_t)w_num_hops << 4) | ((uint16_t)e_num_hops);
+    if (my_mesh_id != dst_mesh_id) {
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
+        // dst_dev_id = exit_node;
+        // fabric_set_unicast_route(packet_header, my_mesh_id, dst_dev_id, dst_mesh_id, ew_dim);
+        // return;
+    }
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
     // If api is called with east and/or west hops != 0, it may be a 2D mcast
@@ -224,4 +256,86 @@ uint8_t get_router_direction(uint32_t eth_channel) {
     return connection_info->read_only[eth_channel].edm_direction;
 }
 
+// Overload: Fill route_buffer of HybridMeshPacketHeader and initialize hop_index/branch offsets for 2D.
+bool fabric_set_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id = MAX_NUM_MESHES) {
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->mcast_params_16 = 0;
+    auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
+#if defined(COMPILE_FOR_ERISC)
+    // ACTIVE_ETH doesn't have information yet
+    static_assert(dst_mesh_id < MAX_NUM_MESHES, "ACTIVE_ETH doesn't support inter-mesh routing");
+#endif
+    auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
+        tt_l1_ptr exit_node_table_t* exit_node_table =
+            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
+        while (true) {
+        }  // not fully supported yet
+    }
+    bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
+
+    packet_header->routing_fields.value = 0;
+
+    const auto& compressed_route = routing_info->paths[dst_dev_id];
+    uint8_t ns_hops = compressed_route.get_ns_hops();
+    uint8_t ew_hops = compressed_route.get_ew_hops();
+    uint8_t ew_direction = compressed_route.get_ew_direction();
+    uint8_t turn_point = compressed_route.get_turn_point();
+
+    if (ns_hops > 0 && ew_hops > 0) {
+        // 2D routing: turn from NS to EW at turn_point
+        if (ew_direction) {
+            packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
+        } else {
+            packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
+        }
+    } else if (ns_hops == 0 && ew_hops > 0) {
+        // East/West only routing: branch offset is set at position 1 (start_hop + 1)
+        if (ew_direction) {
+            packet_header->routing_fields.branch_east_offset = 1;  // East only: branch at hop 1
+        } else {
+            packet_header->routing_fields.branch_west_offset = 1;  // West only: branch at hop 1
+        }
+    } else if (ns_hops == 0 && ew_hops == 0) {
+        // NOTE: this is not needed from functionality perspective, but just to follow original behavior
+        packet_header->routing_fields.branch_west_offset = 1;
+    }
+
+    return ok;
+}
+
+// Overload: For 1D LowLatencyPacketHeader
+// 1D need to choose between target_as_dev true/false and compressed true/false
+// TODO: compare performance of compressed true/false
+//       https://github.com/tenstorrent/tt-metal/issues/29449
+template <bool target_as_dev = true, bool compressed = true>
+bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_header, uint16_t target_num) {
+    if constexpr (compressed) {
+        if constexpr (target_as_dev) {
+            return decode_route_to_buffer_by_dev(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+        } else {
+            return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+        }
+    } else {
+#if defined(COMPILE_FOR_ERISC)
+        static_assert(!target_as_dev, "ACTIVE_ETH doesn't support device id based routing yet");
+#endif
+        auto* routing_info =
+            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(ROUTING_PATH_BASE_1D);
+        auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+        if constexpr (target_as_dev) {
+            uint16_t my_device_id = routing_table->my_device_id;
+            uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;
+            return routing_info->decode_route_to_buffer(hops, (volatile uint8_t*)&packet_header->routing_fields.value);
+        } else {
+            return routing_info->decode_route_to_buffer(
+                target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
+        }
+    }
+}
 }  // namespace tt::tt_fabric

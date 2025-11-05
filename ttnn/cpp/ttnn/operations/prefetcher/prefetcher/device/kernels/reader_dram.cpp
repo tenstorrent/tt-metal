@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,8 +45,9 @@ void kernel_main() {
 
             // Address setup
             uint32_t tensor_base_address = tensor_addrs_l1[layer * num_tensors + t];
-            uint32_t src_base_addr =
-                noc_async_read_tile_dram_sharded_set_state<true>(tensor_base_address, curr_page_size, bank_id, vc);
+            uint64_t src_base_addr = get_noc_addr_from_bank_id<true>(bank_id, tensor_base_address);
+            noc_async_read_one_packet_set_state<true>(src_base_addr, curr_page_size, vc);
+
             uint32_t src_read_addr = 0;
 
             uint32_t num_free_blocks_in_buffer = total_num_blocks_in_buffer;

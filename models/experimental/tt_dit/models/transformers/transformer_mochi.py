@@ -55,7 +55,6 @@ class MochiTransformerBlock:
             "norm_elementwise_affine": False,
             "bias": False,
             "mesh_device": mesh_device,
-            "init": init,
         }
 
         self.norm1_linear = ColParallelLinear(
@@ -64,7 +63,6 @@ class MochiTransformerBlock:
             bias=True,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
@@ -77,7 +75,6 @@ class MochiTransformerBlock:
                 bias=True,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
@@ -88,7 +85,6 @@ class MochiTransformerBlock:
                 bias=True,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
                 ccl_manager=ccl_manager,
             )
@@ -126,7 +122,6 @@ class MochiTransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            init=init,
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
@@ -140,7 +135,6 @@ class MochiTransformerBlock:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                init=init,
                 fsdp_mesh_axis=fsdp_mesh_axis,
             )
 
@@ -304,9 +298,7 @@ class MochiTransformerBlock:
         silu_temb_11BD = ttnn.silu(temb_11BD)
 
         # Returns 4*dim fractured on TP
-        mod_spatial_11BZ = self.norm1_linear(
-            silu_temb_11BD, core_grid=self.core_grid, compute_kernel_config=self.temb_compute_kernel_config
-        )
+        mod_spatial_11BZ = self.norm1_linear(silu_temb_11BD, compute_kernel_config=self.temb_compute_kernel_config)
         if self.parallel_config.tensor_parallel.factor > 1:
             mod_spatial_11BZ = ttnn.experimental.all_gather_async(
                 mod_spatial_11BZ,
@@ -334,7 +326,7 @@ class MochiTransformerBlock:
 
         # Returns 4*dim if not context_pre_only, dim if context_pre_only, fractured TP
         mod_prompt_11BZ = self.norm1_context_linear(
-            silu_temb_11BD, core_grid=self.core_grid, compute_kernel_config=self.temb_compute_kernel_config
+            silu_temb_11BD, compute_kernel_config=self.temb_compute_kernel_config
         )
         if self.parallel_config.tensor_parallel.factor > 1:
             mod_prompt_11BZ = ttnn.experimental.all_gather_async(
@@ -376,7 +368,7 @@ class MochiTransformerBlock:
         # ModulatedRMSNorm
         spatial_attn_mod_1BND = self.norm2_norm(
             spatial_attn_1BND, compute_kernel_config=self.rms_compute_kernel_config
-        ) * ttnn.tanh(gate_msa_11BD, accuracy=True)
+        ) * ttnn.tanh(gate_msa_11BD, fast_and_approximate_mode=False)
 
         # Residual
         spatial_1BND = spatial_1BND + spatial_attn_mod_1BND
@@ -386,10 +378,7 @@ class MochiTransformerBlock:
             1.0 + scale_mlp_11BD
         )
 
-        # TODO: Pass core_grid, compute_kernel_config for correctness check
-        spatial_ff_1BND = self.ff(
-            spatial_normed_1BND, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
-        )
+        spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
 
         # Gather spatial FF output
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -409,7 +398,7 @@ class MochiTransformerBlock:
 
         spatial_ff_mod_1BND = self.norm4_norm(
             spatial_ff_1BND, compute_kernel_config=self.rms_compute_kernel_config
-        ) * ttnn.tanh(gate_mlp_11BD, accuracy=True)
+        ) * ttnn.tanh(gate_mlp_11BD, fast_and_approximate_mode=False)
 
         # Residual
         spatial_1BND = spatial_1BND + spatial_ff_mod_1BND
@@ -418,7 +407,7 @@ class MochiTransformerBlock:
             # Norm attention output (MochiRMSNormZero)
             prompt_attn_mod_1BLP = self.norm2_context_norm(
                 prompt_attn_1BLP, compute_kernel_config=self.rms_compute_kernel_config
-            ) * ttnn.tanh(prompt_gate_msa_11BD, accuracy=True)
+            ) * ttnn.tanh(prompt_gate_msa_11BD, fast_and_approximate_mode=False)
 
             # Residual
             prompt_1BLP = prompt_1BLP + prompt_attn_mod_1BLP
@@ -429,9 +418,7 @@ class MochiTransformerBlock:
             ) * (1.0 + prompt_scale_mlp_11BD)
 
             # TODO: Pass core_grid, compute_kernel_config for correctness check
-            prompt_ff_1BLP = self.ff_context(
-                prompt_normed_1BLP, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
-            )
+            prompt_ff_1BLP = self.ff_context(prompt_normed_1BLP, compute_kernel_config=self.ff_compute_kernel_config)
 
             # Gather prompt FF output
             if self.parallel_config.tensor_parallel.factor > 1:
@@ -451,7 +438,7 @@ class MochiTransformerBlock:
 
             prompt_ff_mod_1BLP = self.norm4_context_norm(
                 prompt_ff_1BLP, compute_kernel_config=self.rms_compute_kernel_config
-            ) * ttnn.tanh(prompt_gate_mlp_11BD, accuracy=True)
+            ) * ttnn.tanh(prompt_gate_mlp_11BD, fast_and_approximate_mode=False)
 
             # Residual
             prompt_1BLP = prompt_1BLP + prompt_ff_mod_1BLP
@@ -478,7 +465,7 @@ class MochiTransformer3DModel:
         init=False,
         ccl_manager=None,
         parallel_config=None,
-        is_fsdp=False,
+        is_fsdp=True,
     ):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -496,7 +483,6 @@ class MochiTransformer3DModel:
             in_channels=in_channels,
             embed_dim=inner_dim,
             mesh_device=mesh_device,
-            init=init,
         )
 
         # NOTE: Torch fallback until we support MochiCombinedTimestepCaptionEmbedding
@@ -535,7 +521,6 @@ class MochiTransformer3DModel:
             bias=False,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-            init=init,
         )
 
         # self.norm_out_norm = LayerNorm(
@@ -555,7 +540,6 @@ class MochiTransformer3DModel:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
-            init=False,
         )
 
         self.norm_out_linear = Linear(
@@ -563,14 +547,12 @@ class MochiTransformer3DModel:
             out_features=inner_dim * 2,
             bias=True,
             mesh_device=mesh_device,
-            init=init,
         )
         self.proj_out = Linear(
             in_features=inner_dim,
             out_features=patch_size * patch_size * self.out_channels,
             bias=True,
             mesh_device=mesh_device,
-            init=init,
         )
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -707,17 +689,21 @@ class MochiTransformer3DModel:
             timestep, text_embeds, encoder_attention_mask, hidden_dtype=torch.float32
         )
 
+        valid_prompt_length = encoder_attention_mask.sum(dim=1).max().int().item()
+
         logger.info(f"temb shape: {temb.shape}")
         logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
 
         tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
         tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
 
-        logger.warning(
-            "Preparing timestep and text features - attention mask not taken into account for the shape of the prompt. May lead to poor outputs"
-        )
-        if not torch.all(encoder_attention_mask == 1):
-            logger.warning("Attention mask is not all ones. May lead to poor outputs!!!")
+        logger.info(f"valid prompt length: {valid_prompt_length}")
+        prompt_shape = list(tt_prompt_1BLP.shape)
+        prompt_shape[2] = valid_prompt_length
+        tt_prompt_1BLP = ttnn.reshape(tt_prompt_1BLP, ttnn.Shape(prompt_shape), tt_prompt_1BLP.padded_shape)
+
+        if valid_prompt_length < text_embeds.shape[-2]:
+            logger.warning("Attention mask is not all ones. Truncating prompt")
 
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
@@ -753,6 +739,10 @@ class MochiTransformer3DModel:
         B = spatial_1BND.shape[1]
         pH, pW = H // self.patch_size, W // self.patch_size
         logger.info(f"Postprocessing spatial output with shape {spatial_1BND.shape}")
+
+        assert (
+            self.mesh_device.shape[self.parallel_config.sequence_parallel.mesh_axis] > 1
+        ), "all_gather_async requires at least 1 device"
 
         # AllGather hanging for large seqlen
         # # Gather sequence-parallel output
@@ -803,9 +793,7 @@ class MochiTransformer3DModel:
             )
 
         # Modulate the spatial output
-        mod = self.norm_out_linear(
-            ttnn.silu(temb_11BD), core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
-        )
+        mod = self.norm_out_linear(ttnn.silu(temb_11BD), compute_kernel_config=self.hifi4_compute_kernel_config)
         scale, shift = ttnn.chunk(mod, 2, -1)
 
         ## SUPER HACKY WORKAROUND
@@ -813,7 +801,7 @@ class MochiTransformer3DModel:
         # The workaround is to use distributed layernorm by fracturing the input on the TP axis
 
         spatial_fractured_1BND = self.fracture_spatial_input(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
+            spatial_1BND, compute_kernel_config=self.hifi4_compute_kernel_config
         )
         spatial_norm_fractured_1BND = self.norm_out_norm(spatial_fractured_1BND)
 
@@ -833,9 +821,7 @@ class MochiTransformer3DModel:
 
         spatial_norm_1BND = spatial_norm_1BND * (1 + scale) + shift
 
-        proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
-        )
+        proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
 
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
 

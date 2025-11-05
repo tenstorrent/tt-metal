@@ -14,9 +14,207 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn {
 namespace ccl {
+
+bool is_fabric_2d() {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    return (
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+}
+
+tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
+    if (topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Linear) {
+        return tt::tt_fabric::Topology::Linear;
+    } else if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
+        return tt::tt_fabric::Topology::Ring;
+    }
+    return topology;
+}
+
+tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
+    const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis) {
+    auto mesh_shape = tensor.device()->shape();
+    auto device_coords = tensor.device_storage().coords;
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    if (topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Mesh) {
+        return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+    }
+    // ring is possible if device coordinates along our cluster axis are the same as the last coordinate in the mesh
+    // shape first_index = 0 last index = mesh_shape[cluster_axis] - 1
+    if (cluster_axis.has_value()) {
+        if (mesh_shape[cluster_axis.value()] == 2) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
+        bool first_index_is_0 = device_coords.at(0)[cluster_axis.value()] == 0;
+        bool last_index_is_mesh_shape_minus_1 =
+            device_coords.at(device_coords.size() - 1)[cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
+        if (first_index_is_0 && last_index_is_mesh_shape_minus_1) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+        } else {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
+    } else {
+        if (mesh_shape[0] == 2 || mesh_shape[1] == 2) {
+            return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+        }
+        TT_FATAL(!device_coords.empty(), "device_coords is empty");
+        for (int i = 0; i < device_coords.front().dims(); i++) {
+            if (device_coords.front()[i] != 0) {
+                return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+            }
+        }
+        for (int i = 0; i < device_coords.back().dims(); i++) {
+            if (device_coords.back()[i] != mesh_shape[i] - 1) {
+                return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
+            }
+        }
+    }
+    return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
+}
+
+tt::tt_fabric::Topology get_usable_topology(
+    const Tensor& tensor, tt::tt_fabric::Topology whole_device_topology, const std::optional<uint32_t>& cluster_axis) {
+    if (whole_device_topology == tt::tt_fabric::Topology::Ring ||
+        whole_device_topology == tt::tt_fabric::Topology::Torus) {
+        auto boundary_mode = get_boundary_mode(tensor, whole_device_topology, cluster_axis);
+        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+            return whole_device_topology;
+        } else if (whole_device_topology == tt::tt_fabric::Topology::Torus) {
+            return tt::tt_fabric::Topology::Mesh;
+        } else {
+            return tt::tt_fabric::Topology::Linear;
+        }
+    }
+    return whole_device_topology;
+}
+
+uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {
+    const auto& device_coords = tensor.device_storage().coords;
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    if (cluster_axis.has_value()) {
+        log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
+        TT_FATAL(!device_coords.empty(), "device_coords is empty");
+        TT_FATAL(
+            device_coords.at(0).dims() > cluster_axis.value(),
+            "cluster axis {} is out of range for device coords rank {} ",
+            cluster_axis.value(),
+            device_coords.at(0).dims());
+        uint32_t ring_size = 0;
+        for (const auto& device_coord : device_coords) {
+            ring_size = std::max(ring_size, device_coord[cluster_axis.value()] + 1);
+        }
+        TT_FATAL(ring_size > 0, "ring_size is 0");
+        log_debug(tt::LogOp, "Topological dimension {}", ring_size);
+        return ring_size;
+    } else {
+        log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
+        return device_coords.size();
+    }
+}
+
+uint32_t get_linearized_index_from_physical_coord(
+    const Tensor& tensor, const MeshCoordinate& physical_coord, const std::optional<uint32_t>& cluster_axis) {
+    const auto& device_coords = tensor.device_storage().coords;
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    if (cluster_axis.has_value()) {
+        log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
+        TT_FATAL(
+            physical_coord.dims() > cluster_axis.value(),
+            "cluster axis {} is out of range for physical coord rank {} ",
+            cluster_axis.value(),
+            physical_coord.dims());
+        // find minimum value along the cluster axis
+        uint32_t min_value = std::numeric_limits<uint32_t>::max();
+        for (const auto& device_coord : device_coords) {
+            min_value = std::min(min_value, device_coord[cluster_axis.value()]);
+        }
+        TT_FATAL(
+            physical_coord[cluster_axis.value()] >= min_value,
+            "physical_coord[{}] {} is less than min_value {}",
+            cluster_axis.value(),
+            physical_coord[cluster_axis.value()],
+            min_value);
+        log_debug(
+            tt::LogOp,
+            "Physical linearized index for physical_coord: {} is {}",
+            physical_coord,
+            physical_coord[cluster_axis.value()] - min_value);
+        return physical_coord[cluster_axis.value()] - min_value;
+    } else {
+        auto it = std::find(device_coords.begin(), device_coords.end(), physical_coord);
+        TT_FATAL(it != device_coords.end(), "physical_coord not found in device_coords");
+        log_debug(
+            tt::LogOp,
+            "Physical linearized index for physical_coord: {} is {}",
+            physical_coord,
+            static_cast<uint32_t>(std::distance(device_coords.begin(), it)));
+        return static_cast<uint32_t>(std::distance(device_coords.begin(), it));
+    }
+}
+
+std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
+    const Tensor& tensor,
+    const MeshCoordinate& physical_coord,
+    int offset,
+    ttnn::ccl::Topology topology,
+    const std::optional<uint32_t>& cluster_axis) {
+    const auto& device_coords = tensor.device_storage().coords;
+    TT_FATAL(!device_coords.empty(), "device_coords is empty");
+    auto boundary_mode = get_boundary_mode(tensor, topology, cluster_axis);
+    if (cluster_axis.has_value()) {
+        TT_FATAL(
+            device_coords.at(0)[cluster_axis.value()] == 0,
+            "Currently, we only support CCLs with physical coordinates starting from 0 along the cluster axis {}, we "
+            "got {}",
+            cluster_axis.value(),
+            device_coords.at(0)[cluster_axis.value()]);
+        TT_FATAL(
+            physical_coord.dims() > cluster_axis.value(),
+            "cluster axis {} is out of range for physical coord rank {} ",
+            cluster_axis.value(),
+            physical_coord.dims());
+        log_debug(tt::LogOp, "Boundary mode: {}", boundary_mode);
+        auto potential_neighbor =
+            physical_coord.get_neighbor(tensor.device()->shape(), offset, cluster_axis.value(), boundary_mode);
+        auto it = std::find(device_coords.begin(), device_coords.end(), potential_neighbor);
+        if (it != device_coords.end()) {
+            log_debug(
+                tt::LogOp,
+                "Physical coord {} Potential neighbor {} is found in device_coords",
+                physical_coord,
+                potential_neighbor);
+            return potential_neighbor;
+        } else {
+            log_debug(
+                tt::LogOp,
+                "Physical coord {} Potential neighbor {} is not found in device_coords",
+                physical_coord,
+                potential_neighbor);
+            return std::nullopt;
+        }
+    } else {
+        uint32_t physical_linearized_index =
+            get_linearized_index_from_physical_coord(tensor, physical_coord, cluster_axis);
+        int potential_neighbor_idx = (int)physical_linearized_index + offset;
+        if (boundary_mode == tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP) {
+            potential_neighbor_idx = (potential_neighbor_idx + device_coords.size()) % device_coords.size();
+        } else if (potential_neighbor_idx < 0 || potential_neighbor_idx >= static_cast<int>(device_coords.size())) {
+            log_debug(
+                tt::LogOp,
+                "Potential neighbor idx {} is out of range for device_coords size {}",
+                potential_neighbor_idx,
+                device_coords.size());
+            return std::nullopt;
+        }
+        log_debug(tt::LogOp, "Potential neighbor idx {} is found in device_coords", potential_neighbor_idx);
+        return device_coords.at(potential_neighbor_idx);
+    }
+}
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);
@@ -92,12 +290,12 @@ SenderReceiverConfig get_device_sender_receiver_config(
 
             config.receiver_device_id = is_last_chip_in_clockwise_direction
                                             ? std::nullopt
-                                            : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+                                            : std::optional<tt::ChipId>(devices.at((i + 1) % num_devices)->id());
 
             config.sender_device_id =
                 is_last_chip_in_counter_clockwise_direction
                     ? std::nullopt
-                    : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+                    : std::optional<tt::ChipId>(devices.at((i + num_devices - 1) % num_devices)->id());
         }
     }
 
@@ -116,7 +314,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
-    auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+    auto get_chip_id = [&](std::size_t line_index) -> std::optional<tt::ChipId> {
         auto new_row = mesh_coord[0];
         auto new_col = mesh_coord[1];
         if (cluster_axis == 0) {
@@ -263,9 +461,8 @@ RingTopology::RingTopology(
             auto const& sockets = device->get_ethernet_sockets(receiver_device);
             TT_FATAL(
                 sender_socket_idx < sockets.size(),
-                "Sender socket index out of bounds. Device {} has {} ethernet cores but tried to access core at "
+                "Sender socket index out of bounds. Device has {} ethernet cores but tried to access core at "
                 "index {}",
-                device->id(),
                 sockets.size(),
                 sender_socket_idx);
             auto eth_sender_core = sockets.at(sender_socket_idx);
@@ -277,9 +474,8 @@ RingTopology::RingTopology(
             auto const& sockets = device->get_ethernet_sockets(sender_device);
             TT_FATAL(
                 receiver_socket_idx < sockets.size(),
-                "Receiver socket index out of bounds. Device {} has {} ethernet cores but tried to access core at "
+                "Receiver socket index out of bounds. Device has {} ethernet cores but tried to access core at "
                 "index {}",
-                device->id(),
                 sockets.size(),
                 receiver_socket_idx);
             auto eth_receiver_core = sockets.at(receiver_socket_idx);
@@ -350,8 +546,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
     std::optional<uint32_t> sender_device_id) {
-    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::tt_metal::hal::get_arch());
-    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::hal::get_arch());
+    auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::tt_metal::hal::get_arch());
+    auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::tt_metal::hal::get_arch());
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;
@@ -1537,6 +1733,19 @@ std::vector<Shape4D<uint32_t>> GenericWrappedTensorSlicerV2::create_worker_slice
     return worker_slice_shapes;
 }
 
+void validate_fabric_2d_dynamic_config(Topology topology) {
+    TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+    auto physical_mesh_shapes = tt::tt_fabric::get_physical_mesh_shapes();
+    TT_FATAL(
+        physical_mesh_shapes.size() == 1,
+        "Fabric 2D dynamic CCLs expected a single Physical Mesh to be instantiated, but got {} meshes",
+        physical_mesh_shapes.size());
+    const auto& physical_mesh_shape = physical_mesh_shapes.begin()->second;
+    TT_FATAL(
+        physical_mesh_shape.dims() == 2,
+        "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
+}
+
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
     size_t ring_size, size_t ring_index, Topology topology) {
     // Used for experimentation for optimal perf
@@ -1569,33 +1778,32 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
 
 std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
     Topology topology,
-    IDevice* src_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device) {
+    const MeshCoordinate& src_device_coord,
+    const std::optional<MeshCoordinate>& forward_device_coord,
+    const std::optional<MeshCoordinate>& backward_device_coord,
+    MeshDevice* mesh_device) {
     std::array<uint32_t, 2> forward_args = {};
     std::array<uint32_t, 2> backward_args = {};
 
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-        if (forward_device) {
-            auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());
+        validate_fabric_2d_dynamic_config(topology);
+        if (forward_device_coord) {
+            auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             forward_args[0] = *forward_device_fabric_node_id.mesh_id;
             forward_args[1] = forward_device_fabric_node_id.chip_id;
         }
-        if (backward_device) {
-            auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*backward_device)->id());
+        if (backward_device_coord) {
+            auto backward_device_fabric_node_id = mesh_device->get_fabric_node_id(backward_device_coord.value());
             backward_args[0] = *backward_device_fabric_node_id.mesh_id;
             backward_args[1] = backward_device_fabric_node_id.chip_id;
         }
     } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
-        if (forward_device) {
+        if (forward_device_coord) {
             forward_args[0] = 0; // dst_mesh_id, unused
             forward_args[1] = 1; // distance_in_hops
         }
-        if (backward_device) {
+        if (backward_device_coord) {
             backward_args[0] = 0; // dst_mesh_id, unused
             backward_args[1] = 1; // distance_in_hops
         }
@@ -1628,11 +1836,12 @@ std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
 
 std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
     Topology topology,
-    IDevice* src_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& src_device_coord,
+    const std::optional<MeshCoordinate>& forward_device_coord,
+    const std::optional<MeshCoordinate>& backward_device_coord,
     uint32_t num_targets_forward,
-    uint32_t num_targets_backward) {
+    uint32_t num_targets_backward,
+    MeshDevice* mesh_device) {
     std::array<uint32_t, 6> forward_args = {};
     std::array<uint32_t, 6> backward_args = {};
     // Used for experimentation for optimal perf
@@ -1640,25 +1849,30 @@ std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backwar
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
 
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
-        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
-        auto set_mcast_args = [&src_fabric_node_id](std::array<uint32_t, 6>& args, std::optional<IDevice*> device, uint32_t num_targets) {
-            if (device) {
-                auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*device)->id());
+        validate_fabric_2d_dynamic_config(topology);
+        auto src_fabric_node_id = mesh_device->get_fabric_node_id(src_device_coord);
+        auto set_mcast_args = [&src_fabric_node_id](
+                                  std::array<uint32_t, 6>& args,
+                                  const std::optional<MeshCoordinate>& coord,
+                                  uint32_t num_targets,
+                                  MeshDevice* mesh_device) {
+            if (coord) {
+                const auto& dev_coord = *coord;
+                auto device_fabric_node_id = mesh_device->get_fabric_node_id(dev_coord);
                 auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
                 args[0] = *device_fabric_node_id.mesh_id;
                 args[1] = device_fabric_node_id.chip_id;
                 args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets - 1;
             }
         };
-        set_mcast_args(forward_args, forward_device, num_targets_forward);
-        set_mcast_args(backward_args, backward_device, num_targets_backward);
+        set_mcast_args(forward_args, forward_device_coord, num_targets_forward, mesh_device);
+        set_mcast_args(backward_args, backward_device_coord, num_targets_backward, mesh_device);
     } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
-        if (forward_device) {
+        if (forward_device_coord) {
             forward_args[0] = 1;                    // start_distance_in_hops
             forward_args[1] = num_targets_forward;  // range_hops
         }
-        if (backward_device) {
+        if (backward_device_coord) {
             backward_args[0] = 1;                     // start_distance_in_hops
             backward_args[1] = num_targets_backward;  // range_hops
         }

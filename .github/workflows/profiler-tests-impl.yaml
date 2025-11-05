@@ -12,14 +12,16 @@ on:
       docker-image:
         required: true
         type: string
+      topology:
+        required: true
+        type: string
+      test-script:
+        required: true
+        type: string
       extra-tag:
         required: false
         type: string
         default: "in-service"
-      topology:
-        required: false
-        type: string
-        default: "config-t3000"
 
 jobs:
   profiler-tests:
@@ -54,19 +56,19 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run profiler regression tests
-        timeout-minutes: 30
+        timeout-minutes: 35
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          ${{ inputs.test-script }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U03BJ1L3LUQ # Mo Memarian
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

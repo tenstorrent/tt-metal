@@ -13,7 +13,6 @@ namespace ttnn::operations::quantization {
 
 struct QuantOp {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& scale,
         const std::variant<Tensor, int32_t>& zero_point,
@@ -25,7 +24,6 @@ struct QuantOp {
 
 struct RequantOp {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& in_scale,
         const std::variant<Tensor, int32_t>& in_zero_point,
@@ -39,7 +37,6 @@ struct RequantOp {
 
 struct DequantOp {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         const std::variant<Tensor, float>& scale,
         const std::variant<Tensor, int32_t>& zero_point,

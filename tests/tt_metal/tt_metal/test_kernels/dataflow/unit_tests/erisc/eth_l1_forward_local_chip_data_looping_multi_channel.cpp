@@ -16,14 +16,14 @@
 // #define DONT_STRIDE_IN_ETH_BUFFER 1
 #define DONT_STRIDE_IN_ETH_BUFFER 0
 
-template <bool src_is_dram>
+template <typename AddrGen>
 void read_chunk(
     uint32_t eth_l1_buffer_address_base,
     uint32_t num_pages,
     uint32_t num_pages_per_l1_buffer,
     uint32_t page_size,
     uint32_t& page_index,
-    const InterleavedAddrGen<src_is_dram>& source_address_generator) {
+    const AddrGen& source_address_generator) {
     uint32_t local_eth_l1_curr_src_addr = eth_l1_buffer_address_base;
     uint32_t end_page_index = std::min(page_index + num_pages_per_l1_buffer, num_pages);
     for (; page_index < end_page_index; ++page_index) {
@@ -37,7 +37,7 @@ void read_chunk(
     }
 }
 
-template <uint8_t MAX_CONCURRENT_TRANSACTIONS, bool src_is_dram>
+template <uint8_t MAX_CONCURRENT_TRANSACTIONS, typename AddrGen>
 FORCE_INLINE bool noc_read_data_sequence(
     std::array<uint32_t, MAX_CONCURRENT_TRANSACTIONS>& transaction_channel_sender_buffer_addresses,
     uint32_t num_bytes_per_send,
@@ -46,7 +46,7 @@ FORCE_INLINE bool noc_read_data_sequence(
     const erisc::datamover::QueueIndexPointer<uint8_t> eth_sender_rdptr,
     const erisc::datamover::QueueIndexPointer<uint8_t> eth_sender_ackptr,
     const uint8_t noc_index,
-    const InterleavedAddrGen<src_is_dram>& source_address_generator,
+    const AddrGen& source_address_generator,
     const uint32_t page_size,
     const uint32_t num_pages_per_l1_buffer,
     const uint32_t num_pages,
@@ -69,7 +69,7 @@ FORCE_INLINE bool noc_read_data_sequence(
 #else
 
             // DPRINT << "tx: reading data into L1 buffer on channel " << (uint32_t)noc_reader_buffer_wrptr << "\n";
-            read_chunk<src_is_dram>(
+            read_chunk<AddrGen>(
                 transaction_channel_sender_buffer_addresses[noc_reader_buffer_wrptr
                                                                 .index()],  // eth_l1_buffer_address_base
                 num_pages,
@@ -93,7 +93,7 @@ void kernel_main() {
     constexpr uint32_t num_bytes_per_send_word_size = get_compile_time_arg_val(1);
     constexpr std::uint32_t total_num_message_sends = get_compile_time_arg_val(2);
     constexpr std::uint32_t NUM_TRANSACTION_BUFFERS = get_compile_time_arg_val(3);
-    constexpr bool src_is_dram = get_compile_time_arg_val(4) == 1;
+    constexpr auto src_args = TensorAccessorArgs<4>();
 
     constexpr uint32_t MAX_NUM_CHANNELS = NUM_TRANSACTION_BUFFERS;
 
@@ -117,11 +117,9 @@ void kernel_main() {
     // in our measurements
     erisc::datamover::eth_setup_handshake(local_eth_l1_src_addr, true);
 
-    // const InterleavedAddrGenFast<src_is_dram> s = {
-    //     .bank_base_address = src_addr, .page_size = page_size, .data_format = df};
+    // const auto s = TensorAccessor(src_args, src_addr, page_size);
 
-    const InterleavedAddrGen<src_is_dram> source_address_generator = {
-        .bank_base_address = src_addr, .page_size = page_size};
+    const auto source_address_generator = TensorAccessor(src_args, src_addr, page_size);
 
     // SETUP DATASTRUCTURES
     std::array<uint32_t, MAX_NUM_CHANNELS> transaction_channel_sender_buffer_addresses;
@@ -148,7 +146,7 @@ void kernel_main() {
                             noc_reader_buffer_wrptr, noc_reader_buffer_ackptr, noc_index) ||
                         did_something;
 
-        did_something = noc_read_data_sequence<MAX_NUM_CHANNELS, src_is_dram>(
+        did_something = noc_read_data_sequence<MAX_NUM_CHANNELS, decltype(source_address_generator)>(
                             transaction_channel_sender_buffer_addresses,
                             num_bytes_per_send,
                             noc_reader_buffer_wrptr,

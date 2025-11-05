@@ -9,6 +9,7 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.falcon7b_common.tests.test_utils import (
     create_prefill_attn_mask_for_sharded_softmax,
     get_num_devices,
@@ -17,7 +18,6 @@ from models.demos.falcon7b_common.tests.test_utils import (
 )
 from models.demos.falcon7b_common.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.falcon7b_common.tt.model_utils import get_weights_cached, layernorm
-from models.utility_functions import nearest_32
 from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 

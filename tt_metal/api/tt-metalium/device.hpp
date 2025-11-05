@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,9 +19,11 @@
 #include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
+#include <tt-metalium/core_coord.hpp>
+
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include <tt_stl/span.hpp>
 
@@ -29,7 +32,7 @@ namespace tt {
 namespace tt_metal {
 
 namespace program_cache::detail {
-class ProgramCache;
+struct ProgramCache;
 }
 /*
 MemoryBlockTable is a list of memory blocks in the following format:
@@ -40,13 +43,14 @@ size: bytes
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 enum class BufferType;
 
+class Allocator;
 class Buffer;
 class Program;
 class SubDevice;
 
 class CommandQueue;
 class SystemMemoryManager;
-class TraceBuffer;
+struct TraceBuffer;
 struct TraceDescriptor;
 
 namespace distributed {
@@ -62,12 +66,12 @@ public:
     IDevice& operator=(const IDevice& other) = delete;
 
     IDevice(IDevice&& other) = default;
-    IDevice& operator=(IDevice&& other) = default;
+    IDevice& operator=(IDevice&& /*other*/) = default;
 
     virtual tt::ARCH arch() const = 0;
 
-    virtual chip_id_t id() const = 0;
-    virtual chip_id_t build_id() const = 0;
+    virtual ChipId id() const = 0;
+    virtual ChipId build_id() const = 0;
 
     virtual uint8_t num_hw_cqs() const = 0;
 
@@ -116,8 +120,8 @@ public:
 
     // Returns true if the ethernet core is active
     virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const = 0;
-    virtual std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
-    virtual std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const = 0;
+    virtual std::tuple<ChipId, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
+    virtual std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const = 0;
     virtual bool is_inactive_ethernet_core(CoreCoord logical_core) const = 0;
 
     virtual CoreCoord compute_with_storage_grid_size() const = 0;
@@ -148,7 +152,9 @@ public:
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-    virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
+
+    // If cq_id is not provided, the current command queue is returned from the current thread
+    virtual CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
 
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
@@ -197,7 +203,7 @@ public:
     virtual SubDeviceManagerId create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
-        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
+        std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void clear_loaded_sub_device_manager() = 0;
@@ -214,8 +220,6 @@ public:
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
-
-    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
 
 }  // namespace tt_metal

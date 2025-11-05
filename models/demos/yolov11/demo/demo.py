@@ -11,6 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.utils.common_demo_utils import (
     LoadImages,
     get_mesh_mappers,
@@ -22,7 +23,6 @@ from models.demos.utils.common_demo_utils import (
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov11.reference import yolov11
 from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
-from models.utility_functions import disable_persistent_kernel_cache
 
 
 def init_model_and_runner(
@@ -169,6 +169,7 @@ def run_yolov11n_demo_dataset(
 def test_demo(
     device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device, model_location_generator
 ):
+    pytest.skip("Skipping yolov11 demo test: https://github.com/tenstorrent/tt-metal/issues/30568")
     run_yolov11n_demo(
         device,
         model_type,

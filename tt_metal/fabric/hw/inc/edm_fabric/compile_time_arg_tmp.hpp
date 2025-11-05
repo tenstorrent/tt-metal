@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -168,4 +168,33 @@ constexpr auto conditional_get_next_n_args() -> typename std::enable_if<GET_THE_
 template <bool GET_THE_ARG, typename T, size_t CT_ARGS_START_IDX, size_t NUM_ELEMS_TO_TAKE>
 constexpr auto conditional_get_next_n_args() -> typename std::enable_if<!GET_THE_ARG, std::array<T, NUM_ELEMS_TO_TAKE>>::type {
     return std::array<T, NUM_ELEMS_TO_TAKE>{};
+}
+
+// clang-format off
+/**
+ * Compile-time foreach assertion that checks if all elements in a constexpr array satisfy a predicate
+ *
+ * | Template Argument     | Description                              | Type                  | Valid Range      |
+ * |-----------------------|------------------------------------------|-----------------------|------------------|
+ * | T                     | element type                             | <typename>            | -----            |
+ * | N                     | array size in elements                   | size_t                | 1 to max<size_t> |
+ * | Predicate             | predicate function type                  | <typename>            | -----            |
+ * | Index                 | current index being checked (internal)   | size_t                | 0 to N-1         |
+ */
+// clang-format on
+template <typename T, size_t N, typename Predicate, size_t Index = 0>
+constexpr bool all_elements_satisfy(const std::array<T, N>& arr, Predicate pred) {
+    if constexpr (N == 0) {
+        return true;
+    }
+    if constexpr (Index >= N) {
+        return true;
+    }
+    if (!pred(arr[Index])) {
+        return false;
+    }
+    if constexpr (Index + 1 < N) {
+        return all_elements_satisfy<T, N, Predicate, Index + 1>(arr, pred);
+    }
+    return true;
 }

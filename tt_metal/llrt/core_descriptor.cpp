@@ -14,19 +14,18 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "metal_soc_descriptor.h"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_simulation_device.h>
-#include <umd/device/types/arch.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
-#include "utils.hpp"
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/simulation/simulation_chip.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 
@@ -48,8 +47,10 @@ inline std::string get_core_descriptor_file(
 
     bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims
     if (tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
-        if (init.get_soc_descriptor().grid_size.y <= 2) { // these SOC descriptors declare a 2x2 grid
+        auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
+            tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+        tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
+        if (grid_size.y <= 2) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
         }
     }
@@ -95,7 +96,7 @@ inline std::string get_core_descriptor_file(
 }
 
 const core_descriptor_t& get_core_descriptor_config(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // {arch : {product : {dispatch core axis: {fabric tensix config: {num hardware command queues : config}}}}}
     static std::unordered_map<
         ARCH,
@@ -251,7 +252,7 @@ const core_descriptor_t& get_core_descriptor_config(
         dispatch_cores.push_back(coord);
     }
     TT_ASSERT(
-        dispatch_cores.size() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
+        !dispatch_cores.empty() || tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled(),
         "Dispatch cores size must be positive");
 
     // Parse fabric_mux_cores
@@ -304,10 +305,10 @@ const core_descriptor_t& get_core_descriptor_config(
     auto [it, _] = config_by_num_cqs.emplace(std::make_pair(
         num_hw_cqs,
         core_descriptor_t{
-            .compute_grid_size = std::move(compute_grid_size),
+            .compute_grid_size = compute_grid_size,
             .relative_compute_cores = std::move(compute_cores),
             .relative_storage_cores = std::move(storage_cores),
-            .storage_core_bank_size = std::move(storage_core_bank_size),
+            .storage_core_bank_size = storage_core_bank_size,
             .relative_dispatch_cores = std::move(dispatch_cores),
             .relative_fabric_mux_cores = std::move(fabric_mux_cores),
             .logical_compute_cores = std::move(logical_compute_cores),
@@ -319,7 +320,7 @@ const core_descriptor_t& get_core_descriptor_config(
 }
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
-    chip_id_t device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    ChipId device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Get logical compute grid dimensions and num workers
     static std::unordered_map<uint32_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
     // Unique hash generated based on the config that's being queried
@@ -346,7 +347,7 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
 }
 
 std::optional<uint32_t> get_storage_core_bank_size(
-    chip_id_t device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
     const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     if (core_desc.storage_core_bank_size.has_value()) {
         TT_FATAL(

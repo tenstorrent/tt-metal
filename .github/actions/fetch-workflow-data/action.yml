@@ -18,17 +18,45 @@ inputs:
     description: 'Number of days of data to fetch (default: 7)'
     required: false
   cache-path:
-    description: 'Path to save the cached workflow data'
-    required: true
+    description: 'Path to write the workflow data JSON (artifact)'
+    required: false
   GITHUB_TOKEN:
     description: 'GitHub token for API access'
     required: true
+  test_run_id:
+    description: 'Run ID to use for testing (optional)'
+    required: false
+    default: ''
+  workflow_configs:
+    description: 'JSON array of workflow configurations to filter by (array of objects with wkflw_name or wkflw_prefix)'
+    required: false
+  workflow_ids:
+    description: 'JSON array of workflow file paths to fetch runs for (e.g., [".github/workflows/workflow.yaml"])'
+    required: false
 
 outputs:
   total-runs:
     description: 'Total number of runs fetched'
   workflow-count:
     description: 'Number of unique workflows found'
+  cache-path:
+    description: 'Absolute path to the written workflow data JSON file'
+  commits-path:
+    description: 'Absolute path to JSON array of commits on main in the last N days'
+  annotations-root:
+    description: 'Absolute path to directory containing per-run annotations'
+  annotations-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> annotations dir'
+  gtest-logs-root:
+    description: 'Absolute path to directory containing downloaded gtest logs per run'
+  gtest-logs-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> gtest logs dir'
+  other-logs-root:
+    description: 'Absolute path to directory containing downloaded other logs per run (failures without annotations)'
+  other-logs-index-path:
+    description: 'Absolute path to JSON mapping of run_id -> other logs dir'
+  last-success-timestamps-path:
+    description: 'Absolute path to JSON mapping of workflow_name -> last success timestamp info'
 
 runs:
   using: 'node20'

@@ -36,7 +36,6 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -45,7 +44,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_test_fixtures.hpp"
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -202,9 +201,9 @@ class EltwiseUnaryOpIfTest : public TTNNFixtureWithDevice,
 
 TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
     // TODO: Enable BH when ready (#25088)
-    if (board_type != BoardType::N300) {
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -227,8 +226,8 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
 
 TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -237,7 +236,11 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
         auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
-            ttnn::sqrt, device, input_spec, output_spec.tensor_layout().get_memory_config());
+            ttnn::sqrt,
+            device,
+            input_spec,
+            /*fast_and_approximate_mode=*/false,
+            output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
@@ -251,8 +254,8 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
 
 TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -283,8 +286,8 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
 
 TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -311,8 +314,8 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
 
 TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -335,8 +338,8 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
 
 TEST_P(EltwiseUnaryOpIfTest, Sin) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -359,8 +362,8 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
 
 TEST_P(EltwiseUnaryOpIfTest, Cos) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -414,8 +417,8 @@ class SoftmaxOpIfTest : public TTNNFixtureWithDevice,
 TEST_P(SoftmaxOpIfTest, Softmax) {
     const auto& input_spec = std::get<ttnn::TensorSpec>(GetParam());
     const auto& dim_arg = std::get<int>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -469,8 +472,8 @@ class EltwiseBinaryOpIfTest : public TTNNFixtureWithDevice,
 TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -478,7 +481,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
     {
         tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::add,
@@ -504,8 +507,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
 TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300 && board_type != tt::BoardType::E150) {
         GTEST_SKIP();
     }
 
@@ -513,7 +516,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::subtract,
@@ -539,8 +542,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
 TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -548,7 +551,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::multiply,
@@ -574,8 +577,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
 TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -583,7 +586,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::maximum,
@@ -609,8 +612,8 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
 TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
@@ -618,7 +621,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
     {
         auto* device = device_;
         const auto& output_spec = input_spec_a;
-        constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+        constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
 
         auto query = ttnn::graph::query_op_constraints(
             ttnn::minimum,
@@ -701,8 +704,8 @@ TEST_P(MatmulOpIfTest, Matmul) {
     const auto& input_spec_b = std::get<1>(GetParam());
     const auto& matmul_program_config =
         std::get<std::optional<ttnn::operations::matmul::MatmulProgramConfig>>(GetParam());
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
+    const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
+    if (board_type != tt::BoardType::N300 && board_type != tt::BoardType::E150) {
         GTEST_SKIP();
     }
 
@@ -821,8 +824,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const std::array<uint32_t, 2> padding{3, 3};
     const std::array<uint32_t, 2> dilation{1, 1};
     const uint32_t groups = 1;
-
-    const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
 
     // Run the test
     {

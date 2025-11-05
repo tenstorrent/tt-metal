@@ -10,14 +10,14 @@
 #include <fstream>
 #include <string>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_soc_descriptor.h>
+#include <umd/device/soc_descriptor.hpp>
 
 using namespace tt::tt_metal;
 
@@ -27,7 +27,7 @@ using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
 
 namespace tt {
 
-static std::string logfile_path = "generated/noc_data/";
+constexpr auto logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);
@@ -44,11 +44,13 @@ void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     outfile.close();
 }
 
-void DumpCoreNocData(chip_id_t device_id, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
+void DumpCoreNocData(ChipId device_id, const umd::CoreDescriptor& logical_core, noc_data_t& noc_data) {
     CoreCoord virtual_core =
         tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
             device_id, logical_core.coord, logical_core.type);
-    for (int risc_id = 0; risc_id < GetNumRiscs(device_id, logical_core); risc_id++) {
+    uint32_t num_processors =
+        tt_metal::MetalContext::instance().hal().get_num_risc_processors(llrt::get_core_type(device_id, virtual_core));
+    for (int risc_id = 0; risc_id < num_processors; risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
         uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
         auto from_dev = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -63,13 +65,13 @@ void DumpCoreNocData(chip_id_t device_id, const CoreDescriptor& logical_core, no
     }
 }
 
-void DumpDeviceNocData(chip_id_t device_id, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
+void DumpDeviceNocData(ChipId device_id, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
     // Need to treat dispatch cores and normal cores separately, so keep track of which cores are dispatch.
     CoreDescriptorSet dispatch_cores = GetDispatchCores(device_id);
 
     // Now go through all cores on the device, and dump noc data for them.
     CoreDescriptorSet all_cores = GetAllCores(device_id);
-    for (const CoreDescriptor& logical_core : all_cores) {
+    for (const umd::CoreDescriptor& logical_core : all_cores) {
         if (dispatch_cores.count(logical_core)) {
             DumpCoreNocData(device_id, logical_core, dispatch_noc_data);
         } else {
@@ -78,14 +80,14 @@ void DumpDeviceNocData(chip_id_t device_id, noc_data_t& noc_data, noc_data_t& di
     }
 }
 
-void DumpNocData(const std::vector<chip_id_t>& devices) {
+void DumpNocData(const std::vector<ChipId>& devices) {
     // Skip if feature is not enabled
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;
     }
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
-    for (chip_id_t device_id : devices) {
+    for (ChipId device_id : devices) {
         log_info(tt::LogMetal, "Dumping noc data for Device {}...", device_id);
         DumpDeviceNocData(device_id, noc_data, dispatch_noc_data);
     }
@@ -94,7 +96,7 @@ void DumpNocData(const std::vector<chip_id_t>& devices) {
     PrintNocData(dispatch_noc_data, "dispatch_noc_data.txt");
 }
 
-void ClearNocData(chip_id_t device_id) {
+void ClearNocData(ChipId device_id) {
     // Skip if feature is not enabled
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_record_noc_transfers()) {
         return;
@@ -107,11 +109,13 @@ void ClearNocData(chip_id_t device_id) {
         "NOC transfer recording is incompatible with DPRINT");
 
     CoreDescriptorSet all_cores = GetAllCores(device_id);
-    for (const CoreDescriptor& logical_core : all_cores) {
+    for (const umd::CoreDescriptor& logical_core : all_cores) {
         CoreCoord virtual_core =
             tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 device_id, logical_core.coord, logical_core.type);
-        for (int risc_id = 0; risc_id < GetNumRiscs(device_id, logical_core); risc_id++) {
+        uint32_t num_processors = tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+            llrt::get_core_type(device_id, virtual_core));
+        for (int risc_id = 0; risc_id < num_processors; risc_id++) {
             uint64_t addr = GetDprintBufAddr(device_id, virtual_core, risc_id);
             std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, initbuf, addr);

@@ -10,26 +10,22 @@
 #include <filesystem>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/multi_mesh_types.hpp>
+#include <tt-metalium/fabric_types.hpp>
 #include <impl/context/metal_context.hpp>
 #include "gmock/gmock.h"
 #include <fmt/format.h>
 #include "utils.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 namespace {
 
-using ::testing::ElementsAre;
-using ::testing::Eq;
 using ::testing::HasSubstr;
-using ::testing::IsEmpty;
 using ::testing::ThrowsMessage;
 using ::tt::tt_metal::distributed::MeshCoordinate;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshShape;
 using ::tt::tt_metal::distributed::test::utils::ScopedEnvVar;
-using ::tt::tt_metal::distributed::test::utils::TemporaryFile;
 
 // RAII guard for managing mesh binding environment variables
 class ScopedMeshBinding {
@@ -67,7 +63,7 @@ const std::string kDualHostMeshDesc =
 // This is a 2x4 mesh split between 2 hosts, where:
 // - Host 0 owns chips 0,1,4,5 (left half)
 // - Host 1 owns chips 2,3,6,7 (right half)
-const std::vector<std::vector<eth_coord_t>> kDualHostMeshEthCoords = {
+const std::vector<std::vector<EthCoord>> kDualHostMeshEthCoords = {
     // Mesh 0 - all 8 chips arranged as 2x4
     {
         {0, 0, 0, 0, 0},  // chip 0 at (0,0)
@@ -81,9 +77,9 @@ const std::vector<std::vector<eth_coord_t>> kDualHostMeshEthCoords = {
     }};
 
 // Helper function to get chip mapping from eth coords
-std::map<FabricNodeId, chip_id_t> get_dual_host_chip_mapping() {
+std::map<FabricNodeId, ChipId> get_dual_host_chip_mapping() {
     const auto& cluster = ::tt::tt_metal::MetalContext::instance().get_cluster();
-    std::map<FabricNodeId, chip_id_t> physical_chip_ids_mapping;
+    std::map<FabricNodeId, ChipId> physical_chip_ids_mapping;
     for (std::uint32_t mesh_id = 0; mesh_id < kDualHostMeshEthCoords.size(); mesh_id++) {
         for (std::uint32_t chip_id = 0; chip_id < kDualHostMeshEthCoords[mesh_id].size(); chip_id++) {
             const auto& eth_coord = kDualHostMeshEthCoords[mesh_id][chip_id];

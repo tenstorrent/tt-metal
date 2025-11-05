@@ -6,7 +6,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "tracy/Tracy.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -267,8 +267,6 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
 
 std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multiples(
     const CoreCoord& core_grid, const uint32_t units_to_divide, const uint32_t multiple, const bool row_wise) {
-    ZoneScoped;
-
     const uint32_t batches_to_divide = std::ceil(units_to_divide / multiple), max_num_cores = core_grid.x * core_grid.y;
     const uint32_t target_num_cores = (batches_to_divide >= max_num_cores) ? max_num_cores : batches_to_divide;
 
@@ -292,7 +290,6 @@ std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multipl
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise) {
-    ZoneScoped;
     if (units_to_divide == 0) {
         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
     }
@@ -358,7 +355,6 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreRangeSet& core_grid, const uint32_t units_to_divide, const bool row_wise) {
-    ZoneScoped;
     if (units_to_divide == 0) {
         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
     }

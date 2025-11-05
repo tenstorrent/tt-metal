@@ -5,7 +5,7 @@ We have made the linears (Q,K,V) to be executed separately and added bias suppor
 configuration changes.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 
 
 class TtGemmaImageAttention(LightweightModule):
@@ -92,6 +92,12 @@ class TtGemmaImageAttention(LightweightModule):
         wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
         wq_chunked, wk_chunked, wv_chunked = (
             torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
+        )
+
+        self.qkv_program_config = lambda seq_len, MAX_MM_SEQ_LEN: (
+            None
+            if self.configuration.is_gemma
+            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
         )
 
         # for Gemma
@@ -284,13 +290,12 @@ class TtGemmaImageAttention(LightweightModule):
 
     def forward(self, x_11SH, mask=None):
         seq_len = x_11SH.shape[-2]
+        batch_size = x_11SH.shape[0]
 
-        MAX_MM_SEQ_LEN = (
-            seq_len if "gemma-3" in self.configuration.base_model_name else self.configuration.VISION_MAX_MM_SEQ
-        )
+        MAX_MM_SEQ_LEN = seq_len if self.configuration.is_gemma else self.configuration.VISION_MAX_MM_SEQ
 
         if seq_len > MAX_MM_SEQ_LEN:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+            x_11SH = ttnn.reshape(x_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
         q_heads_1QSD = ttnn.linear(
             x_11SH,
@@ -299,12 +304,10 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
 
-        q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
+        q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
 
         k_heads_1KSD = ttnn.linear(
             x_11SH,
@@ -313,12 +316,10 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
 
-        k_heads_1KSD = ttnn.transpose(ttnn.reshape(k_heads_1KSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
+        k_heads_1KSD = ttnn.transpose(ttnn.reshape(k_heads_1KSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
 
         v_heads_1VSD = ttnn.linear(
             x_11SH,
@@ -327,11 +328,9 @@ class TtGemmaImageAttention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
-        v_heads_1VSD = ttnn.transpose(ttnn.reshape(v_heads_1VSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
+        v_heads_1VSD = ttnn.transpose(ttnn.reshape(v_heads_1VSD, (batch_size, seq_len, self.n_local_heads, -1)), 1, 2)
 
         # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
@@ -363,7 +362,9 @@ class TtGemmaImageAttention(LightweightModule):
 
         # reshaping long sequence to matmul fit on device
         if seq_len > MAX_MM_SEQ_LEN:
-            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
+            attn_output_11SH = ttnn.reshape(
+                attn_output_11SH, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1]
+            )
 
         if self.num_devices > 1:
             attn_output_11SH = ttnn.experimental.all_gather_async(
@@ -372,7 +373,7 @@ class TtGemmaImageAttention(LightweightModule):
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
-                topology=ttnn.Topology.Linear,
+                topology=ttnn.Topology.Ring,
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
@@ -386,12 +387,10 @@ class TtGemmaImageAttention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=None
-            if "gemma-3" in self.configuration.base_model_name
-            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+            program_config=self.qkv_program_config(seq_len, MAX_MM_SEQ_LEN),
         )
         if seq_len > MAX_MM_SEQ_LEN:
-            output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            output_11SH = ttnn.reshape(output_11SH, [batch_size, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
         return output_11SH

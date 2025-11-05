@@ -7,11 +7,11 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include "erisc_datamover_builder.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
@@ -77,7 +77,7 @@ bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric
 size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->is_2D_routing_enabled()) {
         return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
-                                                    : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
+                                                    : sizeof(tt::tt_fabric::HybridMeshPacketHeader);
     } else {
         return sizeof(tt::tt_fabric::PacketHeader);
     }
@@ -207,12 +207,10 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
             (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
         const bool is_east_west = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST);
 
-        if ((fabric_type == FabricType::TORUS_X && is_north_south) ||
-            (fabric_type == FabricType::TORUS_Y && is_east_west)) {
-            // torused along one dimension, but connecting along the other dimension
-            return false;
-        }
-        return true;
+        const bool torus_mismatch = (fabric_type == FabricType::TORUS_X && is_north_south) ||
+                                    (fabric_type == FabricType::TORUS_Y && is_east_west);
+
+        return !torus_mismatch;
     }
 
     return false;
@@ -235,7 +233,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
             switch (fabric_edm_type) {
                 case tt::tt_fabric::FabricEriscDatamoverType::Default:
                     TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
-                    return *this->router_config_.get();
+                    return *this->router_config_;
                     break;
                 case tt::tt_fabric::FabricEriscDatamoverType::Dateline:
                     TT_FATAL(
@@ -269,7 +267,7 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
     }
 };
 
-void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t num_routers) {
+void FabricContext::set_num_fabric_initialized_routers(ChipId chip_id, size_t num_routers) {
     TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->num_initialized_routers_[chip_id] == UNINITIALIZED_ROUTERS,
@@ -278,7 +276,7 @@ void FabricContext::set_num_fabric_initialized_routers(chip_id_t chip_id, size_t
     this->num_initialized_routers_[chip_id] = num_routers;
 }
 
-uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) const {
+uint32_t FabricContext::get_num_fabric_initialized_routers(ChipId chip_id) const {
     TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
@@ -287,7 +285,7 @@ uint32_t FabricContext::get_num_fabric_initialized_routers(chip_id_t chip_id) co
     return this->num_initialized_routers_[chip_id];
 }
 
-void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t chan_id) {
+void FabricContext::set_fabric_master_router_chan(ChipId chip_id, chan_id_t chan_id) {
     TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->master_router_chans_[chip_id] == UNINITIALIZED_MASTER_ROUTER_CHAN,
@@ -296,7 +294,7 @@ void FabricContext::set_fabric_master_router_chan(chip_id_t chip_id, chan_id_t c
     this->master_router_chans_[chip_id] = chan_id;
 }
 
-chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const {
+chan_id_t FabricContext::get_fabric_master_router_chan(ChipId chip_id) const {
     TT_FATAL(chip_id < num_devices, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices);
     TT_FATAL(
         this->master_router_chans_[chip_id] != UNINITIALIZED_MASTER_ROUTER_CHAN,
@@ -306,7 +304,7 @@ chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const 
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
-    return {this->router_config_->edm_local_sync_address};
+    return {this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
 }
 
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status() const {
@@ -325,7 +323,7 @@ std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_addre
 
 tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_tensix_config() const {
     TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
-    return *tensix_config_.get();
+    return *tensix_config_;
 }
 
 void FabricContext::initialize_tensix_config() {

@@ -34,6 +34,35 @@ void bind_gather_operation(py::module& module) {
         Additional Information:
             * Currently, the `sparse_grad` argument is not supported.
 
+        Note:
+
+            Supported dtypes and layout for input tensor values:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE
+               * - UINT16, UINT32
+                 - TILE
+               * - INT32
+                 - TILE
+
+            Supported dtypes and layout for index tensor values:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - UINT16, UINT32
+                 - TILE
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+
         Example:
 
         .. code-block:: python
@@ -70,16 +99,8 @@ void bind_gather_operation(py::module& module) {
                const ttnn::Tensor& input_index_tensor,
                const bool sparse_grad,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-               QueueId queue_id) -> Tensor {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    dim,
-                    input_index_tensor,
-                    sparse_grad,
-                    memory_config,
-                    optional_output_tensor);
+               const std::optional<tt::tt_metal::MemoryConfig>& memory_config) -> Tensor {
+                return self(input_tensor, dim, input_index_tensor, sparse_grad, memory_config, optional_output_tensor);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),
@@ -87,8 +108,7 @@ void bind_gather_operation(py::module& module) {
             py::kw_only(),
             py::arg("sparse_grad") = false,
             py::arg("out") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

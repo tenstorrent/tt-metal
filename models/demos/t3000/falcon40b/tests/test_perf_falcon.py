@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    profiler,
-    skip_for_grayskull,
-)
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 from ttnn import ConcatMeshToTensor
 
 
@@ -32,7 +30,6 @@ def run_test_FalconCausalLM_end_to_end(
     model_config,
     model_config_str,
     tt_cache_path,
-    model_location_generator,
     expected_compile_time,
     expected_inference_time,
     warmup_iterations,
@@ -43,11 +40,10 @@ def run_test_FalconCausalLM_end_to_end(
 
     # Clear global profiler state before starting measurements
     profiler.clear()
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_name, low_cpu_mem_usage=True, num_hidden_layers=num_layers
+        model_version, local_files_only=is_ci_env, low_cpu_mem_usage=True, num_hidden_layers=num_layers
     )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
@@ -306,7 +302,6 @@ def run_test_FalconCausalLM_end_to_end(
     # This script does not asser the expected vs actual time since this is done based on the perf report and as part of the perf pipeline
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.model_perf_t3000
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
@@ -348,8 +343,6 @@ def test_perf_bare_metal(
     num_layers,
     request,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     t3k_mesh_device,
     is_ci_env,
 ):
@@ -364,9 +357,7 @@ def test_perf_bare_metal(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     disable_persistent_kernel_cache()
 
@@ -381,7 +372,6 @@ def test_perf_bare_metal(
         model_config,
         model_config_str,
         tt_cache_path,
-        model_location_generator,
         expected_compile_time,
         expected_inference_time,
         warmup_iterations=10,
@@ -389,7 +379,6 @@ def test_perf_bare_metal(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
@@ -420,8 +409,6 @@ def test_device_perf_bare_metal(
     num_layers,
     request,
     model_config_str,
-    model_location_generator,
-    get_tt_cache_path,
     t3k_mesh_device,
     is_ci_env,
 ):
@@ -436,9 +423,7 @@ def test_device_perf_bare_metal(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     disable_persistent_kernel_cache()
 
@@ -453,7 +438,6 @@ def test_device_perf_bare_metal(
         model_config,
         model_config_str,
         tt_cache_path,
-        model_location_generator,
         expected_compile_time,
         expected_inference_time,
         warmup_iterations=10,

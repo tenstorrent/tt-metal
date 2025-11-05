@@ -17,23 +17,25 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt_stl/span.hpp>
 
 #include "device_fixture.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
+
+// Access to internal API: ProgramImpl::num_kernel, get_kernel
+#include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -68,7 +70,7 @@ uint32_t get_runtime_arg_addr(
 };
 
 distributed::MeshWorkload initialize_program_data_movement(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreRangeSet& core_range_set) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CoreRangeSet& core_range_set) {
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -81,12 +83,12 @@ distributed::MeshWorkload initialize_program_data_movement(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return workload;
 }
 
 distributed::MeshWorkload initialize_program_data_movement_rta(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& core_range_set,
     uint32_t num_unique_rt_args,
     bool common_rtas = false) {
@@ -117,12 +119,12 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = dm_defines});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return workload;
 }
 
 tt::tt_metal::KernelHandle initialize_program_compute(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     tt::tt_metal::Program& program,
     const CoreRangeSet& core_range_set,
     uint32_t num_unique_rt_args,
@@ -157,7 +159,7 @@ tt::tt_metal::KernelHandle initialize_program_compute(
 }
 
 std::pair<distributed::MeshWorkload, tt::tt_metal::KernelHandle> initialize_program_compute(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& core_range_set,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args) {
@@ -168,13 +170,13 @@ std::pair<distributed::MeshWorkload, tt::tt_metal::KernelHandle> initialize_prog
 
     auto kernel_id =
         initialize_program_compute(mesh_device, program, core_range_set, num_unique_rt_args, num_common_rt_args);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_id};
 }
 
 std::pair<distributed::MeshWorkload, std::vector<tt::tt_metal::KernelHandle>>
 initialize_program_compute_multi_range_sets(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<CoreRangeSet>& core_range_sets,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args) {
@@ -189,14 +191,14 @@ initialize_program_compute_multi_range_sets(
         kernel_ids.push_back(
             initialize_program_compute(mesh_device, program, core_range_set, num_unique_rt_args, num_common_rt_args));
     }
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_ids};
 }
 
 // Verify the runtime args for a single core (apply optional non-zero increment amounts to values written to match
 // compute kernel)
 void verify_core_rt_args(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool is_common,
     CoreCoord core,
     uint32_t base_addr,
@@ -224,7 +226,7 @@ void verify_core_rt_args(
 // Iterate over all cores unique and common runtime args, and verify they match expected values.
 void verify_results(
     bool are_args_incremented,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const distributed::MeshWorkload& workload,
     const std::map<CoreCoord, std::vector<uint32_t>>& core_to_rt_args,
     const std::vector<uint32_t>& common_rt_args = {}) {
@@ -236,8 +238,8 @@ void verify_results(
     auto& program = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        const auto kernel = program.impl().get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
             device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             kernel->get_kernel_processor_class(),
@@ -250,11 +252,12 @@ void verify_results(
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args) << "(unique rta)";
 
-            verify_core_rt_args(mesh_device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
+            verify_core_rt_args(
+                mesh_device, false, logical_core, rt_args_base_addr, expected_rt_args, unique_arg_incr_val);
         }
 
         // Verify common RT Args (same for all cores) if they exist.
-        if (common_rt_args.size() > 0) {
+        if (!common_rt_args.empty()) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
                 device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
                 kernel->get_kernel_processor_class(),
@@ -300,7 +303,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         auto& program = workload.get_programs().at(device_range);
-        ASSERT_TRUE(program.num_kernels() == 1);
+        ASSERT_TRUE(program.impl().num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {0xfeadbeef, 0xabababab};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
@@ -434,7 +437,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     // Generate an rt arg val based on x and y.
-                    uint32_t val_offset = x * 100 + y * 10;
+                    uint32_t val_offset = (x * 100) + (y * 10);
                     std::vector<uint32_t> initial_runtime_args = {101 + val_offset, 202 + val_offset};
                     SetRuntimeArgs(program, kernel, logical_core, initial_runtime_args);
                     core_to_rt_args[logical_core] = initial_runtime_args;
@@ -487,7 +490,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     // Generate rt args length and val based on x,y arbitrarily.
-                    uint32_t val_offset = x * 100 + y * 10;
+                    uint32_t val_offset = (x * 100) + (y * 10);
                     uint32_t num_rt_args = 2 + x + y;
                     std::vector<uint32_t> initial_runtime_args;
                     initial_runtime_args.reserve(num_rt_args);
@@ -513,7 +516,6 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
 TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
-        auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));
@@ -549,7 +551,7 @@ TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
         auto workload = unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 2);
         auto& program = workload.get_programs().at(device_range);
-        ASSERT_TRUE(program.num_kernels() == 1);
+        ASSERT_TRUE(program.impl().num_kernels() == 1);
         std::vector<uint32_t> initial_runtime_args = {101, 202};
         SetRuntimeArgs(program, 0, core_range_set, initial_runtime_args);
 
@@ -590,9 +592,9 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
         // Split into 4 quads
         // Slow dispatch test. All coords are available for use
         CoreRange core_range_0(CoreCoord(0, 0), CoreCoord(max_x / 2, max_y / 2));
-        CoreRange core_range_1(CoreCoord(max_x / 2 + 1, 0), CoreCoord(max_x, max_y / 2));
-        CoreRange core_range_2(CoreCoord(0, max_y / 2 + 1), CoreCoord(max_x / 2, max_y));
-        CoreRange core_range_3(CoreCoord(max_x / 2 + 1, max_y / 2 + 1), CoreCoord(max_x, max_y));
+        CoreRange core_range_1(CoreCoord((max_x / 2) + 1, 0), CoreCoord(max_x, max_y / 2));
+        CoreRange core_range_2(CoreCoord(0, (max_y / 2) + 1), CoreCoord(max_x / 2, max_y));
+        CoreRange core_range_3(CoreCoord((max_x / 2) + 1, (max_y / 2) + 1), CoreCoord(max_x, max_y));
 
         CoreRangeSet core_range_set_0(std::vector{core_range_0, core_range_1});
         CoreRangeSet core_range_set_1(std::vector{core_range_2, core_range_3});
@@ -610,4 +612,4 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
     }
 }
 
-}  // namespace unit_tests::runtime_args
+}  // namespace tt::tt_metal

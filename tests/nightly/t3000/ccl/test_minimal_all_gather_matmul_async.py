@@ -8,20 +8,20 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
+from tests.nightly.t3000.ccl.test_minimal_all_gather_async import is_unsupported_case
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
-def create_global_semaphores(t3k_mesh_device, num_devices, cores, initial_value):
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(t3k_mesh_device, cores, initial_value) for _ in range(2)]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
     return ccl_semaphore_handles
 
 
 def run_all_gather_impl(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     ag_output_shape,
     dim,
@@ -47,6 +47,8 @@ def run_all_gather_impl(
     num_workers_per_link=None,
     num_buffers_per_channel=None,
 ):
+    if use_legacy_allgather:
+        pytest.skip(LEGACY_CCL_SKIP)
     torch.manual_seed(0)
 
     tile = (32, 32)
@@ -67,7 +69,7 @@ def run_all_gather_impl(
             pytest.fail("num_iters must be >= 1")
 
         ##### All gather setup #####
-        compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+        compute_grid_size = mesh_device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
@@ -79,17 +81,17 @@ def run_all_gather_impl(
         worker_sub_device_id = ttnn.SubDeviceId(0)
         sub_device_stall_group = [worker_sub_device_id]
 
-        sub_device_manager = t3k_mesh_device.create_sub_device_manager([worker_sub_device], 0)
-        t3k_mesh_device.load_sub_device_manager(sub_device_manager)
-        t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
+        sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+        mesh_device.load_sub_device_manager(sub_device_manager)
+        mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
         # create global semaphore handles
         ccl_semaphore_handles = [
-            create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
+            create_global_semaphores(mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
         ]
 
         barrier_semaphore_handles = [
-            ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+            ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
         ]
 
     ### Create persistent output buffers
@@ -97,11 +99,11 @@ def run_all_gather_impl(
     persistent_output_buffers = [
         ttnn.from_torch(
             torch.zeros(ag_output_shape),
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ag_input_dtype,
             memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(t3k_mesh_device),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         for _ in range(num_iters)
     ]
@@ -122,11 +124,11 @@ def run_all_gather_impl(
 
         input_tensor_mesh = ttnn.from_torch(
             ag_output_tensor,
-            device=t3k_mesh_device,
+            device=mesh_device,
             layout=layout,
             dtype=ag_input_dtype,
             memory_config=mem_config_input,
-            mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=dim),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=dim),
         )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
@@ -142,9 +144,9 @@ def run_all_gather_impl(
         weights_tensor_padded,
         dtype=matmul_weights_dtype,
         layout=layout,
-        device=t3k_mesh_device,
+        device=mesh_device,
         memory_config=mem_config_weights,
-        mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim),
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=dim),
     )
 
     if use_bias:
@@ -154,9 +156,9 @@ def run_all_gather_impl(
             bias_tensor_padded,
             dtype=matmul_weights_dtype,
             layout=layout,
-            device=t3k_mesh_device,
+            device=mesh_device,
             memory_config=mem_config_weights,
-            mesh_mapper=ShardTensorToMesh(t3k_mesh_device, dim=dim),
+            mesh_mapper=ShardTensorToMesh(mesh_device, dim=dim),
             tile=ttnn.Tile(tile),
         )
     else:
@@ -199,31 +201,20 @@ def run_all_gather_impl(
 
     def run_op(i):
         if use_non_fused:
-            if use_legacy_allgather:
-                pytest.skip(LEGACY_CCL_SKIP)
-                # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
-                # tt_all_gather_out_tensor = ttnn.all_gather(
-                #     input_tensor_mesh_list[i],
-                #     dim,
-                #     num_links=num_links,
-                #     memory_config=mem_config_ag,
-                # )
-                assert False, "Legacy ccl call removed until new implementation is done"
-            else:
-                tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
-                    input_tensor_mesh_list[i],
-                    persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
-                    dim=dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
-                    num_links=num_links,
-                    memory_config=mem_config_ag,
-                    topology=all_gather_topology,
-                    subdevice_id=worker_sub_device_id,
-                    barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-                    chunks_per_sync=chunks_per_sync,
-                    num_workers_per_link=num_workers_per_link,
-                    num_buffers_per_channel=num_buffers_per_channel,
-                )
+            tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
+                input_tensor_mesh_list[i],
+                persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                num_links=num_links,
+                memory_config=mem_config_ag,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
 
             tt_matmul_out_tensor = ttnn.linear(
                 tt_all_gather_out_tensor,
@@ -234,44 +225,26 @@ def run_all_gather_impl(
                 compute_kernel_config=compute_kernel_config,
             )
         else:
-            if use_legacy_allgather:
-                pytest.skip(LEGACY_CCL_SKIP)
-                # tt_all_gather_out_tensor, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
-                #     input_tensor_mesh_list[i],
-                #     weight_tt,
-                #     dim,
-                #     (0, 6),
-                #     bias=bias_tt,
-                #     num_links=num_links,
-                #     memory_config_ag=mem_config_ag,
-                #     memory_config_mm=mem_config_mm,
-                #     transpose_a=False,
-                #     transpose_b=False,
-                #     program_config=program_config,
-                #     compute_kernel_config=compute_kernel_config,
-                # )
-                assert False, "Legacy ccl call removed until new implementation is done"
-            else:
-                tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
-                    input_tensor_mesh_list[i],
-                    weight_tt,
-                    persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
-                    dim=dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
-                    all_gather_core_grid_offset=(0, 6),
-                    barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
-                    bias=bias_tt,
-                    num_links=num_links,
-                    memory_config_ag=mem_config_ag,
-                    topology=all_gather_topology,
-                    subdevice_id=worker_sub_device_id,
-                    memory_config_mm=mem_config_mm,
-                    program_config=program_config,
-                    compute_kernel_config=compute_kernel_config,
-                    chunks_per_sync=chunks_per_sync,
-                    num_workers_per_link=num_workers_per_link,
-                    num_buffers_per_channel=num_buffers_per_channel,
-                )
+            tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
+                input_tensor_mesh_list[i],
+                weight_tt,
+                persistent_output_buffer=persistent_output_buffers[i] if use_persistent_buffers else None,
+                dim=dim,
+                multi_device_global_semaphore=ccl_semaphore_handles[i],
+                all_gather_core_grid_offset=(0, 6),
+                barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+                bias=bias_tt,
+                num_links=num_links,
+                memory_config_ag=mem_config_ag,
+                topology=all_gather_topology,
+                subdevice_id=worker_sub_device_id,
+                memory_config_mm=mem_config_mm,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                chunks_per_sync=chunks_per_sync,
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
+            )
 
         return tt_all_gather_out_tensor, tt_matmul_out_tensor
 
@@ -279,22 +252,22 @@ def run_all_gather_impl(
         # Compile the op
         tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(0)
         if not use_legacy_allgather:
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done compiling Op")
 
         # Capture the trace
-        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         tt_all_gather_out_tensor, tt_matmul_out_tensor = run_op(0)
-        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         if not use_legacy_allgather:
-            ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+            ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         logger.info(f"Done capturing trace")
 
         # Execute trace
         for i in range(num_iters):
-            ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
             if not use_legacy_allgather:
-                ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
             tt_matmul_out_tensor_list.append(tt_matmul_out_tensor)
         logger.info(f"Done executing trace")
@@ -306,7 +279,7 @@ def run_all_gather_impl(
 
             if not use_legacy_allgather:
                 logger.info(f"Waiting for op")
-                ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
+                ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
                 logger.info(f"Done op")
 
             logger.info(f"Done iteration {i}")
@@ -316,7 +289,7 @@ def run_all_gather_impl(
         torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
 
         tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
-        tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+        tt_mm_out = ttnn.to_torch(tt_mm_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED mm: {output}"
@@ -325,22 +298,139 @@ def run_all_gather_impl(
         torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
         tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-        tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+        tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
         tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
         eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, 1)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"{i} FAILED ag: {output}"
 
     if not use_legacy_allgather:
-        t3k_mesh_device.reset_sub_device_stall_group()
-        t3k_mesh_device.clear_loaded_sub_device_manager()
+        mesh_device.reset_sub_device_stall_group()
+        mesh_device.clear_loaded_sub_device_manager()
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_devices, num_links, ag_output_shape, dim, layout, matmul_output_dim, max_in0_block_w, matmul_weights_dtype, ag_input_dtype, use_bias",
+    "num_links, ag_output_shape, dim, layout, matmul_output_dim, max_in0_block_w, matmul_weights_dtype, ag_input_dtype, use_bias, enable_trace, num_iters, use_barrier, use_persistent_buffers, chunks_per_sync, num_workers_per_link, num_buffers_per_channel",
     [
-        (8, 1, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, 960, 2, ttnn.bfloat16, ttnn.bfloat16, True),
-        (8, 1, [1, 1, 32, 512], 3, ttnn.TILE_LAYOUT, 960, 2, ttnn.bfloat16, ttnn.bfloat16, True),
+        # Shape 0 tests - fused only
+        (
+            1,
+            [1, 1, 4096, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            960,
+            2,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+            False,
+            True,
+            10,
+            2,
+            2,
+        ),  # perf, no_barrier_with_persistent, chunking
+        (
+            1,
+            [1, 1, 4096, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            960,
+            2,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            True,
+            True,
+            None,
+            None,
+            None,
+        ),  # check, barrier_with_persistent, default
+        (
+            1,
+            [1, 1, 4096, 2560],
+            3,
+            ttnn.TILE_LAYOUT,
+            960,
+            2,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+            True,
+            False,
+            None,
+            None,
+            None,
+        ),  # perf, barrier_without_persistent, default
+        # Shape 1 tests - fused only
+        (
+            1,
+            [1, 1, 32, 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            960,
+            2,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            True,
+            True,
+            None,
+            None,
+            None,
+        ),  # check, barrier_with_persistent, default
+        (
+            1,
+            [1, 1, 32, 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            960,
+            2,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            True,
+            True,
+            10,
+            False,
+            True,
+            10,
+            2,
+            2,
+        ),  # perf, no_barrier_with_persistent, chunking
+        (
+            1,
+            [1, 1, 32, 512],
+            3,
+            ttnn.TILE_LAYOUT,
+            960,
+            2,
+            ttnn.bfloat16,
+            ttnn.bfloat16,
+            True,
+            False,
+            1,
+            True,
+            False,
+            10,
+            2,
+            2,
+        ),  # check, barrier_without_persistent, chunking
+    ],
+    ids=[
+        "ag_output_shape0-perf-no_barrier_with_persistent-chunking",
+        "ag_output_shape0-check-barrier_with_persistent-default",
+        "ag_output_shape0-perf-barrier_without_persistent-default",
+        "ag_output_shape1-check-barrier_with_persistent-default",
+        "ag_output_shape1-perf-no_barrier_with_persistent-chunking",
+        "ag_output_shape1-check-barrier_without_persistent-chunking",
     ],
 )
 @pytest.mark.parametrize(
@@ -354,85 +444,39 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace,num_iters",
+    "device_params, all_gather_topology",
     [
-        (True, 10),
-        (False, 1),
-    ],
-    ids=["perf", "check"],
-)
-@pytest.mark.parametrize(
-    "use_non_fused",
-    [
-        True,
-        False,
-    ],
-    ids=["separate", "fused"],
-)
-@pytest.mark.parametrize(
-    "use_barrier, use_persistent_buffers",
-    [
-        (True, True),
-        (True, False),
-        (False, True),
-    ],
-    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
-)
-@pytest.mark.parametrize(
-    "chunks_per_sync, num_workers_per_link, num_buffers_per_channel",
-    [
-        (None, None, None),
-        (10, 2, 2),
-    ],
-    ids=["default", "chunking"],
-)
-@pytest.mark.parametrize(
-    "device_params, use_legacy_allgather, all_gather_topology",
-    [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        pytest.param(
-            {"trace_region_size": 90112}, True, ttnn.Topology.Ring, marks=pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-        ),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear", "legacy_ring"],
+    ids=["fabric_ring"],
 )
 def test_all_gather_matmul_async(
-    t3k_mesh_device,
-    num_devices,
+    mesh_device,
+    num_links,
     ag_output_shape,
     dim,
-    num_links,
-    ag_input_dtype,
     layout,
     matmul_output_dim,
-    matmul_weights_dtype,
     max_in0_block_w,
+    matmul_weights_dtype,
+    ag_input_dtype,
     use_bias,
-    mem_config_input,
-    mem_config_ag,
-    mem_config_mm,
     enable_trace,
-    use_non_fused,
+    num_iters,
     use_barrier,
     use_persistent_buffers,
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
-    use_legacy_allgather,
+    mem_config_input,
+    mem_config_ag,
+    mem_config_mm,
     all_gather_topology,
-    num_iters,
 ):
-    if use_non_fused == False and all_gather_topology == ttnn.Topology.Linear:
-        pytest.skip("linear is not supported when using fused for all-gather")
-
-    if use_barrier == True and use_legacy_allgather == True:
-        pytest.skip("barrier not used for legacy all-gather")
-
     run_all_gather_impl(
-        t3k_mesh_device,
-        num_devices,
+        mesh_device,
+        mesh_device.get_num_devices(),
         ag_output_shape,
         dim,
         num_links,
@@ -447,8 +491,8 @@ def test_all_gather_matmul_async(
         mem_config_mm,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
-        use_non_fused=use_non_fused,
-        use_legacy_allgather=use_legacy_allgather,
+        use_non_fused=False,
+        use_legacy_allgather=False,
         num_iters=num_iters,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,

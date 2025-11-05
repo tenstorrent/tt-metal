@@ -11,8 +11,8 @@
 #include "fd_kernel.hpp"
 #include "mesh_graph.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 
 namespace tt {
@@ -89,30 +89,12 @@ class PrefetchKernel : public FDKernel {
 public:
     PrefetchKernel(
         int node_id,
-        chip_id_t device_id,
-        chip_id_t servicing_device_id,
+        ChipId device_id,
+        ChipId servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
         bool h_variant,
-        bool d_variant) :
-        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-        auto& core_manager = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager();  // Not thread safe
-        static_config_.is_h_variant = h_variant;
-        static_config_.is_d_variant = d_variant;
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-
-        if (h_variant && d_variant) {
-            this->logical_core_ = core_manager.prefetcher_core(device_id, channel, cq_id);
-        } else if (h_variant) {
-            channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(
-                servicing_device_id);
-            this->logical_core_ = core_manager.prefetcher_core(servicing_device_id, channel, cq_id);
-        } else if (d_variant) {
-            this->logical_core_ = core_manager.prefetcher_d_core(device_id, channel, cq_id);
-        }
-        this->kernel_type_ = FDKernelType::DISPATCH;
-    }
+        bool d_variant);
 
     void CreateKernel() override;
 

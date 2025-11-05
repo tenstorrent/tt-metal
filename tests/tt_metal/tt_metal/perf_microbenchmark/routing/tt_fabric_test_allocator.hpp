@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,12 +10,15 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <set>
+#include <fmt/format.h>
 #include <tt-metalium/host_api.hpp>
 #include "tt_fabric_test_common.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_memory_map.hpp"
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -36,8 +39,8 @@ public:
         payload_chunk_size(payload_chunk_size),
         l1_alignment_(l1_alignment),
         payload_region_(payload_region),
-        atomic_region_(atomic_region) {
-        this->next_atomic_addr_ = this->atomic_region_.start;
+        atomic_region_(atomic_region),
+        next_atomic_addr_(this->atomic_region_.start) {
         init_payload_buffer_allocator();
     }
 
@@ -103,7 +106,7 @@ private:
         uint32_t chunk_size = this->payload_chunk_size;
         TT_FATAL(
             chunk_size > 0 && chunk_size % l1_alignment_ == 0,
-            "Payload chunk_size must be positive and a multiple of alignment");
+            "Payload chunk_size must be positive and a multiple of L1 alignment");
 
         available_payload_chunks_.clear();
         for (uint32_t addr = payload_region_.start; addr + chunk_size <= payload_region_.end(); addr += chunk_size) {
@@ -127,10 +130,15 @@ private:
 struct CorePool {
     CorePool(const CoreAllocationConfig& policy) : policy(policy) {}
 
-    std::vector<CoreCoord> get_available_cores(const std::unordered_map<CoreCoord, uint32_t>& core_workload) const {
+    std::vector<CoreCoord> get_available_cores(
+        const std::unordered_map<CoreCoord, uint32_t>& core_workload, uint32_t partition_id = 0) const {
         std::vector<CoreCoord> available;
-        available.reserve(active_pool.size());
-        for (const auto& core : active_pool) {
+
+        // Use partition-local cores if partitioned
+        const auto& cores_to_check = (num_partitions > 1) ? partition_cores.at(partition_id) : active_pool;
+
+        available.reserve(cores_to_check.size());
+        for (const auto& core : cores_to_check) {
             auto it = core_workload.find(core);
             if (it == core_workload.end() || it->second < policy.max_configs_per_core) {
                 available.push_back(core);
@@ -139,11 +147,63 @@ struct CorePool {
         return available;
     }
 
+    void initialize_with_cores(const std::vector<CoreCoord>& cores, uint32_t num_partitions = 1);
+    void add_cores(const std::vector<CoreCoord>& new_cores);
+
     const CoreAllocationConfig& policy;
     std::vector<CoreCoord> active_pool;
     size_t next_pool_idx = 0;
     bool initialized = false;
+
+    // Partition support
+    uint32_t num_partitions = 1;
+    std::unordered_map<CoreCoord, uint32_t> core_to_partition;
+    std::unordered_map<uint32_t, std::vector<CoreCoord>> partition_cores;
+    uint32_t next_partition_id = 0;
+    std::unordered_map<uint32_t, size_t> next_pool_idx_per_partition;
 };
+
+// CorePool method implementations
+inline void CorePool::initialize_with_cores(const std::vector<CoreCoord>& cores, uint32_t num_partitions) {
+    TT_FATAL(!initialized, "Cannot re-initialize CorePool");
+
+    // Sanity check - need at least 1 core per partition
+    TT_FATAL(
+        cores.size() >= num_partitions,
+        "Cannot partition {} cores into {} partitions - need at least 1 core per partition",
+        cores.size(),
+        num_partitions);
+
+    this->num_partitions = num_partitions;
+    this->next_partition_id = 0;
+
+    // Initialize per-partition tracking
+    for (uint32_t p = 0; p < num_partitions; p++) {
+        next_pool_idx_per_partition[p] = 0;
+    }
+
+    // Delegate to add_cores for partition assignment
+    add_cores(cores);
+
+    initialized = true;
+}
+
+inline void CorePool::add_cores(const std::vector<CoreCoord>& new_cores) {
+    if (new_cores.empty()) {
+        return;
+    }
+
+    active_pool.insert(active_pool.end(), new_cores.begin(), new_cores.end());
+    std::sort(active_pool.begin(), active_pool.end());
+
+    // Assign partitions and update both maps
+    for (const auto& core : new_cores) {
+        uint32_t pid = next_partition_id;
+        core_to_partition[core] = pid;
+        partition_cores[pid].push_back(core);
+        next_partition_id = (next_partition_id + 1) % num_partitions;
+    }
+}
 
 class TestDeviceResources {
 public:
@@ -157,10 +217,11 @@ public:
         const BaseMemoryRegion& payload_region,
         const BaseMemoryRegion& atomic_region);
 
-    void initialize_receiver_pool();
+    void initialize_receiver_pool(uint32_t num_partitions = 1);
     CoreCoord reserve_sync_core();
     CoreCoord reserve_sender_core(const std::optional<CoreCoord>& specified_core);
-    CoreCoord reserve_receiver_core(const std::optional<CoreCoord>& specified_core);
+    CoreCoord reserve_receiver_core(
+        const std::optional<CoreCoord>& specified_core, uint32_t partition_id = 0, uint32_t num_partitions = 1);
     CoreResources& get_or_create_core_resources(const CoreCoord& core, CoreType core_type);
 
     const FabricNodeId node_id_;
@@ -173,9 +234,28 @@ public:
     std::unordered_map<CoreCoord, uint32_t> core_workload_;        // map core -> num_configs
     std::unordered_map<CoreCoord, CoreResources> core_resources_;  // map core -> its memory allocator
 
+    // Credit allocation: per-sender-core (needed for multi-link scenarios)
+    std::unordered_map<CoreCoord, DynamicMemoryRegion> credit_allocators_;
+
+    // Collect remaining pristine cores from all pools (for mux allocation)
+    std::vector<CoreCoord> collect_remaining_pristine_cores() const;
+
+    // Initialize credit allocator for a specific sender core (lazy)
+    void initialize_credit_allocator(const CoreCoord& sender_core, const SenderMemoryMap& sender_memory_map);
+
+    // Allocate credit chunk from a specific sender core's L1 credit region
+    // Returns the base address of the allocated chunk
+    // Throws if allocation would exceed region bounds
+    uint32_t allocate_credit_chunk(
+        const CoreCoord& sender_core, uint32_t num_receivers, const SenderMemoryMap& sender_memory_map);
+
+    // Reset credit allocators
+    void reset_credit_allocators();
+
 private:
-    void reserve_core_internal(const CoreCoord& core, CoreType core_type);
-    CoreCoord find_next_available_core(CorePool& pool);
+    void reserve_core_internal(const CoreCoord& core, CoreType core_type, uint32_t partition_id = 0);
+    void assign_core_to_partition(CorePool& pool, const CoreCoord& core, uint32_t partition_id);
+    CoreCoord find_next_available_core(CorePool& pool, uint32_t partition_id = 0);
     CoreCoord find_next_available_sync_core(CorePool& pool);
     void refill_pool(CorePool& pool);
 };
@@ -208,14 +288,21 @@ inline TestDeviceResources::TestDeviceResources(
     std::sort(pristine_cores_.begin(), pristine_cores_.end());
 }
 
-inline void TestDeviceResources::initialize_receiver_pool() {
+inline void TestDeviceResources::initialize_receiver_pool(uint32_t num_partitions) {
     CorePool& receiver_pool = core_pools_[RECEIVER_TYPE_IDX];
     if (!receiver_pool.initialized) {
         // All cores not used for senders are available for receivers.
-        receiver_pool.active_pool = pristine_cores_;
-        std::sort(receiver_pool.active_pool.begin(), receiver_pool.active_pool.end());
+        receiver_pool.initialize_with_cores(pristine_cores_, num_partitions);
         pristine_cores_.clear();
-        receiver_pool.initialized = true;
+
+        if (num_partitions > 1) {
+            log_debug(
+                tt::LogTest,
+                "Device {}: Initialized receiver pool with {} cores, {} partitions",
+                node_id_,
+                receiver_pool.active_pool.size(),
+                num_partitions);
+        }
     }
 }
 
@@ -248,26 +335,27 @@ inline CoreCoord TestDeviceResources::reserve_sender_core(const std::optional<Co
     return core;
 }
 
-inline CoreCoord TestDeviceResources::reserve_receiver_core(const std::optional<CoreCoord>& specified_core) {
+inline CoreCoord TestDeviceResources::reserve_receiver_core(
+    const std::optional<CoreCoord>& specified_core, uint32_t partition_id, uint32_t num_partitions) {
+    // Lazy init with correct partition count
     if (!core_pools_[RECEIVER_TYPE_IDX].initialized) {
-        initialize_receiver_pool();
+        initialize_receiver_pool(num_partitions);
     }
 
+    CoreCoord core;
     if (specified_core.has_value()) {
-        reserve_core_internal(specified_core.value(), CoreType::RECEIVER);
-        return specified_core.value();
+        core = specified_core.value();
+    } else {
+        core = find_next_available_core(core_pools_[RECEIVER_TYPE_IDX], partition_id);
     }
 
-    CorePool& pool = core_pools_[RECEIVER_TYPE_IDX];
-    CoreCoord core = find_next_available_core(pool);
-    reserve_core_internal(core, CoreType::RECEIVER);
+    // reserve_core_internal handles ALL partition logic
+    reserve_core_internal(core, CoreType::RECEIVER, partition_id);
     return core;
 }
 
 inline CoreResources& TestDeviceResources::get_or_create_core_resources(const CoreCoord& core, CoreType core_type) {
     if (core_resources_.find(core) == core_resources_.end()) {
-        CoreAllocationConfig policy = core_pools_[static_cast<size_t>(core_type)].policy;
-
         core_resources_.emplace(
             core,
             CoreResources(
@@ -280,25 +368,90 @@ inline CoreResources& TestDeviceResources::get_or_create_core_resources(const Co
 }
 
 inline void TestDeviceResources::refill_pool(CorePool& pool) {
-    uint32_t refill_count;
-    if (pool.active_pool.empty()) {
-        refill_count = pool.policy.initial_pool_size;
-    } else {
-        refill_count = pool.policy.pool_refill_size;
-    }
+    uint32_t refill_count = pool.active_pool.empty() ? pool.policy.initial_pool_size : pool.policy.pool_refill_size;
+
+    std::vector<CoreCoord> new_cores;
 
     for (uint32_t i = 0; i < refill_count; ++i) {
         if (pristine_cores_.empty()) {
-            // This is not an error if we are just refilling. But if the pool is empty, it is.
             if (pool.active_pool.empty()) {
                 TT_THROW("No more pristine cores available to create a new active pool.");
             }
             break;
         }
-        pool.active_pool.push_back(pristine_cores_.back());
+        new_cores.push_back(pristine_cores_.back());
         pristine_cores_.pop_back();
     }
-    std::sort(pool.active_pool.begin(), pool.active_pool.end());
+
+    // Use CorePool::add_cores to handle partition assignment
+    pool.add_cores(new_cores);
+}
+
+inline void TestDeviceResources::initialize_credit_allocator(
+    const CoreCoord& sender_core, const SenderMemoryMap& sender_memory_map) {
+    auto it = credit_allocators_.find(sender_core);
+    if (it == credit_allocators_.end()) {
+        credit_allocators_.emplace(
+            sender_core,
+            DynamicMemoryRegion(
+                sender_memory_map.get_credit_addresses_base(),
+                sender_memory_map.get_credit_addresses_size(),
+                SenderMemoryMap::CREDIT_ADDRESS_STRIDE));
+    }
+}
+
+inline uint32_t TestDeviceResources::allocate_credit_chunk(
+    const CoreCoord& sender_core, uint32_t num_receivers, const SenderMemoryMap& sender_memory_map) {
+    // Lazy initialization per sender core
+    auto it = credit_allocators_.find(sender_core);
+    if (it == credit_allocators_.end()) {
+        initialize_credit_allocator(sender_core, sender_memory_map);
+        it = credit_allocators_.find(sender_core);
+    }
+
+    // Allocate from this sender core's allocator
+    uint32_t chunk_base = it->second.allocate_chunk(num_receivers);
+    return chunk_base;
+}
+
+inline void TestDeviceResources::reset_credit_allocators() {
+    for (auto& [core, allocator] : credit_allocators_) {
+        allocator.reset();
+    }
+}
+
+inline std::vector<CoreCoord> TestDeviceResources::collect_remaining_pristine_cores() const {
+    std::vector<CoreCoord> remaining_cores;
+
+    // Collect from pristine_cores_ (if not yet moved to pools)
+    remaining_cores.insert(remaining_cores.end(), pristine_cores_.begin(), pristine_cores_.end());
+
+    // Collect from sender pool (cores that haven't been allocated yet)
+    const CorePool& sender_pool = core_pools_[SENDER_TYPE_IDX];
+    if (sender_pool.initialized) {
+        for (const auto& core : sender_pool.active_pool) {
+            auto it = core_workload_.find(core);
+            if (it == core_workload_.end()) {
+                // Core is in pool but has never been allocated
+                remaining_cores.push_back(core);
+            }
+        }
+    }
+
+    // Collect from receiver pool (cores that haven't been allocated yet)
+    const CorePool& receiver_pool = core_pools_[RECEIVER_TYPE_IDX];
+    if (receiver_pool.initialized) {
+        for (const auto& core : receiver_pool.active_pool) {
+            auto it = core_workload_.find(core);
+            if (it == core_workload_.end()) {
+                // Core is in pool but has never been allocated
+                remaining_cores.push_back(core);
+            }
+        }
+    }
+
+    // Pools are mutually exclusive, no duplicates possible
+    return remaining_cores;
 }
 
 inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& pool) {
@@ -308,45 +461,74 @@ inline CoreCoord TestDeviceResources::find_next_available_sync_core(CorePool& po
     return core;
 }
 
-inline CoreCoord TestDeviceResources::find_next_available_core(CorePool& pool) {
-    while (true) {
-        // Search the current pool for an available core.
-        for (size_t i = 0; i < pool.active_pool.size(); ++i) {
-            size_t idx_to_check = (pool.next_pool_idx + i) % pool.active_pool.size();
-            const CoreCoord& core = pool.active_pool[idx_to_check];
-            auto it = core_workload_.find(core);
+inline CoreCoord TestDeviceResources::find_next_available_core(CorePool& pool, uint32_t partition_id) {
+    // Use per-partition tracking
+    size_t& next_idx = pool.next_pool_idx_per_partition[partition_id];
+    const auto& partition_cores = pool.partition_cores[partition_id];
 
+    while (true) {
+        // Search partition-local cores
+        for (size_t i = 0; i < partition_cores.size(); ++i) {
+            size_t idx_to_check = (next_idx + i) % partition_cores.size();
+            const CoreCoord& core = partition_cores[idx_to_check];
+
+            // Check availability
+            auto it = core_workload_.find(core);
             if (it == core_workload_.end() || it->second < pool.policy.max_configs_per_core) {
-                // Found an available core. Update index for next search and return.
+                // Found available core. Update index based on policy
                 if (pool.policy.policy == CoreAllocationPolicy::ExhaustFirst) {
-                    // For ExhaustFirst, keep pointing to this core until it's full.
                     if (it == core_workload_.end() || (it->second + 1) < pool.policy.max_configs_per_core) {
-                        pool.next_pool_idx = idx_to_check;
+                        next_idx = idx_to_check;
                     } else {
-                        // Core will be full after this allocation, so move to the next.
-                        pool.next_pool_idx = (idx_to_check + 1) % pool.active_pool.size();
+                        next_idx = (idx_to_check + 1) % partition_cores.size();
                     }
                 } else {  // RoundRobin
-                    pool.next_pool_idx = (idx_to_check + 1) % pool.active_pool.size();
+                    next_idx = (idx_to_check + 1) % partition_cores.size();
                 }
                 return core;
             }
         }
 
-        // If we are here, the pool is exhausted. Try to refill it.
+        // Pool exhausted, try to refill
         size_t old_pool_size = pool.active_pool.size();
         refill_pool(pool);
 
-        // If the pool size didn't change after refill, we're out of cores for good.
         if (pool.active_pool.size() == old_pool_size) {
             TT_THROW("No available core found and the pool could not be refilled. All cores are at max workload.");
         }
-        // Point the search to the start of the newly added cores to avoid re-scanning the exhausted ones.
-        pool.next_pool_idx = old_pool_size;
+
+        // Reset to start of partition (refill already updated partition_cores)
+        next_idx = 0;
     }
 }
 
-inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, CoreType core_type) {
+inline void TestDeviceResources::assign_core_to_partition(
+    CorePool& pool, const CoreCoord& core, uint32_t partition_id) {
+    auto partition_it = pool.core_to_partition.find(core);
+
+    if (partition_it != pool.core_to_partition.end()) {
+        // Core already in pool
+        if (partition_it->second == partition_id) {
+            return;  // Already in correct partition, nothing to do
+        }
+
+        // Move from old partition to new partition
+        uint32_t old_partition = partition_it->second;
+
+        // Remove from old partition's vector
+        auto& old_partition_cores = pool.partition_cores[old_partition];
+        old_partition_cores.erase(
+            std::remove(old_partition_cores.begin(), old_partition_cores.end(), core), old_partition_cores.end());
+    }
+
+    // Add to new partition (works for both move and fresh assignment)
+    pool.core_to_partition[core] = partition_id;
+    pool.partition_cores[partition_id].push_back(core);
+    std::sort(pool.partition_cores[partition_id].begin(), pool.partition_cores[partition_id].end());
+}
+
+inline void TestDeviceResources::reserve_core_internal(
+    const CoreCoord& core, CoreType core_type, uint32_t partition_id) {
     CorePool& pool = core_pools_[static_cast<size_t>(core_type)];
     CorePool& other_pool =
         core_pools_[static_cast<size_t>(core_type == CoreType::SENDER ? CoreType::RECEIVER : CoreType::SENDER)];
@@ -363,6 +545,25 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
             (core_type == CoreType::SENDER ? "RECEIVER" : "SENDER"));
     }
 
+    // Check partition conflict (only for RECEIVER with partitions)
+    if (core_type == CoreType::RECEIVER && pool.num_partitions > 1) {
+        auto partition_it = pool.core_to_partition.find(core);
+        if (partition_it != pool.core_to_partition.end() && partition_it->second != partition_id) {
+            // Core is in different partition - check if it's active
+            auto workload_it = core_workload_.find(core);
+            if (workload_it != core_workload_.end() && workload_it->second > 0) {
+                TT_THROW(
+                    "Cannot reserve core {} on device {} for partition {}: "
+                    "core is already in use by partition {} with {} configs",
+                    core.str(),
+                    node_id_,
+                    partition_id,
+                    partition_it->second,
+                    workload_it->second);
+            }
+        }
+    }
+
     // If core is pristine, it must be added to the active pool first.
     auto pristine_it = std::find(pristine_cores_.begin(), pristine_cores_.end(), core);
     if (pristine_it != pristine_cores_.end()) {
@@ -370,6 +571,11 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
         // Put it in the active pool so it's not "lost" from tracking.
         pool.active_pool.push_back(core);
         std::sort(pool.active_pool.begin(), pool.active_pool.end());
+    }
+
+    // Assign/move to correct partition (only for RECEIVER with partitions)
+    if (core_type == CoreType::RECEIVER && pool.num_partitions > 1) {
+        assign_core_to_partition(pool, core, partition_id);
     }
 
     if (core_workload_[core] >= pool.policy.max_configs_per_core) {
@@ -384,6 +590,22 @@ inline void TestDeviceResources::reserve_core_internal(const CoreCoord& core, Co
     core_workload_[core]++;
 
     get_or_create_core_resources(core, core_type);
+}
+
+// ======================================================================================
+// Credit Allocation Helpers
+// ======================================================================================
+
+/**
+ * Calculate credit configuration (100% initial, 20% batch)
+ * Simple policy: Give sender full buffer capacity, receiver returns in 20% batches
+ */
+inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
+    uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {
+    uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
+    uint32_t initial_credits = std::min(buffer_capacity_packets, num_packets);
+    uint32_t batch_size = std::max(1u, initial_credits / 4);
+    return {initial_credits, batch_size};
 }
 
 // ======================================================================================
@@ -402,6 +624,9 @@ public:
     void allocate_resources(TestConfig& test_config);
     void reset();
 
+    // Get pristine cores for a device (for local mux allocation)
+    std::vector<CoreCoord> get_pristine_cores_for_device(const FabricNodeId& node_id) const;
+
 private:
     TestDeviceResources& get_or_create_device_resources(const FabricNodeId& node_id);
 
@@ -412,6 +637,7 @@ private:
     const ReceiverMemoryMap& receiver_memory_map_;
     std::optional<CoreCoord> worker_grid_size_;
     std::unordered_map<FabricNodeId, std::unique_ptr<TestDeviceResources>> all_device_resources_;
+    bool enable_flow_control_ = false;  // Set during allocate_resources, used during device creation
 };
 
 inline GlobalAllocator::GlobalAllocator(
@@ -448,10 +674,250 @@ inline TestDeviceResources& GlobalAllocator::get_or_create_device_resources(cons
             policies_.receiver_config,
             receiver_memory_map_.payload_chunks,
             receiver_memory_map_.atomic_counters));
+
     return *inserted_it->second;
 }
 
+/**
+ * Manages dynamic allocation policy computation and caching.
+ *
+ * Responsibilities:
+ * - Compute optimal allocation policies for a given test configuration
+ * - Cache policies based on topology key (name + num_links)
+ * - Determine when reconstruction is needed (iteration 0 or topology change)
+ */
+class DynamicPolicyManager {
+public:
+    DynamicPolicyManager(const IDeviceInfoProvider& device_info_provider, const IRouteManager& route_manager) :
+        device_info_provider_(device_info_provider), route_manager_(route_manager) {}
+
+    /**
+     * Get new policy for a test configuration if recomputation is needed.
+     *
+     * Returns std::nullopt if the cached policy can be reused (same topology, not iteration 0).
+     * Returns a new policy if:
+     * - First iteration (iteration_number == 0), OR
+     * - Topology changed (different name or num_links)
+     *
+     */
+    std::optional<AllocatorPolicies> get_new_policy_for_test(const TestConfig& config) {
+        // Build topology key from parameters that affect allocation policy:
+        // - config.name: Different tests have different sender/receiver patterns
+        // - num_links: Link duplication creates additional sender cores, affecting reserved cores
+        //
+        // Parameters that DON'T affect policy (and thus share the same key):
+        // - size/num_packets: Only affects validation, not resource allocation
+        // - ftype/ntype: Only affects routing, not allocation
+        //
+        // Format: "test_name:links_N" (e.g., "FlowControlMesh:links_2")
+        std::string topology_key = fmt::format("{}:links_{}", config.name, config.fabric_setup.num_links);
+
+        bool needs_recomputation = (config.iteration_number == 0) || (topology_key != last_topology_key_);
+
+        if (needs_recomputation) {
+            // Compute fresh policy
+            cached_policy_ = compute_policy(config);
+            last_topology_key_ = topology_key;
+
+            return cached_policy_;  // Return new policy
+        } else {
+            return std::nullopt;  // Signal to reuse existing policy
+        }
+    }
+
+    const AllocatorPolicies& get_cached_policy() const { return cached_policy_; }
+
+    void reset() {
+        last_topology_key_.clear();
+        cached_policy_ = AllocatorPolicies{};
+    }
+
+private:
+    /**
+     * Compute dynamic allocation policies based on test configuration.
+     *
+     * Analyzes the test topology (senders, receivers, devices, flow control) and computes
+     * optimal allocation policies:
+     * - max_configs_per_core: How many receiver configs can share a single core
+     * - default_payload_chunk_size: Buffer size for each receiver config
+     *
+     */
+    AllocatorPolicies compute_policy(const TestConfig& config) {
+        // 1. Query system parameters
+        CoreCoord worker_grid = device_info_provider_.get_worker_grid_size();
+        uint32_t total_worker_cores = worker_grid.x * worker_grid.y;
+
+        // 2. Determine mux cores per device and num_links (if flow control enabled)
+        uint32_t mux_cores_per_device = 0;
+        uint32_t num_links = 1;  // Default to 1 link
+        if (config.enable_flow_control) {
+            // Determine num_links from test config
+            uint32_t max_link_id = 0;
+            for (const auto& sender : config.senders) {
+                max_link_id = std::max(max_link_id, sender.link_id);
+            }
+            num_links = max_link_id + 1;  // link_id is 0-indexed
+
+            // Per device max: 4 directions × num_links
+            mux_cores_per_device = NUM_DIRECTIONS * num_links;
+        }
+
+        // 3. Build per-device receiver load histogram
+        std::unordered_map<FabricNodeId, uint32_t> receiver_load_per_device;
+
+        for (const auto& sender : config.senders) {
+            for (const auto& pattern : sender.patterns) {
+                const auto& dest = pattern.destination.value();
+
+                if (dest.hops.has_value()) {
+                    auto dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
+                        sender.device,
+                        const_cast<std::unordered_map<RoutingDirection, uint32_t>&>(dest.hops.value()),
+                        pattern.ftype.value());
+                    for (const auto& dst_id : dst_node_ids) {
+                        receiver_load_per_device[dst_id]++;
+                    }
+                } else if (dest.device.has_value()) {
+                    receiver_load_per_device[dest.device.value()]++;
+                }
+            }
+        }
+
+        // 4. Per-device analysis - find worst case
+        uint32_t max_configs_per_core_needed = DEFAULT_MIN_CONFIGS_PER_CORE;
+        std::optional<FabricNodeId> worst_case_device;
+
+        for (const auto& [device_id, num_receivers] : receiver_load_per_device) {
+            // Count reserved cores on this device
+            uint32_t sender_cores_on_device = 0;
+            for (const auto& sender : config.senders) {
+                if (sender.device == device_id) {
+                    sender_cores_on_device++;
+                }
+            }
+
+            bool has_sync = false;
+            for (const auto& sync : config.global_sync_configs) {
+                if (sync.device == device_id) {
+                    has_sync = true;
+                    break;
+                }
+            }
+
+            uint32_t reserved_cores =
+                (has_sync ? 1 : 0) + sender_cores_on_device + mux_cores_per_device + SAFETY_MARGIN_CORES;
+
+            // Feasibility check 1: No cores left for receivers
+            if (reserved_cores >= total_worker_cores) {
+                log_fatal(
+                    tt::LogTest,
+                    "Device [mesh={}, chip={}] allocation is INFEASIBLE!\n"
+                    "  Reserved cores: {} >= Total cores: {}\n"
+                    "  Breakdown: sync={}, senders={}, mux={}, safety={}\n"
+                    "  No cores left for {} receiver configs!\n"
+                    "  Suggestions: Reduce link count, disable flow control, or use larger core grid.",
+                    device_id.mesh_id,
+                    device_id.chip_id,
+                    reserved_cores,
+                    total_worker_cores,
+                    (has_sync ? 1 : 0),
+                    sender_cores_on_device,
+                    mux_cores_per_device,
+                    SAFETY_MARGIN_CORES,
+                    num_receivers);
+                TT_FATAL(false, "Infeasible allocation configuration");
+            }
+
+            uint32_t available_for_receivers = total_worker_cores - reserved_cores;
+
+            // Feasibility check 2: Insufficient cores for minimum buffer size
+            uint32_t min_cores_needed =
+                (num_receivers + MAX_CONFIGS_PER_CORE_CEILING - 1) / MAX_CONFIGS_PER_CORE_CEILING;
+
+            if (available_for_receivers < min_cores_needed) {
+                log_fatal(
+                    tt::LogTest,
+                    "Device [mesh={}, chip={}] allocation is INFEASIBLE!\n"
+                    "  Receiver configs: {}\n"
+                    "  Minimum cores needed: {} (to provide 16KB per receiver)\n"
+                    "  Available cores: {}\n"
+                    "  Reserved cores: {}\n"
+                    "  The test requires more receiver cores than available even at maximum sharing.\n"
+                    "  Suggestions: Reduce test scale, links, or use larger core grid.",
+                    device_id.mesh_id,
+                    device_id.chip_id,
+                    num_receivers,
+                    min_cores_needed,
+                    available_for_receivers,
+                    reserved_cores);
+                TT_FATAL(false, "Infeasible allocation: insufficient receiver cores");
+            }
+
+            // Compute required configs per core based on available cores
+            uint32_t required = (num_receivers + available_for_receivers - 1) / available_for_receivers;
+
+            // Apply mux client cap if flow control is enabled
+            // Since link duplication uniformly distributes receivers across links,
+            // we divide total receivers by num_links to get receivers per link
+            if (config.enable_flow_control && num_links > 0) {
+                uint32_t receivers_per_link = num_receivers / num_links;
+
+                if (receivers_per_link > MAX_RECV_CORES_PER_LINK_WITH_MUX) {
+                    // Calculate minimum sharing factor needed to satisfy mux client cap
+                    uint32_t sharing_factor_per_link =
+                        (receivers_per_link + MAX_RECV_CORES_PER_LINK_WITH_MUX - 1) / MAX_RECV_CORES_PER_LINK_WITH_MUX;
+
+                    // Apply the stricter constraint (mux cap vs available cores)
+                    required = std::max(required, sharing_factor_per_link);
+                }
+            }
+
+            if (required > max_configs_per_core_needed) {
+                max_configs_per_core_needed = required;
+                worst_case_device = device_id;
+            }
+        }
+
+        // 5. Apply bounds
+        uint32_t max_configs_per_core = std::min(max_configs_per_core_needed, MAX_CONFIGS_PER_CORE_CEILING);
+        uint32_t payload_chunk_size = USABLE_L1_SIZE_BYTES / max_configs_per_core;
+
+        // since L1 alignment is not available here, align to 64 bytes as a safe minimum
+        payload_chunk_size = tt::align(payload_chunk_size, 64);
+
+        // 6. Build and return policies
+        AllocatorPolicies computed_policies;
+        computed_policies.receiver_config.max_configs_per_core = max_configs_per_core;
+        computed_policies.default_payload_chunk_size = payload_chunk_size;
+
+        return computed_policies;
+    }
+
+    // Dependencies
+    const IDeviceInfoProvider& device_info_provider_;
+    const IRouteManager& route_manager_;
+
+    // Caching state
+    std::string last_topology_key_;
+    AllocatorPolicies cached_policy_;
+
+    // Constants for dynamic policy computation
+    static constexpr uint32_t MIN_BUFFER_SIZE_BYTES = 16 * 1024;                                            // 16KB
+    static constexpr uint32_t USABLE_L1_SIZE_BYTES = 1024 * 1024;                                           // 1MB
+    static constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = USABLE_L1_SIZE_BYTES / MIN_BUFFER_SIZE_BYTES;  // 64
+    static constexpr uint32_t SAFETY_MARGIN_CORES = 2;
+    static constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
+    static constexpr uint32_t NUM_DIRECTIONS = 4;  // N, S, E, W
+
+    // Mux kernel stack constraint: Maximum receiver cores per device per link when flow control enabled
+    // Beyond this limit, receiver cores must be shared to prevent mux kernel stack overflow
+    static constexpr uint32_t MAX_RECV_CORES_PER_LINK_WITH_MUX = 20;
+};
+
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
+    // Store flow control flag for use during device creation
+    enable_flow_control_ = test_config.enable_flow_control;
+
     // PASS 0: Reserve sync cores for synchronization
     for (auto& sync_sender : test_config.global_sync_configs) {
         auto& device_resources = get_or_create_device_resources(sync_sender.device);
@@ -460,7 +926,10 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
     // PASS 1: Reserve all specified sender cores first. This establishes the pool of
     // cores that are *not* available for receivers.
+    uint32_t receiver_partitions = 1;  // Compute number of link partitions needed
     for (const auto& sender : test_config.senders) {
+        receiver_partitions = std::max(receiver_partitions, sender.link_id + 1);
+
         if (sender.core.has_value()) {
             auto& device_resources = get_or_create_device_resources(sender.device);
             device_resources.reserve_sender_core(sender.core);
@@ -487,10 +956,12 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                  dest.atomic_inc_address.has_value())) {
                 // Fully specified, just book-keep.
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
-                device_resources.reserve_receiver_core(dest.core);
+                device_resources.reserve_receiver_core(dest.core, sender.link_id, receiver_partitions);
                 // We assume the pre-specified address is valid.
                 continue;
             }
+
+            uint32_t num_receivers_for_credits = 0;
 
             if (dest.hops.has_value()) {  // process based on hops
                 std::vector<FabricNodeId> dst_node_ids =
@@ -514,10 +985,11 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
                     const auto& receiver_pool = device_resources.core_pools_[RECEIVER_TYPE_IDX];
                     if (!receiver_pool.initialized) {
-                        device_resources.initialize_receiver_pool();
+                        device_resources.initialize_receiver_pool(receiver_partitions);
                     }
 
-                    const auto available_cores = receiver_pool.get_available_cores(device_resources.core_workload_);
+                    const auto available_cores =
+                        receiver_pool.get_available_cores(device_resources.core_workload_, sender.link_id);
                     for (const auto& core : available_cores) {
                         core_counts[core]++;
                         auto& core_resources = device_resources.get_or_create_core_resources(core, CoreType::RECEIVER);
@@ -618,7 +1090,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 // Reserve resources on all destination devices
                 for (const auto& node_id : dst_node_ids) {
                     auto& device_resources = get_or_create_device_resources(node_id);
-                    device_resources.reserve_receiver_core(dest.core);
+                    device_resources.reserve_receiver_core(dest.core, sender.link_id, receiver_partitions);
                     auto& core_resources =
                         device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
                     // Reserve payload chunk if needed
@@ -630,13 +1102,21 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                         core_resources.reserve_atomic_counter(dest.atomic_inc_address.value());
                     }
                 }
+
+                num_receivers_for_credits = static_cast<uint32_t>(dst_node_ids.size());
             } else if (dest.device.has_value()) {  // process dest devices directly
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
 
+                // Lazy init if needed
+                if (!device_resources.core_pools_[RECEIVER_TYPE_IDX].initialized) {
+                    device_resources.initialize_receiver_pool(receiver_partitions);
+                }
+
                 if (!dest.core.has_value()) {
-                    dest.core = device_resources.reserve_receiver_core(std::nullopt);
+                    dest.core =
+                        device_resources.reserve_receiver_core(std::nullopt, sender.link_id, receiver_partitions);
                 } else {
-                    device_resources.reserve_receiver_core(dest.core);
+                    device_resources.reserve_receiver_core(dest.core, sender.link_id, receiver_partitions);
                 }
 
                 auto& core_resources =
@@ -668,14 +1148,54 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 if (allocate_atomic_inc_address) {
                     dest.atomic_inc_address = core_resources.allocate_atomic_counter();
                 }
+
+                num_receivers_for_credits = 1;  // Direct-device = single receiver
+            }
+
+            if (enable_flow_control_) {
+                // Allocate credit chunk from sender core's L1
+                auto& sender_device_resources = get_or_create_device_resources(sender.device);
+                uint32_t credit_chunk_base = sender_device_resources.allocate_credit_chunk(
+                    sender.core.value(), num_receivers_for_credits, sender_memory_map_);
+
+                // Calculate credit configuration using simple policy
+                uint32_t buffer_capacity_bytes = policies_.default_payload_chunk_size;
+                uint32_t packet_size_bytes = pattern.size.value();
+                uint32_t num_packets = pattern.num_packets.value();
+                auto [initial_credits, batch_size] =
+                    calculate_credit_config(buffer_capacity_bytes, packet_size_bytes, num_packets);
+
+                // Populate sender credit info directly in pattern
+                pattern.sender_credit_info = SenderCreditInfo{
+                    .expected_receiver_count = num_receivers_for_credits,
+                    .credit_reception_address_base = credit_chunk_base,
+                    .initial_credits = initial_credits};
+                pattern.credit_return_batch_size = batch_size;
             }
         }
     }
 }
 
 inline void GlobalAllocator::reset() {
+    // Reset credit allocators before clearing device resources
+    for (auto& [node_id, device_resources_ptr] : all_device_resources_) {
+        device_resources_ptr->reset_credit_allocators();
+    }
+
     all_device_resources_.clear();
     worker_grid_size_ = std::nullopt;
+    enable_flow_control_ = false;
+}
+
+inline std::vector<CoreCoord> GlobalAllocator::get_pristine_cores_for_device(const FabricNodeId& node_id) const {
+    auto it = all_device_resources_.find(node_id);
+    if (it == all_device_resources_.end()) {
+        // Device not found in allocator (no workers allocated on this device)
+        // Return empty vector - no cores available for mux allocation
+        return {};
+    }
+    // Collect remaining pristine cores from all pools (after allocation is complete)
+    return it->second->collect_remaining_pristine_cores();
 }
 
 }  // namespace tt::tt_fabric::fabric_tests

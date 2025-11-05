@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtR
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -23,8 +23,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
         ((1, 640, 64, 64), (1, 1280), 1, 1, False, 1, "down_blocks", 0.999),
         ((1, 640, 32, 32), (1, 1280), 2, 0, True, 1, "down_blocks", 0.999),
         ((1, 1280, 32, 32), (1, 1280), 2, 1, False, 1, "down_blocks", 0.999),
-        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 2, "up_blocks", 0.998),
-        ((1, 640, 128, 128), (1, 1280), 2, 1, True, 2, "up_blocks", 0.998),
+        ((1, 960, 128, 128), (1, 1280), 2, 0, True, 1, "up_blocks", 0.998),
+        ((1, 640, 128, 128), (1, 1280), 2, 1, True, 1, "up_blocks", 0.998),
         ((1, 2560, 32, 32), (1, 1280), 0, 0, True, 1, "up_blocks", 0.999),
         ((1, 1920, 32, 32), (1, 1280), 0, 2, True, 1, "up_blocks", 0.999),
         ((1, 1920, 64, 64), (1, 1280), 1, 0, True, 1, "up_blocks", 0.999),
@@ -43,6 +43,7 @@ def test_resnetblock2d(
     split_in,
     block,
     pcc,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -71,6 +72,8 @@ def test_resnetblock2d(
         model_config,
         conv_shortcut,
         split_in,
+        debug_mode=debug_mode,
+        use_negative_mask=block == "up_blocks" and down_block_id == 2,
     )
 
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)

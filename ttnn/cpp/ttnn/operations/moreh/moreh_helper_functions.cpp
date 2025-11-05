@@ -9,7 +9,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
 
 #include "tt-metalium/hal.hpp"
 
@@ -104,7 +103,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(hal::get_arch()),
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_read(hal::get_arch()),
             .compile_args = compile_args,
             .defines = std::move(defines)});
 }
@@ -121,7 +120,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         core_spec,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(hal::get_arch()),
+            .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(hal::get_arch()),
             .compile_args = compile_args,
             .defines = std::move(defines)});
 }
@@ -231,9 +230,8 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         auto _core_range = (arg.core_range != std::nullopt) ? arg.core_range : core_range;
 
         tt_metal::CircularBufferConfig cb_config =
-            tt_metal::CircularBufferConfig(
-                _num_tiles * tt_metal::detail::TileSize(_data_format), {{_buffer_index, _data_format}})
-                .set_page_size(_buffer_index, tt_metal::detail::TileSize(_data_format));
+            tt_metal::CircularBufferConfig(_num_tiles * tt::tile_size(_data_format), {{_buffer_index, _data_format}})
+                .set_page_size(_buffer_index, tt::tile_size(_data_format));
 
         cb_id = tt_metal::CreateCircularBuffer(program, _core_range.value(), cb_config);
     }
@@ -390,10 +388,22 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
         for (int i = 0; i < input_shape.rank(); ++i) {
-            TT_FATAL(input_dim[i] == output_dim[i], "Error");
+            TT_FATAL(
+                input_dim[i] == output_dim[i],
+                "Input dimension[{}] ({}) must equal output dimension[{}] ({})",
+                i,
+                input_dim[i],
+                i,
+                output_dim[i]);
         }
         for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
-            TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
+            TT_FATAL(
+                input_dim_wo_padding[i] == output_dim_wo_padding[i],
+                "Input dimension without padding[{}] ({}) must equal output dimension without padding[{}] ({})",
+                i,
+                input_dim_wo_padding[i],
+                i,
+                output_dim_wo_padding[i]);
         }
     } else {
         ttnn::SmallVector<uint32_t> expected_output_shape;
@@ -415,10 +425,23 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         log_debug(
             LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
         for (int i = 0; i < expected_output_shape.size(); ++i) {
-            TT_FATAL(i == padded_dim || input_shape[i] == expected_output_shape[i], "Error");
+            TT_FATAL(
+                i == padded_dim || input_shape[i] == expected_output_shape[i],
+                "Input shape[{}] ({}) must equal expected output shape[{}] ({}) when not padded dimension",
+                i,
+                input_shape[i],
+                i,
+                expected_output_shape[i]);
         }
         for (int i = 0; i < expected_output_shape_wo_padding.size(); ++i) {
-            TT_FATAL(i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
+            TT_FATAL(
+                i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i],
+                "Input shape without padding[{}] ({}) must equal expected output shape without padding[{}] ({}) when "
+                "not target dimension",
+                i,
+                input_shape_wo_padding[i],
+                i,
+                expected_output_shape_wo_padding[i]);
         }
     }
 }

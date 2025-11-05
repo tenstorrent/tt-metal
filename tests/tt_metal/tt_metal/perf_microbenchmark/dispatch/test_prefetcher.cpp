@@ -28,7 +28,7 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "common.h"
 #include <tt-metalium/core_coord.hpp>
@@ -44,11 +44,9 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include "umd/device/tt_io.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/xy_pair.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/tt_io.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE \
     tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST)
@@ -65,7 +63,8 @@ constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE = 10;
 constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 1024;
-constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = 128 * 1024 + 2 * sizeof(CQPrefetchCmd) + 2 * sizeof(CQDispatchCmd);
+constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE =
+    (128 * 1024) + (2 * sizeof(CQPrefetchCmd)) + (2 * sizeof(CQDispatchCmdLarge));
 constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 16 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -76,15 +75,14 @@ constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
-constexpr uint32_t DRAM_DATA_BASE_ADDR = 1024 * 1024;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
 constexpr uint32_t host_data_dirty_pattern = 0xbaadf00d;
 
-constexpr CoreType DISPATCH_CORE_TYPE =
-    CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean up
-                       // single device creation.
+constexpr tt::CoreType DISPATCH_CORE_TYPE =
+    tt::CoreType::WORKER;  // If this changes, need to pass it into CreateDevice. TODO: Clean this up when when we clean
+                           // up single device creation.
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // Test dispatch program performance
@@ -194,7 +192,8 @@ void init(int argc, char** argv) {
         test_args::get_command_option_uint32(input_args, "-hp", DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE);
     prefetch_q_entries_g = test_args::get_command_option_uint32(input_args, "-hq", DEFAULT_PREFETCH_Q_ENTRIES);
     cmddat_q_size_g = test_args::get_command_option_uint32(input_args, "-cs", DEFAULT_CMDDAT_Q_SIZE);
-    max_prefetch_command_size_g = cmddat_q_size_g / 2;  // note: half this for best perf
+    max_prefetch_command_size_g =
+        cmddat_q_size_g / 2 - (CQ_PREFETCH_CMD_BARE_MIN_SIZE - 1);  // note: half this for best perf
     scratch_db_size_g = test_args::get_command_option_uint32(input_args, "-ss", DEFAULT_SCRATCH_DB_SIZE);
     use_coherent_data_g = test_args::has_command_option(input_args, "-c");
     readback_every_iteration_g = !test_args::has_command_option(input_args, "-rb");
@@ -254,12 +253,26 @@ void add_bare_prefetcher_cmd(vector<uint32_t>& cmds, CQPrefetchCmd& cmd, bool pa
     }
 }
 
+void add_bare_prefetcher_cmd(vector<uint32_t>& cmds, CQPrefetchCmdLarge& cmd, bool pad = false) {
+    uint32_t* ptr = (uint32_t*)&cmd;
+    for (int i = 0; i < sizeof(CQPrefetchCmdLarge) / sizeof(uint32_t); i++) {
+        cmds.push_back(*ptr++);
+    }
+
+    if (pad) {
+        // Pad debug cmd to always be the alignment size
+        for (uint32_t i = 0; i < (CQ_PREFETCH_CMD_BARE_MIN_SIZE - sizeof(CQPrefetchCmdLarge)) / sizeof(uint32_t); i++) {
+            cmds.push_back(std::rand());
+        }
+    }
+}
+
 void add_prefetcher_packed_paged_read_cmd(
     vector<uint32_t>& cmds, vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds, uint32_t length) {
     CQPrefetchCmd cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED_PACKED;
 
-    uint32_t stride = sub_cmds.size() * sizeof(CQPrefetchRelayPagedPackedSubCmd) + sizeof(CQPrefetchCmd);
+    uint32_t stride = (sub_cmds.size() * sizeof(CQPrefetchRelayPagedPackedSubCmd)) + sizeof(CQPrefetchCmd);
     uint32_t aligned_stride = round_cmd_size_up(stride);
     cmd.relay_paged_packed.total_length = length;
     cmd.relay_paged_packed.stride = aligned_stride;
@@ -321,11 +334,10 @@ void add_prefetcher_linear_read_cmd(IDevice* device,
                                     uint32_t length) {
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
-    CQPrefetchCmd cmd{};
+    CQPrefetchCmdLarge cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
 
     cmd.relay_linear.pad1 = 0;
-    cmd.relay_linear.pad2 = 0;
     cmd.relay_linear.noc_xy_addr =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.relay_linear.addr = addr;
@@ -366,9 +378,10 @@ void add_prefetcher_cmd_to_hostq(
     uint32_t new_size = (cmds.size() - prior_end) * sizeof(uint32_t);
     TT_FATAL(
         new_size <= max_prefetch_command_size_g,
-        "Generated prefetcher command {} exceeds max command size {}",
+        "Generated prefetcher command {} exceeds max command size {} (padding size {} B)",
         new_size,
-        max_prefetch_command_size_g);
+        max_prefetch_command_size_g,
+        pad_size_bytes);
     TT_FATAL((new_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
     sizes.push_back(new_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE);
 }
@@ -448,7 +461,7 @@ void add_paged_dram_data_to_device_data(
         uint32_t dram_bank_id = page_idx % num_dram_banks_g;
         auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
         CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
-        uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
+        uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
         if (page_idx == last_page - 1) {
             page_size_words -= length_adjust_words;
@@ -481,13 +494,13 @@ void gen_dram_packed_read_cmd(
 
     uint32_t page_size = 1 << log_page_size;
     int count = 0;
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     for (auto length : lengths) {
-        TT_ASSERT(length <= num_dram_banks_g * page_size);
         TT_ASSERT((length & (MetalContext::instance().hal().get_alignment(HalMemType::DRAM) - 1)) == 0);
         CQPrefetchRelayPagedPackedSubCmd sub_cmd{};
         sub_cmd.start_page = 0;  // TODO: randomize?
         sub_cmd.log_page_size = log_page_size;
-        sub_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
+        sub_cmd.base_addr = dram_data_base_addr + count * page_size;
         sub_cmd.length = length;
         sub_cmds.push_back(sub_cmd);
         count++;
@@ -495,7 +508,7 @@ void gen_dram_packed_read_cmd(
         // Model the packed paged read in this function by updating worker data with interleaved/paged DRAM data, for
         // validation later.
         uint32_t length_words = length / sizeof(uint32_t);
-        uint32_t base_addr_words = (sub_cmd.base_addr - DRAM_DATA_BASE_ADDR) / sizeof(uint32_t);
+        uint32_t base_addr_words = (sub_cmd.base_addr - dram_data_base_addr) / sizeof(uint32_t);
         uint32_t page_size_words = page_size / sizeof(uint32_t);
 
         // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
@@ -504,7 +517,7 @@ void gen_dram_packed_read_cmd(
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
             auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
-            uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
+            uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
             uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
             for (uint32_t j = 0; j < words; j++) {
@@ -542,7 +555,7 @@ void gen_dram_read_cmd(
     // Device code assumes padding to 32 bytes
     TT_ASSERT((length_adjust & 0x1f) == 0);
 
-    uint32_t device_data_size = page_size * pages - length_adjust;
+    uint32_t device_data_size = (page_size * pages) - length_adjust;
     log_trace(
         tt::LogTest,
         "Starting {} with worker_core: {} start_page: {} base_addr: 0x{:x} page_size: {} pages: {}. device_data_size: "
@@ -559,11 +572,12 @@ void gen_dram_read_cmd(
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
     auto prior_end = prefetch_cmds.size();
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     add_prefetcher_paged_read_cmd(
         prefetch_cmds,
         cmd_sizes,
         start_page,
-        base_addr + DRAM_DATA_BASE_ADDR,
+        base_addr + dram_data_base_addr,
         page_size,
         pages,
         is_dram,
@@ -641,7 +655,7 @@ void gen_linear_read_cmd(
     auto prior_end = prefetch_cmds.size();
     uint32_t addr = device_data.get_base_result_addr(device_data.get_core_type(worker_core));
     add_prefetcher_linear_read_cmd(
-        device, prefetch_cmds, cmd_sizes, worker_core, addr + offset * sizeof(uint32_t), length);
+        device, prefetch_cmds, cmd_sizes, worker_core, addr + (offset * sizeof(uint32_t)), length);
     uint32_t new_size = (prefetch_cmds.size() - prior_end) * sizeof(uint32_t);
     TT_ASSERT(new_size <= max_prefetch_command_size_g, "Generated prefetcher command exceeds max command size");
     TT_ASSERT((new_size >> DispatchSettings::PREFETCH_Q_LOG_MINSIZE) < 0xFFFF, "HostQ command too large to represent");
@@ -813,7 +827,7 @@ void gen_host_test(
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     for (int count = 1; count < 100; count++) {
-        uint32_t data_size_words = std::rand() % ((max_data_size / 100 / sizeof(uint32_t)) * count) + 1;
+        uint32_t data_size_words = (std::rand() % ((max_data_size / 100 / sizeof(uint32_t)) * count)) + 1;
         uint32_t data_size_bytes = data_size_words * sizeof(uint32_t);
 
         std::vector<uint32_t> dispatch_cmds;
@@ -871,18 +885,14 @@ void gen_rnd_dram_paged_cmd(
     uint32_t start_page = std::rand() % num_dram_banks_g;
     uint32_t max_page_size = big_g ? MAX_PAGE_SIZE : 4096;
     uint32_t page_size = (std::rand() % (max_page_size + 1)) & ~(dram_alignment - 1);
-    if (page_size < dram_alignment) {
-        page_size = dram_alignment;
-    }
+    page_size = std::max(page_size, dram_alignment);
     uint32_t max_data = big_g ? DEVICE_DATA_SIZE : DEVICE_DATA_SIZE / 8;
-    uint32_t max = DEVICE_DATA_SIZE - device_data.size() * sizeof(uint32_t);
+    uint32_t max = DEVICE_DATA_SIZE - (device_data.size() * sizeof(uint32_t));
     max = (max > max_data) ? max_data : max;
     // start in bottom half of valid dram data to not worry about overflowing valid data
     uint32_t base_addr = (std::rand() % (DRAM_DATA_SIZE_BYTES / 2)) & ~(dram_alignment - 1);
     uint32_t size = std::rand() % max;
-    if (size < page_size) {
-        size = page_size;
-    }
+    size = std::max(size, page_size);
     uint32_t pages = size / page_size;
     TT_ASSERT(base_addr + (start_page * page_size + pages * page_size / num_dram_banks_g) < DRAM_DATA_SIZE_BYTES);
 
@@ -945,6 +955,7 @@ void gen_rnd_inline_cmd(
             // packed unicast write
             gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
             break;
+        default: TT_THROW("Invalid which_cmd {} in gen_rnd_inline_cmd", which_cmd);
     }
 
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
@@ -952,7 +963,7 @@ void gen_rnd_inline_cmd(
 
 void gen_rnd_debug_cmd(vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
     vector<uint32_t> rnd_payload;
-    generate_random_payload(rnd_payload, std::rand() % (dispatch_buffer_page_size_g - sizeof(CQDispatchCmd)) + 1);
+    generate_random_payload(rnd_payload, (std::rand() % (dispatch_buffer_page_size_g - sizeof(CQDispatchCmd))) + 1);
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_DEBUG, rnd_payload);
 }
 
@@ -961,7 +972,7 @@ void gen_packed_read_test(
     static constexpr uint32_t min_read_size = 128;
     bool done = false;
     while (!done) {
-        uint32_t packed_read_page_size = std::rand() % 3 + 9;  // log2 values. i.e., 512, 1024, 2048
+        uint32_t packed_read_page_size = (std::rand() % 3) + 9;  // log2 values. i.e., 512, 1024, 2048
         uint32_t n_sub_cmds =
             relay_max_packed_paged_submcds ? CQ_PREFETCH_CMD_RELAY_PAGED_PACKED_MAX_SUB_CMDS : (std::rand() % 7) + 1;
         uint32_t max_read_size = (1 << packed_read_page_size) * num_dram_banks_g;
@@ -1000,7 +1011,7 @@ void copy_struct_to_vector(std::vector<uint32_t>& prefetch_cmds, T& cmd) {
     static_assert(
         sizeof(T) % sizeof(uint32_t) == 0, "CQPrefetchCmd must be a multiple of 4 bytes to be copied to vector");
     size_t current_size = prefetch_cmds.size();
-    prefetch_cmds.resize(current_size + sizeof(T) / sizeof(uint32_t));
+    prefetch_cmds.resize(current_size + (sizeof(T) / sizeof(uint32_t)));
     memcpy(&prefetch_cmds[current_size], &cmd, sizeof(T));
 }
 
@@ -1032,6 +1043,7 @@ void gen_dram_ringbuffer_read_cmd(
     int count = 0;
 
     std::vector<CQPrefetchRelayRingbufferSubCmd> sub_cmds;
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     for (auto length : lengths) {
         constexpr uint32_t max_page_offset = 5;
         CQPrefetchCmd cmd{};
@@ -1043,7 +1055,7 @@ void gen_dram_ringbuffer_read_cmd(
         }
         ringbuffer_cmd.start_page = rand() % max_page_offset;
         ringbuffer_cmd.log2_page_size = log_page_size;
-        ringbuffer_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
+        ringbuffer_cmd.base_addr = dram_data_base_addr + count * page_size;
         ringbuffer_cmd.length = length;
         ringbuffer_cmd.wp_offset_update = length;
         count++;
@@ -1053,7 +1065,7 @@ void gen_dram_ringbuffer_read_cmd(
         // Model the paged to ringbuffer read in this function by updating worker data with interleaved/paged DRAM data,
         // for validation later.
         uint32_t length_words = length / sizeof(uint32_t);
-        uint32_t base_addr_words = (ringbuffer_cmd.base_addr - DRAM_DATA_BASE_ADDR) / sizeof(uint32_t);
+        uint32_t base_addr_words = (ringbuffer_cmd.base_addr - dram_data_base_addr) / sizeof(uint32_t);
         uint32_t page_size_words = page_size / sizeof(uint32_t);
 
         // Get data from DRAM map, add to worker.
@@ -1062,7 +1074,7 @@ void gen_dram_ringbuffer_read_cmd(
             uint32_t dram_bank_id = page_idx % num_dram_banks_g;
             auto dram_channel = device->allocator()->get_dram_channel_from_bank_id(dram_bank_id);
             CoreCoord bank_core = device->logical_core_from_dram_channel(dram_channel);
-            uint32_t bank_offset = base_addr_words + page_size_words * (page_idx / num_dram_banks_g);
+            uint32_t bank_offset = base_addr_words + (page_size_words * (page_idx / num_dram_banks_g));
 
             uint32_t words = (page_size_words > length_words - i) ? length_words - i : page_size_words;
             for (uint32_t j = 0; j < words; j++) {
@@ -1097,7 +1109,7 @@ void gen_dram_ringbuffer_read_cmd(
         CQPrefetchCmd cmd{};
         cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_RINGBUFFER;
 
-        uint32_t stride = sub_cmds.size() * sizeof(CQPrefetchRelayRingbufferSubCmd) + sizeof(CQPrefetchCmd);
+        uint32_t stride = (sub_cmds.size() * sizeof(CQPrefetchRelayRingbufferSubCmd)) + sizeof(CQPrefetchCmd);
         uint32_t aligned_stride = round_cmd_size_up(stride);
         cmd.relay_ringbuffer.stride = aligned_stride;
         cmd.relay_ringbuffer.count = sub_cmds.size();
@@ -1116,7 +1128,7 @@ void gen_ringbuffer_read_test(
     static constexpr uint32_t min_read_size = 128;
     bool done = false;
     while (!done) {
-        uint32_t ringbuffer_read_page_size_log2 = std::rand() % 3 + 9;  // log2 values. i.e., 512, 1024, 2048
+        uint32_t ringbuffer_read_page_size_log2 = (std::rand() % 3) + 9;  // log2 values. i.e., 512, 1024, 2048
         uint32_t max_read_size = (1 << ringbuffer_read_page_size_log2) * num_dram_banks_g;
         auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
         // arbitrary.
@@ -1176,6 +1188,7 @@ void gen_rnd_test(
                     gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, device_data);
                 }
                 break;
+            default: gen_rnd_test(device, prefetch_cmds, cmd_sizes, device_data); break;
         }
     }
 }
@@ -1213,7 +1226,11 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     for (uint32_t page_id = 0; page_id < pages; page_id++) {
         uint32_t bank_id = page_id % num_dram_banks_g;
         std::vector<uint32_t> exec_buf_page(exec_buf_cmds.begin() + index / sizeof(uint32_t), exec_buf_cmds.begin() + (index + page_size) / sizeof(uint32_t));
-        tt::tt_metal::detail::WriteToDeviceDRAMChannel(device, bank_id, DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + (page_id / num_dram_banks_g) * page_size, exec_buf_page);
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(
+            device,
+            bank_id,
+            DRAM_EXEC_BUF_DEFAULT_BASE_ADDR + ((page_id / num_dram_banks_g) * page_size),
+            exec_buf_page);
 
         index += page_size;
     }
@@ -1278,7 +1295,7 @@ void gen_smoke_test(
 
     dispatch_cmds.resize(0);
     gen_dispatcher_unicast_write_cmd(
-        device, dispatch_cmds, worker_core, device_data, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+        device, dispatch_cmds, worker_core, device_data, dispatch_buffer_page_size_g - sizeof(CQDispatchCmdLarge));
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     dispatch_cmds.resize(0);
@@ -1287,7 +1304,11 @@ void gen_smoke_test(
 
     dispatch_cmds.resize(0);
     gen_dispatcher_unicast_write_cmd(
-        device, dispatch_cmds, worker_core, device_data, 2 * dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+        device,
+        dispatch_cmds,
+        worker_core,
+        device_data,
+        (2 * dispatch_buffer_page_size_g) - sizeof(CQDispatchCmdLarge));
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // Merge 4 commands in the FetchQ
@@ -1355,10 +1376,10 @@ void gen_smoke_test(
         device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
     lengths.resize(0);
-    lengths.push_back(tt::align(scratch_db_size_g / 4 + 2 * 1024 + 32, dram_alignment));
-    lengths.push_back(tt::align(scratch_db_size_g / 4 + 3 * 1024 + 32, dram_alignment));
+    lengths.push_back(tt::align((scratch_db_size_g / 4) + (2 * 1024) + 32, dram_alignment));
+    lengths.push_back(tt::align((scratch_db_size_g / 4) + (3 * 1024) + 32, dram_alignment));
     lengths.push_back(tt::align(scratch_db_size_g / 2, dram_alignment));
-    lengths.push_back(tt::align(scratch_db_size_g / 8 + 5 * 1024 + 96, dram_alignment));
+    lengths.push_back(tt::align((scratch_db_size_g / 8) + (5 * 1024) + 96, dram_alignment));
     gen_dram_packed_read_cmd(
         device, prefetch_cmds, cmd_sizes, device_data, another_worker_core, packed_read_page_size, lengths);
 
@@ -1392,7 +1413,7 @@ void gen_smoke_test(
         5,
         dram_alignment,
         2048,
-        num_dram_banks_g * 3 + 1,
+        (num_dram_banks_g * 3) + 1,
         0);
     gen_dram_read_cmd(
         device,
@@ -1427,7 +1448,7 @@ void gen_smoke_test(
         5,
         dram_alignment,
         2048,
-        num_dram_banks_g * 2 + 1,
+        (num_dram_banks_g * 2) + 1,
         256);
     gen_dram_read_cmd(
         device,
@@ -1450,7 +1471,7 @@ void gen_smoke_test(
         worker_core,
         0,
         0,
-        scratch_db_size_g / 2 + dram_alignment,
+        (scratch_db_size_g / 2) + dram_alignment,
         2,
         128);  // just a little larger than the scratch_db, length_adjust backs into prior page
     gen_dram_read_cmd(
@@ -1459,7 +1480,7 @@ void gen_smoke_test(
 
     // Forces length_adjust to back into prior read.  Device reads pages, shouldn't be a problem...
     uint32_t page_size = 256 + dram_alignment;
-    uint32_t length = scratch_db_size_g / 2 / page_size * page_size + page_size;
+    uint32_t length = (scratch_db_size_g / 2 / page_size * page_size) + page_size;
     gen_dram_read_cmd(
         device, prefetch_cmds, cmd_sizes, device_data, worker_core, 3, 128, page_size, length / page_size, 160);
 
@@ -1501,7 +1522,7 @@ void gen_smoke_test(
         cmd_sizes,
         device_data,
         worker_core,
-        dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+        dispatch_buffer_page_size_g - sizeof(CQDispatchCmdLarge));
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, dispatch_buffer_page_size_g);
     gen_linear_read_cmd(
         device,
@@ -1509,7 +1530,7 @@ void gen_smoke_test(
         cmd_sizes,
         device_data,
         worker_core,
-        2 * dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+        (2 * dispatch_buffer_page_size_g) - sizeof(CQDispatchCmdLarge));
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 2 * dispatch_buffer_page_size_g);
 
     // Test wait/stall
@@ -1525,7 +1546,7 @@ void gen_smoke_test(
         device_data,
         worker_core,
         32,
-        device_data.size_at(worker_core, 0) - 32 / sizeof(uint32_t));
+        device_data.size_at(worker_core, 0) - (32 / sizeof(uint32_t)));
 
     // Touch test write offset
     // Making sure this really works by doing a write would break lots of
@@ -1559,13 +1580,13 @@ void gen_smoke_test(
 
             dispatch_cmds.resize(0);
             gen_dispatcher_host_write_cmd(
-                dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g - 2 * sizeof(CQDispatchCmd));
+                dispatch_cmds, device_data, (multiplier * dispatch_buffer_page_size_g) - (2 * sizeof(CQDispatchCmd)));
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
             pad_host_data(device_data);
 
             dispatch_cmds.resize(0);
             gen_dispatcher_host_write_cmd(
-                dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+                dispatch_cmds, device_data, (multiplier * dispatch_buffer_page_size_g) - sizeof(CQDispatchCmd));
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
             pad_host_data(device_data);
 
@@ -1576,13 +1597,13 @@ void gen_smoke_test(
 
             dispatch_cmds.resize(0);
             gen_dispatcher_host_write_cmd(
-                dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g + sizeof(CQDispatchCmd));
+                dispatch_cmds, device_data, (multiplier * dispatch_buffer_page_size_g) + sizeof(CQDispatchCmd));
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
             pad_host_data(device_data);
 
             dispatch_cmds.resize(0);
             gen_dispatcher_host_write_cmd(
-                dispatch_cmds, device_data, multiplier * dispatch_buffer_page_size_g + sizeof(CQDispatchCmd));
+                dispatch_cmds, device_data, (multiplier * dispatch_buffer_page_size_g) + sizeof(CQDispatchCmd));
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
             pad_host_data(device_data);
         }
@@ -1602,6 +1623,7 @@ void gen_relay_linear_h_test(
         64;
 
     bool done = false;
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     while (!done) {
         // Generate random read size, ensure it's aligned
         auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
@@ -1618,11 +1640,8 @@ void gen_relay_linear_h_test(
             // Add the CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH with the dispatch command as payload
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
-            // Now generate the CQ_PREFETCH_CMD_RELAY_LINEAR_H command to fetch data from NOC
-            auto prior_end = prefetch_cmds.size();
-
             // Create the relay linear H command
-            CQPrefetchCmd cmd{};
+            CQPrefetchCmdLarge cmd{};
             cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
 
             // Set up the source NOC address - we'll read from DRAM where data is initialized
@@ -1639,7 +1658,7 @@ void gen_relay_linear_h_test(
             [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, dram_bank_id);
             // Read from DRAM result data address where data is stored
             // DeviceData uses the logical coordinates as keys
-            cmd.relay_linear_h.addr = DRAM_DATA_BASE_ADDR + offset;
+            cmd.relay_linear_h.addr = dram_data_base_addr + offset;
             cmd.relay_linear_h.length = length;
 
             // Add the command
@@ -1752,7 +1771,7 @@ void write_prefetcher_cmd(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     static vector<uint32_t> read_vec;  // static to avoid realloc
 
     // wait for space
@@ -1781,6 +1800,19 @@ void write_prefetcher_cmd(
     nt_memcpy((uint8_t*)host_mem_ptr, (uint8_t*)&cmds[cmd_offset], cmd_size_bytes);
     cmd_offset += cmd_size_words;
     host_mem_ptr += cmd_size_words;
+    uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uintptr_t int_host_ptr = reinterpret_cast<uintptr_t>(host_mem_ptr);
+    if (tt::align(int_host_ptr, pcie_alignment) != int_host_ptr) {
+        auto prev_cmd_offset = cmd_offset - cmd_size_words;
+        auto prev_cmd = reinterpret_cast<CQPrefetchCmd&>(cmds[prev_cmd_offset]);
+        auto prev_cmd_id = prev_cmd.base.cmd_id;
+        fmt::println(
+            "PCIE unaligned increment into host hugepage, last command:{}, last size:{}, new ptr:{:#X}",
+            prev_cmd_id,
+            cmd_size_words,
+            int_host_ptr);
+        assert(0);
+    }
 
     // This updates FetchQ where each entry of type prefetch_q_entry_type is size in 16B.
     prefetch_q_writer.write(prefetch_q_dev_ptr, cmd_size16b);
@@ -1798,7 +1830,7 @@ void write_prefetcher_cmds(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer,
+    umd::Writer& prefetch_q_writer,
     bool is_control_only) {
     static uint32_t* host_mem_ptr;
     static uint32_t prefetch_q_dev_ptr;
@@ -1817,7 +1849,7 @@ void write_prefetcher_cmds(
         vector<uint32_t> prefetch_q_rd_ptr_addr_data;
 
         prefetch_q_rd_ptr_addr_data.push_back(
-            prefetch_q_base + prefetch_q_entries_g * sizeof(DispatchSettings::prefetch_q_entry_type));
+            prefetch_q_base + (prefetch_q_entries_g * sizeof(DispatchSettings::prefetch_q_entry_type)));
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->id(), phys_prefetch_core, prefetch_q_rd_ptr_addr_data, prefetch_q_rd_ptr_addr);
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
@@ -1884,7 +1916,7 @@ std::chrono::duration<double> run_test(
     uint32_t prefetch_q_base,
     uint32_t prefetch_q_rd_ptr_addr,
     CoreCoord phys_prefetch_core,
-    tt::Writer& prefetch_q_writer) {
+    umd::Writer& prefetch_q_writer) {
     auto start = std::chrono::system_clock::now();
 
     std::thread t1([&]() {
@@ -1975,7 +2007,7 @@ void configure_for_single_chip(
     TT_ASSERT(cmddat_q_size_g >= 2 * max_prefetch_command_size_g);
 
     // NOTE: this test hijacks hugepage
-    chip_id_t mmio_device_id =
+    ChipId mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -2405,7 +2437,7 @@ int main(int argc, char** argv) {
         }
         log_info(LogTest, "Iterations: {}", iterations_g);
 
-        tt::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
+        umd::Writer prefetch_q_writer = tt::tt_metal::MetalContext::instance().get_cluster().get_static_tlb_writer(
             tt_cxy_pair(device->id(), phys_prefetch_core_g));
 
         vector<uint32_t> cmds, terminate_cmds;
@@ -2414,7 +2446,7 @@ int main(int argc, char** argv) {
             device,
             all_workers_g,
             l1_buf_base_g,
-            DRAM_DATA_BASE_ADDR,
+            device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
             (uint32_t*)host_hugepage_completion_buffer_base_g,
             false,
             DRAM_DATA_SIZE_WORDS);

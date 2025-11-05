@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,6 +29,9 @@ constexpr size_t get_next_power_of_2(size_t n) {
     return power;
 }
 
+// around 40% faster on WH compared to the default implementation
+// pop about (14 vs 12 cycles) 20% faster, push about (16 vs 10 cycles) 40% faster
+// not an exact cycle count given how timestamping works
 template <typename T, size_t MAX_SIZE>
 struct Stack {
     static constexpr size_t REAL_SIZE = MAX_SIZE + 1;
@@ -36,55 +39,22 @@ struct Stack {
     static constexpr top_idx_t EMPTY_VALUE = 0;
     static_assert(REAL_SIZE < std::numeric_limits<top_idx_t>::max());
     std::array<T, REAL_SIZE> data;
-    top_idx_t top;
-
-    Stack() : top(EMPTY_VALUE) {}
-
-    FORCE_INLINE bool is_empty() const { return top == EMPTY_VALUE; }
-
-    FORCE_INLINE bool is_full() const {
-        // Should only need calling for validation/debugging purposes
-        return top == REAL_SIZE - 1;
-    }
-
-    FORCE_INLINE void push(T value) {
-        ASSERT(!is_full());
-        data[top] = value;
-        top++;
-    }
-
-    FORCE_INLINE T pop() {
-        ASSERT(!is_empty());
-        T value = data[top];
-        top--;
-        return value;
-    }
-
-    FORCE_INLINE T peek() const {
-        ASSERT(!is_empty());
-        return data[top];
-    }
-};
-
-// around 40% faster on WH compared to the default implementation
-// pop about (14 vs 12 cycles) 20% faster, push about (16 vs 10 cycles) 40% faster
-// not an exact cycle count given how timestamping works
-template <typename T, size_t MAX_SIZE>
-struct WormholeEfficientStack {
-    static constexpr size_t REAL_SIZE = MAX_SIZE + 1;
-    using top_idx_t = int8_t;
-    static constexpr top_idx_t EMPTY_VALUE = 0;
-    static_assert(REAL_SIZE < std::numeric_limits<top_idx_t>::max());
-    std::array<T, REAL_SIZE> data;
+    T* base;
+    T* end;
     T* top;
 
-    WormholeEfficientStack() : data({}), top(&data[0]) {}
+    Stack() : base(nullptr), end(nullptr), top(nullptr) {}
+    void init(T* base) {
+        this->base = base;
+        this->end = base + MAX_SIZE;
+        this->top = base;
+    }
 
-    FORCE_INLINE bool is_empty() const { return top == &data[0]; }
+    FORCE_INLINE bool is_empty() const { return top == base; }
 
     FORCE_INLINE bool is_full() const {
         // Should only need calling for validation/debugging purposes
-        return top == &data[REAL_SIZE - 1];
+        return top == end;
     }
 
     FORCE_INLINE void push(T value) {
@@ -105,6 +75,46 @@ struct WormholeEfficientStack {
         return *top;
     }
 };
+
+// around 40% faster on WH compared to the default implementation
+// pop about (14 vs 12 cycles) 20% faster, push about (16 vs 10 cycles) 40% faster
+// not an exact cycle count given how timestamping works
+// template <typename T, size_t MAX_SIZE>
+// struct Stack {
+//     static constexpr size_t REAL_SIZE = MAX_SIZE + 1;
+//     using top_idx_t = int8_t;
+//     static constexpr top_idx_t EMPTY_VALUE = 0;
+//     static_assert(REAL_SIZE < std::numeric_limits<top_idx_t>::max());
+//     std::array<T, REAL_SIZE> data;
+//     T* top;
+
+//     Stack() : data({}), top(&data[0]) {}
+
+//     FORCE_INLINE bool is_empty() const { return top == &data[0]; }
+
+//     FORCE_INLINE bool is_full() const {
+//         // Should only need calling for validation/debugging purposes
+//         return top == &data[REAL_SIZE - 1];
+//     }
+
+//     FORCE_INLINE void push(T value) {
+//         ASSERT(!is_full());
+//         *top = value;
+//         top++;
+//     }
+
+//     FORCE_INLINE T pop() {
+//         ASSERT(!is_empty());
+//         --top;
+//         T value = *top;
+//         return value;
+//     }
+
+//     FORCE_INLINE T peek() const {
+//         ASSERT(!is_empty());
+//         return *top;
+//     }
+// };
 
 template <typename T, typename INHERITED_TYPE>
 struct OnePassIteratorBase {
@@ -165,14 +175,10 @@ struct BarrelIterator {
 template <size_t N_CHUNKS, size_t CHUNK_N_PKTS>
 struct ChannelBuffersPool {
     using chunk_t = EthChannelBuffer<PACKET_HEADER_TYPE, CHUNK_N_PKTS>;
-    using free_chunks_stack_t =
-#if defined(ARCH_WORMHOLE)
-        WormholeEfficientStack<chunk_t*, N_CHUNKS>;
-#else
-        Stack<chunk_t*, N_CHUNKS>;
-#endif
+    using free_chunks_stack_t = Stack<chunk_t*, N_CHUNKS>;
 
     std::array<chunk_t, N_CHUNKS> all_buffers;
+    std::array<chunk_t*, N_CHUNKS> all_buffers_ptrs;
     free_chunks_stack_t free_chunks;
 
     // using chunk_base_address_t = std::initializer_list<std::tuple<size_t, uint8_t>>;
@@ -180,9 +186,10 @@ struct ChannelBuffersPool {
 
     void init(const chunk_base_address_t& buffer_regions, size_t buffer_size_bytes, size_t header_size_bytes) {
         size_t idx = 0;
+        free_chunks.init(&all_buffers_ptrs[0]);
         for (const auto& chunk_base_address : buffer_regions) {
             ASSERT(idx < N_CHUNKS);
-            new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes, idx);
+            new (&all_buffers[idx]) chunk_t(chunk_base_address, buffer_size_bytes, header_size_bytes);
             free_chunks.push(&all_buffers[idx]);
             idx++;
         }

@@ -67,18 +67,18 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG2, 0);
         TTI_SFPSETSGN(1, p_sfpu::LREG2, p_sfpu::LREG1, 1);
         TTI_SFPSETEXP(126, p_sfpu::LREG1, p_sfpu::LREG1, 1);
-        TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG12, p_sfpu::LREG0, 0);
         TTI_SFPEXEXP(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
 
         // 1st iteration
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
         TTI_SFPNOP;
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPNOP;
         // 2nd iteration
-        TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 0);
         TTI_SFPNOP;
-        TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPIADD((-126) & 0xfff, p_sfpu::LREG3, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_IMM);
 
         // Re-bias

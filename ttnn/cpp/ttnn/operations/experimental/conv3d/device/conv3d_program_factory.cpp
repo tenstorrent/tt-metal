@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -41,7 +41,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto dtype_bytes = input_tensor.element_size();
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
+    auto tile_size = tt::tile_size(data_format);
 
     bool use_bias = bias_tensor.has_value();
 
@@ -554,7 +554,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
                 cores_str += "(" + std::to_string(core.x) + "," + std::to_string(core.y) + ")";
             }
 
-            CoreCoord reducer_core = {
+            [[maybe_unused]] CoreCoord reducer_core = {
                 reducer_core_ids[group_id] % grid_size.x, reducer_core_ids[group_id] / grid_size.x};
 
             log_debug(
@@ -579,7 +579,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         auto& writer_args = writer_args_per_core[core_id];
 
         // Get is_reducer value from the stored arguments
-        bool is_reducer = (writer_args[13] == 1);
+        [[maybe_unused]] bool is_reducer = (writer_args[13] == 1);
 
         // Add reducer core coordinates
         if (reducer_core_ids[reduction_group_id] != UINT32_MAX) {

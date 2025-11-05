@@ -10,7 +10,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 // #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
@@ -54,8 +53,8 @@ Tensor HaloTensorCreation(const Tensor& input) {
     Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
-    auto halo_output = ttnn::halo(
-        DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
+    auto halo_output =
+        ttnn::halo(input_tensor, sliding_window_config, 0, false, false, input_tensor.memory_config(), false);
 
     return halo_output;
 }
@@ -136,7 +135,11 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
         "Output sticks per shard {} should be same as output sticks per core {}",
         out_nsticks_per_core,
         output_nsticks_per_core);
-    TT_FATAL(input_nsticks_per_core % in_w == 0, "Error");
+    TT_FATAL(
+        input_nsticks_per_core % in_w == 0,
+        "Input sticks per core ({}) must be divisible by input width ({})",
+        input_nsticks_per_core,
+        in_w);
 
     // creating halo input tensor
     auto halo_in = HaloTensorCreation(input);
@@ -213,8 +216,8 @@ tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     // computation needed for the bilinear kernel. Passing them as an argument.
     float scale_h_inv = 1.0f / (float)scale_factor_h;
     float scale_w_inv = 1.0f / (float)scale_factor_w;
-    float y_index = (float)(0.5f) * (float)scale_h_inv + 0.5f;
-    float x_index_compute = (float)(0.5f) * (float)scale_w_inv - 0.5f;
+    float y_index = ((float)(0.5f) * (float)scale_h_inv) + 0.5f;
+    float x_index_compute = ((float)(0.5f) * (float)scale_w_inv) - 0.5f;
 
     uint32_t scale_h_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_h_inv);
     uint32_t scale_w_inv_u32 = *reinterpret_cast<uint32_t*>(&scale_w_inv);

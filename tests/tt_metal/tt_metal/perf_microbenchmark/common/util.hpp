@@ -15,28 +15,34 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 
+// Access to internal API: ProgramImpl::logical_cores
+#include "impl/program/program_impl.hpp"
+
 inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, const tt::tt_metal::Program& program) {
-#if defined(TRACY_ENABLE)
+    uint64_t t0_to_any_riscfw_end = 0;
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_enabled()) {
+        return t0_to_any_riscfw_end;
+    }
     // TODO: use enums from profiler_common.h
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
-        program.logical_cores()[tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
+        program.impl()
+            .logical_cores()[hal.get_programmable_core_type_index(tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
     auto device_id = device->id();
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
-    dprint_buf_msg_t* dprint_msg = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<dprint_buf_msg_t*>(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+    tt::tt_metal::DeviceAddr dprint_msg_addr =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 
     // This works for tensix only, will need to be updated for eth
-    std::vector<uint64_t> print_buffer_addrs = {
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_NC]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_BR]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR0]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR1]),
-        reinterpret_cast<uint64_t>(&dprint_msg->data[DPRINT_RISCV_INDEX_TR2]),
-    };
+    auto num_processors = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::TENSIX);
+    std::vector<uint64_t> print_buffer_addrs;
+    print_buffer_addrs.reserve(num_processors);
+    for (int i = 0; i < num_processors; i++) {
+        print_buffer_addrs.push_back(dprint_msg_addr + i * sizeof(DebugPrintMemLayout));
+    }
     for (const auto& worker_core : worker_cores_used_in_program) {
         for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;
@@ -67,10 +73,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         }
     }
 
-    uint64_t t0_to_any_riscfw_end = max_cycle - min_cycle;
-#else
-    uint64_t t0_to_any_riscfw_end = 0;
-#endif
+    t0_to_any_riscfw_end = max_cycle - min_cycle;
 
     return t0_to_any_riscfw_end;
 }
@@ -99,7 +102,7 @@ enum class ACCESS_TYPE { READ, WRITE };
 
 enum class BUFFER_TYPE { DRAM, L1 };
 
-std::string NOC_INDEXToString(NOC_INDEX enumValue) {
+inline std::string NOC_INDEXToString(NOC_INDEX enumValue) {
     switch (enumValue) {
         case NOC_INDEX::NOC_RISCV_0: return "NOC_RISCV_0";
         case NOC_INDEX::NOC_RISCV_1: return "NOC_RISCV_1";
@@ -107,7 +110,7 @@ std::string NOC_INDEXToString(NOC_INDEX enumValue) {
     }
 }
 
-std::string NOC_DIRECTIONToString(NOC_DIRECTION enumValue) {
+inline std::string NOC_DIRECTIONToString(NOC_DIRECTION enumValue) {
     switch (enumValue) {
         case NOC_DIRECTION::X_PLUS_DIR: return "X_PLUS_DIR";
         case NOC_DIRECTION::Y_MINUS_DIR: return "Y_MINUS_DIR";
@@ -117,7 +120,7 @@ std::string NOC_DIRECTIONToString(NOC_DIRECTION enumValue) {
     }
 }
 
-std::string ACCESS_TYPEToString(ACCESS_TYPE enumValue) {
+inline std::string ACCESS_TYPEToString(ACCESS_TYPE enumValue) {
     switch (enumValue) {
         case ACCESS_TYPE::READ: return "READ";
         case ACCESS_TYPE::WRITE: return "WRITE";
@@ -125,7 +128,7 @@ std::string ACCESS_TYPEToString(ACCESS_TYPE enumValue) {
     }
 }
 
-std::string BUFFER_TYPEToString(BUFFER_TYPE enumValue) {
+inline std::string BUFFER_TYPEToString(BUFFER_TYPE enumValue) {
     switch (enumValue) {
         case BUFFER_TYPE::DRAM: return "DRAM";
         case BUFFER_TYPE::L1: return "L1";

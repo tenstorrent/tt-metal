@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnupblock2d impor
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -53,6 +53,7 @@ def test_crossattnup(
     out_dim,
     block_id,
     pcc,
+    debug_mode,
     is_ci_env,
     reset_seeds,
 ):
@@ -78,6 +79,7 @@ def test_crossattnup(
         num_attn_heads,
         out_dim,
         True,
+        debug_mode=debug_mode,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_temb_tensor = torch_random(temb_shape, -0.1, 0.1, dtype=torch.float32)

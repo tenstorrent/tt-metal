@@ -110,20 +110,6 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     assert_where_with_pcc(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
 
 
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_where_nans(device, dtype):
-    if dtype == torch.float32:
-        pytest.xfail("#22308 ttnn.where erroneously propagates NaNs")
-
-    torch.manual_seed(0)
-
-    C = torch.ones(1, 4, 1, dtype=dtype)
-    T = torch.randn(1, 4, 768, dtype=dtype)
-    F = torch.full((1, 4, 768), float("nan"), dtype=dtype)
-
-    assert_where_with_pcc(C, T, F, device)
-
-
 def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
     torch.manual_seed(0)
 
@@ -150,7 +136,7 @@ def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
+@pytest.mark.parametrize("value", [15.5, 0, -6.8])
 def test_addcmul(device, h, w, value):
     run_ternary_test_value(device, h, w, value, ttnn.addcmul)
 

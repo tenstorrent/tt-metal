@@ -10,9 +10,9 @@ from transformers import AutoTokenizer, DistilBertForQuestionAnswering, pipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, profiler
 from models.demos.wormhole.distilbert.distilbert_utils import squadv2_1K_samples_input, squadv2_answer_decode_batch
 from models.demos.wormhole.distilbert.tt import ttnn_optimized_distilbert
-from models.utility_functions import disable_persistent_kernel_cache, profiler, skip_for_grayskull
 
 
 def load_inputs(input_path, batch):
@@ -289,7 +289,6 @@ def run_distilbert_question_and_answering_inference_squad_v2(
         logger.info(f"\tCPU_Eval: exact: {cpu_eval_score['exact']} -- F1:  {cpu_eval_score['f1']}")
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "model_name, input_loc",
     ((["distilbert-base-uncased-distilled-squad", "models/demos/wormhole/distilbert/demo/input_data.json"]),),
@@ -313,7 +312,6 @@ def test_demo(input_loc, model_name, distilbert, batch_size, model_location_gene
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["distilbert-base-uncased-distilled-squad"])
 @pytest.mark.parametrize("distilbert", [ttnn_optimized_distilbert])
 @pytest.mark.parametrize("batch_size", [8])

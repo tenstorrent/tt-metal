@@ -26,12 +26,18 @@ Several key components work together to perform computations within Tensix:
 
 The compute engines rely on four main register sets:
 
-1. **SrcA**: The first source register set for the matrix engine.
-2. **SrcB**: The second source register set for the matrix engine.
+1. **SrcA**: The first source register of the matrix engine.
+2. **SrcB**: The second source register of the matrix engine.
 3. **Dst**: The destination register set for the matrix engine, also used by the vector engine. This register set is exposed in the higher-level API.
 4. **LReg**: Internal registers within the SFPU for holding vector data during computation.
 
 The following image illustrates the connection between the different components and the registers they can access.
+
+.. note::
+
+    The register names are historical and may not clearly reflect their roles. The matrix engine (FPU) was developed before the vector engine (SFPU), and the names ``SrcA``, ``SrcB``, and ``Dst`` were chosen based on their use in matrix operations: ``SrcA`` and ``SrcB`` as source operands, and ``Dst`` as the destination. These names remained unchanged when the vector engine was added.
+
+    ``SrcA`` and ``SrcB`` are physical registers inside the matrix engine. The names might suggest references to memory locations, but they are just hardware registers used for computation. And unlike ``Dst``, ``SrcA`` and ``SrcB`` are single registers, not a register set.
 
 .. note::
 
@@ -40,7 +46,7 @@ The following image illustrates the connection between the different components 
     Furthermore, the unpacker, packer, SFPU, and FPU are not processing cores and cannot make control flow decisions on their own. The RISC-V cores issue commands to the compute engines and manage data flow between them. Explicit synchronization may be needed to ensure the engines have finished their work before the RISC-V cores proceed.
 
 .. figure:: /images/tenstorrent-sfpu-fpu-dst-register-diagram-and-dataflow.webp
-    :scale: 45%
+    :width: 65%
     :alt: Diagram of the dataflow, registers and engines that the compute kernel have access to
     :align: center
 
@@ -237,7 +243,6 @@ For example, to compute the element-wise sum of two tiles:
 
     // Configure the (un)packer based on the data formats of the CBs.
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    add_binary_tile_init();
 
     for(int i=0; i < 8; i++) {
         cb_wait_front(CBIndex::c_0, 1); cb_wait_front(CBIndex::c_1, 1);

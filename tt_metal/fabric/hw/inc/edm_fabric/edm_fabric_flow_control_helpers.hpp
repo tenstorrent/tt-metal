@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,10 +11,13 @@
 #include <utility>
 #include <limits>
 
+#include "debug/assert.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
 
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
+
+#include "debug/assert.h"
 
 namespace tt::tt_fabric {
 
@@ -205,6 +208,11 @@ struct OutboundReceiverChannelPointers {
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
+
+    FORCE_INLINE void advance_remote_receiver_buffer_index() {
+        remote_receiver_buffer_index =
+            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
+    }
 };
 
 /*
@@ -223,6 +231,8 @@ struct ReceiverChannelPointers {
     }
 
     FORCE_INLINE uint8_t get_src_chan_id(BufferIndex buffer_index) const { return src_chan_ids[buffer_index.get()]; }
+
+    FORCE_INLINE uint8_t get_src_chan_id() const { return src_chan_ids[0]; }
 
     FORCE_INLINE void init() { reset(); }
 

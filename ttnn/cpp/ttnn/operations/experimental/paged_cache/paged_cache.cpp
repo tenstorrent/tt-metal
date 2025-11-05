@@ -21,7 +21,7 @@ ttnn::Tensor PagedUpdateCacheOperation::invoke(
     const std::optional<const Tensor>& page_table = std::nullopt,
     const uint32_t batch_offset = 0,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords = std::nullopt) {
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;
     tt::tt_metal::operation::run(
@@ -52,7 +52,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> PagedFusedUpdateCacheOperation::invoke(
     const std::optional<const Tensor>& page_table = std::nullopt,
     const uint32_t batch_offset = 0,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords = std::nullopt) {
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor1.device()->arch(), compute_kernel_config);
     const bool share_cache_arg = share_cache.has_value() ? share_cache.value() : false;
     tt::tt_metal::operation::run(
@@ -79,7 +79,7 @@ ttnn::Tensor PagedFillCacheOperation::invoke(
     const std::optional<const Tensor>& batch_idx_tensor,
     const uint32_t batch_idx_fallback,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords = std::nullopt) {
+    const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords = std::nullopt) {
     auto kernel_config_val = init_device_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config);
 
     std::vector<std::optional<const Tensor>> optional_inputs_for_run;

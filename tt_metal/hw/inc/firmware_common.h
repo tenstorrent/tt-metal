@@ -20,10 +20,18 @@
 #include "dataflow_api.h"
 #endif
 
+constexpr size_t round_up_to_mult_of_4(size_t value) { return ((value + 3) / 4) * 4; }
+
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
+
+// These arrays are used to store the worker logical to virtual coordinate mapping. Only
+// defined in cores that need this information for NOC transactions (e.g. DM cores).
+// Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
+extern uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
+extern uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
 
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
@@ -51,9 +59,23 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     l1_to_local_mem_copy((uint*)bank_to_l1_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes + dram_offsets_size_bytes), l1_offsets_size_bytes >> 2);
 }
 
+inline void noc_worker_logical_to_virtual_map_init(uint64_t worker_logical_to_virtual_map_addr) {
+    int32_t worker_logical_col_to_virtual_col_size_bytes = sizeof(worker_logical_col_to_virtual_col);
+    l1_to_local_mem_copy(
+        (uint*)worker_logical_col_to_virtual_col,
+        (uint tt_l1_ptr*)(worker_logical_to_virtual_map_addr),
+        worker_logical_col_to_virtual_col_size_bytes >> 2);
+
+    int32_t worker_logical_row_to_virtual_row_size_bytes = sizeof(worker_logical_row_to_virtual_row);
+    l1_to_local_mem_copy(
+        (uint*)worker_logical_row_to_virtual_row,
+        (uint tt_l1_ptr*)(worker_logical_to_virtual_map_addr + worker_logical_col_to_virtual_col_size_bytes),
+        worker_logical_row_to_virtual_row_size_bytes >> 2);
+}
+
 FORCE_INLINE
 uint32_t firmware_config_init(
-    tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
+    tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t processor_index) {
     extern uint32_t tt_l1_ptr* rta_l1_base;
     extern uint32_t tt_l1_ptr* crta_l1_base;
     extern uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT];
@@ -68,16 +90,20 @@ uint32_t firmware_config_init(
             (uint32_t tt_l1_ptr*)(kernel_config_base[index] + launch_msg_address->kernel_config.sem_offset[index]);
     }
     rta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
-                                        launch_msg_address->kernel_config.rta_offset[dispatch_class].rta_offset);
+                                        launch_msg_address->kernel_config.rta_offset[processor_index].rta_offset);
     crta_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base[core_type_index] +
-                                         launch_msg_address->kernel_config.rta_offset[dispatch_class].crta_offset);
+                                         launch_msg_address->kernel_config.rta_offset[processor_index].crta_offset);
 
     return kernel_config_base[core_type_index];
 }
 
 FORCE_INLINE
 void wait_for_go_message() {
+#ifdef ARCH_QUASAR
+    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
+#else
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+#endif
     uint32_t go_message_index = mailboxes->go_message_index;
 
     while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
@@ -155,26 +181,14 @@ inline __attribute__((always_inline)) void configure_gathering() {
 
 inline __attribute__((always_inline)) void configure_l1_data_cache() {
 #if defined(ARCH_BLACKHOLE)
-#if defined(DISABLE_L1_DATA_CACHE)
-    // Flush and Disables Blackhole's L1 cache by setting bit 3. Grayskull and Wormhole do not have L1 cache
-    // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
-    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
-    asm(R"ASM(
-            fence
-            li t1, 0x8
-            csrrs zero, 0x7c0, t1
-             )ASM" ::
-            : "t1");
-#elif !defined(ENABLE_HW_CACHE_INVALIDATION)
-    // Disable gathering to stop HW from invalidating the data cache after 128 transactions by setting bit 24
-    // This is default enabled
-    asm(R"ASM(
-            li   t1, 0x1
-            slli t1, t1, 24
-            fence
-            csrrs zero, 0x7c0, t1
-             )ASM" ::
-            : "t1");
+    // Blackhole's L1 cache can be disabled by setting bit 3 and enabled by clearing it. Grayskull and Wormhole do not have L1 cache
+    // The cache is default disabled. When hw APIs better hide L1 cache, we can keep it enabled
+    // L1 cache can be enabled by setting `TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS` env var. It can be enabled risc by risc
+    // export TT_METAL_ENABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
+#if defined(ENABLE_L1_DATA_CACHE)
+    set_l1_data_cache<true>();
+#else
+    set_l1_data_cache<false>();
 #endif
 #endif
 }
@@ -194,4 +208,13 @@ inline __attribute__((always_inline)) void configure_csr() {
     configure_gathering();
     configure_l1_data_cache();
     disable_relaxed_memory_ordering();
+}
+
+struct coord_t {
+    uint8_t x;
+    uint8_t y;
+};
+
+FORCE_INLINE coord_t get_virtual_coord_from_worker_logical_coord(uint8_t worker_x, uint8_t worker_y) {
+    return {worker_logical_col_to_virtual_col[worker_x], worker_logical_row_to_virtual_row[worker_y]};
 }

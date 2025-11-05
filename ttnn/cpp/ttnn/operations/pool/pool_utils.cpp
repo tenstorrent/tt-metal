@@ -4,7 +4,7 @@
 #include "pool_utils.hpp"
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
 
@@ -29,7 +29,7 @@ uint32_t get_bf16_pool_scalar(
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return bfloat16::truncate(value).to_packed() << 16;
+    return std::bit_cast<uint16_t>(bfloat16::truncate(value)) << 16;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
@@ -41,7 +41,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return bfloat16::truncate(value).to_packed();
+    return std::bit_cast<uint16_t>(bfloat16::truncate(value));
 }
 
 bool is_pool_op_one_scalar_per_core(
@@ -54,8 +54,7 @@ bool is_pool_op_one_scalar_per_core(
     uint32_t pad_w,
     std::optional<int32_t> divisor_override) {
     return pool_type != Pool2DType::AVG_POOL2D || divisor_override.has_value() ||
-           ((ceil_mode == false || (ceil_h == 0 && ceil_w == 0)) &&
-            (count_include_pad == true || (pad_h == 0 && pad_w == 0)));
+           ((!ceil_mode || (ceil_h == 0 && ceil_w == 0)) && (count_include_pad || (pad_h == 0 && pad_w == 0)));
 }
 
 std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
@@ -109,17 +108,24 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
-    const Tensor& input,
+    const DataType& input_dtype,
+    const DataType& output_dtype,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t in_channels,
-    Pool2DType pool_type) {
+    Pool2DType pool_type,
+    bool return_indices,
+    const Layout& output_layout) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
+    TT_FATAL((split_reader && return_indices) || !return_indices, "split_reader must be true for MPWI");
 
-    auto dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
+    auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
+    tt::DataFormat index_format = datatype_to_dataformat_converter(DataType::UINT16);
+    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output_dtype);
     uint32_t nbytes = datum_size(data_format);
+    uint32_t index_nbytes = datum_size(index_format);
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
     // for medium kernels with sizes 16 < kernel_size_hw < 32 we tilize an entire tile even if some rows are unused,
@@ -128,7 +134,10 @@ FactoryParameters get_factory_parameters(
     uint32_t num_tilized_rows =
         kernel_size_hw <= tt::constants::FACE_WIDTH ? kernel_size_hw : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::TILE_WIDTH);
-    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / tt::constants::FACE_WIDTH);
+    // For TILE_LAYOUT output, we need to align to TILE_WIDTH instead of FACE_WIDTH
+    uint32_t effective_tile_width_for_output =
+        (output_layout == Layout::TILE) ? tt::constants::TILE_WIDTH : tt::constants::FACE_WIDTH;
+    uint32_t out_ntiles_c = (uint32_t)std::ceil((float)in_channels / num_shards_c / effective_tile_width_for_output);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const bool last_tile_is_partial =
@@ -137,14 +146,22 @@ FactoryParameters get_factory_parameters(
     const uint32_t max_rows_for_reduction =
         !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
-    const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
+    if (return_indices) {
+        TT_FATAL(
+            !is_avg_pool && !is_large_kernel,
+            "Currently only small full width max pool is supported with return_indices");
+    }
+    const uint32_t MAX_TILES_PER_REDUCTION = return_indices ? 1 : (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     return FactoryParameters{
         .multi_buffering_factor = multi_buffering_factor,
         .split_reader = split_reader,
         .nbytes = nbytes,
+        .index_nbytes = index_nbytes,
         .data_format = data_format,
+        .index_format = index_format,
+        .output_data_format = output_data_format,
         .in_ntiles_c = in_ntiles_c,
         .out_ntiles_c = out_ntiles_c,
         .is_avg_pool = is_avg_pool,
@@ -164,6 +181,7 @@ uint32_t calculate_L1_usage(
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
+    bool return_indices,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t out_h,
@@ -172,7 +190,9 @@ uint32_t calculate_L1_usage(
     const MemoryConfig& output_memory,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout,
+    const DataType& output_dtype) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -185,7 +205,16 @@ uint32_t calculate_L1_usage(
         num_shards_c = grid_size.x;
     }
 
-    FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, in_channels, pool_type);
+    FactoryParameters params = get_factory_parameters(
+        num_shards_c,
+        input.dtype(),
+        output_dtype,
+        kernel_h,
+        kernel_w,
+        in_channels,
+        pool_type,
+        return_indices,
+        output_layout);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
@@ -203,10 +232,14 @@ uint32_t calculate_L1_usage(
     uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
 
     uint32_t in_cb_sz = 0;
-    if (params.is_wide_reduction) {
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+    if (return_indices) {
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
     } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+        if (params.is_wide_reduction) {
+            in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+        } else {
+            in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
+        }
     }
 
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
@@ -219,15 +252,52 @@ uint32_t calculate_L1_usage(
         in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
     }
 
-    // after reduction
-    uint32_t out_cb_pagesize =
-        std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
-        params.nbytes;
-    uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
+    uint32_t total_mpwi_cb_size = 0;
+    if (return_indices) {
+        // Add tile temporary CBs for return_indices
+        uint32_t tile_elems = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+        uint32_t idx_tile_size = params.index_nbytes * tile_elems * 1;  // 1 page
+        uint32_t data_tile_size = params.nbytes * tile_elems * 1;       // 1 page
+        // 1 data sized tile (pack_tmp_cb) and 5 index sized tiles (in_idx, pack_idx_tmp, right_inc, down_left_wrap_inc,
+        // up_left_wrap_inc)
+        total_mpwi_cb_size = (5 * idx_tile_size) + data_tile_size;
+    }
+
+    uint32_t out_cb_pagesize;
+    uint32_t out_cb_npages;
+    const bool is_output_tiled = output_layout == Layout::TILE;
+
+    if (is_output_tiled) {
+        out_cb_pagesize = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
+        out_cb_npages = output_memory.shard_spec().value().shape[0] * output_memory.shard_spec().value().shape[1] /
+                        tt::constants::TILE_HW;
+    } else {
+        out_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
+            params.nbytes;
+        out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
+    }
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
+    uint32_t pre_tilize_cb_size = 0;
+
+    if (is_output_tiled) {
+        const uint32_t pre_tilize_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        const uint32_t pre_tilize_cb_npages = 1;
+        pre_tilize_cb_size = pre_tilize_cb_pagesize * pre_tilize_cb_npages;
+    }
+
+    uint32_t out_idx_cb_config_size = 0;
+    if (return_indices) {
+        uint32_t out_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
+            params.index_nbytes;
+        out_idx_cb_config_size = out_cb_npages * out_cb_pagesize;
+    }
+
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           sliding_window::align_buffer(out_cb_config_size) /* global, involved */;
+           total_mpwi_cb_size + pre_tilize_cb_size + sliding_window::align_buffer(out_cb_config_size) +
+           sliding_window::align_buffer(out_idx_cb_config_size);
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -236,7 +306,10 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    bool return_indices,
+    const Layout& output_layout,
+    const DataType& output_dtype) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
@@ -255,6 +328,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     };
 
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    bool is_out_tiled = output_layout == ttnn::TILE_LAYOUT;
 
     auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
         auto input_parallel_config = pool::determine_valid_parallel_config(
@@ -266,8 +340,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             compute_grid_size,
             orientation,
             false,
-            false,
-            is_in_tiled,  // if input is tiled we need the shard width to be a tile multiple,
+            is_out_tiled,
+            is_in_tiled || is_out_tiled,  // if input/output is tiled we need the shard width to be a tile multiple,
             0);
 
         if (!input_parallel_config.has_value()) {
@@ -281,6 +355,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             sliding_window_config.get_ceil_pad_h(),
             sliding_window_config.get_ceil_pad_w(),
             sliding_window_config.ceil_mode,
+            return_indices,
             sliding_window_config.window_hw.first,
             sliding_window_config.window_hw.second,
             sliding_window_config.get_output_shape()[1],
@@ -289,7 +364,9 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             get_memconfig(input_parallel_config.value()),
             pool_type,
             count_include_pad,
-            divisor_override);
+            divisor_override,
+            output_layout,
+            output_dtype);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };
@@ -340,14 +417,29 @@ void validate_input_params(
     // tensor shape validation against provided NHWC dimensions
     const uint32_t nhw = batch_size * input_h * input_w;
     const auto& input_shape = input_tensor.logical_shape();
+
+    // Support both (1, 1, nhw, c) and (n, h, w, c) formats
+    bool is_flattened_format =
+        (input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels);
+    bool is_nhwc_format =
+        (input_shape[0] == batch_size && input_shape[1] == input_h && input_shape[2] == input_w &&
+         input_shape[3] == channels);
+
+    // Unflattened tesnor currently supported for non_block formats only.
     TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == nhw && input_shape[3] == channels,
-        "Input tensor shape {} does not match expected shape (1, 1, {}, {})",
+        is_flattened_format || (is_nhwc_format && !is_block_float(input_tensor.dtype())),
+        "Input tensor shape {} does not match expected shape. For block format inputs (bfloat8_b/bfloat4_b) only "
+        "flattened format (1, 1, {}, {}) is supported. Unflattened format ({}, {}, {}, {}) is not supported for block "
+        "format inputs.",
         input_shape,
         nhw,
+        channels,
+        batch_size,
+        input_h,
+        input_w,
         channels);
 
-    if (is_in_tiled) {
+    if (is_in_tiled && is_flattened_format) {
         const uint32_t padded_channels = tt::round_up(channels, tt::constants::TILE_WIDTH);
         const uint32_t padded_nhw = tt::round_up(nhw, tt::constants::TILE_HEIGHT);
         const auto& padded_input_shape = input_tensor.padded_shape();
@@ -394,8 +486,8 @@ void validate_input_params(
         kernel_size[1]);
 
     // ensure effective kernel size (with dilation) doesn't exceed padded input
-    uint32_t effective_kernel_h = dilation_h * (kernel_size[0] - 1) + 1;
-    uint32_t effective_kernel_w = dilation_w * (kernel_size[1] - 1) + 1;
+    uint32_t effective_kernel_h = (dilation_h * (kernel_size[0] - 1)) + 1;
+    uint32_t effective_kernel_w = (dilation_w * (kernel_size[1] - 1)) + 1;
     uint32_t padded_input_h = input_h + pad_top + pad_bottom;
     uint32_t padded_input_w = input_w + pad_left + pad_right;
     TT_FATAL(

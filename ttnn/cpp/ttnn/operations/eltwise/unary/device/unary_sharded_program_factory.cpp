@@ -8,7 +8,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
@@ -26,9 +25,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = args.op_chain;
-    float value1 = 0.0f;
-    float value2 = 0.0f;
-
+    uint32_t packed_scalar1 = 0u;
+    uint32_t packed_scalar2 = 0u;
     tt::tt_metal::Program program = CreateProgram();
 
     auto shard_spec = input.shard_spec().value();
@@ -45,8 +43,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
@@ -82,7 +80,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].op_type == UnaryOpType::HARDSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -131,29 +129,34 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     }
 
     bool math_approx_mode = std::all_of(
-        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
+        args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.type()); });
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
 
-    if (!ops_chain[0].params.empty()) {
-        switch (ops_chain[0].op_type) {
-            case UnaryOpType::HARDSHRINK: value1 = ops_chain[0].params[0]; break;
+    if (input.dtype() == DataType::FLOAT32) {
+        unary_defines["INP_FLOAT32"] = "1";
+    } else if (input.dtype() == DataType::INT32) {
+        unary_defines["INP_INT32"] = "1";
+    } else if (input.dtype() == DataType::UINT32) {
+        unary_defines["INP_UINT32"] = "1";
+    } else {
+        unary_defines["INP_FLOAT"] = "1";
+    }
+
+    if (!ops_chain[0].empty()) {
+        switch (ops_chain[0].type()) {
+            case UnaryOpType::HARDSHRINK:
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
+                break;
             case UnaryOpType::WHERE_TSS:
-                value1 = ops_chain[0].params[0];
-                value2 = ops_chain[0].params[1];
-                if (input.dtype() == DataType::INT32) {
-                    unary_defines["FILL_INT"] = "fill_tile_int";
-                } else {
-                    unary_defines["FILL_FLOAT"] = "fill_tile";
-                }
+                packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
+                packed_scalar2 = utils::pack_scalar_runtime_arg(ops_chain[0], 1, input.dtype());
                 break;
             default: break;
         }
     }
 
-    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root_sharded, input.dtype());
+    auto path = utils::get_compute_kernel_path(ops_chain[0].type(), compute_root_sharded, input.dtype());
 
-    const auto packed_scalar1 = utils::pack_scalar_runtime_arg(value1, input.dtype());
-    const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,

@@ -17,25 +17,24 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "command_queue_fixture.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/test_utils/df/float32.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {
 
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 void build_and_run_program(
-    std::shared_ptr<distributed::MeshDevice> device,
+    const std::shared_ptr<distributed::MeshDevice>& device,
     bool slow_dispatch,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
@@ -61,7 +60,14 @@ void build_and_run_program(
     CreateCircularBuffer(program1, cr_set, cb_config);
     CreateCircularBuffer(program2, cr_set, cb_config);
 
-    vector<uint32_t> compile_args = {MAX_LOOP, page_size};
+    // Add 2 semaphores initialized to 0 for each program, 1 per risc
+    uint32_t program1_semaphore0 = CreateSemaphore(program1, cr_set, 0);
+    uint32_t program1_semaphore1 = CreateSemaphore(program1, cr_set, 0);
+    uint32_t program2_semaphore0 = CreateSemaphore(program2, cr_set, 0);
+    uint32_t program2_semaphore1 = CreateSemaphore(program2, cr_set, 0);
+
+    vector<uint32_t> compile_args = {MAX_LOOP, page_size, 2};
+    tt_metal::TensorAccessorArgs::create_l1_interleaved().append_to(compile_args);
 
     auto brisc_kernel1 = CreateKernel(
         program1,
@@ -125,19 +131,30 @@ void build_and_run_program(
                 top_left_core_physical.y,
                 bottom_right_core_physical.x,
                 bottom_right_core_physical.y,
-                device_grid.x * device_grid.y};
+                device_grid.x * device_grid.y,
+                0,  // risc index
+                // semaphore IDs for program1
+                program1_semaphore0,   // semaphore 0
+                program1_semaphore1};  // semaphore 1
+
             tt::tt_metal::SetRuntimeArgs(program1, brisc_kernel1, core, rt_args);
+            rt_args[8] = 1;  // risc index
             tt::tt_metal::SetRuntimeArgs(program1, ncrisc_kernel1, core, rt_args);
+
+            rt_args[8] = 0;  // risc index
+            // Override semaphore IDs for program2
+            rt_args[9] = program2_semaphore0;   // semaphore 0
+            rt_args[10] = program2_semaphore1;  // semaphore 1
+
             tt::tt_metal::SetRuntimeArgs(program2, brisc_kernel2, core, rt_args);
+            rt_args[8] = 1;  // risc index
             tt::tt_metal::SetRuntimeArgs(program2, ncrisc_kernel2, core, rt_args);
         }
     }
     distributed::MeshWorkload workload1;
     distributed::MeshWorkload workload2;
-    distributed::AddProgramToMeshWorkload(
-        workload1, std::move(program1), distributed::MeshCoordinateRange(device->shape()));
-    distributed::AddProgramToMeshWorkload(
-        workload2, std::move(program2), distributed::MeshCoordinateRange(device->shape()));
+    workload1.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program1));
+    workload2.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program2));
 
     // This loop caches program1 and runs
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {
@@ -151,7 +168,7 @@ void build_and_run_program(
     distributed::Finish(device->mesh_command_queue());
 }
 
-TEST_F(UnitMeshCQFixture, TestDynamicNoCOneProgram) {
+TEST_F(MeshDispatchFixture, TestDynamicNoCOneProgram) {
     uint32_t NUM_PROGRAMS = 1;
     uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
@@ -160,7 +177,7 @@ TEST_F(UnitMeshCQFixture, TestDynamicNoCOneProgram) {
     build_and_run_program(this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
 }
 
-TEST_F(UnitMeshCQFixture, TestDynamicNoCMutlipleProgram) {
+TEST_F(MeshDispatchFixture, TestDynamicNoCMutlipleProgram) {
     uint32_t NUM_PROGRAMS = 3;
     uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;
@@ -169,7 +186,7 @@ TEST_F(UnitMeshCQFixture, TestDynamicNoCMutlipleProgram) {
     build_and_run_program(this->devices_[0], this->slow_dispatch_, NUM_PROGRAMS, MAX_LOOP, page_size, mix_noc_mode);
 }
 
-TEST_F(UnitMeshCQFixture, TestDynamicNoCMutlipleProgramMixedMode) {
+TEST_F(MeshDispatchFixture, TestDynamicNoCMutlipleProgramMixedMode) {
     uint32_t NUM_PROGRAMS = 5;
     uint32_t MAX_LOOP = 65536;
     uint32_t page_size = 1024;

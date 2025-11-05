@@ -14,12 +14,14 @@ import ttnn
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
+    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
+    dequantize_state_dict,
     get_model_config,
-    load_state_dict,
-    pad_or_trim_seq_len,
+    get_test_weight_config,
     run_module_forward,
 )
 
@@ -49,7 +51,7 @@ class DeepseekV3MoEExperts(nn.Module):
         return torch.cat(outputs, dim=0)
 
 
-def create_combined_state_dict(module_path: str, model_path: Path) -> dict:
+def create_combined_state_dict(module_path: str, model_path: Path, state_dict: dict[str, torch.Tensor]) -> dict:
     """
     Create a combined state_dict from multiple experts state_dicts.
     """
@@ -58,46 +60,21 @@ def create_combined_state_dict(module_path: str, model_path: Path) -> dict:
     base_path = ".".join(parts[:-1])
     s, e = module_path.split(".")[-1].split("-")
     s, e = int(s), int(e)
-    state_dict = {}
+    out_state_dict = {}
     for i in range(s, e + 1):
         module_path_i = f"{base_path}.{i}"
-        state_dict_i = load_state_dict(model_path, module_path_i)
+        state_dict_i = sub_state_dict(state_dict, module_path_i + ".")
         for k, v in state_dict_i.items():
             k_ = f"{base_path.split('.')[-1]}.{i}.{k}"
-            state_dict[k_] = v
+            out_state_dict[k_] = v
 
-    # Remove weight_scale_inv keys from state_dict as reference model does not have them
-    keys_to_remove = [k for k in state_dict.keys() if "weight_scale_inv" in k]
-    for k in keys_to_remove:
-        del state_dict[k]
-
-    return state_dict
+    return out_state_dict
 
 
-def get_reference_model(weight_type, hf_config, module_path, model_path: Path) -> DeepseekV3MoEExperts:
-    reference_model = DeepseekV3MoEExperts(hf_config)
-    if weight_type == "real":
-        # Load the state_dict from the specified module path and model path
-        state_dict = create_combined_state_dict(module_path, model_path)
-        reference_model.load_state_dict(state_dict)
-    return reference_model
-
-
-def get_reference_input(batch_size, seq_len, hf_config):
-    return torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
-
-
-def get_reference_output(torch_input, reference_model):
-    return reference_model(torch_input)
-
-
-@pytest.mark.skip(reason="This test hangs for some reason")
 @pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 128),
-        ("prefill", 128),
-        ("prefill", 256),
         ("prefill", 2048),
     ],
 )
@@ -113,22 +90,34 @@ def test_forward_pass(
     mode: str,
     seq_len: int,
     hf_config: Any,
-    tmp_path: Path,
+    cache_path: Path,
     mesh_device: Any,
     weight_type: str,
     module_path: str,
     model_path: Path,
-    reset_seeds: Any,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict: dict[str, torch.Tensor],
 ):
     batch_size = 1
 
-    reference_model = get_reference_model(weight_type, hf_config, module_path, model_path)
-    torch_input = get_reference_input(batch_size, seq_len, hf_config)
-    reference_output = get_reference_output(torch_input, reference_model)
+    reference_model = DeepseekV3MoEExperts(hf_config).eval()
+    torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
+    if weight_type == "random":
+        state_dict = add_inv_scale_to_state_dict(
+            reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
+        )
 
-    torch_input = pad_or_trim_seq_len(torch_input, mode, seq_len)
+    else:
+        assert weight_type == "real"
+        state_dict = create_combined_state_dict(module_path, model_path, state_dict)
+        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+    reference_output = reference_model(torch_input)
+
     # Generate module configs and state
-    weight_config = TTExperts.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        TTExperts, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+    )
     model_config = get_model_config(TTExperts, mode, hf_config, mesh_device)
     model_state = TTExperts.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)

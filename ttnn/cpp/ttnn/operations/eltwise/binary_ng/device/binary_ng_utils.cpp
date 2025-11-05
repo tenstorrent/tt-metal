@@ -5,7 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -37,63 +37,47 @@ BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcas
         case SubtileBroadcastType::NONE:
             reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterNoBcast;
+            writer_kernel = KernelName::WriterScalar;
             bcast_input = std::nullopt;
             break;
 
-        case SubtileBroadcastType::SCALAR_A:
-            reader_kernel = KernelName::ReaderScalarBcast;
+        case SubtileBroadcastType::SCALAR_A:;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::SCALAR_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterScalarBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A:
-            reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::ROW_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterRowBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
-            reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A_COL_B:
-            reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_B_COL_A:
-            reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterRowBcast;
             bcast_input = 0;
             break;
     }
@@ -122,13 +106,6 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
             return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
         case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
-        case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
-        case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
-        case KernelName::ReaderScalarBcast: return fmt::format(dataflow, root, "reader_interleaved_scalar_bcast.cpp");
-        case KernelName::WriterNoBcast: return fmt::format(dataflow, root, "writer_interleaved_no_bcast.cpp");
-        case KernelName::WriterRowBcast: return fmt::format(dataflow, root, "writer_interleaved_row_bcast.cpp");
-        case KernelName::WriterColBcast: return fmt::format(dataflow, root, "writer_interleaved_col_bcast.cpp");
-        case KernelName::WriterScalarBcast: return fmt::format(dataflow, root, "writer_interleaved_scalar_bcast.cpp");
         case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
         case KernelName::ComputeNoBcast:
             return fmt::format(
@@ -151,7 +128,8 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : binary_op(EnumT::SUB) {
+OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+    binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
         case BinaryOpType::SUB: break;
@@ -173,10 +151,34 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 binary_op = FpuBinaryOp::ADD;
             }
             break;
-        case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
-        case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
-        case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::LT:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::LTZ;
+            } else {
+                binary_op = SfpuBinaryOp::LT;
+            }
+            break;
+        case BinaryOpType::GT:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::GTZ;
+            } else {
+                binary_op = SfpuBinaryOp::GT;
+            }
+            break;
+        case BinaryOpType::GE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::GEZ;
+            } else {
+                binary_op = SfpuBinaryOp::GE;
+            }
+            break;
+        case BinaryOpType::LE:
+            if (dtype != DataType::INT32) {
+                postprocess = unary::UnaryOpType::LEZ;
+            } else {
+                binary_op = SfpuBinaryOp::LE;
+            }
+            break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2
@@ -327,6 +329,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        // sqrt(a^2 + b^2)
+        case BinaryOpType::HYPOT:
+            process_lhs = unary::UnaryOpType::SQUARE;
+            process_rhs = unary::UnaryOpType::SQUARE;
+            binary_op = EnumT::ADD;
+            postprocess = unary::UnaryOpType::SQRT;
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -359,6 +368,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"mul_int_tile_init();", "mul_uint16_tile"};
             } else if (dtype == DataType::INT32) {
                 return {"mul_int32_tile_init();", "mul_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"mul_int32_tile_init();", "mul_uint32_tile"};
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }
@@ -399,18 +410,24 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case BITWISE_AND:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_and_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_and_binary_tile"};
             }
         case BITWISE_OR:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_or_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_or_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_or_binary_tile"};
             }
         case BITWISE_XOR:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_uint16_binary_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"binary_bitwise_tile_init();", "bitwise_xor_uint32_binary_tile"};
             } else {
                 return {"binary_bitwise_tile_init();", "bitwise_xor_binary_tile"};
             }
@@ -432,6 +449,10 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
         case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
+        case LT: return {"lt_int32_tile_init();", "lt_int32_tile"};
+        case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
+        case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
+        case LE: return {"le_int32_tile_init();", "le_int32_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -455,24 +476,28 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
 void add_activation_defines(
     std::map<std::string, std::string>& defines,
-    tt::stl::Span<const unary::UnaryWithParam> activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
     std::optional<DataType> dtype) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
         activations.begin(),
         activations.end(),
         std::string{},
-        [&](std::string&& process, const unary::UnaryWithParam& a) {
-            const auto& [op_init, op_func] = unary::utils::get_op_init_and_func(a.op_type, a.params, "i", dtype);
+        [&](std::string&& process, const unary::EltwiseUnaryWithParam& a) {
+            const auto& [op_init, op_func] = std::visit(
+                [&](auto params) { return unary::utils::get_op_init_and_func(a.type(), params, "i", dtype); },
+                a.get_params());
             process += op_init;
             process += op_func;
-            unary::utils::update_macro_defines(a.op_type, defines);
+            unary::utils::update_macro_defines(a.type(), defines);
             return std::move(process);
         });
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const DataType b_dtype) {
+std::map<std::string, std::string> make_dataflow_defines(
+    const DataType dtype, const std::optional<DataType> b_dtype_opt) {
     std::map<std::string, std::string> defines;
+    const auto b_dtype = b_dtype_opt.value_or(dtype);
     // to maintain backward compatibility, we need to support both dtype and b_dtype
     if (dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
@@ -538,7 +563,37 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>);
+template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
 
+tt::tt_metal::ShardSpec adjust_to_shape(
+    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    auto ret = shard_spec;
+
+    // Calculate volume of all dimensions EXCEPT the last (width)
+    // This is the "collapsed height" for sharding purposes
+    uint32_t from_volume_except_width = 1;
+    uint32_t to_volume_except_width = 1;
+
+    const int rank = std::max(from_shape.rank(), to_shape.rank());
+
+    // Accumulate all dimensions except the last
+    for (int i = 0; i < rank - 1; ++i) {
+        uint32_t from_dim = (i < from_shape.rank()) ? from_shape[i] : 1;
+        uint32_t to_dim = (i < to_shape.rank()) ? to_shape[i] : 1;
+        from_volume_except_width *= from_dim;
+        to_volume_except_width *= to_dim;
+    }
+
+    // Get width dimensions
+    uint32_t from_width = from_shape[-1];
+    uint32_t to_width = to_shape[-1];
+
+    // Adjust shard shape based on full volume ratios
+    TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
+    TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    return ret;
+}
 }  // namespace ttnn::operations::binary_ng

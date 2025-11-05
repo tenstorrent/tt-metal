@@ -124,7 +124,7 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TensorSpec::TensorSpec(ttnn::Shape logical_shape, TensorLayout tensor_layout) :
+TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_layout) :
     logical_shape_(std::move(logical_shape)),
     tensor_layout_(std::move(tensor_layout)),
     cached_padded_shape_(tensor_layout_.compute_padded_shape(logical_shape_)),
@@ -183,7 +183,7 @@ TensorSpec TensorSpec::block_sharded(CoreRange grid, ShardOrientation orientatio
         div_up(physical_shape().height(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.y : grid_size.x);
     auto shard_width =
         div_up(physical_shape().width(), orientation == ShardOrientation::ROW_MAJOR ? grid_size.x : grid_size.y);
-    NdShardSpec shard_spec(Shape({shard_height, shard_width}), std::move(grid), orientation);
+    NdShardSpec shard_spec(Shape({shard_height, shard_width}), grid, orientation);
     return sharded(std::move(shard_spec), ShardShapeAlignment::RECOMMENDED);
 }
 
@@ -218,7 +218,7 @@ void TensorSpec::populate_sharding_specs() {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
             tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
         }
-    } else if (memory_config().shard_spec() && memory_config().shard_spec()->mode == ShardMode::PHYSICAL) {
+    } else if (memory_config().shard_spec()) {
         tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
     }
 }

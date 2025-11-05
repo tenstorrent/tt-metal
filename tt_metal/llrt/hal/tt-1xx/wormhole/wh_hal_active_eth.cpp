@@ -2,16 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#define HAL_BUILD tt::tt_metal::wormhole::active_eth
 #define COMPILE_FOR_ERISC
 
 #include "dev_msgs.h"
+using namespace tt::tt_metal::wormhole::active_eth;
 
 #include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
-#include "llrt_common/mailbox.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 #include "wormhole/wh_hal.hpp"
 #include "wormhole/wh_hal_eth_asserts.hpp"
 
@@ -20,8 +21,10 @@
 
 namespace tt::tt_metal::wormhole {
 
-// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
-#include "core_config.h"
+// This file is intended to be wrapped inside arch-specific namespace.
+namespace active_eth_dev_msgs {
+#include "hal/generated/dev_msgs_impl.hpp"
+}
 
 HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<DeviceAddr> mem_map_bases;
@@ -64,6 +67,10 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, link_status);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
+        eth_l1_mem::address_map::AERISC_FABRIC_ROUTING_PATH_BASE_1D;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
+        eth_l1_mem::address_map::AERISC_FABRIC_ROUTING_PATH_BASE_2D;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -94,34 +101,44 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_1D)] =
+        eth_l1_mem::address_map::FABRIC_ROUTING_PATH_SIZE_1D;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTING_PATH_2D)] =
+        eth_l1_mem::address_map::FABRIC_ROUTING_PATH_SIZE_2D;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
-    std::vector<HalJitBuildConfig> processor_types(1);
-    for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
-        processor_types[0] = HalJitBuildConfig{
-            .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
-            .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
-            .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
-            .fw_launch_addr_value = 0x1,
-            .memory_load = ll_api::memory::Loading::DISCRETE,
-        };
-        processor_classes[processor_class_idx] = processor_types;
-    }
-    static_assert(
-        llrt_common::k_SingleProcessorMailboxSize<EthProcessorTypes> <=
-        eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
+        // DM
+        {
+            // ERISC
+            {.fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
+             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
+             .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
+             .fw_launch_addr_value = 0x1,
+             .memory_load = ll_api::memory::Loading::DISCRETE},
+        },
+    };
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
+        // DM
+        {
+            {"ER", "ERISC"},
+        },
+    };
+
+    static_assert(sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
-        processor_classes,
-        mem_map_bases,
-        mem_map_sizes,
-        fw_mailbox_addr,
+        std::move(processor_classes),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
+        std::move(processor_classes_names),
         false /*supports_cbs*/,
-        false /*supports_receiving_multicast_cmds*/};
+        false /*supports_receiving_multicast_cmds*/,
+        active_eth_dev_msgs::create_factory()};
 }
 
 }  // namespace tt::tt_metal::wormhole

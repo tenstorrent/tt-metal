@@ -7,9 +7,9 @@ import time
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 from models.perf.device_perf_utils import check_device_perf, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()

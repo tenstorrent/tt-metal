@@ -11,28 +11,30 @@
 
 #include <sys/types.h>
 #include <cstddef>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/utils.hpp>
+#include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <ostream>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_types.hpp>
+#include <umd/device/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "tt_memory.h"
+#include "hal/generated/dev_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
-enum class CoreType;
 enum class AddressableCoreType : uint8_t;
 
 namespace tt {
-
-enum class ARCH;
 
 namespace tt_metal {
 
@@ -46,6 +48,34 @@ struct HalProcessorIdentifier {
 std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
+
+// A set of processors distinguishing programmable core type and index within that core type.
+// See get_processor_index and get_processor_class_and_type_from_index.
+class HalProcessorSet {
+private:
+    std::array<uint32_t, NumHalProgrammableCoreTypes> masks_{};
+
+public:
+    void add(HalProgrammableCoreType core_type, uint32_t processor_index) {
+        masks_[static_cast<size_t>(core_type)] |= (1u << processor_index);
+    }
+    bool contains(HalProgrammableCoreType core_type, uint32_t processor_index) const {
+        return (masks_[static_cast<size_t>(core_type)] & (1u << processor_index)) != 0;
+    }
+    bool empty() const {
+        for (const auto& mask : masks_) {
+            if (mask != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+    // Returns the bitmask of processors for the given core type.
+    // Bit i set <=> processor index i is in the set.
+    uint32_t get_processor_mask(HalProgrammableCoreType core_type) const {
+        return masks_[static_cast<size_t>(core_type)];
+    }
+};
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
 static constexpr int MAX_PROCESSOR_TYPES_COUNT = 3;
@@ -79,6 +109,12 @@ enum class FWMailboxMsg : uint8_t {
     ETH_MSG_RELEASE_CORE,
     // Heartbeat counter
     HEARTBEAT,
+    // Retrain Count
+    RETRAIN_COUNT,
+    // Rx Link Up
+    RX_LINK_UP,
+    // Port Status
+    PORT_STATUS,
     // Number of mailbox message types
     COUNT,
 };
@@ -106,42 +142,57 @@ private:
     CoreType core_type_;
     // indices represents processor class and type positions, value is build configuration params
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
+    // indices represents processor class and type positions, values are abbreviated name and full name pairs
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
+    dev_msgs::Factory dev_msgs_factory_;
 
 public:
     HalCoreInfoType(
         HalProgrammableCoreType programmable_core_type,
         CoreType core_type,
-        const std::vector<std::vector<HalJitBuildConfig>>& processor_classes,
-        const std::vector<DeviceAddr>& mem_map_bases,
-        const std::vector<uint32_t>& mem_map_sizes,
-        const std::vector<uint32_t>& eth_fw_mailbox_msgs,
+        std::vector<std::vector<HalJitBuildConfig>> processor_classes,
+        std::vector<DeviceAddr> mem_map_bases,
+        std::vector<uint32_t> mem_map_sizes,
+        std::vector<uint32_t> eth_fw_mailbox_msgs,
+        std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names,
         bool supports_cbs,
-        bool supports_receiving_multicast_cmds);
+        bool supports_receiving_multicast_cmds,
+        dev_msgs::Factory dev_msgs_factory) :
+        programmable_core_type_(programmable_core_type),
+        core_type_(core_type),
+        processor_classes_(std::move(processor_classes)),
+        processor_classes_names_(std::move(processor_classes_names)),
+        mem_map_bases_(std::move(mem_map_bases)),
+        mem_map_sizes_(std::move(mem_map_sizes)),
+        eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
+        supports_cbs_(supports_cbs),
+        supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
+        dev_msgs_factory_(dev_msgs_factory) {}
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalL1MemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
     uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
+    const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
-template <typename T>
-inline T HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalL1MemAddrType>(addr_type);
+inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_bases_.size());
-    return reinterpret_cast<T>(this->mem_map_bases_[index]);
+    return this->mem_map_bases_[index];
 }
 
 inline uint32_t HalCoreInfoType::get_dev_size(HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalL1MemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_sizes_.size());
     return this->mem_map_sizes_[index];
 }
@@ -161,6 +212,8 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
     TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
     return this->processor_classes_[processor_class_idx][processor_type_idx];
 }
+
+inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
 // These are generated on demand instead of stored in HalJitBuildConfig,
@@ -206,6 +259,9 @@ public:
     using StackSizeFunc = std::function<uint32_t(uint32_t)>;
     using EthFwArgAddrFunc = std::function<uint32_t(int, uint32_t)>;
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
+    using SetIRAMTextSizeFunc = std::function<void(
+        dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
+    using VerifyFwVersionFunc = std::function<void(tt::umd::semver_t)>;
 
 private:
     tt::ARCH arch_;
@@ -216,6 +272,10 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
+    uint32_t max_processors_per_core_{};
+    // Architecture-defined PCIe address range
+    uint64_t pcie_addr_lower_bound_{};
+    uint64_t pcie_addr_upper_bound_{};
     uint32_t num_nocs_{};
     uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
@@ -234,8 +294,7 @@ private:
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
-    bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
-    std::unordered_set<AddressableCoreType> virtualized_core_types_;
+    std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
     float eps_ = 0.0f;
@@ -244,6 +303,7 @@ private:
 
     void initialize_wh(bool is_base_routing_fw_enabled);
     void initialize_bh();
+    void initialize_qa();
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -261,6 +321,8 @@ private:
     EthFwArgAddrFunc eth_fw_arg_addr_func_;
     DispatchFeatureQueryFunc device_features_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
+    SetIRAMTextSizeFunc set_iram_text_size_func_;
+    VerifyFwVersionFunc verify_eth_fw_version_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -315,8 +377,7 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
-    bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
-    const std::unordered_set<AddressableCoreType>& get_virtualized_core_types() const {
+    const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
 
@@ -330,7 +391,7 @@ public:
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
-    uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
+    uint32_t get_processor_classes_count(HalProgrammableCoreType programmable_core_type) const;
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
     // Query device features. Returns true if the feature is enabled.
@@ -340,15 +401,11 @@ public:
     // This value can be found in the ELF file.
     bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
-    template <typename T = DeviceAddr>
-    T get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
     // Overloads for Dram Params
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalDramMemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalDramMemAddrType addr_type) const;
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
@@ -374,11 +431,17 @@ public:
     // Inverse function of get_processor_index.
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
+    // Parses a string representation of a set of processor names (used by env vars).
+    HalProcessorSet parse_processor_set_spec(std::string_view spec) const;
 
     uint32_t get_total_num_risc_processors() const;
+    uint32_t get_max_processors_per_core() const { return max_processors_per_core_; }
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+
+    const std::string& get_processor_class_name(
+        HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const;
 
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
         return relocate_func_(addr, local_init_addr, has_shared_local_mem);
@@ -395,22 +458,47 @@ public:
         TT_ASSERT(jit_build_query_ != nullptr);
         return *jit_build_query_;
     }
+
+    const dev_msgs::Factory& get_dev_msgs_factory(HalProgrammableCoreType programmable_core_type) const {
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_dev_msgs_factory();
+    }
+
+    // This interface guarantees that go_msg_t is 4B and has the same layout for all core types.
+    // Code that assumes that should use this interface to create go_msg_t values,
+    // as it is otherwise not guaranteed by the HAL interface.
+    uint32_t make_go_msg_u32(uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const;
+
+    // If the specified processor uses IRAM, update the launch message to set the IRAM text size.
+    void set_iram_text_size(
+        dev_msgs::launch_msg_t::View launch_msg,
+        HalProgrammableCoreType programmable_core_type,
+        HalProcessorClassType processor_class,
+        uint32_t processor_type_idx,
+        uint32_t iram_text_size) const {
+        if (this->set_iram_text_size_func_) {
+            this->set_iram_text_size_func_(
+                launch_msg, programmable_core_type, processor_class, processor_type_idx, iram_text_size);
+        }
+    }
+
+    // Returns the supported PCIe address range for the current architecture
+    uint64_t get_pcie_addr_lower_bound() const;
+    // Inclusive upper bound
+    uint64_t get_pcie_addr_upper_bound() const;
+
+    // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
+    // not compatible.
+    void verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
+        this->verify_eth_fw_version_func_(eth_fw_version);
+    }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
 
-inline uint32_t Hal::get_processor_classes_count(
-    std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const {
-    // TODO extract as reusable function like `to_index(programmable_core_type)`
-    uint32_t index = std::visit(
-        ttsl::overloaded{
-            [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
-                return utils::underlying_type(core_type_specifier);
-            },
-            [](uint32_t core_type_specifier) { return core_type_specifier; },
-        },
-        programmable_core_type);
-    TT_ASSERT(index < this->core_info_.size());
+inline uint32_t Hal::get_processor_classes_count(HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = get_programmable_core_type_index(programmable_core_type);
     return this->core_info_[index].get_processor_classes_count();
 }
 
@@ -419,7 +507,7 @@ inline uint32_t Hal::get_processor_types_count(
     uint32_t index = std::visit(
         ttsl::overloaded{
             [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
-                return utils::underlying_type(core_type_specifier);
+                return ttsl::as_underlying_type(core_type_specifier);
             },
             [](uint32_t core_type_specifier) { return core_type_specifier; },
         },
@@ -434,28 +522,17 @@ inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_typ
 
 inline CoreType Hal::get_core_type(uint32_t core_type_index) const { return core_info_[core_type_index].core_type_; }
 
-template <typename T>
-inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
+inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     TT_FATAL(
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
         "Attempting to read addr of unreserved memory");
-    return this->core_info_[index].get_dev_addr<T>(addr_type);
-}
-
-template <typename T>
-inline T Hal::get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const {
-    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
-    TT_FATAL(
-        !(get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX &&
-          addr_type == HalL1MemAddrType::UNRESERVED),
-        "Attempting to read addr of unreserved memory");
-    return this->core_info_[programmable_core_type_index].get_dev_addr<T>(addr_type);
+    return this->core_info_[index].get_dev_addr(addr_type);
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     TT_FATAL(
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
@@ -466,39 +543,38 @@ inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type
     return this->core_info_[index].get_dev_size(addr_type);
 }
 
-template <typename T>
-inline T Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalDramMemAddrType>(addr_type);
+inline DeviceAddr Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_bases_.size());
-    return reinterpret_cast<T>(this->dram_bases_[index]);
+    return this->dram_bases_[index];
 }
 
 inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalDramMemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_sizes_.size());
     return this->dram_sizes_[index];
 }
 
 inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_.size());
     return this->mem_alignments_[index];
 }
 
 inline uint32_t Hal::get_read_alignment(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_read_alignments_.size());
     return this->mem_read_alignments_[index];
 }
 
 inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_write_alignments_.size());
     return this->mem_write_alignments_[index];
 }
 
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
     return this->mem_alignments_with_pcie_[index];
 }
@@ -513,13 +589,14 @@ inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_ty
 
 inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
     const uint32_t num_processor_classes =
-        this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+        this->core_info_[ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type)]
             .get_processor_classes_count();
     uint32_t num_riscs = 0;
     for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
-        num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+        num_riscs += this->core_info_[ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type)]
                          .get_processor_types_count(processor_class_idx);
     }
+    TT_ASSERT(num_riscs <= max_processors_per_core_);
     return num_riscs;
 }
 inline uint32_t Hal::get_processor_index(
@@ -542,6 +619,12 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
 }
 
+inline const std::string& Hal::get_processor_class_name(
+    HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_class_name(processor_index, is_abbreviated);
+}
+
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
 
 inline bool Hal::get_supports_eth_fw_mailbox() const {
@@ -549,9 +632,9 @@ inline bool Hal::get_supports_eth_fw_mailbox() const {
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
-    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
-    return this->core_info_[index].eth_fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
+    return this->core_info_[index].eth_fw_mailbox_msgs_[ttsl::as_underlying_type<FWMailboxMsg>(msg)];
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
@@ -559,14 +642,14 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
-    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     // -1 for the message
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
-    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     // Index 0 is the offset of the mailbox message
     return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);
@@ -581,6 +664,17 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
         case HalProgrammableCoreType::IDLE_ETH:
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
+    }
+}
+
+// Core type conversion utility
+constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(CoreType core_type) {
+    switch (core_type) {
+        case CoreType::WORKER:
+        case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
+        case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
+        case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
+        default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
 

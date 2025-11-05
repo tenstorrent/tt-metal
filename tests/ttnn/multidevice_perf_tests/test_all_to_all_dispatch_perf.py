@@ -13,13 +13,11 @@ from models.perf.device_perf_utils import run_device_perf_detailed
     "warmup_iters, arch_type, stage, perf_target_max_us, perf_target_min_us",
     [
         (5, "6U", "decode", 17, 12),
-        (5, "TG", "decode", 61, 52),
         (5, "T3K", "decode", 38, 32),  # huge variance among machines for T3K
         (1, "6U", "prefill", 800, 700),
-        (1, "TG", "prefill", 2700, 2000),
         (1, "T3K", "prefill", 4300, 3800),
     ],
-    ids=["6U_decode", "TG_decode", "T3K_decode", "6U_prefill", "TG_prefill", "T3K_prefill"],
+    ids=["6U_decode", "T3K_decode", "6U_prefill", "T3K_prefill"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_all_to_all_dispatch_perf(
@@ -36,10 +34,8 @@ def test_all_to_all_dispatch_perf(
     subdir = "moe_perf"
     if arch_type == "6U":
         file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py"
-    elif arch_type == "TG":
-        file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_TG.py"
     elif arch_type == "T3K":
-        file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py"
+        file = f"pytest tests/nightly/t3000/ccl/test_all_to_all_dispatch.py"
     else:
         raise ValueError(f"Invalid arch_type: {arch_type}")
 

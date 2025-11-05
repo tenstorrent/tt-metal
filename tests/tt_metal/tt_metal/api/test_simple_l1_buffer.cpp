@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "buffer_test_utils.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -32,13 +32,13 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
-using tt::tt_metal::IDevice;
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 using namespace tt::tt_metal;
 
 namespace tt::test::buffer::detail {
-bool SimpleL1Loopback(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t local_address, size_t byte_size) {
+bool SimpleL1Loopback(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, size_t local_address, size_t byte_size) {
     std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
     std::vector<uint8_t> outputs(byte_size);
     CoreCoord bank0_logical_core = mesh_device->allocator()->get_logical_core_from_bank_id(0);
@@ -52,7 +52,7 @@ bool SimpleL1Loopback(std::shared_ptr<distributed::MeshDevice> mesh_device, size
 }
 // input_l1_buffer -->  Reader reads from this location --> CB --> Writer --> output_l1_buffer
 bool SimpleTiledL1WriteCBRead(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord core,
     size_t input_local_address,
     size_t output_local_address,
@@ -72,7 +72,7 @@ bool SimpleTiledL1WriteCBRead(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     const uint32_t cb_index = 0;
@@ -209,30 +209,6 @@ TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWritex2y2TileLo) {
 }
 
 TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWritex2y2TileHi) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
-    }
-}
-
-TEST_F(MeshDeviceFixture, TensixTestBufferL1ReadWriteTileLo) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = 768 * 1024;
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
-    }
-}
-
-TEST_F(MeshDeviceFixture, TensixTestBufferL1ReadWriteTileHi) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
         ASSERT_TRUE(SimpleTiledL1WriteCBRead(

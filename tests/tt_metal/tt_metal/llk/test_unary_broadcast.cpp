@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -37,8 +37,8 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -138,9 +138,9 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             std::vector<float> tempfp32v;
             tempfp32v.resize(vBroadcast.size());
             for (int i = 0; i < vBroadcast.size(); i++) {
-                tempfp32v[i] = vBroadcast[i].to_float();
+                tempfp32v[i] = static_cast<float>(vBroadcast[i]);
             }
-            tilized_packed_res = pack_fp32_vec_as_bfp8_tiles(tempfp32v, true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(tempfp32v), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -154,7 +154,7 @@ std::vector<uint32_t> get_tilized_packed_golden_broadcast(
             auto packed_vec = pack_vector<uint32_t, bfloat16>(tempfp16bv);
             tilized_packed_res = ::unit_tests::compute::gold_standard_tilize(packed_vec, config);
         } else if (T_out == tt::DataFormat::Bfp8_b) {
-            tilized_packed_res = pack_fp32_vec_as_bfp8_tiles(vBroadcast, true, false);
+            tilized_packed_res = pack_as_bfp8_tiles(tt::stl::make_const_span(vBroadcast), true, false);
         } else {
             TT_THROW("Testing infrastructure not setup for output data type {}", T_out);
         }
@@ -194,7 +194,7 @@ bool check_is_close(std::vector<uint32_t>& packed_golden, std::vector<uint32_t>&
 }
 
 auto CreateDramBuffer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
     uint32_t single_tile_size = tile_size(dformat);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     distributed::DeviceLocalBufferConfig dram_config{
@@ -242,15 +242,14 @@ void get_packed_tilized_input_output_pair(
 }
 
 void run_single_core_unary_broadcast(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const UnaryBroadcastConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const UnaryBroadcastConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    const auto device = mesh_device->get_devices()[0];
     CoreCoord core = {0, 0};
 
     constexpr uint32_t num_tiles = 32;

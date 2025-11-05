@@ -22,7 +22,7 @@ class IDevice;
 }  // namespace tt::tt_metal
 
 namespace ttnn::ccl {
-class WorkerEdmInterfaceArgs;
+struct WorkerEdmInterfaceArgs;
 
 namespace worker_detail {
 
@@ -85,7 +85,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     const CoreRangeSet& worker_core_range,
     tt::tt_metal::DataMovementConfig datamovement_kernel_config,
     size_t num_command_streams = 2,
-    std::optional<chip_id_t> my_chip_id = std::nullopt);
+    std::optional<tt::ChipId> my_chip_id = std::nullopt);
 
 
 struct CCLWorkerArgBuilder {

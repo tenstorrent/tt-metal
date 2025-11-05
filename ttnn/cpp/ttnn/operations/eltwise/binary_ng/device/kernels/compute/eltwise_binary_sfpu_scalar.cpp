@@ -16,7 +16,7 @@
 #include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/quantization.h"
 #include "compute_kernel_api/xlogy.h"
-
+#include "compute_kernel_api/binary_comp.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 

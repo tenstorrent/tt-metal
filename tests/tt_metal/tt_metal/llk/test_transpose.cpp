@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -35,7 +35,7 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
-#include <tt-metalium/utils.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -98,14 +98,14 @@ void validate_transpose_wh(
 }
 
 void run_single_core_transpose(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const TransposeConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TransposeConfig& test_config) {
     TT_FATAL(test_config.shape.size() == 4, "Error");
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -150,19 +150,27 @@ void run_single_core_transpose(
             .set_page_size(ouput_cb_index, test_config.single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
+    std::vector<uint32_t> reader_cta;
+    tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_cta);
     auto unary_reader_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_cta});
 
+    std::vector<uint32_t> writer_cta;
+    tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_cta);
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
         core,
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_cta});
 
     vector<uint32_t> compute_kernel_args = {uint(Ht * Wt * NC)};
 

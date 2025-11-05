@@ -6,24 +6,28 @@
 
 #include <optional>
 #include <string>
+#include <utility>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 
 namespace ttnn {
 
 namespace operations::conv {
 namespace conv2d {
 
+using Conv2dSliceConfig = op_slicing::Op2DSliceConfig;
 struct Conv2dConfig {
     // If set, the weights & bias tensors will be converted to this dtype after preprocessing.
     // prepare_conv_bias needs this to always be set to the same dtype as the weights.
     std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
-    // Either "relu" or ""
-    std::string activation = "";
+    // Fused activation function as UnaryWithParam
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
 
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
@@ -31,6 +35,10 @@ struct Conv2dConfig {
     // If true && dellocate_activation is true, then after halo device op is done,
     // the output tensor of halo will be reallocated.
     bool reallocate_halo_output = true;
+
+    // If true, config tensors for Conv2D are stored in DRAM instead of L1_SMALL. L1_SMALL is persistent storage and
+    // get's quickly used up for large CNNs.
+    bool config_tensors_in_dram = false;
 
     // Has to be a multiple of 32.
     //  Smaller -> Smaller CBs, Lower L1 Usage, Lower perf.
@@ -75,10 +83,6 @@ struct Conv2dConfig {
     // This will increase perf, but it will take more L1 space.
     bool full_inner_dim = false;
 
-    // Only for height sharding.
-    // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
-    bool enable_split_reader = false;
-
     // Re-use input tensor storage when creating output tensor
     bool in_place = false;
 
@@ -101,7 +105,19 @@ struct Conv2dConfig {
     //    4. Input tensor's padding must be zero.
     //    5. Input tensor data type is not BFLOAT8_B.
 
-    bool enable_kernel_stride_folding = false;
+    std::optional<bool> enable_kernel_stride_folding = std::nullopt;
+
+    // Activation reuse is a feature that enables reusing data between consecutive image rows.
+    // It can be enabled for height sharding only and boosts im2col performance,
+    // so its meant to be used for reader-bound convolutions.
+    bool enable_activation_reuse = false;
+
+    // Force split reader overrides split_reader heuristic.
+    // Split reader can be enabled for height sharding only and boosts im2col performance (if not weights reader bound),
+    // so its meant to be used for reader-bound convolutions.
+    // If not Height sharded and activation block size height is not greater than 32, then this is ignored.
+    // If not set, then split reader heuristic is used to determine if it should be enabled.
+    std::optional<bool> force_split_reader = std::nullopt;
     // ===============================================================
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -109,6 +125,7 @@ struct Conv2dConfig {
         "activation",
         "deallocate_activation",
         "reallocate_halo_output",
+        "config_tensors_in_dram",
         "act_block_h_override",
         "act_block_w_div",
         "reshard_if_not_optimal",
@@ -120,15 +137,17 @@ struct Conv2dConfig {
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "full_inner_dim",
-        "enable_split_reader",
         "in_place",
-        "enable_kernel_stride_folding");
+        "enable_kernel_stride_folding",
+        "enable_activation_reuse",
+        "force_split_reader");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->weights_dtype),
             std::cref(this->activation),
             std::cref(this->deallocate_activation),
             std::cref(this->reallocate_halo_output),
+            std::cref(this->config_tensors_in_dram),
             std::cref(this->act_block_h_override),
             std::cref(this->act_block_w_div),
             std::cref(this->reshard_if_not_optimal),
@@ -140,47 +159,35 @@ struct Conv2dConfig {
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->full_inner_dim),
-            std::cref(this->enable_split_reader),
             std::cref(this->in_place),
-            std::cref(this->enable_kernel_stride_folding));
+            std::cref(this->enable_kernel_stride_folding),
+            std::cref(this->enable_activation_reuse),
+            std::cref(this->force_split_reader));
     }
 };
 
-struct Conv2dSliceConfig {
-    // Determines the dimension along which the input & output tensors are sliced.
-    // Slices based on [N, H, W, C] shape.
-    // Using width slicing is more efficient as it reduces memory usage. This is because the overlap of data between
-    // cores is minimized in width slicing, reducing the size of the Halo output. If the Height & Width dimensions are
-    // similar, then use Width slicing. Use Height slicing if the Height dimension is significantly larger than the
-    // Width dimension.
-    enum class SliceType : bool { HEIGHT, WIDTH };
-    SliceType slice_type = SliceType::WIDTH;
-
-    // Number of slices that the output tensor should be divided into.
-    uint32_t num_slices = 0;
-};
-
 // TODO: Accept parallelization
-enum class OptimizedConvOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
+enum class Conv2dOpParallelizationStrategy { MULTI_CORE, MULTI_CORE_REUSE, MULTI_CORE_REUSE_MCAST, SINGLE_CORE };
 
-struct OptimizedConvParallelizationConfig {
+struct Conv2dParallelizationConfig {
     CoreCoord grid_size;  // (x,y)
     uint32_t num_cores_nhw = 1;
-    uint32_t num_cores_c = 1;
+    uint32_t num_cores_c_in = 1;
+    uint32_t num_cores_c_out = 1;
     uint32_t per_core_out_matrix_height_ntile = 1;
     uint32_t per_core_out_matrix_width_ntile = 1;
 
     CoreCoord get_grid_size() const { return this->grid_size; }
 };
 
-struct OptimizedConvBlockConfig {
+struct Conv2dBlockConfig {
     uint32_t act_block_h_ntiles;
     uint32_t act_block_w_ntiles;
     uint32_t out_subblock_h_ntiles;
     uint32_t out_subblock_w_ntiles;
 };
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -195,14 +202,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     bool untilize_out,
     bool has_bias,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
-    bool enable_weights_double_buffer);
+    bool enable_weights_double_buffer,
+    bool config_tensors_in_dram);
 
-tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
+tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
@@ -217,25 +225,27 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool untilize_out,
     bool has_bias,
     const std::optional<unary::UnaryWithParam>& fused_activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     bool transpose_mcast,
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
-    bool enable_split_reader,
-    bool full_inner_dim);
+    bool full_inner_dim,
+    bool enable_activation_reuse,
+    bool config_tensors_in_dram,
+    std::optional<bool> force_split_reader);
 
 // new micro op
-struct OptimizedConvNew {
-    OptimizedConvParallelizationConfig parallelization_config;
-    OptimizedConvBlockConfig block_config;
+struct Conv2d {
+    Conv2dParallelizationConfig parallelization_config;
+    Conv2dBlockConfig block_config;
     const sliding_window::SlidingWindowConfig& sliding_window_config;
     const uint32_t output_channels;
     const uint32_t groups;
     bool untilize_out, has_bias;
-    std::string activation = "";
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt;
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
@@ -243,17 +253,19 @@ struct OptimizedConvNew {
     bool enable_act_double_buffer;
     bool enable_weights_double_buffer;
     bool full_inner_dim;
-    bool enable_split_reader;
+    bool enable_activation_reuse;
+    bool config_tensors_in_dram;
     uint32_t pre_op_l1_allocation_size_bytes{};
-    OptimizedConvNew(
+    std::optional<bool> force_split_reader = std::nullopt;
+    Conv2d(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
         uint32_t groups,
         bool untile_out,
         bool has_bias,
-        std::string activation,
-        const OptimizedConvParallelizationConfig& p_config,
-        const OptimizedConvBlockConfig& b_config,
+        std::optional<ttnn::operations::unary::UnaryWithParam> activation,
+        const Conv2dParallelizationConfig& p_config,
+        const Conv2dBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
         tt::tt_metal::DataType dtype,
         std::array<std::uint32_t, 4> input_tensor_shape,
@@ -261,24 +273,27 @@ struct OptimizedConvNew {
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
         bool full_inner_dim,
-        bool enable_split_reader) :
-        output_channels(output_channels),
-        groups(groups),
-        sliding_window_config(sliding_window_config),
-        untilize_out(untile_out),
-        has_bias(has_bias),
-        activation(activation),
+        bool enable_activation_reuse,
+        bool config_tensors_in_dram,
+        std::optional<bool> force_split_reader) :
         parallelization_config(p_config),
         block_config(b_config),
-        memory_config(memory_config),
+        sliding_window_config(sliding_window_config),
+        output_channels(output_channels),
+        groups(groups),
+        untilize_out(untile_out),
+        has_bias(has_bias),
+        activation(std::move(activation)),
+        memory_config(std::move(memory_config)),
         dtype(dtype),
         input_tensor_shape(input_tensor_shape),
         compute_kernel_config(compute_kernel_config),
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
         full_inner_dim(full_inner_dim),
-        enable_split_reader(enable_split_reader) {}
-
+        enable_activation_reuse(enable_activation_reuse),
+        config_tensors_in_dram(config_tensors_in_dram),
+        force_split_reader(force_split_reader) {};
     void validate(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -307,7 +322,9 @@ struct OptimizedConvNew {
         "input_tensor_shape",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
-        "enable_split_reader");
+        "enable_activation_reuse",
+        "config_tensors_in_dram",
+        "force_split_reader");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(this->parallelization_config),
@@ -323,11 +340,13 @@ struct OptimizedConvNew {
             std::cref(this->input_tensor_shape),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
-            std::cref(this->enable_split_reader));
+            std::cref(this->enable_activation_reuse),
+            std::cref(this->config_tensors_in_dram),
+            std::cref(this->force_split_reader));
     }
 };
 
-Tensor optimized_conv_new(
+Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
     std::optional<const Tensor> bias,
@@ -335,9 +354,9 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const std::string& activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
     tt::tt_metal::DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
@@ -345,7 +364,9 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool full_inner_dim = false,
-    bool enable_split_reader = false);
+    bool enable_activation_reuse = false,
+    bool config_tensors_in_dram = false,
+    std::optional<bool> force_split_reader = std::nullopt);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -359,20 +380,21 @@ struct conv_op_l1_usage {
     uint32_t CB_allocation_size;
 };
 
-// This function calculates how much L1 will be allocated by the conv2d op.
 // L1 allocation is either for the output tensor or for Circular Buffers.
-// This doesn't include Circular Buffers that use globally allocated addresses, as these don't need memory allocation.
 conv_op_l1_usage calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const OptimizedConvBlockConfig& block_config,
-    const OptimizedConvParallelizationConfig& pconfig,
+    const Conv2dBlockConfig& block_config,
+    const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
-    std::array<uint32_t, 2> kernel_size,
+    const sliding_window::SlidingWindowConfig& sliding_window_config,
+    std::array<uint32_t, 2> dilation,
     const Conv2dConfig& conv_config,
     tt::tt_metal::DataType input_datatype,
     tt::tt_metal::DataType output_datatype,
+    uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
+    uint32_t input_channels_padded,
     bool skip_act_cb_create = false);
 
 }  // namespace conv2d

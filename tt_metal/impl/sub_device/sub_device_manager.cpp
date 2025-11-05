@@ -3,33 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
-#include <functional>
 #include <limits>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "allocator_types.hpp"
-#include "buffer_types.hpp"
 #include "core_coord.hpp"
+#include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include "hal.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include "trace/trace.hpp"
+#include "impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "vector_aligned.hpp"
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
@@ -53,8 +49,8 @@ SubDeviceManager::SubDeviceManager(
     tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size, IDevice* device) :
     id_(next_sub_device_manager_id_++),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
-    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))),
-    device_(device) {
+    device_(device),
+    local_l1_size_(tt::align(local_l1_size, MetalContext::instance().hal().get_alignment(HalMemType::L1))) {
     TT_ASSERT(device != nullptr, "Device must not be null");
     this->validate_sub_devices();
     this->populate_sub_device_ids();
@@ -66,8 +62,8 @@ SubDeviceManager::SubDeviceManager(
 SubDeviceManager::SubDeviceManager(
     IDevice* device, std::unique_ptr<Allocator>&& global_allocator, tt::stl::Span<const SubDevice> sub_devices) :
     id_(next_sub_device_manager_id_++),
-    device_(device),
     sub_devices_(sub_devices.begin(), sub_devices.end()),
+    device_(device),
     local_l1_size_(0) {
     TT_ASSERT(device != nullptr, "Device must not be null");
 
@@ -314,9 +310,8 @@ void SubDeviceManager::populate_sub_allocators() {
             config.core_type_from_noc_coord_table.insert({noc_coord, AllocCoreType::ComputeAndStore});
         }
 
-        // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
+        // L1BankingAllocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
         // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-        TT_ASSERT(device_->allocator_scheme_ == MemoryAllocator::L1_BANKING);
         sub_device_allocators_[i] = std::make_unique<L1BankingAllocator>(config);
     }
 }
@@ -367,7 +362,7 @@ void SubDeviceManager::populate_noc_data() {
     CoreRangeSet all_core_set{device_worker_cores};
     CoreRangeSet unused_cores = all_core_set.subtract(used_cores);
     if (!unused_cores.empty()) {
-        constexpr uint32_t unused_go_message_index = go_message_num_entries - 1;
+        constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;
         core_go_message_mapping_.emplace_back(unused_cores, unused_go_message_index);
     }
 }

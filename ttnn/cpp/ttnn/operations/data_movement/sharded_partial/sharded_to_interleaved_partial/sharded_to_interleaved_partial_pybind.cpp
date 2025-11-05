@@ -27,9 +27,8 @@ void bind_sharded_to_interleaved_partial(
                int64_t& num_slices,
                int64_t& slice_index,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::DataType>& output_dtype,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, cache_tensor, num_slices, slice_index, memory_config, output_dtype);
+               const std::optional<ttnn::DataType>& output_dtype) -> ttnn::Tensor {
+                return self(input_tensor, cache_tensor, num_slices, slice_index, memory_config, output_dtype);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("cache_tensor").noconvert(),
@@ -38,8 +37,6 @@ void bind_sharded_to_interleaved_partial(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId,
-
         });
 }
 
@@ -50,7 +47,7 @@ void py_bind_sharded_to_interleaved_partial(pybind11::module& module) {
     detail::bind_sharded_to_interleaved_partial(
         module,
         ttnn::sharded_to_interleaved_partial,
-        R"doc(sharded_to_interleaved_partial(input_tensor: ttnn.Tensor, cache_tensor: ttnn.Tensor,  num_slices: int, slice_index: int, *, output_dtype: Optional[ttnn.dtype] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
         Converts a partial tensor from sharded_to_interleaved memory layout
 
@@ -63,7 +60,6 @@ void py_bind_sharded_to_interleaved_partial(pybind11::module& module) {
         Keyword Args:
             * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
             * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
-            * :attr:`queue_id`: command queue id
 
         Example:
 

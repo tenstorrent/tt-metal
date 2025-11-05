@@ -1,4 +1,4 @@
-name: "(TG) Choose your pipeline"
+name: "(Galaxy) Choose your pipeline"
 
 on:
   workflow_dispatch:
@@ -24,33 +24,32 @@ on:
           - ASan
           - TSan
         default: "Release"
-      extra-tag: # set in-service and topology-6u by default
-        description: "You can specify only one topology, 'topology-6u' or 'config-tg'. Default is config-tg."
+      extra-tag:
         required: true
         type: string
-        default: "in-service,config-tg"
-      tg-quick:
+        default: "in-service"
+      galaxy-quick:
         required: false
         type: boolean
         default: false
-      tg-demo:
+      galaxy-demo:
         required: false
         type: boolean
         default: false
-      tg-unit:
+      galaxy-unit:
         required: false
         type: boolean
         default: false
-      tg-frequent:
+      galaxy-frequent:
         required: false
         type: boolean
         default: false
-      tg-model-perf:
-        description: "tg-model-perf (Requires tracy build)"
+      galaxy-model-perf:
+        description: "galaxy-model-perf (Requires tracy build)"
         required: false
         type: boolean
         default: false
-      tg-stress:
+      galaxy-stress:
         required: false
         type: boolean
         default: false
@@ -66,37 +65,19 @@ jobs:
       run-demo: ${{ steps.logic.outputs.run-demo }}
       run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
       run-stress: ${{ steps.logic.outputs.run-stress }}
-      clean-extra-tag: ${{ steps.logic.outputs.clean-extra-tag }}
-      is-config-tg: ${{ steps.logic.outputs.is-config-tg }}
     steps:
       - name: Determine test execution
         id: logic
-        # Skip all but tg-quick if trigger-type is not manual
+        # Skip all but galaxy-quick if trigger-type is not manual
         run: |
-          EXTRA_TAG="${{ inputs.extra-tag }}"
-          # (remove both config-tg and topology-6u) from EXTRA_TAG
-          # and clean up any extra commas
-          # e.g. "config-tg,in-service" -> "in-service"
-          CLEANED=$(echo "$EXTRA_TAG" | sed -e 's/\bconfig-tg\b//g' -e 's/\btopology-6u\b//g' -e 's/,,/,/g' -e 's/^,//' -e 's/,$//')
-
-          # Check which tag is present
-          if [[ "$EXTRA_TAG" == *"topology-6u"* ]]; then
-            IS_CONFIG_TG=false
-          else
-            IS_CONFIG_TG=true  # set config-tg if topology-6u is not present
-          fi
-
-          echo "clean-extra-tag=$CLEANED" >> $GITHUB_OUTPUT
-          echo "is-config-tg=$IS_CONFIG_TG" >> $GITHUB_OUTPUT
-
           case "${{ inputs.trigger_type }}" in
             "manual")
-              echo "run-quick=${{ inputs.tg-quick }}" >> $GITHUB_OUTPUT
-              echo "run-unit=${{ inputs.tg-unit }}" >> $GITHUB_OUTPUT
-              echo "run-frequent=${{ inputs.tg-frequent }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.tg-demo }}" >> $GITHUB_OUTPUT
-              echo "run-model-perf=${{ inputs.tg-model-perf }}" >> $GITHUB_OUTPUT
-              echo "run-stress=${{ inputs.tg-stress }}" >> $GITHUB_OUTPUT
+              echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.galaxy-unit }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.galaxy-frequent }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.galaxy-demo }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.galaxy-model-perf }}" >> $GITHUB_OUTPUT
+              echo "run-stress=${{ inputs.galaxy-stress }}" >> $GITHUB_OUTPUT
               ;;
             "model-pr")
               echo "run-quick=true" >> $GITHUB_OUTPUT
@@ -149,73 +130,71 @@ jobs:
       build-type: ${{ inputs.build-type }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
+      build-umd-tests: true
       version: 22.04
-  tg-quick:
+  galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-quick.yaml
+    uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
-      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
-      topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
-
-  tg-unit-tests:
+      topology-6u: true
+  galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-unit-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
-      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
-  tg-frequent-tests:
+      topology: 'topology-6u'
+  galaxy-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-frequent-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-frequent-tests-impl.yaml
     with:
-      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
-  tg-demo-tests:
+      topology: 'topology-6u'
+  galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-demo-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
-      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
-  tg-model-perf-tests:
+      topology: 'topology-6u'
+  galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-model-perf-tests-impl.yaml
     with:
-      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
-  tg-stress-test:
+      topology: 'topology-6u'
+  galaxy-stress-test:
     if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
     needs: [build-artifact, determine-tests]
     secrets: inherit
-    uses: ./.github/workflows/tg-stress.yaml
+    uses: ./.github/workflows/galaxy-stress-tests-impl.yaml
     with:
-      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
+      extra-tag: ${{ inputs.extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
-      topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
+      topology-6u: true

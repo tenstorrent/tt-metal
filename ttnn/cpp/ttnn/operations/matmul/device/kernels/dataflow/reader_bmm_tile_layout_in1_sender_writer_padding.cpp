@@ -88,6 +88,8 @@ void kernel_main() {
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
 
+    constexpr uint32_t one_tile = 1;
+
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
@@ -102,13 +104,13 @@ void kernel_main() {
 #ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
     // Bias accessor will be defined later after TensorAccessor args
-#endif
+#endif  // BIAS_SHARDED
 #else
     rt_args_idx += 2;  // Skip over placeholders
-#endif
+#endif  // FUSE_BIAS
 #ifndef OUT_SHARDED
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
-#endif
+#endif  // OUT_SHARDED
 
     constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(30);
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(31);
@@ -134,7 +136,7 @@ void kernel_main() {
     constexpr auto after_bias_offset = bias_args.next_compile_time_args_offset();
 #else
     constexpr auto after_bias_offset = out_args.next_compile_time_args_offset();
-#endif
+#endif  // FUSE_BIAS
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_SHARDED
@@ -146,13 +148,13 @@ void kernel_main() {
 
     constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(after_bias_offset);
     constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(after_bias_offset + 1);
-#endif
+#endif  // IN1_DRAM_SHARDED
 
 #ifdef FUSE_BIAS
 #ifndef BIAS_SHARDED
     const auto s3 = TensorAccessor(bias_args, in3_tensor_addr, bias_single_tile_size_bytes);
-#endif
-#endif
+#endif  // BIAS_SHARDED
+#endif  // FUSE_BIAS
 
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
@@ -167,7 +169,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in1;
 
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
-#endif
+#endif  // IN1_SHARDED
 
     //  WRITER
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
@@ -200,8 +202,8 @@ void kernel_main() {
         in1_mcast_dest_noc_start_x, in1_mcast_dest_noc_start_y, in1_mcast_dest_noc_end_x, in1_mcast_dest_noc_end_y, 0);
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = get_write_ptr(cb_id_in1);
-#endif
-#endif
+#endif  // IN1_SHARDED
+#endif  // SKIP_MCAST
 
     uint32_t l1_write_addr_sparsity = 0;
     if constexpr (batchB > 0) {
@@ -212,7 +214,7 @@ void kernel_main() {
 #ifdef IN1_DRAM_SHARDED
     constexpr uint32_t in1_dram_block_size_bytes = in1_dram_block_num_tiles * in1_single_tile_size_bytes;
     uint32_t in1_block_w_bytes = in1_block_w * in1_single_tile_size_bytes;
-#endif
+#endif  // IN1_DRAM_SHARDED
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in1_batch_tile_id = in1_tensor_start_tile_id;
@@ -224,7 +226,7 @@ void kernel_main() {
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
-                if (reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr_sparsity)[bB] == 0) {
+                if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
                     out_tensor_start_tile_id += MtNt;
                     in1_batch_tile_id += KtNt;
                     continue;
@@ -233,7 +235,7 @@ void kernel_main() {
 
 #ifdef IN1_DRAM_SHARDED
             uint32_t l1_read_addr_in1_offset = 0;
-#endif
+#endif  // IN1_DRAM_SHARDED
             uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
@@ -241,7 +243,7 @@ void kernel_main() {
                 uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
                 uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
-#endif
+#endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
 
@@ -261,15 +263,13 @@ void kernel_main() {
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint32_t in1_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
-                                in1_tensor_addr,
-                                in1_single_tile_size_bytes,
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index],
-                                vc);
+                            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(
+                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in1_tensor_addr);
 
                             if (i == 0) {
                                 in1_base_addr += dram_tensor_start_offset;
                             }
+                            noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_single_tile_size_bytes, vc);
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1) + l1_write_addr_in1_offset;
@@ -281,8 +281,8 @@ void kernel_main() {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc_async_read_tile_dram_sharded_with_state(
-                                        in1_base_addr, l1_read_addr_in1_temp, l1_write_addr_in1_temp);
+                                    noc_async_read_one_packet_with_state<true, true>(
+                                        in1_base_addr + l1_read_addr_in1_temp, l1_write_addr_in1_temp, vc);
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
                                     l1_write_addr_in1_temp += in1_single_tile_size_bytes;
                                 }
@@ -299,6 +299,11 @@ void kernel_main() {
 #ifndef IN1_SHARDED
                         // Operand 1
                         cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+#ifdef INTERMEDIATE_CB_READ
+                        constexpr uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+                        cb_reserve_back(in1_intermediate_cb_index, one_tile);
+                        uint32_t l1_write_addr_helper = get_write_ptr(in1_intermediate_cb_index);
+#endif  // INTERMEDIATE_CB_READ
                         l1_write_addr_in1 = get_write_ptr(cb_id_in1);
                         uint64_t in1_start_address =
                             l1_write_addr_in1;  // copy start address of block, to be used for mcasting
@@ -309,7 +314,16 @@ void kernel_main() {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in1_block_w; ++w) {
                                 if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
+#ifndef INTERMEDIATE_CB_READ
                                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
+#else
+                                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_helper);
+                                    noc_async_read_barrier();
+                                    memcpy(
+                                        /*dst=*/reinterpret_cast<void*>(l1_write_addr_in1),
+                                        /*src=*/reinterpret_cast<const void*>(l1_write_addr_helper),
+                                        /*size=*/in1_single_tile_size_bytes);
+#endif  // INTERMEDIATE_CB_READ
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
                                 in1_tensor_tile_id += in1_tensor_stride_w;
@@ -320,7 +334,7 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
-#endif
+#endif  // IN1_SHARDED
 #endif  // IN1_DRAM_SHARDED
 
 #ifndef SKIP_MCAST
@@ -349,7 +363,7 @@ void kernel_main() {
                         // which means data could be changed before
                         //  write is issued.
                         noc_async_writes_flushed();
-#endif
+#endif  // ARCH_BLACKHOLE
 
                         // We should also multicast the flag to destinations
                         // num_dests must not include source, since we are NOT really doing a local copy!
@@ -357,11 +371,17 @@ void kernel_main() {
                             in1_mcast_receiver_semaphore_addr,
                             in1_mcast_receiver_semaphore_noc_addr,
                             in1_mcast_num_cores);
-#endif
+#endif  // SKIP_MCAST
 
 #ifndef IN1_SHARDED
                         cb_push_back(cb_id_in1, in1_block_num_tiles);
-#endif
+#ifdef INTERMEDIATE_CB_READ
+                        // Clean up helper CB
+                        cb_push_back(in1_intermediate_cb_index, one_tile);
+                        cb_wait_front(in1_intermediate_cb_index, one_tile);
+                        cb_pop_front(in1_intermediate_cb_index, one_tile);
+#endif  // INTERMEDIATE_CB_READ
+#endif  // IN1_SHARDED
                     }
 #ifdef FUSE_BIAS
                     // Only read bias on first batch, or we have multiple output blocks
@@ -380,15 +400,14 @@ void kernel_main() {
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint32_t in3_base_addr = noc_async_read_tile_dram_sharded_set_state<true>(
-                                in3_tensor_addr,
-                                bias_single_tile_size_bytes,
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index],
-                                vc);
+                            uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(
+                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in3_tensor_addr);
 
                             if (i == 0) {
                                 in3_base_addr += dram_tensor_start_offset;
                             }
+
+                            noc_async_read_one_packet_set_state<true>(in3_base_addr, bias_single_tile_size_bytes, vc);
 
                             uint32_t l1_read_addr_in3 = 0;
                             uint32_t l1_write_addr_in3 = get_write_ptr(cb_id_in3) + l1_write_addr_in3_offset;
@@ -397,8 +416,8 @@ void kernel_main() {
                                 bias_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc_async_read_tile_dram_sharded_with_state(
-                                    in3_base_addr, l1_read_addr_in3, l1_write_addr_in3);
+                                noc_async_read_one_packet_with_state<true, true>(
+                                    in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
                                 l1_write_addr_in3 += bias_single_tile_size_bytes;
                                 in3_block_size_bytes += bias_single_tile_size_bytes;
@@ -421,7 +440,7 @@ void kernel_main() {
                         }
                         // Barrier! make sure the reads are done
                         noc_async_read_barrier();
-#endif
+#endif  // IN1_DRAM_SHARDED
 
 #ifndef SKIP_MCAST
 
@@ -448,7 +467,7 @@ void kernel_main() {
                         // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
                         // latency which means data could be changed before write is issued.
                         noc_async_writes_flushed();
-#endif
+#endif  // ARCH_BLACKHOLE
 
                         // We should also multicast the flag to destinations
                         // num_dests must not include source, since we are NOT really doing a local copy!

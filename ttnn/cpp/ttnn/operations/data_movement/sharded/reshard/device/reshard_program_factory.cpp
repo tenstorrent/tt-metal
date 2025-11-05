@@ -7,9 +7,9 @@
 #include <algorithm>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 
@@ -284,9 +284,9 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create
                         const auto& pattern_meta_stride = meta_strides[i];
 
                         CoreCoord expected_core = {
-                            original_page_stride.start_core.x + r * pattern_meta_stride.core.x,
-                            original_page_stride.start_core.y + r * pattern_meta_stride.core.y};
-                        uint32_t expected_data = original_page_stride.start_data + r * pattern_meta_stride.data;
+                            original_page_stride.start_core.x + (r * pattern_meta_stride.core.x),
+                            original_page_stride.start_core.y + (r * pattern_meta_stride.core.y)};
+                        uint32_t expected_data = original_page_stride.start_data + (r * pattern_meta_stride.data);
 
                         if (current_page_stride.start_core != expected_core ||
                             current_page_stride.start_data != expected_data) {
@@ -401,7 +401,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * input_pages_per_original;
         uint32_t valid_pages = input_pages_per_original;
         if (is_last_in_row) {
             uint32_t next_total =
@@ -424,7 +423,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
             is_last_in_row = (core.y == shard_grid.y - 1);
         }
         uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
         uint32_t valid_pages = output_pages_per_original;
         if (is_last_in_row) {
             uint32_t next_total =
@@ -630,7 +628,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
     if (local_tensor.layout() == Layout::TILE) {
-        unit_size = tt::tt_metal::detail::TileSize(data_format);
+        unit_size = tt::tile_size(data_format);
         local_units_per_shard = local_shard_spec.numel() / TILE_HW;
         remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
     } else {
@@ -650,7 +648,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
             : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
 
-    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
         program,
         kernel_name,
@@ -783,7 +781,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
     if (input.layout() == Layout::TILE) {
-        page_size = tt::tt_metal::detail::TileSize(data_format);
+        page_size = tt::tile_size(data_format);
         unit_size = page_size;
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
@@ -917,7 +915,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     const auto& all_cores = local_shard_spec.grid;
 
     const auto remote_core_type = remote_tensor.buffer()->core_type();
-    bool interface_with_dram = (remote_core_type == CoreType::DRAM);
+    bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     const auto local_cores = corerange_to_cores(
         local_shard_spec.grid, std::nullopt, local_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
     const auto remote_cores = corerange_to_cores(
@@ -989,8 +987,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
             runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
 
             // Adjust read and write offsets to the correct stick address because we are splitting work across 2 kernels
-            const uint32_t adjusted_read_offset = args.read_offset + total_num_sticks_kernel_0 * local_stride_bytes;
-            const uint32_t adjusted_write_offset = args.write_offset + total_num_sticks_kernel_0 * remote_stride_bytes;
+            const uint32_t adjusted_read_offset = args.read_offset + (total_num_sticks_kernel_0 * local_stride_bytes);
+            const uint32_t adjusted_write_offset =
+                args.write_offset + (total_num_sticks_kernel_0 * remote_stride_bytes);
 
             const std::vector<uint32_t> segment_kernel_1 = {
                 args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};

@@ -7,10 +7,6 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_bitwise.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {
@@ -39,6 +35,11 @@ ALWI void bitwise_and_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
         idst0, idst1, odst)));
 }
 
+ALWI void bitwise_and_uint32_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::AND, InstrModLoadStore::INT32>(
+        idst0, idst1, odst)));
+}
+
 ALWI void bitwise_and_uint16_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::AND, InstrModLoadStore::LO16>(
         idst0, idst1, odst)));
@@ -49,12 +50,22 @@ ALWI void bitwise_or_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
         idst0, idst1, odst)));
 }
 
+ALWI void bitwise_or_uint32_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::OR, InstrModLoadStore::INT32>(
+        idst0, idst1, odst)));
+}
+
 ALWI void bitwise_or_uint16_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::OR, InstrModLoadStore::LO16>(
         idst0, idst1, odst)));
 }
 
 ALWI void bitwise_xor_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::XOR, InstrModLoadStore::INT32>(
+        idst0, idst1, odst)));
+}
+
+ALWI void bitwise_xor_uint32_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_bitwise<APPROX, ckernel::sfpu::BinaryBitwiseOp::XOR, InstrModLoadStore::INT32>(
         idst0, idst1, odst)));
 }

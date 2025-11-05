@@ -12,7 +12,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/types.hpp"
-
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 namespace ttnn {
 
 namespace operations::conv {
@@ -32,6 +32,7 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
 uint32_t get_input_channels_alignment(
     TensorMemoryLayout input_tensor_memory_layout,
     Layout input_tensor_layout,
+    bool sliced_op,
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
@@ -58,8 +59,7 @@ struct SkipMcast {
     bool skip_weights_mcast;
 };
 
-SkipMcast conv_skip_mcast(
-    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
+SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
 
 sliding_window::ParallelConfig determine_parallel_config(
     TensorMemoryLayout shard_layout,
@@ -80,6 +80,7 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
+    tt::tt_metal::ShardOrientation block_shard_orientation,
     bool is_mm_conv);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
@@ -96,30 +97,35 @@ uint32_t get_num_cores_channels_from_parallel_config(const sliding_window::Paral
 MemoryConfig create_sharded_memory_config_from_parallel_config(
     const ttnn::Shape& tensor_shape, const sliding_window::ParallelConfig& parallel_config, uint32_t tile_size);
 
-OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
-    const MemoryConfig& conv_output_mem_config, uint32_t num_cores_nhw, uint32_t num_cores_c);
+Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
+    const MemoryConfig& conv_output_mem_config,
+    uint32_t num_cores_nhw,
+    uint32_t num_cores_c_in,
+    uint32_t num_cores_c_out);
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
-    OptimizedConvParallelizationConfig conv_parallelization_config,
-    OptimizedConvBlockConfig conv_blocking_config,
+    Conv2dParallelizationConfig conv_parallelization_config,
+    Conv2dBlockConfig conv_blocking_config,
     bool height_sharded,
-    const std::string& activation,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 
-OptimizedConvBlockConfig determine_per_core_conv_block_config(
+Conv2dBlockConfig determine_per_core_conv_block_config(
     const sliding_window::ParallelConfig& parallel_config,
-    const OptimizedConvParallelizationConfig& conv_op_parallel_config,
+    const Conv2dParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
     uint32_t padded_output_height_ntiles_per_core,
     uint32_t act_block_h_override,
     uint32_t act_block_w_div,
     uint32_t window_h,
     uint32_t window_w,
+    uint32_t output_width,
     bool fp32_accum,
-    bool full_inner_dim);
+    bool full_inner_dim,
+    bool enable_activation_reuse = false);
 
-std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
+std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
     const sliding_window::ParallelConfig& input_parallel_config,
@@ -132,26 +138,18 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid);
 
-static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
-    MeshDevice* device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv);
-
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
-    const Conv2dConfig& conv_config,
+    TensorMemoryLayout shard_layout,
+    ShardOrientation block_shard_orientation,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
     CoreCoord compute_grid_size,
     Layout input_tensor_layout,
-    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt);
+    BufferType input_tensor_buffer_type,
+    const std::optional<sliding_window::ParallelConfig>& input_tensor_parallel_config = std::nullopt,
+    std::optional<uint32_t> act_block_h_override = std::nullopt);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device);
 
@@ -172,6 +170,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     tt::tt_metal::DataType output_datatype,
     std::optional<const MemoryConfig> input_memory_config,
     const std::array<uint32_t, 2>& kernel_size,
+    const std::array<uint32_t, 2>& stride,
     const std::array<uint32_t, 2>& dilation,
     const std::array<uint32_t, 4>& padding,
     uint32_t groups,
@@ -193,6 +192,27 @@ shard_or_reshard_tensor_if_required(
     bool is_mm_conv,
     bool auto_shard);
 
+bool auto_enable_kernel_folding(
+    std::optional<bool> enable_folding_,
+    bool is_dram,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4);
+
+Tensor fold_input_tensor_if_required(
+    const ttnn::Tensor& input_tensor,
+    MeshDevice* device,
+    uint32_t& input_height,
+    uint32_t& input_width,
+    uint32_t& in_channels,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4,
+    bool& mm_conv,
+    Conv2dConfig& conv_config);
+
 ttnn::Tensor fold_tensor(
     const ttnn::Tensor& tensor,
     MeshDevice* device,
@@ -206,6 +226,7 @@ struct KernelStrideFoldingResult {
     uint32_t in_channels;
     std::array<uint32_t, 2> stride;
     std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 4> padding_n4;
     bool mm_conv;
 };
 
@@ -234,27 +255,67 @@ struct ConvDRAMParamters {
     uint32_t groups;
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_kernel_config;
-    Conv2dSliceConfig dram_slice_config;
     CoreCoord compute_grid;
-    ttnn::Shape weights_shape;
     DataType weights_datatype;
     DataType input_datatype;
     DataType output_datatype;
+    Layout input_layout;
     bool enable_bias;
     bool mm_conv;
+
+    bool operator<(const ConvDRAMParamters& other) const;
+
+    static constexpr auto attribute_names = std::make_tuple(
+        "in_channels",
+        "out_channels",
+        "batch_size",
+        "input_height",
+        "input_width",
+        "output_height",
+        "output_width",
+        "kernel_size",
+        "stride",
+        "padding_n4",
+        "dilation",
+        "groups",
+        "conv_config",
+        "compute_kernel_config",
+        "compute_grid",
+        "weights_datatype",
+        "input_datatype",
+        "output_datatype",
+        "input_layout",
+        "enable_bias",
+        "mm_conv");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(this->in_channels),
+            std::cref(this->out_channels),
+            std::cref(this->batch_size),
+            std::cref(this->input_height),
+            std::cref(this->input_width),
+            std::cref(this->output_height),
+            std::cref(this->output_width),
+            std::cref(this->kernel_size),
+            std::cref(this->stride),
+            std::cref(this->padding_n4),
+            std::cref(this->dilation),
+            std::cref(this->groups),
+            std::cref(this->conv_config),
+            std::cref(this->compute_kernel_config),
+            std::cref(this->compute_grid),
+            std::cref(this->weights_datatype),
+            std::cref(this->input_datatype),
+            std::cref(this->output_datatype),
+            std::cref(this->input_layout),
+            std::cref(this->enable_bias),
+            std::cref(this->mm_conv));
+    }
 };
 
-uint32_t estimate_halo_output_elems(
-    std::array<uint32_t, 2> halo_input_shard_shape,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> dilation,
-    std::array<uint32_t, 4> padding);
+std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
+    std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
 
-uint32_t calculate_conv_dram_slice_L1_usage(
-    const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
-
+void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);
 }  // namespace operations::conv
 }  // namespace ttnn

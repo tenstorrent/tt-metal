@@ -11,16 +11,16 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.vit.common import load_torch_model
-from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
-from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
-from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
+from models.common.utility_functions import (
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
     is_blackhole,
     torch2tt_tensor,
 )
+from models.demos.vit.common import load_torch_model
+from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
+from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
+from models.perf.perf_utils import prep_perf_report
 
 
 def get_expected_times(functional_vit):

@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -30,7 +29,6 @@ namespace {
 
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
-using ::tt::tt_metal::distributed::MeshContainer;
 
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     MeshDeviceConfig config(MeshShape(1, 1));
@@ -133,6 +131,23 @@ TEST(GetOptimalDramBankToLogicalWorkerAssignmentAPI, UnitMeshes) {
     for (auto& [_, dev] : devs) {
         EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0));
         EXPECT_NO_THROW(dev->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_1));
+    }
+}
+
+TEST(ThrowOnMultipleMeshDeviceInitialization, UnitMeshes) {
+    auto device_ids_set = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
+    std::vector<int> device_ids(device_ids_set.begin(), device_ids_set.end());
+    auto unit_meshes = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(device_ids);
+    for (auto& [_, unit_mesh] : unit_meshes) {
+        EXPECT_EQ(unit_mesh->is_initialized(), true);
+        EXPECT_ANY_THROW(unit_mesh->initialize(
+            /*num_hw_cqs=*/1,
+            /*l1_small_size=*/DEFAULT_L1_SMALL_SIZE,
+            /*trace_region_size=*/DEFAULT_TRACE_REGION_SIZE,
+            /*worker_l1_size=*/DEFAULT_WORKER_L1_SIZE,
+            /*l1_bank_remap=*/{},
+            /*minimal=*/false)
+        );
     }
 }
 

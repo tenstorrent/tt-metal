@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 
-from models.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc, is_grayskull
+from models.common.utility_functions import pad_by_zero, torch2tt_tensor, comp_pcc
 
 
 def ref_layernorm(x, gamma, beta, eps):
@@ -46,12 +46,12 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
         gamma_t = pad_by_zero(gamma, device, in0_mem_config, gamma_dtype)[0]
         beta_t = pad_by_zero(beta, device, in0_mem_config, gamma_dtype)[0]
 
-        if not is_grayskull():
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=True,
-                fp32_dest_acc_en=True if in_dtype == ttnn.float32 else False,
-            )
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True if in_dtype == ttnn.float32 else False,
+        )
 
         if test_id == 0:
             ttz = ttnn.layer_norm(
@@ -59,7 +59,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 1:
             ttz = ttnn.layer_norm(
@@ -68,7 +68,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 epsilon=epsf,
                 weight=gamma_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 2:
             ttz = ttnn.layer_norm(
@@ -78,7 +78,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 weight=gamma_t,
                 bias=beta_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 3:
             ttz = ttnn.rms_norm(
@@ -86,7 +86,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 residual_input_tensor=in1_t,
                 epsilon=epsf,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 4:
             ttz = ttnn.rms_norm(
@@ -95,7 +95,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 epsilon=epsf,
                 weight=gamma_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 5:
             ttz = ttnn.rms_norm(
@@ -105,14 +105,11 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 weight=gamma_t,
                 bias=beta_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 6:
             ttz = ttnn.layer_norm(
-                in0_t,
-                epsilon=epsf,
-                memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                in0_t, epsilon=epsf, memory_config=out_mem_config, compute_kernel_config=compute_kernel_config
             )
         if test_id == 7:
             ttz = ttnn.layer_norm(
@@ -120,7 +117,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 epsilon=epsf,
                 weight=gamma_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 8:
             ttz = ttnn.layer_norm(
@@ -129,14 +126,11 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 weight=gamma_t,
                 bias=beta_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 9:
             ttz = ttnn.rms_norm(
-                in0_t,
-                epsilon=epsf,
-                memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                in0_t, epsilon=epsf, memory_config=out_mem_config, compute_kernel_config=compute_kernel_config
             )
         if test_id == 10:
             ttz = ttnn.rms_norm(
@@ -144,7 +138,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 epsilon=epsf,
                 weight=gamma_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
         if test_id == 11:
             ttz = ttnn.rms_norm(
@@ -153,7 +147,7 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
                 weight=gamma_t,
                 bias=beta_t,
                 memory_config=out_mem_config,
-                compute_kernel_config=compute_kernel_config if not is_grayskull() else None,
+                compute_kernel_config=compute_kernel_config,
             )
 
         tt_got_back = ttz.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
@@ -218,8 +212,6 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
     ],
 )
 def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device):
-    if is_grayskull() and in_dtype == ttnn.float32:
-        pytest.skip("Skipping float32 tests on Grayskull")
     run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
 
 

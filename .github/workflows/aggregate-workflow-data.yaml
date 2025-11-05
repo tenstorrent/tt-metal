@@ -4,7 +4,7 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '0 * * * *' # every hour
+    - cron: '*/10 * * * *' # every 10 minutes
   workflow_dispatch:
     inputs:
       days:
@@ -17,21 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
+      commits-path: ${{ steps.fetch.outputs.commits-path }}
+      annotations-root: ${{ steps.fetch.outputs.annotations-root }}
+      annotations-index-path: ${{ steps.fetch.outputs.annotations-index-path }}
+      gtest-logs-root: ${{ steps.fetch.outputs.gtest-logs-root }}
+      gtest-logs-index-path: ${{ steps.fetch.outputs.gtest-logs-index-path }}
+      other-logs-root: ${{ steps.fetch.outputs.other-logs-root }}
+      other-logs-index-path: ${{ steps.fetch.outputs.other-logs-index-path }}
+      last-success-timestamps-path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
-
-      - name: Set rolling cache index
-        id: cache-index
-        run: echo "CACHE_INDEX=$(( ${{ github.run_number }} % 3 ))" >> $GITHUB_ENV
-
-      - name: Restore workflow data cache
-        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
-        with:
-          path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}
-          restore-keys: |
-            metal-workflow-data-${{ github.ref }}-
-            metal-workflow-data-
 
       - name: Install fetch-workflow-data dependencies
         shell: bash
@@ -42,8 +37,55 @@ jobs:
         uses: ./.github/actions/fetch-workflow-data
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          cache-path: ${{ github.workspace }}/workflow-data.json
           days: ${{ github.event.inputs.days || 15 }}
+          workflow_ids: |
+            [
+              ".github/workflows/all-post-commit-workflows.yaml",
+              ".github/workflows/blackhole-post-commit.yaml",
+              ".github/workflows/blackhole-nightly-tests.yaml",
+              ".github/workflows/blackhole-demo-tests.yaml",
+              ".github/workflows/galaxy-profiler-tests.yaml",
+              ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
+              ".github/workflows/galaxy-deepseek-tests.yaml",
+              ".github/workflows/galaxy-model-perf-tests.yaml",
+              ".github/workflows/galaxy-demo-tests.yaml",
+              ".github/workflows/galaxy-unit-tests.yaml",
+              ".github/workflows/galaxy-frequent-tests.yaml",
+              ".github/workflows/galaxy-stress-tests.yaml",
+              ".github/workflows/galaxy-nightly-tests.yaml",
+              ".github/workflows/galaxy-quick.yaml",
+              ".github/workflows/t3000-model-perf-tests.yaml",
+              ".github/workflows/t3000-nightly-tests.yaml",
+              ".github/workflows/t3000-frequent-tests.yaml",
+              ".github/workflows/t3000-profiler-tests.yaml",
+              ".github/workflows/t3000-perplexity-tests.yaml",
+              ".github/workflows/t3000-demo-tests.yaml",
+              ".github/workflows/t3000-unit-tests.yaml",
+              ".github/workflows/fast-dispatch-frequent-tests.yaml",
+              ".github/workflows/perf-device-models.yaml",
+              ".github/workflows/perf-models.yaml",
+              ".github/workflows/fast-dispatch-full-regressions-and-models.yaml",
+              ".github/workflows/single-card-demo-tests.yaml",
+              ".github/workflows/tt-metal-l2-nightly.yaml",
+              ".github/workflows/ttnn-run-sweeps.yaml",
+              ".github/workflows/vllm-nightly-tests.yaml",
+              ".github/workflows/metal-run-microbenchmarks.yaml",
+              ".github/workflows/apc-nightly-debug.yaml"
+            ]
+          workflow_configs: |
+            [
+              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
+              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
+              {"display": "Galaxy prefix", "wkflw_prefix": "(Galaxy)"},
+              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
+              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
+              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
+              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
+              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
+              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
+              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
+            ]
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -51,11 +93,46 @@ jobs:
           path: ${{ github.workspace }}/workflow-data.json
           retention-days: 1
 
-      - name: Save workflow data cache
-        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 #@v4
+      - name: Upload annotations artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
-          path: ${{ github.workspace }}/workflow-data.json
-          key: metal-workflow-data-${{ github.ref }}-${{ env.CACHE_INDEX }}-${{ github.run_id }}
+          name: workflow-annotations
+          path: |
+            ${{ steps.fetch.outputs.annotations-root }}/
+            ${{ steps.fetch.outputs.annotations-index-path }}
+          retention-days: 1
+
+      - name: Upload commits artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: commits-main
+          path: ${{ steps.fetch.outputs.commits-path }}
+          retention-days: 1
+
+      - name: Upload gtest logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-gtest-logs
+          path: |
+            ${{ steps.fetch.outputs.gtest-logs-root }}/
+            ${{ steps.fetch.outputs.gtest-logs-index-path }}
+          retention-days: 1
+
+      - name: Upload other logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-other-logs
+          path: |
+            ${{ steps.fetch.outputs.other-logs-root }}/
+            ${{ steps.fetch.outputs.other-logs-index-path }}
+          retention-days: 1
+
+      - name: Upload last success timestamps artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: last-success-timestamps
+          path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
+          retention-days: 1
 
       - name: Debug cache file
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
@@ -65,16 +142,89 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
+      regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
+      alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
+      - name: Discover previous successful run id
+        id: prev
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const workflow_id = '.github/workflows/aggregate-workflow-data.yaml';
+            const resp = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
+              owner,
+              repo,
+              workflow_id,
+              branch: 'main',
+              status: 'completed',
+              per_page: 10
+            });
+            const runs = (resp.data.workflow_runs || []).filter(r => r.event === 'schedule' && r.conclusion === 'success');
+            const run = runs[0];
+            const selectedId = run ? String(run.id) : '';
+            core.info(`Selected previous run id: ${selectedId || 'none'}`);
+            core.setOutput('run_id', selectedId);
       - name: Install analyze-workflow-data dependencies
         shell: bash
         working-directory: .github/actions/analyze-workflow-data
         run: npm install
-      - name: Download workflow data
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 #@v4
+      - name: Download previous workflow data artifact (if any)
+        if: ${{ steps.prev.outputs.run_id != '' }}
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: workflow-data
+          path: ${{ github.workspace }}/prev
+          run-id: ${{ steps.prev.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Echo selected previous run id
+        run: |
+          echo "Selected previous run id: ${{ steps.prev.outputs.run_id }}"
+      - name: List artifacts for selected previous run (debug)
+        if: ${{ steps.prev.outputs.run_id != '' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run_id = Number('${{ steps.prev.outputs.run_id }}');
+            const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id, per_page: 100 });
+            core.info(`Artifacts for run ${run_id}:`);
+            for (const a of arts.data.artifacts) {
+              core.info(`- name=${a.name} id=${a.id} expired=${a.expired} size=${a.size_in_bytes}`);
+            }
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download workflow data
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-data
+          path: ${{ github.workspace }}
+      - name: Download annotations (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-annotations
+          path: ${{ github.workspace }}/annotations
+      - name: Download gtest logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-gtest-logs
+          path: ${{ github.workspace }}/logs/gtest
+      - name: Download other logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-other-logs
+          path: ${{ github.workspace }}/logs/other
+      - name: Download commits index
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: commits-main
+          path: ${{ github.workspace }}
+      - name: Download last success timestamps
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: last-success-timestamps
           path: ${{ github.workspace }}
       - name: Analyze workflow data
         id: analyze
@@ -83,13 +233,19 @@ jobs:
           days: ${{ github.event.inputs.days || 15 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
+          previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
+          annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
+          commits-path: ${{ github.workspace }}/commits-main.json
+          gtest-logs-index-path: ${{ github.workspace }}/logs/gtest/gtest-logs-index.json
+          other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
+          last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
+          alert-all: 'false'
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
               {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
               {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
-              {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
-              {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
+              {"display": "Galaxy prefix", "wkflw_prefix": "(Galaxy)"},
               {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
               {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
               {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
@@ -98,14 +254,28 @@ jobs:
               {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
               {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
             ]
+      - name: Upload status changes artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-status-changes
+          path: ${{ steps.analyze.outputs.status_changes_path }}
+          retention-days: 1
+
 
   handle-failures:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
       - name: Handle failed workflows
         run: |
           echo "The following workflows have failed:"
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
+      - name: Post regressions to Slack
+        uses: ./.github/actions/slack-report-analyze-workflow-data
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_AGGREGATE_PIPELINE_STATUS_ALERT }}
+          regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
+          alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}

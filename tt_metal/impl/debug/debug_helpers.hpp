@@ -6,17 +6,17 @@
 
 #include <set>
 
-#include "dev_msgs.h"
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/core_descriptor.hpp>
+#include "llrt/core_descriptor.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
+#include "llrt.hpp"
 
 namespace tt::tt_metal {
 
 // Helper function for comparing CoreDescriptors for using in sets.
 struct CoreDescriptorComparator {
-    bool operator()(const CoreDescriptor& x, const CoreDescriptor& y) const {
+    bool operator()(const umd::CoreDescriptor& x, const umd::CoreDescriptor& y) const {
         if (x.coord == y.coord) {
             return x.type < y.type;
         } else {
@@ -24,10 +24,10 @@ struct CoreDescriptorComparator {
         }
     }
 };
-using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
+using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
-static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
+inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size =
@@ -51,7 +51,7 @@ static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
 
 // Helper function to get CoreDescriptors for all cores that are used for dispatch. Should be a subset of
 // GetAllCores().
-static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
+[[maybe_unused]] static CoreDescriptorSet GetDispatchCores(ChipId device_id) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
     const auto& dispatch_core_config =
@@ -64,47 +64,10 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
     return dispatch_cores;
 }
 
-// Helper function to convert virtual core -> HalProgrammableCoreType. TODO: Remove when we fix core types.
-static tt::tt_metal::HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core, chip_id_t device_id) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(virtual_core, device_id)) {
-        return tt::tt_metal::HalProgrammableCoreType::TENSIX;
-    }
-
-    // Eth pcores have a different address, but only active ones.
-    CoreCoord logical_core =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
-            device_id, virtual_core);
-    auto active_ethernet_cores =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
-    if (active_ethernet_cores.find(logical_core) != active_ethernet_cores.end()) {
-        return tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    }
-
-    return tt::tt_metal::HalProgrammableCoreType::IDLE_ETH;
-}
-
-inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_core, int risc_id) {
-    dprint_buf_msg_t* buf = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<dprint_buf_msg_t*>(
-        get_programmable_core_type(virtual_core, device_id), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
-    return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
-}
-
-inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
-    if (core.type == CoreType::ETH) {
-        auto logical_active_eths =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
-        CoreCoord logical_eth(core.coord.x, core.coord.y);
-        if (logical_active_eths.contains(logical_eth)) {
-            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        } else {
-            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
-        }
-    } else {
-        return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-            tt::tt_metal::HalProgrammableCoreType::TENSIX);
-    }
+inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core, int risc_id) {
+    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
+    return addr + (sizeof(DebugPrintMemLayout) * risc_id);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {

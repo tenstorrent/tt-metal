@@ -6,7 +6,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
@@ -65,11 +64,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     CoreCoord compute_with_storage_grid_size) {
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool is_dram = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -147,7 +144,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+            i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -189,7 +186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 uint32_t in_tile_offset_by_batch =
-                    i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+                    i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
                 const auto& core = cores[i];
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = in_tile_offset_by_batch;
@@ -223,7 +220,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -250,7 +247,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     if (batch_offset.has_value()) {
         tt::DataFormat cb_batch_offset_data_format =
             tt_metal::datatype_to_dataformat_converter(batch_offset.value().dtype());
-        uint32_t single_batch_offset_tile_size = tt_metal::detail::TileSize(cb_batch_offset_data_format);
+        uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
         tt_metal::CircularBufferConfig cb_batch_offset_config_reader =
@@ -501,7 +498,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     const uint32_t head_tiles = head_dim / TILE_WIDTH;
     const uint32_t head_size = head_tiles * single_tile_size;
@@ -528,7 +525,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     if (batch_offset.has_value()) {
         tt::DataFormat cb_batch_offset_data_format =
             tt_metal::datatype_to_dataformat_converter(batch_offset.value().dtype());
-        uint32_t single_batch_offset_tile_size = tt_metal::detail::TileSize(cb_batch_offset_data_format);
+        uint32_t single_batch_offset_tile_size = tt::tile_size(cb_batch_offset_data_format);
         batch_offset_index_stick_size = batch_offset.value().buffer()->aligned_page_size();
 
         tt_metal::CircularBufferConfig cb_batch_offset_config_reader =
@@ -674,7 +671,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
     for (uint32_t i = 0; i < q_num_cores; ++i) {
         const auto& core = q_cores_vector[i];
         std::vector<uint32_t> q_reader_runtime_args;
-        q_reader_runtime_args.reserve(3 + 2 * in_num_cores);
+        q_reader_runtime_args.reserve(3 + (2 * in_num_cores));
         q_reader_runtime_args = {q_start_addr, use_batch_offset ? batch_offset.value().buffer()->address() : 0, i};
         q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
         q_reader_runtime_args.insert(q_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
@@ -686,7 +683,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
         for (uint32_t i = 0; i < k_num_cores; ++i) {
             const auto& core = k_cores_vector[i];
             std::vector<uint32_t> k_reader_runtime_args;
-            k_reader_runtime_args.reserve(3 + 2 * in_num_cores);
+            k_reader_runtime_args.reserve(3 + (2 * in_num_cores));
             k_reader_runtime_args = {q_start_addr, use_batch_offset ? batch_offset.value().buffer()->address() : 0, i};
             k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
             k_reader_runtime_args.insert(k_reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());

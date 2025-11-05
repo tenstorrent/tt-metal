@@ -15,7 +15,7 @@ volatile uint32_t nonzero[4] = {
 volatile uint32_t zero[4] = {0, 0, 0, 0};
 
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 void kernel_main() {
 #else
 #include "compute_kernel_api/common.h"
@@ -49,7 +49,7 @@ void MAIN {
         while (1);
     }
 #if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 }
 #else
 }

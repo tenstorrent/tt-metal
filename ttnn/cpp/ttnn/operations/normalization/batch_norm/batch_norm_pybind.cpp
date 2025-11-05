@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,6 @@ void bind_batch_norm_operation(py::module& module) {
         module,
         ttnn::batch_norm,
         R"doc(
-
         Applies batch norm over each channel on :attr:`input_tensor`.
         See `Spatial Batch Normalization <https://arxiv.org/abs/1502.03167>`_ for more details.
 
@@ -46,7 +45,6 @@ void bind_batch_norm_operation(py::module& module) {
             output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): device compute kernel configuration for the operation. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to 0.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -65,6 +63,9 @@ void bind_batch_norm_operation(py::module& module) {
                  - 4
 
             These apply for all the tensor inputs to this operation, including the optional :attr:`output` tensor.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
 
         Limitations:
             - All input tensors must be tilized, interleaved, rank 4, and on-device.
@@ -104,7 +105,6 @@ void bind_batch_norm_operation(py::module& module) {
             py::arg("bias") = std::nullopt,
             py::arg("output") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("compute_kernel_config") = std::nullopt});
 }
 }  // namespace ttnn::operations::normalization::detail

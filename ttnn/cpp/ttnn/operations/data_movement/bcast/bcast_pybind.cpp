@@ -13,8 +13,7 @@ namespace py = pybind11;
 
 void py_bind_bcast(py::module& module) {
     auto doc =
-        R"doc(bcast(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, math_op[ADD, SUB, MUL],  dim: Optional[int] = None, memory_config: Optional[MemoryConfig] = std::nullopt, output_tensor: Optional[Tensor]) -> ttnn.Tensor
-
+        R"doc(
             Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
             Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
@@ -38,7 +37,6 @@ void py_bind_bcast(py::module& module) {
                 "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
                 "memory_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
                 "output_tensor", "Optional preallocated output tensor", "Tensor", "Default is None", "No"
-                "queue_id", "command queue id", "uint8_t", "Default is 0", "No"
 
             Args:
                 * :attr:`input_tensor_a`: First Input Tensor for bcast.
@@ -64,10 +62,8 @@ void py_bind_bcast(py::module& module) {
                ttnn::BcastOpMath bcast_op,
                ttnn::BcastOpDim bcast_dim,
                std::optional<Tensor> output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id, input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
+                return self(input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
             },
             py::arg("input_a").noconvert(),
             py::arg("input_b").noconvert(),
@@ -75,8 +71,7 @@ void py_bind_bcast(py::module& module) {
             py::arg("dim"),
             py::kw_only(),
             py::arg("output_tensor") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

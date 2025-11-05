@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@ class TtUpsample2D(LightweightModule):
         padding,
         dilation,
         groups,
+        debug_mode=False,
     ):
         super().__init__()
 
@@ -32,18 +33,19 @@ class TtUpsample2D(LightweightModule):
         self.dilation = dilation
         self.groups = groups
         self.scale_factor = 2  # fixed number for now
+        self.debug_mode = debug_mode
 
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
         self.compute_config = model_config.get_conv_compute_config(module_path=module_path)
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
         self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             weights,
             bias,
-            model_config.conv_w_dtype,
+            self.conv_config.weights_dtype,
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
-        self.conv_config = model_config.get_conv_config(conv_path=module_path)
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
@@ -61,7 +63,7 @@ class TtUpsample2D(LightweightModule):
             ttnn.deallocate(hidden_state_l1)
         else:
             hidden_states = hidden_state_l1
-        [hidden_states, [H, W], [self.tt_weights, self.tt_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_weights, tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,
             in_channels=self.conv_params["input_channels"],
@@ -85,5 +87,8 @@ class TtUpsample2D(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_weights = tt_weights
+            self.tt_bias = tt_bias
 
         return hidden_states, [C, H, W]

@@ -87,11 +87,10 @@ struct CQPrefetchBaseCmd {
 
 // Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH)
 struct CQPrefetchRelayLinearCmd {
-    uint8_t pad1;
-    uint16_t pad2;
+    uint16_t pad1;
+    uint64_t length;
     uint32_t noc_xy_addr;
-    uint32_t addr;
-    uint32_t length;
+    uint64_t addr;
 } __attribute__((packed));
 
 // Flushes an extra page at the end (so it can only be used after CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH). Must be only
@@ -100,7 +99,7 @@ struct CQPrefetchRelayLinearHCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t noc_xy_addr;
-    uint32_t addr;
+    uint64_t addr;
     uint32_t length;  // Length must be <= min(scratch_db_size, max command size) - sizeof(CQPrefetchHToPrefetchDHeader)
 } __attribute__((packed));
 
@@ -181,11 +180,10 @@ struct CQPrefetchRelayRingbufferSubCmd {
     uint32_t length;
 } __attribute__((packed));
 
+// 16 byte commands.
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
-        CQPrefetchRelayLinearCmd relay_linear;
-        CQPrefetchRelayLinearHCmd relay_linear_h;
         CQPrefetchRelayPagedCmd relay_paged;
         CQPrefetchRelayPagedPackedCmd relay_paged_packed;
         CQPrefetchRelayInlineCmd relay_inline;
@@ -194,6 +192,16 @@ struct CQPrefetchCmd {
         CQPrefetchPagedToRingbufferCmd paged_to_ringbuffer;
         CQPrefetchSetRingbufferOffsetCmd set_ringbuffer_offset;
         CQPrefetchRelayRingbufferCmd relay_ringbuffer;
+    } __attribute__((packed));
+};
+
+// 32 byte commands.
+struct CQPrefetchCmdLarge {
+    CQPrefetchBaseCmd base;
+    union {
+        CQPrefetchRelayLinearHCmd relay_linear_h;
+        CQPrefetchRelayLinearCmd relay_linear;
+        uint8_t padding[32 - sizeof(CQPrefetchBaseCmd)];
     } __attribute__((packed));
 };
 
@@ -209,16 +217,15 @@ struct CQDispatchWriteCmd {
     uint8_t write_offset_index;
     uint8_t pad1;
     uint32_t noc_xy_addr;
-    uint32_t addr;
-    uint32_t length;
+    uint64_t addr;
+    uint64_t length;
 } __attribute__((packed));
 
 struct CQDispatchWriteHostCmd {
     uint8_t is_event;  // one flag, false=read buffer
     uint16_t pad1;
     uint32_t pad2;
-    uint32_t pad3;
-    uint32_t length;
+    uint64_t length;
 } __attribute__((packed));
 
 constexpr uint16_t CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX = 0xFFFF;
@@ -274,7 +281,7 @@ struct CQDispatchWritePackedLargeSubCmd {
     uint8_t flags;
 } __attribute__((packed));
 
-constexpr inline __attribute__((always_inline)) uint32_t
+constexpr __attribute__((always_inline)) uint32_t
 get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cmds) {
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds *
                                                    sizeof(CQDispatchWritePackedUnicastSubCmd) /
@@ -375,7 +382,6 @@ struct CQDispatchCmd {
     CQDispatchBaseCmd base;
 
     union {
-        CQDispatchWriteCmd write_linear;
         CQDispatchWriteHostCmd write_linear_host;
         CQDispatchWritePagedCmd write_paged;
         CQDispatchWritePackedCmd write_packed;
@@ -392,9 +398,19 @@ struct CQDispatchCmd {
     } __attribute__((packed));
 };
 
+// 32 byte commands.
+struct CQDispatchCmdLarge {
+    CQDispatchBaseCmd base;
+    union {
+        CQDispatchWriteCmd write_linear;
+        uint8_t padding[32 - sizeof(CQDispatchBaseCmd)];
+    } __attribute__((packed));
+};
+
 //////////////////////////////////////////////////////////////////////////////
 
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
 static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
 static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+static_assert((sizeof(CQPrefetchCmdLarge) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
 static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);

@@ -10,6 +10,7 @@
 #include "cq_helpers.hpp"
 
 #include "debug/sanitize_noc.h"
+#include <limits>
 
 // The command queue read interface controls reads from the issue region, host owns the issue region write interface
 // Commands and data to send to device are pushed into the issue region
@@ -80,6 +81,34 @@ FORCE_INLINE void cq_noc_async_write_with_state(
             noc, src_addr, dst_addr, size, ndests);
     }
 }
+// Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
+// addressing at NOC tile
+template <
+    enum CQNocFlags flags,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    enum CQNocSend send = CQ_NOC_SEND,
+    uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
+    bool update_counters = false>
+FORCE_INLINE void cq_noc_async_wwrite_with_state(
+    uint32_t src_addr,
+    uint32_t dst_noc_addr,
+    uint64_t dst_addr,
+    uint32_t size = 0,
+    uint32_t ndests = 1,
+    uint8_t noc = noc_index) {
+    if constexpr (wait) {
+        WAYPOINT("CNSW");
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+        WAYPOINT("CNSD");
+    }
+    noc_wwrite_with_state<DM_DEDICATED_NOC, cmd_buf, flags, CQ_NOC_send, CQ_NOC_wait, false>(
+        noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
+    if constexpr (send) {
+        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
+        noc_wwrite_with_state<DM_DEDICATED_NOC, cmd_buf, CQ_NOC_sndl, send, CQ_NOC_wait, update_counters>(
+            noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
+    }
+}
 
 // More generic version of cq_noc_async_write_with_state: Allows writing an abitrary amount of data, when the NOC config
 // (dst_noc, VC..) have been specified.
@@ -132,6 +161,28 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size);
 }
+// Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
+// addressing at NOC tile
+template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+FORCE_INLINE void cq_noc_async_wwrite_init_state(
+    uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint8_t noc = noc_index) {
+    WAYPOINT("CNIW");
+    uint32_t heartbeat = 0;
+    while (!noc_cmd_buf_ready(noc, cmd_buf)) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
+    WAYPOINT("CNID");
+
+    constexpr enum CQNocCmdFlags cmd_flags = static_cast<enum CQNocCmdFlags>(
+        (mcast ? CQ_NOC_CMD_FLAG_MCAST : 0x0) | (linked ? CQ_NOC_CMD_FLAG_LINKED : 0x0));
+    constexpr uint32_t vc = mcast ? NOC_DISPATCH_MULTICAST_WRITE_VC : NOC_UNICAST_WRITE_VC;
+
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, mcast ? DEBUG_SANITIZE_NOC_MULTICAST : DEBUG_SANITIZE_NOC_UNICAST);
+
+    noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
+    cq_noc_async_wwrite_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(
+        src_addr, dst_noc_addr, dst_addr, size, noc);
+}
 
 template <enum CQNocInlineFlags flags, enum CQNocWait wait = CQ_NOC_WAIT, enum CQNocSend send = CQ_NOC_SEND>
 FORCE_INLINE void cq_noc_inline_dw_write_with_state(
@@ -155,7 +206,8 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
 
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
-        noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_ndvb, CQ_NOC_wait, send>(noc, dst_addr, val, be);
+        noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_ndvb, CQ_NOC_wait, send>(
+            noc, dst_addr, val, be);
     }
 #endif
 }
@@ -206,61 +258,49 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
-template <uint32_t sem_id>
-FORCE_INLINE void cb_wait_all_pages(uint32_t n, uint32_t& additional_count) {
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+template <uint32_t my_sem_id, uint8_t noc_idx, uint32_t downstream_noc_xy, uint32_t downstream_sem_id>
+class CBWriter {
+public:
+    FORCE_INLINE void acquire_pages(uint32_t n) {
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
 
-    // Downstream component sets the MSB as a terminate bit
-    // Mask that off to avoid a race between the sem count and terminate
-    n &= 0x7fffffff;
+        // Ensure last sem_inc has landed
+        noc_async_atomic_barrier();
 
-    WAYPOINT("TAPW");
-    do {
-        invalidate_l1_cache();
-    } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
-    WAYPOINT("TAPD");
-}
+        WAYPOINT("DAPW");
+        // Use a wrapping compare here to compare distance
+        // Required for trace which steals downstream credits and may make the value negative
+        uint32_t heartbeat = 0;
+        do {
+            invalidate_l1_cache();
+            IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+        } while (wrap_gt(n, additional_count + *sem_addr));
+        WAYPOINT("DAPD");
+        additional_count -= n;
+    }
+    FORCE_INLINE void wait_all_pages(uint32_t n) {
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
 
-template <uint32_t noc_xy, uint32_t sem_id>
-void cb_acquire_pages(uint32_t n) {
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+        // Downstream component sets the MSB as a terminate bit
+        // Mask that off to avoid a race between the sem count and terminate
+        n &= 0x7fffffff;
 
-    // Ensure last sem_inc has landed
-    noc_async_atomic_barrier();
+        WAYPOINT("TAPW");
+        do {
+            invalidate_l1_cache();
+        } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
+        WAYPOINT("TAPD");
+    }
 
-    WAYPOINT("DAPW");
-    // Use a wrapping compare here to compare distance
-    // Required for trace which steals downstream credits and may make the value negative
-    uint32_t heartbeat = 0;
-    do {
-        invalidate_l1_cache();
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-    } while (wrap_gt(n, *sem_addr));
-    WAYPOINT("DAPD");
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
-}
+    FORCE_INLINE void release_pages(uint32_t n) {
+        noc_semaphore_inc(
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+    }
 
-template <uint32_t noc_xy, uint32_t sem_id>
-void cb_acquire_pages(uint32_t n, uint32_t& additional_count) {
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
-
-    // Ensure last sem_inc has landed
-    noc_async_atomic_barrier();
-
-    WAYPOINT("DAPW");
-    // Use a wrapping compare here to compare distance
-    // Required for trace which steals downstream credits and may make the value negative
-    uint32_t heartbeat = 0;
-    do {
-        invalidate_l1_cache();
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-    } while (wrap_gt(n, additional_count + *sem_addr));
-    WAYPOINT("DAPD");
-    additional_count -= n;
-}
+    uint32_t additional_count{0};
+};
 
 template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages(uint32_t n) {

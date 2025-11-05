@@ -20,13 +20,10 @@ enum class Initialize { ZEROS = 0, ONES = 1, INCREMENT = 2, RANDOM = 3 };
 template <class T>
 class Tensor {
 public:
-    Tensor(std::vector<T>& values, std::array<uint32_t, 4>& shape) {
-        this->shape = shape;
-        this->values = values;
+    Tensor(std::vector<T>& values, std::array<uint32_t, 4>& shape) : values(values), shape(shape) {
         this->strides = {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};
     }
-    Tensor(std::array<uint32_t, 4>& shape) {
-        this->shape = shape;
+    Tensor(std::array<uint32_t, 4>& shape) : shape(shape) {
         auto volume = shape[0] * shape[1] * shape[2] * shape[3];
         this->values.resize(volume);
         this->strides = {shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1};
@@ -60,8 +57,8 @@ void print(const Tensor<T>& tensor) {
             for (auto y = 0; y < tensor_shape[2]; y++) {
                 std::cout << "[";
                 for (auto x = 0; x < tensor_shape[3]; x++) {
-                    auto idx = x + tensor_shape[3] * y + tensor_shape[3] * tensor_shape[2] * z +
-                               tensor_shape[3] * tensor_shape[2] * tensor_shape[1] * w;
+                    auto idx = x + (tensor_shape[3] * y) + (tensor_shape[3] * tensor_shape[2] * z) +
+                               (tensor_shape[3] * tensor_shape[2] * tensor_shape[1] * w);
                     std::cout << tensor_data[idx] << ",";
                 }
                 std::cout << "]" << std::endl;
@@ -116,10 +113,10 @@ Tensor<T> permute(const Tensor<T>& input, std::array<int, 4> dims) {
         for (auto z = 0; z < in_shape[1]; z++) {          // Z
             for (auto y = 0; y < in_shape[2]; y++) {      // Y
                 for (auto x = 0; x < in_shape[3]; x++) {  // X
-                    auto in_idx = x + y * in_shape[3] + z * in_shape[3] * in_shape[2] +
-                                  w * in_shape[3] * in_shape[2] * in_shape[1];
-                    auto out_idx = z + x * out_shape[3] + y * out_shape[3] * out_shape[2] +
-                                   w * out_shape[3] * out_shape[2] * out_shape[1];
+                    auto in_idx = x + (y * in_shape[3]) + (z * in_shape[3] * in_shape[2]) +
+                                  (w * in_shape[3] * in_shape[2] * in_shape[1]);
+                    auto out_idx = z + (x * out_shape[3]) + (y * out_shape[3] * out_shape[2]) +
+                                   (w * out_shape[3] * out_shape[2] * out_shape[1]);
                     out[out_idx] = input_values[in_idx];
                 }
             }
@@ -140,10 +137,10 @@ Tensor<T> permute_nhwc_to_nchw(const Tensor<T>& input) {
         for (auto z = 0; z < out_shape[1]; z++) {          // Z
             for (auto y = 0; y < out_shape[2]; y++) {      // Y
                 for (auto x = 0; x < out_shape[3]; x++) {  // X
-                    auto out_idx = x + y * out_shape[3] + z * out_shape[3] * out_shape[2] +
-                                   w * out_shape[3] * out_shape[2] * out_shape[1];
-                    auto in_idx = z + x * in_shape[3] + y * in_shape[3] * in_shape[2] +
-                                  w * in_shape[3] * in_shape[2] * in_shape[1];
+                    auto out_idx = x + (y * out_shape[3]) + (z * out_shape[3] * out_shape[2]) +
+                                   (w * out_shape[3] * out_shape[2] * out_shape[1]);
+                    auto in_idx = z + (x * in_shape[3]) + (y * in_shape[3] * in_shape[2]) +
+                                  (w * in_shape[3] * in_shape[2] * in_shape[1]);
                     out[out_idx] = input_values[in_idx];
                 }
             }
@@ -182,8 +179,8 @@ Tensor<T> pad(Tensor<T>& input, std::array<std::array<uint32_t, 2>, 4> pad_size,
                     out.push_back(val);
                 }
                 for (auto dim3 = 0; dim3 < in_shape[3]; dim3++) {
-                    auto idx = dim3 + in_shape[3] * dim2 + in_shape[3] * in_shape[2] * dim1 +
-                               in_shape[3] * in_shape[2] * in_shape[1] * dim0;
+                    auto idx = dim3 + (in_shape[3] * dim2) + (in_shape[3] * in_shape[2] * dim1) +
+                               (in_shape[3] * in_shape[2] * in_shape[1] * dim0);
                     out.push_back(input_values[idx]);
                 }
                 for (auto i = 0; i < pad_size[3][1] * output_strides[3]; i++) {

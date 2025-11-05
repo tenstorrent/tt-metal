@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,11 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
-from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config, get_DRAM_GN_config
+from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import (
+    get_DRAM_conv_config,
+    get_DRAM_GN_config,
+    get_DRAM_GN_shape,
+)
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
 )
@@ -14,7 +18,7 @@ from loguru import logger
 
 
 class TtDecoder(LightweightModule):
-    def __init__(self, device, state_dict, model_config):
+    def __init__(self, device, state_dict, model_config, debug_mode=False):
         super().__init__()
 
         self.device = device
@@ -26,10 +30,11 @@ class TtDecoder(LightweightModule):
         self.padding = (1, 1)
         self.dilation = (1, 1)
         self.groups = 1
+        self.debug_mode = debug_mode
 
         num_up_blocks = 4
 
-        self.mid_block = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", model_config)
+        self.mid_block = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", model_config, debug_mode=debug_mode)
         self.up_blocks = []
         for block_id in range(num_up_blocks):
             self.up_blocks.append(
@@ -40,6 +45,7 @@ class TtDecoder(LightweightModule):
                     model_config,
                     has_upsample=block_id < 3,
                     conv_shortcut=block_id > 1,
+                    debug_mode=debug_mode,
                 )
             )
 
@@ -64,7 +70,18 @@ class TtDecoder(LightweightModule):
             return_mask=True,
         )
 
+        N, C, H, W = get_DRAM_GN_shape(None, 1)
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, self.norm_groups, self.norm_core_grid)
+        self.reciprocals_tensor = ttnn.from_torch(
+            torch_reciprocals,
+            dtype=ttnn.DataType.FLOAT32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
+        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
         (
             self.tt_conv_in_weights,
             self.tt_conv_in_bias,
@@ -72,12 +89,12 @@ class TtDecoder(LightweightModule):
         ) = prepare_conv_params(
             conv_in_weights,
             conv_in_bias,
-            model_config.conv_w_dtype,
+            self.conv_in_config.weights_dtype,
         )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
-        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
+        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
         (
             self.tt_conv_out_weights,
             self.tt_conv_out_bias,
@@ -85,17 +102,16 @@ class TtDecoder(LightweightModule):
         ) = prepare_conv_params(
             conv_out_weights,
             conv_out_bias,
-            model_config.conv_w_dtype,
+            self.conv_out_config.weights_dtype,
         )
         self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
-        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):
         B, C, H, W = input_shape
         hidden_states = sample
 
-        [hidden_states, [H, W], [self.tt_conv_in_weights, self.tt_conv_in_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_conv_in_weights, tt_conv_in_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_in_weights,
             in_channels=self.conv_in_params["input_channels"],
@@ -119,6 +135,9 @@ class TtDecoder(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv_in_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv_in_weights = tt_conv_in_weights
+            self.tt_conv_in_bias = tt_conv_in_bias
 
         logger.info("Starting mid-block")
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W])
@@ -128,6 +147,13 @@ class TtDecoder(LightweightModule):
             hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W])
 
         logger.info("Executing out ops")
+        sharded_mem_config = ttnn.create_sharded_memory_config(
+            shape=self.reciprocals_tensor.shape,
+            core_grid=self.norm_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor, sharded_mem_config)
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.group_norm(
             hidden_states,
@@ -140,11 +166,13 @@ class TtDecoder(LightweightModule):
             epsilon=self.norm_eps,
             inplace=False,
             num_out_blocks=self.norm_blocks,
+            use_welford=True,
+            reciprocals=reciprocals_tensor,
         )
 
         hidden_states = ttnn.silu(hidden_states)
 
-        [hidden_states, [H, W], [self.tt_conv_out_weights, self.tt_conv_out_bias]] = ttnn.conv2d(
+        [hidden_states, [H, W], [tt_conv_out_weights, tt_conv_out_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv_out_weights,
             in_channels=self.conv_out_params["input_channels"],
@@ -168,5 +196,8 @@ class TtDecoder(LightweightModule):
             dtype=self.conv_output_dtype,
         )
         C = self.conv_out_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv_out_weights = tt_conv_out_weights
+            self.tt_conv_out_bias = tt_conv_out_bias
 
         return hidden_states, [C, H, W]

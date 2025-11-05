@@ -4,7 +4,7 @@
 
 #include "tt_memory.h"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <span>
@@ -21,12 +21,25 @@ memory::memory() {
     link_spans_.reserve(initial_span_space_);
 }
 
-memory::memory(std::string_view path, Loading loading) : loading_(loading) {
+memory::memory(const std::string& path, Loading loading) : loading_(loading) {
     ElfFile elf;
 
     elf.ReadImage(path);
     if (loading == Loading::CONTIGUOUS_XIP) {
         elf.MakeExecuteInPlace();
+
+        // debug: dump disassembly after XIP transform
+        if (std::getenv("TT_METAL_XIP_DUMP") != nullptr) {
+            // Write the modified ELF out and run objdump -S -d on it
+            std::string out_elf_path = std::string(path) + ".xip.elf";
+            try {
+                elf.WriteImage(out_elf_path);
+            } catch (const std::exception &e) {
+                log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly ({}): {}", out_elf_path, e.what());
+            } catch (...) {
+                log_warning(tt::LogLLRuntime, "Failed to write XIP ELF for disassembly: {}", out_elf_path);
+            }
+        }
     }
 
     auto const& segments = elf.GetSegments();
@@ -62,7 +75,7 @@ memory::memory(std::string_view path, Loading loading) : loading_(loading) {
             }
             lma += segment.contents.size() * sizeof(word_t);
         }
-        if (loading == Loading::DISCRETE ? segment.contents.size() != 0 : link_spans_.empty()) {
+        if (loading == Loading::DISCRETE ? !segment.contents.empty() : link_spans_.empty()) {
             link_spans_.emplace_back(segment.address, 0);
         }
         link_spans_.back().len += segment.contents.size();

@@ -17,6 +17,7 @@ uint32_t wIndex __attribute__((used));
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 
@@ -120,13 +121,12 @@ void __attribute__((noinline)) Application(void) {
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            uint32_t enables = launch_msg_address->kernel_config.enables;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+            if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0))) {
                 WAYPOINT("R");
-                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
                 iram_setup();
 #endif
@@ -146,9 +146,13 @@ void __attribute__((noinline)) Application(void) {
                 // messages in the ring buffer
             }
 
-        } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
+        } else if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
             // Reset the launch message buffer read ptr
             mailboxes->launch_msg_rd_ptr = 0;
+            if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                DeviceIncrementTraceCount();
+                DeviceTraceOnlyProfilerInit();
+            }
             uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
             internal_::notify_dispatch_core_done(dispatch_addr);

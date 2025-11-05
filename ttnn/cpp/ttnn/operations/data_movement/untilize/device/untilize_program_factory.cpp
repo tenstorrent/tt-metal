@@ -14,7 +14,6 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -42,9 +41,9 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ncores = sub_core_grids.num_cores();
@@ -213,9 +212,9 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     IDevice* device = a.device();
 
@@ -322,7 +321,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     } else {
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
-    if (core_range.ranges().size() > 0) {
+    if (!core_range.ranges().empty()) {
         CreateKernel(
             program,
             compute_kernel,
@@ -330,7 +329,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
     }
-    if (core_range_cliff.ranges().size() > 0) {
+    if (!core_range_cliff.ranges().empty()) {
         CreateKernel(
             program,
             compute_kernel,
@@ -441,9 +440,9 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
 
@@ -475,7 +474,8 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
          full_cores_per_col] =
             ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
-    uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
+    uint32_t total_tiles_per_row =
+        (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
     uint32_t row_size_bytes;
 
     uint32_t el_size = a.element_size();
@@ -486,7 +486,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         row_size_bytes = input_shape[-1] * a.element_size();
     }
 
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
 
@@ -589,7 +589,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
         use_pack_kernel = false;
     }
-    if (core_range.size() > 0) {
+    if (!core_range.empty()) {
         CreateKernel(
             program,
             use_pack_kernel
@@ -685,7 +685,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
-        uint32_t end_column_id = start_column_id + single_block_size_row_arg * TILE_WIDTH * el_size;
+        uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % row_size_bytes;
         if (end_column_id % row_size_bytes == 0 && end_column_id != 0) {
             start_row_id += single_block_size_col_arg * TILE_HEIGHT;
@@ -732,9 +732,9 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -866,9 +866,9 @@ operation::ProgramWithCallbacks untilize_multi_core(
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     tt::tt_metal::IDevice* device = a.device();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
@@ -926,17 +926,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
             }
         }
     }
-
-    // TODO (#23449): This memory calculation is a) outdated/inaccurate and needs to be fixed and b) needs
-    // to be moved up a few layers as the available memory may be different upon a program cache hit
-
-    // Determine how much L1 space we can use for input and output CBs,
-    // ensuring that we don't intrude into other L1 storage space
-    uint32_t max_l1_size =
-        device->l1_size_per_core() / 2 - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-
-    // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
-    uint32_t max_tiles_per_cb = max_l1_size / (input_single_tile_size + output_single_tile_size);
 
     // TODO : currently multi_core parallelization on column only works for single tile height tensors.
     // Need to debug this to work on wide tensors that are higher than a single tile
@@ -1095,7 +1084,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         compute_kernel_defines["DST_ACCUM_MODE"] = "1";
     }
-    if (full_compute_core_range.ranges().size() > 0) {
+    if (!full_compute_core_range.ranges().empty()) {
         std::vector<uint32_t> compute_compile_time_args = {
             (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
         untilize_kernel_id = CreateKernel(
@@ -1111,7 +1100,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Compute Cliff compile_time args and kernel
     // Note: This condition is always false for sharded input (sharded input will never have a cliff core)
     KernelHandle untilize_cliff_kernel_id = 0;
-    if (cliff_compute_core_range.ranges().size() > 0) {
+    if (!cliff_compute_core_range.ranges().empty()) {
         std::vector<uint32_t> compute_compile_time_args_cliff = {
             (uint32_t)num_tiles_per_input_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
         untilize_cliff_kernel_id = CreateKernel(
@@ -1209,7 +1198,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     // Run-time args (cliff core)
     // Note: Only applicable if input is interleaved (sharded input will never have a cliff core)
     std::vector<CoreCoord> cliff_cores = corerange_to_cores(cliff_compute_core_range, std::nullopt, is_row_major);
-    if (cliff_cores.size() > 0) {
+    if (!cliff_cores.empty()) {
         // There should only ever be 0 or 1 cliff cores
         CoreCoord cliff_core = cliff_cores[0];
         uint32_t height_wise_input_block_start_index = full_cores.size() * num_input_blocks_per_full_core;
@@ -1309,9 +1298,9 @@ operation::ProgramWithCallbacks untilize_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -1337,7 +1326,7 @@ operation::ProgramWithCallbacks untilize_single_core(
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
     uint32_t max_l1_size =
-        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
     uint32_t max_tiles_per_cb = max_l1_size / (input_single_tile_size + output_single_tile_size);

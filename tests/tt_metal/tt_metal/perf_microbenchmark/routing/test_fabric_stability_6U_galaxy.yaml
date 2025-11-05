@@ -1,0 +1,118 @@
+# This is a modified version for 6U galaxy systems. Since these systems have more chips,
+# the tests take longer to run. So we reduce the number of iterations per test. Also,
+# these tests required tuned allocation policies to fit all the test configs.
+
+allocation_policies:
+    receiver:
+      max_configs_per_core: 3
+
+Tests:
+  - name: "LinearLooped"
+    fabric_setup:
+      topology: Linear
+
+    top_level_iterations: 5
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      size: 32
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
+        iterations: 5
+
+  - name: "FlowControlLinear"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "MeshLowLatencyLooped"
+    fabric_setup:
+      topology: Mesh
+
+    top_level_iterations: 5
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      size: 32
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
+        iterations: 5
+
+  - name: "FlowControlMeshLowLatency"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all
+
+  - name: "MeshDynamicLooped"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    top_level_iterations: 5
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+
+    defaults:
+      size: 32
+      num_packets: 10000
+
+    patterns:
+      - type: all_to_all
+        iterations: 5
+
+  - name: "FlowControlMeshDynamic"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      ftype: [unicast, mcast]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2, 3, 4]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      num_packets: 100000
+
+    patterns:
+      - type: all_to_all

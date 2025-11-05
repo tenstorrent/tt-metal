@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 import torchvision
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
     comp_pcc,

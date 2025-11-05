@@ -11,7 +11,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -21,7 +20,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -33,6 +32,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/test_utils/bfloat_utils.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
 
         CoreCoord core = {0, 0};
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Bfp8_b);
+        uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
         TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
         uint32_t num_tiles = 2048;
         uint32_t dram_buffer_size = single_tile_size * num_tiles;  // num_tiles of BFP8_B
@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> src_vec = create_random_vector_of_bfp8(
+        std::vector<uint32_t> src_vec = test_utils::create_random_vector_of_bfp8(
             dram_buffer_size,
             /*is_exp_a=*/false,
             100,

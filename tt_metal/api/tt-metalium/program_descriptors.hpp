@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include <optional>
 
@@ -51,7 +51,7 @@ struct CBFormatDescriptor {
 };
 
 struct CBDescriptor {
-    using FormatDescriptors = tt::stl::SmallVector<CBFormatDescriptor, 1>;
+    using FormatDescriptors = ttsl::SmallVector<CBFormatDescriptor, 1>;
 
     uint32_t total_size = 0;
     CoreRangeSet core_ranges;
@@ -125,13 +125,14 @@ struct KernelDescriptor {
 };
 
 struct ProgramDescriptor {
-    using KernelDescriptors = tt::stl::SmallVector<KernelDescriptor, 3>;
-    using SemaphoreDescriptors = tt::stl::SmallVector<SemaphoreDescriptor, 3>;
-    using CBDescriptors = tt::stl::SmallVector<CBDescriptor, 5>;
+    using KernelDescriptors = ttsl::SmallVector<KernelDescriptor, 3>;
+    using SemaphoreDescriptors = ttsl::SmallVector<SemaphoreDescriptor, 3>;
+    using CBDescriptors = ttsl::SmallVector<CBDescriptor, 5>;
 
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
+    std::optional<ttsl::hash::hash_t> custom_program_hash;
 
     uint32_t add_semaphore(CoreRangeSet core_ranges, uint32_t initial_value, CoreType core_type = CoreType::WORKER);
 };

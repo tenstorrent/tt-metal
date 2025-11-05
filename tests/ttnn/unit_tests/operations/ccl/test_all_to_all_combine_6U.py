@@ -6,7 +6,7 @@ from loguru import logger
 import pytest
 import ttnn
 
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
+from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,
 )
@@ -15,9 +15,21 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
     ],
     ids=["fabric_2d", "fabric_1d_line", "fabric_1d_ring"],
     indirect=True,
@@ -25,29 +37,37 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
-    [pytest.param((8, 4), (8, 4), id="8x4_grid"), pytest.param((8, 8), (8, 8), id="8x8_grid")],
+    [
+        pytest.param((8, 4), (8, 4), id="8x4_grid"),
+        pytest.param((8, 8), (8, 8), id="8x8_grid"),
+        pytest.param((8, 16), (8, 16), id="8x16_grid"),
+    ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("axis", [0, 1])
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("axis", [0, 1], ids=["axis_0", "axis_1"])
+@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
-@pytest.mark.parametrize("seq", [1, 2])
-@pytest.mark.parametrize("local_reduce", [False, True])
+@pytest.mark.parametrize("seq", [1, 2], ids=["s1", "s2"])
+@pytest.mark.parametrize("local_reduce", [False, True], ids=["dense", "sparse"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [4, 1])
+@pytest.mark.parametrize("num_links", [4, 1], ids=["num_links_4", "num_links_1"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_input", "l1_input"]
+)
+@pytest.mark.parametrize(
+    "output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram_output", "l1_output"]
+)
 def test_all_to_all_combine_no_trace(
     mesh_device,
     trace_mode,
     mesh_shape,
     axis,
     batches_per_device,
-    experts_per_device,
+    experts,
     select_experts_k,
     hidden_size,
     seq,
@@ -62,9 +82,7 @@ def test_all_to_all_combine_no_trace(
     if seq == 2 and ttnn.L1_MEMORY_CONFIG in (input_memory_config, output_memory_config):
         pytest.skip("Prefill needs to run in DRAM")
 
-    devices = mesh_shape[0] * mesh_shape[1]
-    batch = batches_per_device * devices
-    experts = experts_per_device * devices
+    batch = batches_per_device * mesh_shape[axis]
 
     run_all_to_all_combine_test(
         mesh_device,
@@ -100,8 +118,8 @@ def test_all_to_all_combine_no_trace(
     "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
@@ -120,7 +138,7 @@ def test_perf(
     mesh_shape,
     cluster_axis,
     batches_per_device,
-    experts_per_device,
+    experts,
     select_experts_k,
     hidden_size,
     seq_len,
@@ -139,7 +157,6 @@ def test_perf(
         dispatch_devices = mesh_shape[cluster_axis]
 
     batch = batches_per_device * dispatch_devices
-    experts = experts_per_device * dispatch_devices
 
     trace_all_to_all_combine(
         mesh_device,

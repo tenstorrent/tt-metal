@@ -9,7 +9,7 @@ import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
-from models.utility_functions import torch_random, is_wormhole_b0, skip_for_grayskull
+from models.common.utility_functions import torch_random, is_wormhole_b0
 
 
 @pytest.mark.parametrize("batch_sizes", [(1,)])
@@ -140,7 +140,7 @@ def test_linear_with_core_grid(
 @pytest.mark.parametrize("m_size", [32, 64])
 @pytest.mark.parametrize("k_size", [1024])
 @pytest.mark.parametrize("n_size", [1024])
-@pytest.mark.parametrize("activation", [None, "relu", "silu"])
+@pytest.mark.parametrize("activation", [None, "relu", "silu", "gelu", "gelu_approx", "relu6"])
 def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     device, batch_size, m_size, k_size, n_size, activation
 ):
@@ -151,14 +151,59 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
     if activation == "relu":
         torch_output_tensor = torch.relu(torch_output_tensor)
+    elif activation == "relu6":
+        torch_output_tensor = torch.nn.functional.relu6(torch_output_tensor)
     elif activation == "silu":
         torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+    elif activation == "gelu" or activation == "gelu_approx":
+        torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
 
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+
+
+@pytest.mark.parametrize("batch_size", [1, 8])
+@pytest.mark.parametrize("m_size", [32, 64])
+@pytest.mark.parametrize("k_size", [1024])
+@pytest.mark.parametrize("n_size", [1024])
+@pytest.mark.parametrize(
+    "activation",
+    [None, "relu", "relu6", "silu", "gelu", "gelu_approx", "sigmoid", "sigmoid_approx", "hardsigmoid", "mish"],
+)
+def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_size, activation):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.randn((batch_size, m_size, k_size), dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn((k_size, n_size), dtype=torch.bfloat16)
+
+    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
+    if activation == "relu":
+        torch_output_tensor = torch.relu(torch_output_tensor)
+    elif activation == "relu6":
+        torch_output_tensor = torch.nn.functional.relu6(torch_output_tensor)
+    elif activation == "silu":
+        torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+    elif activation in ["gelu", "gelu_approx"]:
+        torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor)
+    elif activation in ["sigmoid", "sigmoid_approx"]:
+        torch_output_tensor = torch.nn.functional.sigmoid(torch_output_tensor)
+    elif activation == "hardsigmoid":
+        torch_output_tensor = torch.nn.functional.hardsigmoid(torch_output_tensor)
+    elif activation == "mish":
+        torch_output_tensor = torch.nn.functional.mish(torch_output_tensor)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
+
+    # We supply no program config or core grid, so this uses the unfused path.
+    output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, activation=activation)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -205,7 +250,8 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     if is_wormhole_b0():
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -314,13 +360,13 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
 
-@skip_for_grayskull()
 def test_linear_with_fp32_dest_acc_and_bias(device):
     torch.manual_seed(0)
     torch_input_tensor_a = torch.rand([64, 1, 256, 384])
     torch_input_tensor_b = torch.rand([1, 1, 1152, 384])
     torch_input_tensor_c = torch.rand([1, 1, 1, 1152])
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
@@ -507,3 +553,117 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     assert torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True), (
         f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}",
     )
+
+
+@pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8])
+@pytest.mark.parametrize("out_subblock", [[1, 4]])
+@pytest.mark.parametrize("out_block", [[1, 4]])
+@pytest.mark.parametrize("num_cores", [62, 64])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("weights_bias_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("compute_config_params", [[ttnn.MathFidelity.LoFi, True, False, False, False]])
+def test_linear_yolov7(
+    device,
+    in0_block_w,
+    out_subblock,
+    out_block,
+    num_cores,
+    input_dtype,
+    weights_bias_dtype,
+    output_dtype,
+    compute_config_params,
+):
+    torch.manual_seed(0)
+    nhw = 6400
+    input_channels = 512
+    output_channels = 512
+
+    input_shape = [1, 1, nhw, input_channels]
+    torch_input_tensor = torch.randn([1, 1, nhw, input_channels], dtype=torch.bfloat16)  # Original size
+    torch_weight_tensor = torch.randn([1, 1, output_channels, input_channels], dtype=torch.bfloat16)
+    torch_bias_tensor = torch.randn([1, 1, 1, output_channels], dtype=torch.bfloat16)
+    torch_out_golden_tensor = torch.nn.functional.linear(
+        torch_input_tensor[0, 0, :, :], torch_weight_tensor[0, 0, :, :], bias=torch_bias_tensor[0, 0, :, :]
+    )
+    torch_out_golden_tensor = torch.nn.functional.silu(torch_out_golden_tensor)
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch.permute(torch_weight_tensor, (0, 1, 3, 2)),
+        weights_bias_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_bias_tensor = ttnn.from_torch(
+        torch_bias_tensor,
+        weights_bias_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=compute_config_params[0],
+        math_approx_mode=compute_config_params[1],
+        fp32_dest_acc_en=compute_config_params[2],
+        packer_l1_acc=compute_config_params[3],
+        dst_full_sync_en=compute_config_params[4],
+    )
+    grid_size = (8, 8)
+    per_core_M = (nhw + 32 * num_cores - 1) // (32 * num_cores)
+    per_core_N = output_channels // 32
+
+    matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock[0],
+        out_subblock_w=out_subblock[1],
+        out_block_h=out_block[0],
+        out_block_w=out_block[1],
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        mcast_in0=False,
+    )
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 7),
+            ),
+        }
+    )
+
+    shard_height = (nhw + num_cores * 32 - 1) // (num_cores * 32) * 32
+    x = tt_input_tensor
+    in0_shard_shape = [shard_height, input_channels]
+    in0_shard_spec = ttnn.ShardSpec(shard_grid, in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    height_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
+    )
+    x = ttnn.to_memory_config(x, height_sharded_mem_config)
+
+    out_shard_shape = [shard_height, output_channels]
+    out_shard_spec = ttnn.ShardSpec(shard_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+
+    tt_output_tensor_on_device = ttnn.linear(
+        x,
+        tt_weight_tensor,
+        bias=tt_bias_tensor,
+        program_config=matmul_config,
+        memory_config=output_mem_config,
+        dtype=output_dtype,
+        compute_kernel_config=compute_config,
+    )
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)

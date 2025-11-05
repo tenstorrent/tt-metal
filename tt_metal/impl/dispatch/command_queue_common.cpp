@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 
 #include "impl/context/metal_context.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -21,9 +21,9 @@ uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_siz
 }
 
 template <bool addr_16B>
-uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
+uint32_t get_cq_issue_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     uint32_t issue_q_rd_ptr =
@@ -40,13 +40,13 @@ uint32_t get_cq_issue_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size)
     return recv;
 }
 
-template uint32_t get_cq_issue_rd_ptr<true>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_issue_rd_ptr<false>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_rd_ptr<true>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_rd_ptr<false>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
+uint32_t get_cq_issue_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t issue_q_wr_ptr =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
@@ -58,13 +58,13 @@ uint32_t get_cq_issue_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size)
     return recv;
 }
 
-template uint32_t get_cq_issue_wr_ptr<true>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_issue_wr_ptr<false>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_wr_ptr<true>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_issue_wr_ptr<false>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
+uint32_t get_cq_completion_wr_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t channel_offset = (channel >> 2) * tt::tt_metal::DispatchSettings::MAX_DEV_CHANNEL_SIZE;
     uint32_t completion_q_wr_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
@@ -81,13 +81,13 @@ uint32_t get_cq_completion_wr_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_
     return recv;
 }
 
-template uint32_t get_cq_completion_wr_ptr<true>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_completion_wr_ptr<false>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_wr_ptr<true>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_wr_ptr<false>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 template <bool addr_16B>
-inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size) {
+inline uint32_t get_cq_completion_rd_ptr(ChipId chip_id, uint8_t cq_id, uint32_t cq_size) {
     uint32_t recv;
-    chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
+    ChipId mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(chip_id);
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip_id);
     uint32_t completion_q_rd_ptr = MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(
         CommandQueueHostAddrType::COMPLETION_Q_RD);
@@ -99,8 +99,8 @@ inline uint32_t get_cq_completion_rd_ptr(chip_id_t chip_id, uint8_t cq_id, uint3
     return recv;
 }
 
-template uint32_t get_cq_completion_rd_ptr<true>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
-template uint32_t get_cq_completion_rd_ptr<false>(chip_id_t chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_rd_ptr<true>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
+template uint32_t get_cq_completion_rd_ptr<false>(ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 uint32_t calculate_expected_workers_to_finish(const tt::tt_metal::IDevice* device, const SubDeviceId& sub_device_id, tt::tt_metal::HalProgrammableCoreType core_type) {
     // Sub Device manager state must be correct (from device init)

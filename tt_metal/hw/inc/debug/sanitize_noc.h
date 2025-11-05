@@ -263,7 +263,7 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
     // kernel is written. In this case we'll do an early exit back to base FW.
     internal_::disable_erisc_app();
     // Subordinates do not have an erisc exit
-#if !(defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1)
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
     erisc_exit();
 #endif
 #endif
@@ -587,9 +587,9 @@ inline void debug_insert_delay(uint8_t transaction_type) {
 
     bool delay = false;
     switch (transaction_type) {
-        case TransactionRead: delay = (v[0].read_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
-        case TransactionWrite: delay = (v[0].write_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
-        case TransactionAtomic: delay = (v[0].atomic_delay_riscv_mask & (1 << debug_get_which_riscv())) != 0; break;
+        case TransactionRead: delay = (v[0].read_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
+        case TransactionWrite: delay = (v[0].write_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
+        case TransactionAtomic: delay = (v[0].atomic_delay_processor_mask & (1u << PROCESSOR_INDEX)) != 0; break;
         default: break;
     }
     if (delay) {

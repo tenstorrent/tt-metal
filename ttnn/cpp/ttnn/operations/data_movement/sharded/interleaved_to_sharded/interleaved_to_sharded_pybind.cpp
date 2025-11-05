@@ -29,17 +29,9 @@ void bind_interleaved_to_sharded(
                tt::tt_metal::TensorMemoryLayout shard_scheme,
                tt::tt_metal::ShardOrientation shard_orientation,
                const std::optional<ttnn::DataType>& output_dtype,
-               QueueId queue_id,
                const std::optional<bool>& keep_l1_aligned) -> ttnn::Tensor {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    grid,
-                    shard_shape,
-                    shard_scheme,
-                    shard_orientation,
-                    output_dtype,
-                    keep_l1_aligned);
+                    input_tensor, grid, shard_shape, shard_scheme, shard_orientation, output_dtype, keep_l1_aligned);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("grid"),
@@ -48,7 +40,6 @@ void bind_interleaved_to_sharded(
             py::arg("shard_orientation"),
             py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
-            py::arg("queue_id") = DefaultQueueId,
             py::arg("keep_l1_aligned") = false,
 
         },
@@ -57,15 +48,13 @@ void bind_interleaved_to_sharded(
                const ttnn::Tensor& input_tensor,
                const MemoryConfig& sharded_memory_config,
                const std::optional<ttnn::DataType>& output_dtype,
-               QueueId queue_id,
                const std::optional<bool>& keep_l1_aligned) -> ttnn::Tensor {
-                return self(queue_id, input_tensor, sharded_memory_config, output_dtype, keep_l1_aligned);
+                return self(input_tensor, sharded_memory_config, output_dtype, keep_l1_aligned);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("sharded_memory_config"),
             py::arg("output_dtype") = std::nullopt,
             py::kw_only(),
-            py::arg("queue_id") = DefaultQueueId,
             py::arg("keep_l1_aligned") = false,
 
         });
@@ -78,8 +67,7 @@ void py_bind_interleaved_to_sharded(pybind11::module& module) {
     detail::bind_interleaved_to_sharded(
         module,
         ttnn::interleaved_to_sharded,
-        R"doc(interleaved_to_sharded(input_tensor: ttnn.Tensor, grid: ttnn.CoreGrid,  int, shard_shape: List[int[2]], shard_scheme: ttl.tensor.TensorMemoryLayout, shard_orientation: ttl.tensor.ShardOrientation, sharded_memory_config: MemoryConfig *, output_dtype: Optional[ttnn.dtype] = None) -> ttnn.Tensor
-
+        R"doc(
         Converts a tensor from interleaved to sharded memory layout
 
         Args:
@@ -92,7 +80,6 @@ void py_bind_interleaved_to_sharded(pybind11::module& module) {
 
         Keyword Args:
             * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
-            * :attr:`queue_id`: command queue id
 
         Example 1 (using grid, shape, scheme, orienttion):
 

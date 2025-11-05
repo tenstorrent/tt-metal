@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import
 
 
 class TtUNetMidBlock2D(LightweightModule):
-    def __init__(self, device, state_dict, module_path, model_config):
+    def __init__(self, device, state_dict, module_path, model_config, debug_mode=False):
         super().__init__()
 
         num_layers_attn = 1
@@ -22,7 +22,9 @@ class TtUNetMidBlock2D(LightweightModule):
             )
 
         for i in range(num_layers_resn):
-            self.resnets.append(TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config))
+            self.resnets.append(
+                TtResnetBlock2D(device, state_dict, f"{module_path}.resnets.{i}", model_config, debug_mode=debug_mode)
+            )
 
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape

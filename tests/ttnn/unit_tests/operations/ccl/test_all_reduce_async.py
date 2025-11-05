@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 
 def run_all_reduce_test(
@@ -43,9 +42,9 @@ def run_all_reduce_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    rs_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
+    ag_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    barrier_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
 
     debug = False
 
@@ -82,13 +81,14 @@ def run_all_reduce_test(
     for i in range(num_iters):
         output_tensor_mesh = ttnn.experimental.all_reduce_async(
             input_tensor_mesh,
-            from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
-            to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
-            gather_multi_device_global_semaphore=gather_semaphore_handles,
+            num_devices=num_devices,
+            barrier_semaphores=barrier_semaphores,
+            rs_global_semaphores=rs_global_semaphores,
+            ag_global_semaphores=ag_global_semaphores,
             math_op=math_op,
             num_links=num_links,
             memory_config=mem_config,
-            topology=topology,
+            topology=ttnn.Topology.Linear,
             subdevice_id=worker_sub_device_id,
         )
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -124,7 +124,6 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -161,6 +160,7 @@ def run_all_reduce_test(
     [
         ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
@@ -198,7 +198,68 @@ def test_ring_all_reduce_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape",
+    [
+        ([1, 8, 256, 1024]),
+        ([1, 8, 33, 65]),
+        ([1, 8, 224, 224]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.float32,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_failing_all_reduce_shapes(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    function_level_defaults,
+    num_iters=2,
+):
+    run_all_reduce_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        function_level_defaults,
+        num_iters=num_iters,
+    )
+
+
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -223,6 +284,7 @@ def test_ring_all_reduce_post_commit(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
@@ -270,11 +332,13 @@ def run_all_reduce_with_mesh_tensor_along_row(
     layout,
     buffer_type: ttnn.BufferType,
     function_level_defaults,
+    memory_config=None,
     num_all_reduce_instances: int = 1,
     num_iters: int = 1,
-    cluster_axis: int = 0,
+    cluster_axis=None,
+    use_semaphore_free_all_reduce_impl: bool = False,
 ):
-    mem_config = ttnn.MemoryConfig(buffer_type=buffer_type)
+    mem_config = memory_config or ttnn.MemoryConfig(buffer_type=buffer_type)
 
     ttnn.synchronize_device(mesh_device)
 
@@ -290,10 +354,9 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    from_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    to_remote_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    gather_semaphore_handles = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-
+    rs_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(3)]
+    ag_global_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    barrier_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
     try:
         debug = False
 
@@ -335,19 +398,31 @@ def run_all_reduce_with_mesh_tensor_along_row(
 
         # Run the op
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.experimental.all_reduce_async(
-                input_tensor_mesh,
-                cluster_axis=cluster_axis,
-                mesh_device=mesh_device,
-                from_remote_multi_device_global_semaphore=from_remote_semaphore_handles,
-                to_remote_multi_device_global_semaphore=to_remote_semaphore_handles,
-                gather_multi_device_global_semaphore=gather_semaphore_handles,
-                math_op=math_op,
-                num_links=num_links,
-                memory_config=mem_config,
-                topology=ttnn.Topology.Linear,
-                subdevice_id=worker_sub_device_id,
-            )
+            if use_semaphore_free_all_reduce_impl:
+                logger.info("Using semaphore-free all-reduce implementation")
+                output_tensor_mesh = ttnn.all_reduce(
+                    input_tensor_mesh,
+                    cluster_axis=cluster_axis,
+                    subdevice_id=worker_sub_device_id,
+                    num_links=num_links,
+                    memory_config=mem_config,
+                    topology=ttnn.Topology.Linear,
+                )
+            else:
+                logger.info("Using experimental all-reduce implementation")
+                output_tensor_mesh = ttnn.experimental.all_reduce_async(
+                    input_tensor_mesh,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    barrier_semaphores=barrier_semaphores,
+                    rs_global_semaphores=rs_global_semaphores,
+                    ag_global_semaphores=ag_global_semaphores,
+                    math_op=math_op,
+                    num_links=num_links,
+                    memory_config=mem_config,
+                    topology=ttnn.Topology.Linear,
+                    subdevice_id=worker_sub_device_id,
+                )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     except Exception as e:
@@ -356,6 +431,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
         mesh_device.reset_sub_device_stall_group()
 
     tt_out_tensors = ttnn.get_device_tensors(output_tensor_mesh)
+
     logger.info(f"Compare")
     golden_canonical_out_tensor = torch.sum(unchunked_input_tensor, 0, keepdim=True)
     golden_canonical_out_tensor = golden_canonical_out_tensor.view(per_chip_output_shape)
@@ -364,7 +440,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = ttnn.to_torch(t)
-
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
@@ -385,18 +460,21 @@ def run_all_reduce_with_mesh_tensor_along_row(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
         (4, 2, [1, 4, 32, 2304], ttnn.TILE_LAYOUT),
+        (4, 2, [4, 1, 64, 1024], ttnn.TILE_LAYOUT),
+        (4, 2, [3, 2, 90, 2040], ttnn.TILE_LAYOUT),
+        (4, 2, [16, 1, 16, 512], ttnn.ROW_MAJOR_LAYOUT),
+        (4, 2, [1, 1, 250, 2048], ttnn.ROW_MAJOR_LAYOUT),
+        (4, 2, [2, 2, 350, 350], ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -406,7 +484,7 @@ def run_all_reduce_with_mesh_tensor_along_row(
         ttnn.BufferType.L1,
     ],
 )
-@pytest.mark.parametrize("replication_factor", [8])  # 1, 8])
+@pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -442,7 +520,6 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
@@ -495,3 +572,218 @@ def test_line_all_reduce_on_TG_cols_post_commit(
         num_all_reduce_instances=replication_factor,
         cluster_axis=0,
     )
+
+
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, layout",
+    [
+        (32, 3, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 33, 66], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("replication_factor", [1])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+def test_line_all_reduce_training(
+    mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    function_level_defaults,
+    replication_factor,
+    num_iters=1,
+):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        function_level_defaults,
+        num_iters=num_iters,
+        num_all_reduce_instances=replication_factor,
+        cluster_axis=1,
+    )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize(
+    "num_devices",
+    [
+        2,
+    ],
+)
+@pytest.mark.parametrize(
+    "num_links",
+    [1],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape",
+    [
+        ([1, 1, 32, 1280]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
+                [32, 64],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_all_reduce_sharded(
+    mesh_device,
+    mesh_shape,
+    memory_config,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    function_level_defaults,
+    num_iters=2,
+):
+    run_all_reduce_test(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        memory_config,
+        function_level_defaults,
+        num_iters=num_iters,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("per_chip_output_shape", [([1, 1, 32, 1280])])
+@pytest.mark.parametrize("cluster_axis", [0])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 4))}),
+                [32, 64],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    ],
+    ids=["sharded_l1", "interleaved_dram", "interleaved_l1"],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}],
+    indirect=True,
+    ids=["fabric_2d_standard", "fabric_2d_dynamic"],
+)
+def test_all_reduce_fabric_2d(
+    mesh_device,
+    per_chip_output_shape,
+    cluster_axis,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    memory_config,
+    function_level_defaults,
+    device_params,
+):
+    num_devices = tuple(mesh_device.shape)[cluster_axis]
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        None,
+        function_level_defaults,
+        memory_config,
+        num_iters=1,
+        num_all_reduce_instances=1,
+        cluster_axis=cluster_axis,
+        use_semaphore_free_all_reduce_impl=True,
+    )
+
+    if memory_config.is_sharded() == False:
+        if device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D:
+            logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
+            assert (
+                mesh_device.num_program_cache_entries() == 3
+            ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 3 as we are using fabric 2D, which fallsback to composite all gather + local reduce"
+        elif device_params["fabric_config"] == ttnn.FabricConfig.FABRIC_2D_DYNAMIC:
+            logger.info(f"Number of program cache entries: {mesh_device.num_program_cache_entries()}")
+            assert (
+                mesh_device.num_program_cache_entries() == 2
+            ), f"Number of program cache entries: {mesh_device.num_program_cache_entries()} but was expecting 2 as we are using fabric 2D dynamic, which uses reduce scatter + all gather"

@@ -21,8 +21,9 @@ void hang_on_down_link() {
 
     // This exits to base FW
     internal_::disable_erisc_app();
+#if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
     erisc_exit();
-
+#endif
     while (1) {
         ;
     }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -168,7 +168,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, device, &cached_data, use_ddp](std::vector<DatasetSample> &&samples) {
-            auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
             std::vector<uint32_t> &targets = cached_data.targets;
@@ -182,8 +181,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
                 std::copy(features.begin(), features.end(), std::back_inserter(data));
                 std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
             }
-            auto end_timer = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (use_ddp) {
@@ -220,8 +217,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
             };
 
             auto [data_tensor, targets_tensor] = create_data_and_targets();
-            end_timer = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
             return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
         };
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
@@ -233,7 +228,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     config.transformer_config.vocab_size =
         round_up_to_tile(tokenizer->get_vocab_size(), (use_tensor_parallel ? num_devices : 1U) * 32U);
 
-    std::shared_ptr<ttml::autograd::ModuleBase> model;
+    std::shared_ptr<ttml::modules::ModuleBase> model;
     if (use_tensor_parallel) {
         config.transformer_config.num_groups = num_devices;
         config.transformer_config.num_heads = num_devices * 3;
@@ -250,7 +245,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
 
-    auto get_loss_value = [device](const TensorPtr &loss) {
+    auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
@@ -348,19 +343,22 @@ If one of these tests fails, it means one (or more) of the following:
 */
 
 TEST_F(NanoLlamaTest, NIGHTLY_Default) {
-    if (should_run_nightly_tests()) {
-        train_test();
+    if (!should_run_nightly_tests()) {
+        GTEST_SKIP() << "Skipping Nightly test.";
     }
+    train_test();
 }
 
 TEST_F(NanoLlamaMultiDeviceTest, DISABLED_NIGHTLY_TensorParallel) {
-    if (should_run_multi_device_tests()) {
-        train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
+    if (!should_run_multi_device_tests()) {
+        GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
+    train_test(/*use_tensor_parallel=*/true, /*use_ddp=*/false);
 }
 
 TEST_F(NanoLlamaMultiDeviceTest, NIGHTLY_DDP) {
-    if (should_run_multi_device_tests()) {
-        train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
+    if (!should_run_multi_device_tests()) {
+        GTEST_SKIP() << "Skipping test as we are running on a single device.";
     }
+    train_test(/*use_tensor_parallel=*/false, /*use_ddp=*/true);
 }

@@ -21,8 +21,8 @@ namespace unit_tests::dm::core_to_and_from_core {
 // Test config, i.e. test parameters
 struct CoreBidirectionalConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord;
+    CoreCoord subordinate_core_coord;
     uint32_t num_of_transactions = 0;
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
@@ -39,7 +39,7 @@ struct CoreBidirectionalConfig {
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirectionalConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBidirectionalConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
     /* ================ SETUP ================ */
@@ -63,7 +63,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
 
     // Assigns a "safe" L1 local address for the master and subordinate cores
     uint32_t l1_base_write_address = master_l1_info.base_address;
-    uint32_t l1_base_read_address = l1_base_write_address + master_l1_info.size / 2;
+    uint32_t l1_base_read_address = l1_base_write_address + (master_l1_info.size / 2);
 
     // Physical Core Coordinates
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
@@ -150,7 +150,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
     /* ================ RUNNING THE PROGRAM ================ */
 
     // Setup Input
-    size_t element_size_bytes = bfloat16::SIZEOF;
+    size_t element_size_bytes = sizeof(bfloat16);
     uint32_t num_elements = bytes_per_transaction / element_size_bytes;
     std::vector<uint32_t> packed_input = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
@@ -161,11 +161,11 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
     tt_metal::detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_read_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -201,7 +201,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const CoreBidirecti
 }
 
 void directed_ideal_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
@@ -233,7 +233,7 @@ void directed_ideal_test(
 }
 
 void same_vc_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
@@ -244,7 +244,7 @@ void same_vc_test(
 }
 
 void packet_sizes_test(
-    shared_ptr<distributed::MeshDevice> mesh_device,
+    const shared_ptr<distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1},

@@ -4,7 +4,7 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/common/queue_id.hpp"
+#include <variant>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -82,12 +82,51 @@ std::optional<UnaryWithParam> get_fused_activation(const std::optional<const std
     return ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
 }
 
+static bool get_post_process_bias(
+    const std::optional<const ttnn::Tensor>& bias,
+    const std::optional<const MatmulProgramConfig>& program_config,
+    const std::optional<const CoreCoord>& user_core_coord,
+    const MemoryConfig& output_mem_config,
+    const ttnn::Tensor& input_tensor_a_adjusted,
+    const ttnn::Tensor& input_tensor_b_adjusted) {
+    // Determine if we should post-process bias based on the program config
+    // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
+    bool post_process_bias = false;
+    if (bias.has_value()) {
+        if (program_config.has_value()) {
+            // Check if the provided program config is MatmulMultiCoreProgramConfig
+            post_process_bias = std::holds_alternative<MatmulMultiCoreProgramConfig>(program_config.value());
+        } else if (!user_core_coord.has_value()) {
+            // When program_config and user_core_coord are not provided, config is auto-generated
+
+            // Special case: L1 memory often leads to MatmulMultiCoreProgramConfig
+            // Be conservative and post-process bias for non-DRAM outputs
+            if (output_mem_config.buffer_type() != BufferType::DRAM) {
+                post_process_bias = true;
+            } else if (!input_tensor_a_adjusted.is_sharded()) {
+                // For DRAM output, check if all tensors are DRAM interleaved
+                bool all_dram_interleaved =
+                    input_tensor_a_adjusted.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    input_tensor_b_adjusted.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                    input_tensor_a_adjusted.memory_config().buffer_type() == BufferType::DRAM &&
+                    input_tensor_b_adjusted.memory_config().buffer_type() == BufferType::DRAM;
+
+                // If not all DRAM interleaved, MatmulMultiCoreProgramConfig is more likely
+                if (!all_dram_interleaved) {
+                    post_process_bias = true;
+                }
+            }
+        }
+    }
+    return post_process_bias;
+}
+
 ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
@@ -127,21 +166,19 @@ ttnn::Tensor bound_matmul(
             input_tensor_b_shape);
     }
 
-    const bool has_program_config = parameters.program_config.has_value();
-    const bool has_user_grid = parameters.user_core_coord.has_value();
-    bool post_process_bias = false;
-    if (bias.has_value()) {
-        if (!has_program_config && !has_user_grid) {
-            post_process_bias = true;
-        }
-    }
+    bool post_process_bias = get_post_process_bias(
+        bias,
+        parameters.program_config,
+        parameters.user_core_coord,
+        parameters.output_mem_config,
+        input_tensor_a_adjusted,
+        input_tensor_b_adjusted);
 
     auto output_tensor = matmul(
         input_tensor_a_adjusted,
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
-        DefaultQueueId,
         optional_output_tensor);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
@@ -149,21 +186,21 @@ ttnn::Tensor bound_matmul(
             output_tensor, ttnn::operations::matmul::compute_matmul_output_shape(input_tensor_a, input_tensor_b));
     }
 
-    if (post_process_bias) {
-        output_tensor = ttnn::add(output_tensor, bias.value(), std::nullopt, parameters.output_mem_config);
+    // Apply bias as post-processing if needed
+    if (post_process_bias && bias.has_value()) {
+        output_tensor = ttnn::add(
+            output_tensor,
+            bias.value(),
+            /*output_dtype=*/std::nullopt,
+            parameters.output_mem_config,
+            optional_output_tensor);
     }
 
-    if (parameters.user_fused_activation.has_value() && !has_user_grid) {
-        const UnaryOpType& op_type = parameters.user_fused_activation.value().op_type;
-        if (op_type == UnaryOpType::RELU) {
-            output_tensor = ttnn::relu(output_tensor, parameters.output_mem_config);
-        } else if (op_type == UnaryOpType::GELU) {
-            output_tensor = ttnn::gelu(output_tensor, false, parameters.output_mem_config);
-        } else if (op_type == UnaryOpType::SILU) {
-            output_tensor = ttnn::silu(output_tensor, parameters.output_mem_config);
-        } else {
-            TT_THROW("ttnn.matmul: Unsupported activation function");
-        }
+    if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
+        const UnaryWithParam& activation = parameters.user_fused_activation.value();
+
+        output_tensor = ttnn::operations::unary::Unary_chain::invoke(
+            output_tensor, {activation}, parameters.output_mem_config, optional_output_tensor);
     }
 
     return output_tensor;
@@ -213,7 +250,6 @@ Tensor MatmulOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        /*queue_id=*/0,
         optional_output_tensor);
 }
 
@@ -259,7 +295,6 @@ Tensor LinearOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        /*queue_id=*/0,
         optional_output_tensor);
 }
 
@@ -308,7 +343,6 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        DefaultQueueId,
         optional_output_tensor);
 }
 
@@ -354,8 +388,7 @@ Tensor AddmmOperation::invoke(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    std::optional<Tensor> optional_output_tensor,
-    QueueId queue_id) {
+    std::optional<Tensor> optional_output_tensor) {
     TT_FATAL(!output_tile.has_value(), "output_tile must not be provided");
 
     std::optional<CoreCoord> user_core_coord;
@@ -384,11 +417,10 @@ Tensor AddmmOperation::invoke(
             output_tile,
             /*global_cb=*/std::nullopt,
             /*sub_device_id=*/std::nullopt},
-        /*queue_id=*/0,
         optional_output_tensor);
 
     if (alpha != 1.0) {
-        multiply_(queue_id, out_tensor, alpha);
+        multiply_(out_tensor, alpha);
     }
 
     if (beta != 0.0) {
@@ -403,14 +435,16 @@ Tensor SparseMatmulOperation::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
-    uint32_t nnz,
+    const std::optional<uint32_t> nnz,
+    bool is_input_a_sparse,
+    bool is_input_b_sparse,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const DataType> dtype,
     const std::optional<const MatmulProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const CoreGrid> core_grid,
     const std::optional<const tt::tt_metal::Tile>& output_tile,
-    std::optional<Tensor> optional_output_tensor,
+    const std::optional<Tensor>& optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     std::optional<CoreCoord> user_core_coord =
@@ -421,6 +455,8 @@ Tensor SparseMatmulOperation::invoke(
         sparsity,
         SparseMatmul{
             nnz,
+            is_input_a_sparse,
+            is_input_b_sparse,
             program_config,
             memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
             dtype,
@@ -429,7 +465,6 @@ Tensor SparseMatmulOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        DefaultQueueId,
         optional_output_tensor);
 }
 

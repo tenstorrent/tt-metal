@@ -108,6 +108,8 @@ void MAIN {
     constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
+    // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -115,7 +117,6 @@ void MAIN {
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
-
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
 #ifdef FUSE_BIAS
@@ -140,6 +141,17 @@ void MAIN {
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
+        if constexpr (get_batch_from_reader) {
+            // Check whether this batch is valid
+            bool is_batch_valid = false;
+            UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+            if (!is_batch_valid) {
+                continue;
+            }
+        }
+
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 bool enable_reload = false;

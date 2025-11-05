@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -43,13 +43,13 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
     const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
-            auto read_offset = shard_x * single_read_size + shard_y * stride_size_bytes * shard_shape.height();
+            auto read_offset = (shard_x * single_read_size) + (shard_y * stride_size_bytes * shard_shape.height());
             uint32_t size_to_read = total_read_size_per_shard;
             uint32_t local_offset = 0;
             while (size_to_read) {
                 std::memcpy(
-                    shard_data.data() + local_offset * (single_read_size / sizeof(uint32_t)),
-                    (uint8_t*)(src) + read_offset + local_offset * stride_size_bytes,
+                    shard_data.data() + (local_offset * (single_read_size / sizeof(uint32_t))),
+                    (uint8_t*)(src) + read_offset + (local_offset * stride_size_bytes),
                     single_read_size);
                 size_to_read -= single_read_size;
                 local_offset++;
@@ -113,9 +113,9 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     auto shard_shape = buffer.physical_shard_shape();
     auto datum_size_bytes = buffer.datum_size_bytes();
 
-    auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
-    auto single_write_size = datum_size_bytes * shard_shape.width();
-    auto total_write_size_per_shard = single_write_size * shard_shape.height();
+    const auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
+    const auto single_write_size = datum_size_bytes * shard_shape.width();
+    const uint64_t total_write_size_per_shard = single_write_size * shard_shape.height();
     auto num_shards_x = global_buffer_shape.width() / shard_shape.width();
     auto num_shards_y = global_buffer_shape.height() / shard_shape.height();
     uint32_t num_devices_x = buffer.device()->num_cols();
@@ -135,13 +135,14 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
                 /*region=*/std::nullopt,
                 num_txns_per_device);
             this->submit_memcpy_request(num_txns_per_device, true);
-            uint32_t write_offset = shard_x * single_write_size + shard_y * stride_size_bytes * shard_shape.height();
-            uint32_t size_to_write = total_write_size_per_shard;
+            uint64_t write_offset =
+                (shard_x * single_write_size) + (shard_y * stride_size_bytes * shard_shape.height());
+            uint64_t size_to_write = total_write_size_per_shard;
             uint32_t local_offset = 0;
             while (size_to_write) {
                 std::memcpy(
-                    (uint8_t*)(dst) + write_offset + local_offset * stride_size_bytes,
-                    shard_data.data() + local_offset * (single_write_size / sizeof(uint32_t)),
+                    (uint8_t*)(dst) + write_offset + (local_offset * stride_size_bytes),
+                    shard_data.data() + (local_offset * (single_write_size / sizeof(uint32_t))),
                     single_write_size);
                 local_offset++;
                 size_to_write -= single_write_size;
@@ -199,12 +200,23 @@ void MeshCommandQueueBase::enqueue_write_mesh_buffer(
 
 void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
-    auto lock = lock_api_function_();
     TT_FATAL(
-        buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
+        (buffer->global_layout() == MeshBufferLayout::SHARDED) || (buffer->device()->num_devices() == 1),
+        "Can only read a Sharded MeshBuffer from a MeshDevice or a Replicated MeshBuffer from a Unit-Mesh.");
     TT_FATAL(
         blocking, "Non-Blocking reads are not supported through {}. Use enqueue_read_shards_instead.", __FUNCTION__);
-    this->read_sharded_buffer(*buffer, host_data);
+    if (buffer->global_layout() == MeshBufferLayout::SHARDED) {
+        auto lock = lock_api_function_();
+        this->read_sharded_buffer(*buffer, host_data);
+    } else {
+        std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+            .shard_coord = MeshCoordinate(0, 0),
+            .host_data = host_data,
+            .region = std::nullopt,
+        }};
+        // enqueue_read_shards will call lock_api_function_(), no need to call it here
+        this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
+    }
 }
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(

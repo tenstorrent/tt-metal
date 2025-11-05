@@ -15,14 +15,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_0_1 = TtYOLOv12xConv2D(
             conv=parameter.cv2[0][1].conv,
             conv_pth=conv_pt.cv2[0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_0_2 = TtYOLOv12xConv2D(
             conv=parameter.cv2[0][2], conv_pth=conv_pt.cv2[0][2], device=device, is_detect=True
@@ -33,14 +33,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv2[1][1].conv,
             conv_pth=conv_pt.cv2[1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_1_2 = TtYOLOv12xConv2D(
             conv=parameter.cv2[1][2], conv_pth=conv_pt.cv2[1][2], device=device, is_detect=True
@@ -51,17 +51,22 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[2][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv2_2_1 = TtYOLOv12xConv2D(
             conv=parameter.cv2[2][1].conv,
             conv_pth=conv_pt.cv2[2][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv2_2_2 = TtYOLOv12xConv2D(
-            conv=parameter.cv2[2][2], conv_pth=conv_pt.cv2[2][2], device=device, is_detect=True
+            conv=parameter.cv2[2][2],
+            conv_pth=conv_pt.cv2[2][2],
+            device=device,
+            is_detect=True,
         )
 
         self.cv3_0_0_0 = TtYOLOv12xConv2D(
@@ -69,30 +74,33 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[0][0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            enable_weights_double_buffer=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
         )
         self.cv3_0_0_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][0][1].conv,
             conv_pth=conv_pt.cv3[0][0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_0_1_0 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][1][0].conv,
             conv_pth=conv_pt.cv3[0][1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            config_override={"act_block_h": 32},
+            config_override={"act_block_h": 32 * 5},
         )
         self.cv3_0_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][1][1].conv,
             conv_pth=conv_pt.cv3[0][1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_0_2 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][2], conv_pth=conv_pt.cv3[0][2], device=device, is_detect=True
@@ -103,7 +111,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[1][0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             config_override={"act_block_h": 32},
         )
@@ -112,21 +120,23 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[1][0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_1_1_0 = TtYOLOv12xConv2D(
             conv=parameter.cv3[1][1][0].conv,
             conv_pth=conv_pt.cv3[1][1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
         )
         self.cv3_1_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[1][1][1].conv,
             conv_pth=conv_pt.cv3[1][1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_1_2 = TtYOLOv12xConv2D(
             conv=parameter.cv3[1][2], conv_pth=conv_pt.cv3[1][2], device=device, is_detect=True
@@ -137,7 +147,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[2][0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_0_1 = TtYOLOv12xConv2D(
@@ -145,24 +155,31 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[2][0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_1_0 = TtYOLOv12xConv2D(
             conv=parameter.cv3[2][1][0].conv,
             conv_pth=conv_pt.cv3[2][1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[2][1][1].conv,
             conv_pth=conv_pt.cv3[2][1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_2 = TtYOLOv12xConv2D(
-            conv=parameter.cv3[2][2], conv_pth=conv_pt.cv3[2][2], device=device, is_detect=True
+            conv=parameter.cv3[2][2],
+            conv_pth=conv_pt.cv3[2][2],
+            device=device,
+            is_detect=True,
+            shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
         self.dfl = TtYOLOv12xConv2D(conv=parameter.dfl.conv, conv_pth=conv_pt.dfl.conv, device=device, is_dfl=True)
@@ -219,32 +236,44 @@ class TtnnDetect:
 
         ya = ttnn.permute(ya, (0, 1, 3, 2))
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[-1]))
+        ya = ttnn.permute(ya, (0, 3, 1, 2))
+        if ya.layout == ttnn.ROW_MAJOR_LAYOUT:
+            ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
+
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+        ya = ttnn.softmax(ya, dim=3, memory_config=ttnn.L1_MEMORY_CONFIG, compute_kernel_config=compute_kernel_config)
         ya = ttnn.permute(ya, (0, 2, 1, 3))
-        ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
-        ya = ttnn.softmax(ya, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ya = ttnn.permute(ya, (0, 2, 3, 1))
 
         c = self.dfl(ya)
         ttnn.deallocate(ya)
 
         if c.is_sharded():
-            c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
+            c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
 
-        c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if c.layout == ttnn.TILE_LAYOUT:
+            c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat8_b)
 
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
 
-        c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
-        c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
+        if c1.layout == ttnn.ROW_MAJOR_LAYOUT:
+            c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        if c2.layout == ttnn.ROW_MAJOR_LAYOUT:
+            c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
 
         c1 = self.anchors - c1
         c2 = self.anchors + c2
         z1 = c2 - c1
         z2 = c1 + c2
-        z2 = ttnn.div(z2, 2)
+        z2 = ttnn.div(z2, 2, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         ttnn.deallocate(c)
         ttnn.deallocate(c1)
@@ -254,7 +283,10 @@ class TtnnDetect:
         ttnn.deallocate(z1)
         ttnn.deallocate(z2)
 
-        z = ttnn.multiply(z, self.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
+        self.strides = ttnn.sharded_to_interleaved(
+            self.strides, memory_config=ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b
+        )
+        z = ttnn.multiply(z, self.strides, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         yb = ttnn.squeeze(yb, 0)
         yb = ttnn.permute(yb, (0, 2, 1))

@@ -11,7 +11,6 @@ Resource link - [source](https://huggingface.co/emrecan/bert-base-turkish-cased-
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-    - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 - Use the following command to run the model:
@@ -28,13 +27,13 @@ pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_be
 > **Note:** SentenceBERT uses BERT-base as its backbone model.
 
 #### Single Device (BS=8):
-- End-to-end performance with mean-pooling post-processing is **408 sentences per second**
+- End-to-end performance with mean-pooling post-processing is **433 sentences per second**
 ```
 pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
 ```
 
 #### Multi Device (DP=2, n300):
-- End-to-end performance with mean-pooling post-processing is **757 sentences per second**
+- End-to-end performance with mean-pooling post-processing is **772 sentences per second**
 ```
 pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_dp
 ```

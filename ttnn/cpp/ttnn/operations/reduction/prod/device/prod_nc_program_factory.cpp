@@ -7,7 +7,6 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
@@ -90,7 +89,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* input_buffer_type = input.buffer();
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(dim)};
     tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 

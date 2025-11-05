@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,10 +12,7 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-
-#ifdef TEST_ENABLE_FABRIC_TRACING
 #include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
-#endif
 
 // clang-format on
 
@@ -36,7 +33,7 @@ inline void setup_header_routing_1d(
         packet_header->to_chip_multicast(
             MulticastRoutingCommandHeader{static_cast<uint8_t>(start_distance), static_cast<uint8_t>(range)});
     } else {
-        packet_header->to_chip_unicast(static_cast<uint8_t>(start_distance));
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, start_distance);
     }
 }
 
@@ -60,7 +57,7 @@ void set_mcast_header(
     // dst_dev_id is ignored since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
     // dst_mesh_id is ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     fabric_set_mcast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
+        (HybridMeshPacketHeader*)packet_header, 0, 0, e_num_hops, w_num_hops, n_num_hops, s_num_hops);
 }
 
 inline void setup_header_routing_2d(
@@ -85,12 +82,7 @@ inline void setup_header_routing_2d(
                 dst_mesh_id,
                 ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
         } else {
-            fabric_set_unicast_route(
-                (LowLatencyMeshPacketHeader*)packet_header,
-                my_dev_id,
-                dst_dev_id,
-                dst_mesh_id,  // Ignored since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
-                ew_dim);
+            fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
         }
     }
 }
@@ -120,19 +112,14 @@ inline void setup_header_noc_unicast_atomic_inc(
     uint8_t noc_x_start,
     uint8_t noc_y_start) {
     packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-        1 /* increment value */,
-        std::numeric_limits<uint16_t>::max(),
-        true /*flush*/});
+        get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 1 /* increment value */, true /*flush*/});
 }
 
 inline void send_notification(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header, tt::tt_fabric::WorkerToFabricEdmSender& connection) {
     // Notify mailbox that the packets have been sent
     connection.wait_for_empty_write_slot();
-#ifdef TEST_ENABLE_FABRIC_TRACING
     RECORD_FABRIC_HEADER(packet_header);
-#endif
     connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -150,9 +137,7 @@ inline void send_packet(
         reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
 #endif
     connection.wait_for_empty_write_slot();
-#ifdef TEST_ENABLE_FABRIC_TRACING
     RECORD_FABRIC_HEADER(packet_header);
-#endif
     connection.send_payload_without_header_non_blocking_from_address(
         source_l1_buffer_address, packet_payload_size_bytes);
     connection.send_payload_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

@@ -7,7 +7,7 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/memory_pin.hpp>
 
 #include <functional>
@@ -27,7 +27,7 @@ public:
 
     // Constructors for `HostBuffer` based on the owned data.
     template <typename T>
-    explicit HostBuffer(std::shared_ptr<std::vector<T>> data);
+    explicit HostBuffer(const std::shared_ptr<std::vector<T>>& data);
 
     template <typename T>
     explicit HostBuffer(std::vector<T>&& data);
@@ -72,11 +72,10 @@ private:
 };
 
 template <typename T>
-HostBuffer::HostBuffer(std::shared_ptr<std::vector<T>> data) {
+HostBuffer::HostBuffer(const std::shared_ptr<std::vector<T>>& data) : type_info_(&typeid(T)) {
     const size_t size_bytes = data->size() * sizeof(T);
     view_ = tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(data->data()), size_bytes);
     pin_ = MemoryPin(data);
-    type_info_ = &typeid(T);
 }
 
 template <typename T>
@@ -89,9 +88,9 @@ HostBuffer::HostBuffer(const std::vector<T>& data) :
 
 template <typename T>
 HostBuffer::HostBuffer(tt::stl::Span<T> borrowed_data, MemoryPin pin) :
+    pin_(std::move(pin)),
     view_(
         tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(borrowed_data.data()), borrowed_data.size() * sizeof(T))),
-    pin_(std::move(pin)),
     type_info_(&typeid(T)) {}
 
 template <typename T>

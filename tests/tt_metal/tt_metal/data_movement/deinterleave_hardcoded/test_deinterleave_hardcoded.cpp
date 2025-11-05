@@ -30,9 +30,14 @@ struct DeinterleaveConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
+bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const DeinterleaveConfig& test_config) {
     // Program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device = mesh_device->get_devices()[0];
 
     for (int k = 0; k < test_config.dest_core_set.size(); k++) {
         // Kernels
@@ -55,15 +60,16 @@ bool run_dm(IDevice* device, const DeinterleaveConfig& test_config) {
 
     // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    tt::tt_metal::detail::LaunchProgram(device, program);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
 }
 }  // namespace unit_tests::dm::deinterleave_hardcoded
 
-TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
-    IDevice* device = devices_.at(0);
-    auto arch_ = device->arch();
+TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
+    auto mesh_device = devices_.at(0);
+    auto arch_ = mesh_device->arch();
 
     if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
@@ -128,13 +134,13 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
             .noc_id = noc_id};
 
         // Run
-        EXPECT_TRUE(run_dm(device, test_config));
+        EXPECT_TRUE(run_dm(mesh_device, test_config));
     }
 }
 
-TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
-    IDevice* device = devices_.at(0);
-    auto arch_ = device->arch();
+TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
+    auto mesh_device = devices_.at(0);
+    auto arch_ = mesh_device->arch();
 
     if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
@@ -181,14 +187,14 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
 
             dest_core_runtime_args.push_back(0);                               // start_x
             dest_core_runtime_args.push_back(8);                               // end_x
-            dest_core_runtime_args.push_back(2 * (x % 4) + 0);                 // start_y
-            dest_core_runtime_args.push_back(2 * (x % 4) + 2);                 // end_y
+            dest_core_runtime_args.push_back((2 * (x % 4)) + 0);               // start_y
+            dest_core_runtime_args.push_back((2 * (x % 4)) + 2);               // end_y
             dest_core_runtime_args.push_back(384);                             // src_width_stride
             dest_core_runtime_args.push_back(36864);                           // src_height_offset_to_next
             dest_core_runtime_args.push_back(192 * y);                         // src_offset
             dest_core_runtime_args.push_back(12288);                           // dst_size_bytes
             dest_core_runtime_args.push_back(12288 * y);                       // dst_offset
-            dest_core_runtime_args.push_back(2 * (y % 4) + (x >= 4 ? 0 : 1));  // offset_x
+            dest_core_runtime_args.push_back((2 * (y % 4)) + (x >= 4 ? 0 : 1));                     // offset_x
             dest_core_runtime_args.push_back(x >= 4 ? offset_y_part2_count : offset_y_part_count);  // offset_y
             dest_core_runtime_args.push_back(16);                                                   // num_src_cores
             dest_core_runtime_args.push_back(x >= 4 ? 0 : 12288);  // dst_rollover_offset
@@ -223,7 +229,7 @@ TEST_F(DeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
             .noc_id = noc_id};
 
         // Run
-        EXPECT_TRUE(run_dm(device, test_config));
+        EXPECT_TRUE(run_dm(mesh_device, test_config));
     }
 }
 

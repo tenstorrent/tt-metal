@@ -5,9 +5,7 @@
 #include "upsample_op.hpp"
 
 #include "tt-metalium/buffer_types.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::upsample {

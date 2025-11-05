@@ -10,6 +10,7 @@ set(HAL_INCLUDE_DIRS
 )
 
 add_library(wh_hal OBJECT)
+add_dependencies(wh_hal hal_generate_dev_msgs_header)
 target_sources(
     wh_hal
     PRIVATE
@@ -23,9 +24,8 @@ target_include_directories(
     BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/wormhole/tt-metalium
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/wormhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines
 )
 target_link_libraries(
     wh_hal
@@ -39,6 +39,7 @@ target_link_libraries(
 )
 
 add_library(bh_hal OBJECT ${BH_HAL_SRC})
+add_dependencies(bh_hal hal_generate_dev_msgs_header)
 target_sources(
     bh_hal
     PRIVATE
@@ -52,8 +53,7 @@ target_include_directories(
     BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/blackhole
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/blackhole/tt-metalium
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/tt-1xx/blackhole
 )
 target_link_libraries(
     bh_hal

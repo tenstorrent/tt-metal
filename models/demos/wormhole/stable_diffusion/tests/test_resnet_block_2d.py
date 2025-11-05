@@ -4,17 +4,16 @@
 
 import pytest
 import torch
-from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
+from models.demos.wormhole.stable_diffusion.sd_helper_funcs import get_reference_stable_diffusion_pipeline
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -25,7 +24,6 @@ def ttnn_to_torch(input):
     return input
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, in_channels, input_height, input_width, memory_layout, buffer_type, shard_end_core, shard_shape, out_channels, use_in_shortcut, block_name, block_index, resnet_index",
@@ -80,29 +78,30 @@ def test_resnet_block_2d_512x512(
     block_name,
     block_index,
     resnet_index,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
 ):
     load_from_disk = False
     if not load_from_disk:
         # setup pytorch model
-        pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
 
-        model = pipe.unet
-        model.eval()
-        config = model.config
+        unet = get_reference_stable_diffusion_pipeline(is_ci_env, is_ci_v2_env, model_location_generator).unet
+        config = unet.config
 
         parameters = preprocess_model_parameters(
-            initialize_model=lambda: model, custom_preprocessor=custom_preprocessor, device=device
+            initialize_model=lambda: unet, custom_preprocessor=custom_preprocessor, device=device
         )
 
         if block_name == "up":
             parameters = parameters.up_blocks[block_index].resnets[resnet_index]
-            resnet = pipe.unet.up_blocks[block_index].resnets[resnet_index]
+            resnet = unet.up_blocks[block_index].resnets[resnet_index]
         elif block_name == "down":
             parameters = parameters.down_blocks[block_index].resnets[resnet_index]
-            resnet = pipe.unet.down_blocks[block_index].resnets[resnet_index]
+            resnet = unet.down_blocks[block_index].resnets[resnet_index]
         else:
             parameters = parameters.mid_block.resnets[resnet_index]
-            resnet = pipe.unet.mid_block.resnets[resnet_index]
+            resnet = unet.mid_block.resnets[resnet_index]
         torch.save(resnet, "resnet.pt")
         torch.save(config, "config.pt")
 

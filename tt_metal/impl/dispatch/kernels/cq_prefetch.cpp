@@ -25,6 +25,8 @@
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
+static_assert(sizeof(CQPrefetchCmd) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+static_assert(sizeof(CQPrefetchCmdLarge) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 struct CQPrefetchHToPrefetchDHeader_s {
     uint32_t length;
     uint8_t raw_copy;     // If true, copy the data directly to the downstream.
@@ -172,9 +174,6 @@ static_assert(
         l1_cache_elements_rounded,
     "CQ_PREFETCH_CMD_RELAY_RINGBUFFER_MAX_SUB_CMDS is too large for l1_cache_elements_rounded");
 
-uint32_t my_downstream_cb_sem_additional_count = 0;
-uint32_t my_dispatch_s_cb_sem_additional_count = 0;
-
 // Define these constexpr structs for a cleaner interface for process_relay_inline_cmd and
 // process_exec_buf_relay_inline_cmd while ensuring that state for dispatch_master and dispatch_subordinate is passed in
 // during compile time.
@@ -188,7 +187,7 @@ struct DispatchRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = downstream_cb_end;
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
-    static constexpr uint32_t& downstream_cb_additional_count = my_downstream_cb_sem_additional_count;
+    static inline CBWriter<my_downstream_cb_sem, my_noc_index, downstream_noc_xy, downstream_cb_sem> cb_writer{};
 };
 
 struct DispatchSRelayInlineState {
@@ -201,7 +200,8 @@ struct DispatchSRelayInlineState {
     static constexpr uint32_t downstream_cb_end_addr = dispatch_s_buffer_end;
     static constexpr uint32_t downstream_write_cmd_buf = BRISC_WR_REG_CMD_BUF;
     static constexpr uint32_t downstream_noc_index = my_noc_index;
-    static constexpr uint32_t& downstream_cb_additional_count = my_dispatch_s_cb_sem_additional_count;
+    static inline CBWriter<my_dispatch_s_cb_sem_id, my_noc_index, dispatch_s_noc_xy, downstream_dispatch_s_cb_sem_id>
+        cb_writer{};
 };
 
 struct PrefetchExecBufState {
@@ -372,8 +372,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     stall_state = static_cast<StallState>(stall_flag << 1);  // NOT_STALLED -> STALL_NEXT if stall_flag is set
 
     if (fetch_size != 0 && pending_read_size == 0) {
-        pending_read_size = read_from_pcie<preamble_size>(
-            prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+        pending_read_size = read_from_pcie<preamble_size>(prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
         if (stall_state == STALL_NEXT && pending_read_size != 0) {
             // No pending reads -> stall_state can be set to STALLED, since the read to the cmd
             // that initiated the stall has been issued.
@@ -454,8 +453,7 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr, uint32_t& local_downs
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(
-        npages, RelayInlineState::downstream_cb_additional_count);
+    RelayInlineState::cb_writer.acquire_pages(npages);
 
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
@@ -479,8 +477,7 @@ static uint32_t process_relay_inline_cmd(uint32_t cmd_ptr, uint32_t& local_downs
 
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed();
-    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(
-        npages);
+    RelayInlineState::cb_writer.release_pages(npages);
     return cmd->relay_inline.stride;
 }
 
@@ -495,7 +492,7 @@ static uint32_t process_relay_inline_noflush_cmd(uint32_t cmd_ptr, uint32_t& dis
     uint32_t length = cmd->relay_inline.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1, DispatchRelayInlineState::downstream_cb_additional_count);
+    DispatchRelayInlineState::cb_writer.acquire_pages(1);
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
@@ -525,7 +522,7 @@ static uint32_t write_pages_to_dispatcher(
     // Grabbing all pages at once is ok if scratch_size < 3 * downstream_cb_block_size
     // test_for_nonzero is an optimization: inner loops moving lots of pages don't bother
     if (!test_for_nonzero || npages != 0) {
-        cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages, my_downstream_cb_sem_additional_count);
+        DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     }
 
     uint64_t noc_addr;
@@ -575,8 +572,8 @@ uint32_t process_relay_paged_cmd_large(
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-    uint32_t write_length = pages * page_size - length_adjust;
-    uint32_t read_length;
+    uint64_t write_length = (uint64_t)pages * page_size - length_adjust;
+    uint64_t read_length;
     uint32_t amt_read;
     if (scratch_db_half_size >= write_length) {
         amt_read = write_length;
@@ -638,7 +635,7 @@ uint32_t process_relay_paged_cmd_large(
 
         write_length -= amt_to_write;
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+        DispatchRelayInlineState::cb_writer.release_pages(npages);
 
         // TODO(pgk); we can do better on WH w/ tagging
         noc_async_read_barrier();
@@ -651,9 +648,9 @@ uint32_t process_relay_paged_cmd_large(
         uint32_t npages = write_pages_to_dispatcher<1, true>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
         // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+        DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
     } else {
-        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(1);
+        DispatchRelayInlineState::cb_writer.release_pages(1);
     }
 
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
@@ -699,9 +696,9 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
 
     // First step - read into DB0
-    uint32_t read_length = pages * page_size;
+    uint64_t read_wlength = (uint64_t)pages * page_size;
     uint32_t scratch_read_addr = scratch_db_top[0];
-    uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+    uint32_t amt_to_read = (scratch_db_half_size > read_wlength) ? read_wlength : scratch_db_half_size;
     uint32_t amt_read = 0;
     while (amt_to_read >= page_size) {
         uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
@@ -711,42 +708,54 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
         amt_to_read -= page_size;
         amt_read += page_size;
     }
+    // The fences are to prevent any compiler reordering of instructions around the division. The latency of the
+    // division is hidden by the latency of the noc_async_read_barrier().
+    std::atomic_signal_fence(std::memory_order_acq_rel);
+    const uint32_t max_batch_size = read_wlength > std::numeric_limits<uint32_t>::max()
+                                        ? (std::numeric_limits<uint32_t>::max() / page_size) * page_size
+                                        : read_wlength;
+    std::atomic_signal_fence(std::memory_order_acq_rel);
     noc_async_read_barrier();
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
     uint32_t db_toggle = 0;
     uint32_t scratch_write_addr;
-    read_length -= amt_read;
-    while (read_length != 0) {
-        // This ensures that writes from prior iteration are done
-        // TODO(pgk); we can do better on WH w/ tagging
-        noc_async_writes_flushed();
+    read_wlength -= amt_read;
+    while (read_wlength != 0) {
+        uint32_t read_length = (read_wlength > max_batch_size) ? max_batch_size : static_cast<uint32_t>(read_wlength);
+        read_wlength -= read_length;
+        while (read_length != 0) {
+            // This ensures that writes from prior iteration are done
+            // TODO(pgk); we can do better on WH w/ tagging
+            noc_async_writes_flushed();
 
-        db_toggle ^= 1;
-        scratch_read_addr = scratch_db_top[db_toggle];
-        scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+            db_toggle ^= 1;
+            scratch_read_addr = scratch_db_top[db_toggle];
+            scratch_write_addr = scratch_db_top[db_toggle ^ 1];
 
-        uint32_t amt_to_write = amt_read;
-        amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-        amt_read = 0;
-        while (amt_to_read >= page_size) {
-            uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
-            noc_async_read(noc_addr, scratch_read_addr, page_size);
-            scratch_read_addr += page_size;
-            page_id++;
-            amt_to_read -= page_size;
-            amt_read += page_size;
+            uint32_t amt_to_write = amt_read;
+            amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+            amt_read = 0;
+            while (amt_to_read >= page_size) {
+                uint64_t noc_addr = addr_gen.get_noc_addr(page_id);
+                noc_async_read(noc_addr, scratch_read_addr, page_size);
+                scratch_read_addr += page_size;
+                page_id++;
+                amt_to_read -= page_size;
+                amt_read += page_size;
+            }
+
+            // Third step - write from DB
+            uint32_t npages =
+                write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+            DispatchRelayInlineState::cb_writer.release_pages(npages);
+
+            read_length -= amt_read;
+
+            // TODO(pgk); we can do better on WH w/ tagging
+            noc_async_read_barrier();
         }
-
-        // Third step - write from DB
-        uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
-
-        read_length -= amt_read;
-
-        // TODO(pgk); we can do better on WH w/ tagging
-        noc_async_read_barrier();
     }
 
     // Third step - write from DB
@@ -760,7 +769,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -860,7 +869,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
 
         // Third step - write from DB
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
-        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+        DispatchRelayInlineState::cb_writer.release_pages(npages);
 
         total_length -= amt_read;
 
@@ -876,7 +885,7 @@ void process_relay_paged_packed_sub_cmds(uint32_t total_length, uint32_t* l1_cac
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
 }
 
 template <bool cmddat_wrap_enable>
@@ -918,54 +927,88 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
     return stride;
 }
 
+template <bool set_src_noc_addr = false>
+void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    // noc_read_state_init is unnecessary.
+    if constexpr (set_src_noc_addr) {
+        noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdL, CQ_NOC_send, CQ_NOC_WAIT>(
+            noc_index, src_noc_addr, 0, 0, 0);
+    } else {
+        // wait on command buf to be ready before issuing new programming
+        noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(
+            noc_index, 0, 0, 0, 0);
+    }
+    if (size > NOC_MAX_BURST_SIZE) {
+        // Set length to max burst size.
+        noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_wait>(
+            noc_index, 0, 0, 0, NOC_MAX_BURST_SIZE);
+        while (size > NOC_MAX_BURST_SIZE) {
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDl, CQ_NOC_SEND, CQ_NOC_wait>(
+                noc_index, 0, src_addr, dst_addr, 0);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dst_addr += NOC_MAX_BURST_SIZE;
+            size -= NOC_MAX_BURST_SIZE;
+            // Do a wait before either the next iteration or the final read.
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(
+                noc_index, 0, 0, 0, 0);
+        }
+    }
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDL, CQ_NOC_SEND, CQ_NOC_wait>(
+        noc_index, 0, src_addr, dst_addr, size);
+}
+
 uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
-    uint32_t read_addr = cmd->relay_linear.addr;
-    uint32_t length = cmd->relay_linear.length;
-    uint32_t read_length = length;
-    // DPRINT << "relay_linear: " << cmd_ptr << " " << length << " " << read_addr << " " << noc_xy_addr << ENDL();
+    uint64_t read_addr = cmd->relay_linear.addr;
+    uint64_t wlength = cmd->relay_linear.length;
+    // DPRINT << "relay_linear: " << cmd_ptr << " " << wlength << " " << read_addr << " " << noc_xy_addr << ENDL();
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
-    uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
-    noc_async_read(noc_addr, scratch_read_addr, amt_to_read);
+    uint32_t amt_to_read = (scratch_db_half_size > wlength) ? wlength : scratch_db_half_size;
+    noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
+
     read_addr += amt_to_read;
+    wlength -= amt_to_read;
     noc_async_read_barrier();
 
     // Second step - read into DB[x], write from DB[x], toggle x, iterate
     // Writes are fast, reads are slow
     uint32_t db_toggle = 0;
     uint32_t scratch_write_addr;
-    read_length -= amt_to_read;
-    while (read_length != 0) {
-        // This ensures that writes from prior iteration are done
-        // TODO(pgk); we can do better on WH w/ tagging
-        noc_async_writes_flushed();
+    constexpr uint32_t max_batch_size = ~(scratch_db_half_size - 1);
+    while (wlength != 0) {
+        uint32_t read_length = (wlength > max_batch_size) ? max_batch_size : wlength;
+        wlength -= read_length;
+        while (read_length != 0) {
+            // This ensures that writes from prior iteration are done
+            // TODO(pgk); we can do better on WH w/ tagging
+            noc_async_writes_flushed();
 
-        db_toggle ^= 1;
-        scratch_read_addr = scratch_db_top[db_toggle];
-        scratch_write_addr = scratch_db_top[db_toggle ^ 1];
+            db_toggle ^= 1;
+            scratch_read_addr = scratch_db_top[db_toggle];
+            scratch_write_addr = scratch_db_top[db_toggle ^ 1];
 
-        uint32_t amt_to_write = amt_to_read;
-        amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
-        noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
-        noc_async_read(noc_addr, scratch_read_addr, amt_to_read);
-        read_addr += amt_to_read;
+            uint32_t amt_to_write = amt_to_read;
+            amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
+            noc_read_64bit_any_len<false>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
+            read_addr += amt_to_read;
 
-        // Third step - write from DB
-        uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
+            // Third step - write from DB
+            uint32_t npages =
+                write_pages_to_dispatcher<0, false>(downstream_data_ptr, scratch_write_addr, amt_to_write);
 
-        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+            DispatchRelayInlineState::cb_writer.release_pages(npages);
 
-        read_length -= amt_to_read;
+            read_length -= amt_to_read;
 
-        // TODO(pgk); we can do better on WH w/ tagging
-        noc_async_read_barrier();
+            // TODO(pgk); we can do better on WH w/ tagging
+            noc_async_read_barrier();
+        }
     }
 
     // Third step - write from DB
@@ -976,7 +1019,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
 
     return CQ_PREFETCH_CMD_BARE_MIN_SIZE;
 }
@@ -1011,6 +1054,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
     uint32_t pages_at_once =
         (max_trace_buffer_pages_in_cmd_dat_q > pages) ? pages : max_trace_buffer_pages_in_cmd_dat_q;
     uint32_t read_length = pages_at_once << log_page_size;
+    uint32_t pages_read = pages_at_once;
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, page_size);
 
@@ -1024,7 +1068,7 @@ void paged_read_into_cmddat_q(uint32_t read_ptr, PrefetchExecBufState& exec_buf_
     }
 
     exec_buf_state.page_id = page_id;
-    exec_buf_state.pages -= pages_at_once;
+    exec_buf_state.pages -= pages_read;
     exec_buf_state.length += read_length;
 }
 
@@ -1042,11 +1086,13 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     // DPRINT << "relay_inline_exec_buf_cmd:" << length << ENDL();
     uint32_t npages =
         (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
+    static_assert(
+        &RelayInlineState::cb_writer.additional_count == &DispatchRelayInlineState::cb_writer.additional_count ||
+        &RelayInlineState::cb_writer.additional_count == &DispatchSRelayInlineState::cb_writer.additional_count);
 
     // Assume the downstream buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, RelayInlineState::my_downstream_cb_sem>(
-        npages, RelayInlineState::downstream_cb_additional_count);
+    RelayInlineState::cb_writer.acquire_pages(npages);
     uint32_t stride = cmd->relay_inline.stride;
     uint32_t remaining_stride = exec_buf_state.length;
     uint32_t remaining = exec_buf_state.length - sizeof(CQPrefetchCmd);
@@ -1079,8 +1125,7 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
         RelayInlineState::downstream_noc_encoding);
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
     noc_async_writes_flushed(RelayInlineState::downstream_noc_index);
-    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(
-        npages);
+    RelayInlineState::cb_writer.release_pages(npages);
 
     return stride;
 }
@@ -1099,7 +1144,7 @@ static uint32_t process_exec_buf_relay_inline_noflush_cmd(
 
     uint32_t stride = cmd->relay_inline.stride;
 
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(1, my_downstream_cb_sem_additional_count);
+    DispatchRelayInlineState::cb_writer.acquire_pages(1);
     if (dispatch_data_ptr == downstream_cb_end) {
         dispatch_data_ptr = downstream_cb_base;
     }
@@ -1311,7 +1356,7 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
 
         uint32_t npages = write_pages_to_dispatcher<0, false>(downstream_data_ptr, start, length);
 
-        cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
+        DispatchRelayInlineState::cb_writer.release_pages(npages);
         sub_cmd++;
     }
     uint32_t start = ringbuffer_start + sub_cmd->start;
@@ -1319,7 +1364,7 @@ void process_relay_ringbuffer_sub_cmds(uint32_t count, uint32_t* l1_cache) {
     uint32_t npages = write_pages_to_dispatcher<1, false>(downstream_data_ptr, start, length);
 
     // One page was acquired w/ the cmd in CMD_RELAY_INLINE_NOFLUSH with 16 bytes written
-    cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages + 1);
+    DispatchRelayInlineState::cb_writer.release_pages(npages + 1);
     downstream_data_ptr = round_up_pow2(downstream_data_ptr, downstream_cb_page_size);
 }
 
@@ -1390,7 +1435,7 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_RELAY_PAGED:
-            // DPRINT << "relay dram page: " << cmd_ptr << ENDL();
+            // DPRINT << "relay paged: " << cmd_ptr << ENDL();
             {
                 uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
                 uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
@@ -1520,10 +1565,10 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
-    volatile CQPrefetchCmd tt_l1_ptr* cmd =
-        (volatile CQPrefetchCmd tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
+    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd =
+        (volatile CQPrefetchCmdLarge tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
     uint32_t noc_xy_addr = cmd->relay_linear_h.noc_xy_addr;
-    uint32_t read_addr = cmd->relay_linear_h.addr;
+    uint64_t read_addr = cmd->relay_linear_h.addr;
     uint32_t length = cmd->relay_linear_h.length;
 
     uint32_t total_length = length + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
@@ -1542,15 +1587,14 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
     dptr->header.extra_pages = 1;
 
     uint32_t payload_ptr = data_ptr + sizeof(CQPrefetchHToPrefetchDHeader);
-    uint64_t noc_addr = get_noc_addr_helper(noc_xy_addr, read_addr);
 
-    noc_async_read(noc_addr, payload_ptr, length);
+    noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, payload_ptr, length);
     noc_async_read_barrier();
 
     uint32_t npages = (total_length + downstream_cb_page_size - 1) >> downstream_cb_log_page_size;
     // Assume the dispatch buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages, my_downstream_cb_sem_additional_count);
+    DispatchRelayInlineState::cb_writer.acquire_pages(npages);
 
     // Write sizes below may exceed NOC_MAX_BURST_SIZE so we use the any_len version
     // Amount to write depends on how much free space
@@ -1601,12 +1645,12 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 
     // Assume the dispatch buffer is big relative to cmddat command size that we can
     // grab what we need in one chunk
-    cb_acquire_pages<my_noc_xy, my_downstream_cb_sem_id>(npages, my_downstream_cb_sem_additional_count);
+    DispatchRelayInlineState::cb_writer.acquire_pages(npages);
     if (is_exec_buf) {
         // swipe all the downstream page credits from ourselves...
         // prefetch_h stalls sending commands to prefetch_d until notified by dispatch_d that the exec_buf is done
         // exec_buf completing on dispatch_h will free the pages and allow sending again
-        my_downstream_cb_sem_additional_count -= downstream_cb_pages;
+        DispatchRelayInlineState::cb_writer.additional_count -= downstream_cb_pages;
 
         // OK to continue prefetching once the page credits are returned
         stall_state = NOT_STALLED;
@@ -1698,10 +1742,7 @@ inline void relay_raw_data_to_downstream(
             pages_to_release += extra_pages;
         }
         if (pages_to_release != 0) {
-            cb_release_pages<
-                my_noc_index,
-                RelayInlineState::downstream_noc_encoding,
-                RelayInlineState::downstream_cb_sem>(pages_to_release);
+            RelayInlineState::cb_writer.release_pages(pages_to_release);
         }
 
         // Advance pointers and remaining
@@ -1948,6 +1989,7 @@ void kernel_main_hd() {
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();
@@ -1967,9 +2009,10 @@ void kernel_main() {
     IDLE_ERISC_RETURN();
 
     // Confirm expected number of pages, spinning here is a leak
-    cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages, my_downstream_cb_sem_additional_count);
+    DispatchRelayInlineState::cb_writer.wait_all_pages(downstream_cb_pages);
 
     noc_async_full_barrier();
 
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": out" << ENDL();
+    set_l1_data_cache<false>();
 }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,13 +9,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.gemma3.tt.gemma_vision_model import TtSiglipGemmaVisionModel
 from models.demos.gemma3.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
@@ -68,7 +67,6 @@ def test_gemma_vision(
     assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",

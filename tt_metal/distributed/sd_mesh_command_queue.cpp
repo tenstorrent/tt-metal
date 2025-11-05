@@ -1,19 +1,22 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sd_mesh_command_queue.hpp"
+#include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
 SDMeshCommandQueue::SDMeshCommandQueue(
     MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), lock_api_function) {}
+    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)) {}
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     TT_THROW("Trace not supported for slow dispatch");
@@ -60,20 +63,30 @@ void SDMeshCommandQueue::read_shard_from_device(
 
 void SDMeshCommandQueue::submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>&, bool) {}
 
-WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index) {
+WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*index*/) {
     TT_THROW("Not supported for slow dispatch");
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     auto lock = lock_api_function_();
     if (!blocking) {
-        log_warning(
+        log_debug(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload execution.", __FUNCTION__);
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
-            auto device = mesh_device_->get_device(coord);
-            tt_metal::detail::LaunchProgram(device, program);
+            if (mesh_device_->is_local(coord)) {
+                auto device = mesh_device_->get_device(coord);
+                tt_metal::detail::LaunchProgram(device, program, false);
+            }
+        }
+    }
+    for (auto& [coord_range, program] : mesh_workload.get_programs()) {
+        for (const auto& coord : coord_range) {
+            if (mesh_device_->is_local(coord)) {
+                auto device = mesh_device_->get_device(coord);
+                tt_metal::detail::WaitProgramDone(device, program);
+            }
         }
     }
 }
@@ -91,7 +104,19 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 }
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
-void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {}
+
+void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
+    for (const auto& device : mesh_device_->get_devices()) {
+        tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    }
+
+    // Barrier across all hosts of the mesh
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
+        mesh_device_->get_view().mesh_id());
+    distributed_context->barrier();
+}
+
 void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(

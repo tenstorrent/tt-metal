@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,10 +34,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
     std::vector<OutputType> output_buffer(output_shape.volume());
 
     // Extract dimensions
-    uint32_t batch_size = tensor_input_shape[0];
     uint32_t input_h = tensor_input_shape[1];
     uint32_t input_w = tensor_input_shape[2];
-    uint32_t channels = tensor_input_shape[3];
 
     // Extract dimensions from grid tensor shape
     auto grid_shape = input_tensor.logical_shape();
@@ -56,16 +54,16 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
         for (uint32_t h = 0; h < grid_h; h++) {
             for (uint32_t w = 0; w < grid_w; w++) {
                 // Calculate input indices for grid coordinates
-                uint32_t x_idx = ((n * grid_h + h) * grid_w + w) * 2 + 0;  // x coordinate
-                uint32_t y_idx = ((n * grid_h + h) * grid_w + w) * 2 + 1;  // y coordinate
+                uint32_t x_idx = (((n * grid_h + h) * grid_w + w) * 2) + 0;  // x coordinate
+                uint32_t y_idx = (((n * grid_h + h) * grid_w + w) * 2) + 1;  // y coordinate
 
                 // Extract normalized coordinates [-1, 1]
                 float x_coord = static_cast<float>(input_buffer[x_idx]);
                 float y_coord = static_cast<float>(input_buffer[y_idx]);
 
                 // Transform to image coordinates
-                float h_coord_image = y_coord * height_scale + height_offset;
-                float w_coord_image = x_coord * width_scale + width_offset;
+                float h_coord_image = (y_coord * height_scale) + height_offset;
+                float w_coord_image = (x_coord * width_scale) + width_offset;
 
                 // Get corner pixel coordinates (floor operation)
                 int32_t h0 = static_cast<int32_t>(std::floor(h_coord_image));
@@ -103,8 +101,8 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                     // Reinterpret int16 bits as bfloat16 for coordinates
                     uint16_t h0_bits = static_cast<uint16_t>(h0_clamped);
                     uint16_t w0_bits = static_cast<uint16_t>(w0_clamped);
-                    output_buffer[base_idx + 0] = bfloat16(h0_bits);
-                    output_buffer[base_idx + 1] = bfloat16(w0_bits);
+                    output_buffer[base_idx + 0] = std::bit_cast<bfloat16>(h0_bits);
+                    output_buffer[base_idx + 1] = std::bit_cast<bfloat16>(w0_bits);
 
                     // Convert weights to bfloat16
                     output_buffer[base_idx + 2] = bfloat16(weight_nw);
@@ -137,11 +135,7 @@ Tensor convert_grid_tensor(
 
     TT_FATAL(is_cpu_tensor(input_tensor), "Prepare_grid_sample_grid only supports host tensors");
 
-    return Tensor(
-        input_tensor.host_storage().transform(compute),
-        output_spec,
-        input_tensor.distributed_tensor_config(),
-        input_tensor.tensor_topology());
+    return Tensor(input_tensor.host_storage().transform(compute), output_spec, input_tensor.tensor_topology());
 }
 
 }  // anonymous namespace

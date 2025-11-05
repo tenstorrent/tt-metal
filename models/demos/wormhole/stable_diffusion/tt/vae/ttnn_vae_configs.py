@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -79,7 +79,6 @@ GROUPNORM_DECODER_NUM_BLOCKS = 32
 def get_default_conv_config():
     return ttnn.Conv2dConfig(
         weights_dtype=ttnn.bfloat8_b,
-        activation="",
         deallocate_activation=True,
     )
 

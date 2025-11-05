@@ -3,7 +3,7 @@ This is the Vision Transformer Block for Gemma-3-4b-it.
 This involves vision followed by MultiModalProjector processing
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -63,7 +63,7 @@ class TtGemmaTransformerVision(LightweightModule):
         )
 
     def forward(self, images):
-        vision_tokens = self.vision_encoder(images)[0, :, :, :]
+        vision_tokens = self.vision_encoder(images)[:, 0, :, :]
 
         vision_tokens = self.mmp(vision_tokens)
         return vision_tokens

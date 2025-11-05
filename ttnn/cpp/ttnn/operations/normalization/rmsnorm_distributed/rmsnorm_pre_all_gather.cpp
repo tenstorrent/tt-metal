@@ -7,6 +7,8 @@
 #include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 
+namespace operation = tt::tt_metal::operation;
+
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
@@ -15,6 +17,7 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const LayerNormProgramConfig>& program_config,
+    const LayerNormDistributedDefaultProgramConfig& distributed_program_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<bool>& use_2d_core_grid) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
@@ -40,7 +43,8 @@ ttnn::Tensor ExecuteRMSNormPreAllGather::invoke(
                        .norm_type = LayerNormDistributedType::RMSNORM,
                        .dtype = dtype,
                        .compute_kernel_config = kernel_config_val,
-                       .use_2d_core_grid = use_2d_core_grid},
+                       .use_2d_core_grid = use_2d_core_grid,
+                       .program_config = distributed_program_config},
                    {input_tensor})
             .at(0);
     }

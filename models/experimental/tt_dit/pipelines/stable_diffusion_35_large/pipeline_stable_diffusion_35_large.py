@@ -29,7 +29,7 @@ from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.manager import CCLManager
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
 from ...utils.padding import PaddingConfig
-from ...utils.cache import get_cache_path, load_cache_dict
+from ...utils.cache import save_cache_dict, load_cache_dict, cache_dict_exists, get_and_create_cache_path
 
 TILE_SIZE = 32
 
@@ -75,6 +75,11 @@ class TimingCollector:
             total_time=self.timings.get("total", 0.0),
         )
 
+    def reset(self):
+        self.timings = {}
+        self.step_timings = {}
+        return self
+
 
 @dataclass
 class PipelineTrace:
@@ -84,81 +89,6 @@ class PipelineTrace:
     timestep_input: ttnn.Tensor
     latents_output: ttnn.Tensor
     tid: int
-
-
-def create_pipeline(
-    mesh_device,
-    batch_size=1,
-    image_w=1024,
-    image_h=1024,
-    guidance_scale=3.5,
-    num_images_per_prompt=1,
-    max_t5_sequence_length=256,
-    prompt_sequence_length=333,
-    spatial_sequence_length=4096,
-    cfg_config=None,
-    sp_config=None,
-    tp_config=None,
-    num_links=None,
-    model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
-    use_cache=False,
-):
-    # defatult config per mesh shape
-    default_config = {
-        (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
-        (4, 8): {"cfg_config": (2, 1), "sp_config": (4, 0), "tp_config": (4, 1), "num_links": 4},
-    }
-
-    # get config from user or default if not provided
-    cfg_factor, cfg_axis = cfg_config or default_config[tuple(mesh_device.shape)]["cfg_config"]
-    sp_factor, sp_axis = sp_config or default_config[tuple(mesh_device.shape)]["sp_config"]
-    tp_factor, tp_axis = tp_config or default_config[tuple(mesh_device.shape)]["tp_config"]
-    num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
-
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
-        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
-        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
-    )
-
-    guidance_cond = 2 if (guidance_scale > 1 and cfg_factor == 1) else 1
-
-    # Enable T5 based on device configuration
-    # T5 is disabled if mesh needs reshaping for CLIP encoder
-    submesh_shape = list(mesh_device.shape)
-    submesh_shape[cfg_axis] //= cfg_factor
-    enable_t5_text_encoder = submesh_shape[1] == 4  # T5 only works if submesh doesn't need reshaping
-
-    logger.info(f"Mesh device shape: {mesh_device.shape}")
-    logger.info(f"Submesh shape: {submesh_shape}")
-    logger.info(f"Parallel config: {parallel_config}")
-    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
-
-    # Create pipeline
-    pipeline = StableDiffusion3Pipeline(
-        mesh_device=mesh_device,
-        enable_t5_text_encoder=enable_t5_text_encoder,
-        guidance_cond=guidance_cond,
-        parallel_config=parallel_config,
-        num_links=num_links,
-        height=image_h,
-        width=image_w,
-        model_checkpoint_path=model_checkpoint_path,
-        use_cache=use_cache,
-    )
-
-    pipeline.prepare(
-        batch_size=batch_size,
-        num_images_per_prompt=num_images_per_prompt,
-        width=image_w,
-        height=image_h,
-        guidance_scale=guidance_scale,
-        max_t5_sequence_length=max_t5_sequence_length,
-        prompt_sequence_length=prompt_sequence_length,
-        spatial_sequence_length=spatial_sequence_length,
-    )
-
-    return pipeline
 
 
 class StableDiffusion3Pipeline:
@@ -261,7 +191,7 @@ class StableDiffusion3Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
-        assert "stabilityai/stable-diffusion-3.5-large" in model_checkpoint_path
+        assert "stabilityai/stable-diffusion-3.5-large" in str(model_checkpoint_path)
 
         if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
@@ -290,20 +220,27 @@ class StableDiffusion3Pipeline:
                 mesh_device=submesh_device,
                 ccl_manager=self.ccl_managers[i],
                 parallel_config=self.dit_parallel_config,
-                init=False,
                 padding_config=padding_config,
             )
 
             if use_cache:
-                cache_path = get_cache_path(
+                cache_path = get_and_create_cache_path(
                     model_name="stable-diffusion-3.5-large",
                     subfolder="transformer",
                     parallel_config=self.dit_parallel_config,
+                    mesh_shape=tuple(submesh_device.shape),
                     dtype="bf16",
                 )
-                logger.info(f"Loading transformer weights from cache: {cache_path}")
-                cache_dict = load_cache_dict(cache_path)
-                tt_transformer.from_cached_state_dict(cache_dict)
+                # create cache if it doesn't exist
+                if not cache_dict_exists(cache_path):
+                    logger.info(
+                        f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
+                    )
+                    tt_transformer.load_state_dict(torch_transformer.state_dict())
+                    save_cache_dict(tt_transformer.to_cached_state_dict(cache_path), cache_path)
+                else:
+                    logger.info(f"Loading transformer weights from cache: {cache_path}")
+                    tt_transformer.from_cached_state_dict(load_cache_dict(cache_path))
             else:
                 logger.info("Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_state_dict(torch_transformer.state_dict())
@@ -376,8 +313,8 @@ class StableDiffusion3Pipeline:
         )
 
         # Load state dicts into new encoders
-        self._text_encoder_1.load_state_dict(text_encoder_1_state_dict)
-        self._text_encoder_2.load_state_dict(text_encoder_2_state_dict)
+        self._text_encoder_1.load_torch_state_dict(text_encoder_1_state_dict)
+        self._text_encoder_2.load_torch_state_dict(text_encoder_2_state_dict)
 
         if enable_t5_text_encoder:
             logger.info("creating TT-NN T5 text encoder...")
@@ -408,13 +345,18 @@ class StableDiffusion3Pipeline:
             )
 
             # Load state dict into new encoder
-            self._text_encoder_3.load_state_dict(torch_text_encoder_3_state_dict)
+            self._text_encoder_3.load_torch_state_dict(torch_text_encoder_3_state_dict)
         else:
             self._text_encoder_3 = None
 
         self.timing_collector = None  # Set externally when timing is needed
 
         self._trace = None
+
+        # intermediate buffers for safe tracing
+        self._intermediate_noise_list = []
+        self._sigma_difference_list = []
+        self._vae_input_latents = None
 
         ttnn.synchronize_device(self.encoder_device)
 
@@ -450,103 +392,89 @@ class StableDiffusion3Pipeline:
         self._prepared_max_t5_sequence_length = max_t5_sequence_length
         self._prepared_prompt_sequence_length = prompt_sequence_length
 
-        """
-        do_classifier_free_guidance = guidance_scale > 1
+    @staticmethod
+    def create_pipeline(
+        mesh_device,
+        batch_size=1,
+        image_w=1024,
+        image_h=1024,
+        guidance_scale=3.5,
+        num_images_per_prompt=1,
+        max_t5_sequence_length=256,
+        prompt_sequence_length=333,
+        spatial_sequence_length=4096,
+        cfg_config=None,
+        sp_config=None,
+        tp_config=None,
+        num_links=None,
+        model_checkpoint_path=f"stabilityai/stable-diffusion-3.5-large",
+        use_cache=False,
+    ):
+        # defatult config per mesh shape
+        default_config = {
+            (2, 4): {"cfg_config": (2, 1), "sp_config": (2, 0), "tp_config": (2, 1), "num_links": 1},
+            (4, 8): {"cfg_config": (2, 1), "sp_config": (4, 0), "tp_config": (4, 1), "num_links": 4},
+        }
 
-        prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
-            prompt_1=[""],
-            prompt_2=[""],
-            prompt_3=[""],
-            negative_prompt_1=[""],
-            negative_prompt_2=[""],
-            negative_prompt_3=[""],
+        # get config from user or default if not provided
+        cfg_factor, cfg_axis = cfg_config or default_config[tuple(mesh_device.shape)]["cfg_config"]
+        sp_factor, sp_axis = sp_config or default_config[tuple(mesh_device.shape)]["sp_config"]
+        tp_factor, tp_axis = tp_config or default_config[tuple(mesh_device.shape)]["tp_config"]
+        num_links = num_links or default_config[tuple(mesh_device.shape)]["num_links"]
+
+        parallel_config = DiTParallelConfig(
+            cfg_parallel=ParallelFactor(factor=cfg_factor, mesh_axis=cfg_axis),
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+            sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+        )
+
+        guidance_cond = 2 if (guidance_scale > 1 and cfg_factor == 1) else 1
+
+        # Enable T5 based on device configuration
+        # T5 is disabled if mesh needs reshaping for CLIP encoder
+        submesh_shape = list(mesh_device.shape)
+        submesh_shape[cfg_axis] //= cfg_factor
+        enable_t5_text_encoder = submesh_shape[1] == 4  # T5 only works if submesh doesn't need reshaping
+
+        logger.info(f"Mesh device shape: {mesh_device.shape}")
+        logger.info(f"Submesh shape: {submesh_shape}")
+        logger.info(f"Parallel config: {parallel_config}")
+        logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+
+        # Create pipeline
+        pipeline = StableDiffusion3Pipeline(
+            mesh_device=mesh_device,
+            enable_t5_text_encoder=enable_t5_text_encoder,
+            guidance_cond=guidance_cond,
+            parallel_config=parallel_config,
+            num_links=num_links,
+            height=image_h,
+            width=image_w,
+            model_checkpoint_path=model_checkpoint_path,
+            use_cache=use_cache,
+        )
+
+        pipeline.prepare(
+            batch_size=batch_size,
             num_images_per_prompt=num_images_per_prompt,
+            width=image_w,
+            height=image_h,
+            guidance_scale=guidance_scale,
             max_t5_sequence_length=max_t5_sequence_length,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-        )
-
-        # TODO: pass the patch_size value
-        patch_size = 2
-        latents_shape = (
-            batch_size * num_images_per_prompt,
-            height // self._torch_vae_scale_factor,
-            (width // self._torch_vae_scale_factor) // patch_size,
-            self._num_channels_latents * patch_size,
-        )
-
-        tt_prompt_embeds = ttnn.from_torch(
-            prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
-        )
-        tt_pooled_prompt_embeds = ttnn.from_torch(
-            pooled_prompt_embeds, device=self._device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self._device),
-
-        )
-
-        tt_timestep = ttnn.allocate_tensor_on_device([batch_size * num_images_per_prompt * (1+do_classifier_free_guidance), 1], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, self._device)
-        tt_sigma_difference = ttnn.allocate_tensor_on_device([1, 1], ttnn.bfloat16, ttnn.TILE_LAYOUT, self._device)
-        tt_latents = ttnn.allocate_tensor_on_device(latents_shape, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self._device)
-
-        self._device.disable_and_clear_program_cache()
-
-        # cache
-        self._step(
-            timestep=tt_timestep,
-            latents=tt_latents,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            prompt_embeds=tt_prompt_embeds,
-            pooled_prompt_embeds=tt_pooled_prompt_embeds,
-            guidance_scale=guidance_scale,
-            sigma_difference=tt_sigma_difference,
-            prompt_sequence_length=prompt_sequence_length,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        self._step(
-            timestep=tt_timestep,
-            latents=tt_latents,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            prompt_embeds=tt_prompt_embeds,
-            pooled_prompt_embeds=tt_pooled_prompt_embeds,
-            guidance_scale=guidance_scale,
-            sigma_difference=tt_sigma_difference,
             prompt_sequence_length=prompt_sequence_length,
             spatial_sequence_length=spatial_sequence_length,
         )
 
-        # trace
-        tid = ttnn.begin_trace_capture(self._device)
-        self._step(
-            timestep=tt_timestep,
-            latents=tt_latents,
-            do_classifier_free_guidance=do_classifier_free_guidance,
-            prompt_embeds=tt_prompt_embeds,
-            pooled_prompt_embeds=tt_pooled_prompt_embeds,
-            guidance_scale=guidance_scale,
-            sigma_difference=tt_sigma_difference,
-            prompt_sequence_length=prompt_sequence_length,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        ttnn.end_trace_capture(self._device, tid)
+        return pipeline
 
-        self._trace = PipelineTrace(
-            tid=tid,
-            spatial_input_output=tt_latents,
-            prompt_input=tt_prompt_embeds,
-            pooled_projection_input=tt_pooled_prompt_embeds,
-            prompt_sequence_length=prompt_sequence_length,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        """
-
-    def run_single_prompt(self, prompt, negative_prompt, num_inference_steps, seed):
+    def run_single_prompt(self, prompt, negative_prompt="", num_inference_steps=40, seed=None):
         return self.__call__(
             prompt_1=[prompt],
             prompt_2=[prompt],
             prompt_3=[prompt],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
+            negative_prompt_1=[negative_prompt or ""],
+            negative_prompt_2=[negative_prompt or ""],
+            negative_prompt_3=[negative_prompt or ""],
             num_inference_steps=num_inference_steps,
             seed=seed,
             traced=True,
@@ -566,7 +494,7 @@ class StableDiffusion3Pipeline:
         traced: bool = False,
         clip_skip: int | None = None,
     ) -> List[Image.Image]:
-        timer = self.timing_collector
+        timer = self.timing_collector.reset() if self.timing_collector else None
 
         with timer.time_section("total") if timer else nullcontext():
             start_time = time.time()
@@ -628,6 +556,7 @@ class StableDiffusion3Pipeline:
             if seed is not None:
                 torch.manual_seed(seed)
             latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
+            latents = self.transformers[0].patchify(latents)
 
             tt_prompt_embeds_list = []
             tt_pooled_prompt_embeds_list = []
@@ -662,7 +591,7 @@ class StableDiffusion3Pipeline:
                 )
 
                 shard_latents_dims = [None, None]
-                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 1  # height of latents
+                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 2
                 tt_initial_latents = ttnn.from_torch(
                     latents,
                     layout=ttnn.TILE_LAYOUT,
@@ -674,6 +603,22 @@ class StableDiffusion3Pipeline:
                         dims=shard_latents_dims,
                     ),
                 )
+
+                if len(self._intermediate_noise_list) <= i:
+                    self._intermediate_noise_list.append(
+                        ttnn.from_torch(
+                            latents,
+                            layout=ttnn.TILE_LAYOUT,
+                            dtype=ttnn.bfloat16,
+                            device=submesh_device,
+                            mesh_mapper=ttnn.ShardTensor2dMesh(
+                                submesh_device,
+                                tuple(submesh_device.shape),
+                                dims=shard_latents_dims,
+                            ),
+                        )
+                    )
+                    self._sigma_difference_list.append(ttnn.clone(self._intermediate_noise_list[-1]))
                 if traced:
                     if self._trace is None:
                         # Push inputs to device
@@ -713,14 +658,15 @@ class StableDiffusion3Pipeline:
                         )
                         tt_timestep_list.append(tt_timestep)
 
-                        tt_sigma_difference = ttnn.full(
-                            [1, 1],
-                            fill_value=sigma_difference,
-                            layout=ttnn.TILE_LAYOUT,
-                            dtype=ttnn.bfloat16,
-                            device=submesh_device,  # Not used in trace region, can be on device always.
+                        tt_sigma_difference_list.append(
+                            ttnn.full(
+                                tt_latents_step_list[0].shape,
+                                fill_value=sigma_difference,
+                                layout=ttnn.TILE_LAYOUT,
+                                dtype=ttnn.bfloat16,
+                                device=None,  # We'll copy to device when needed
+                            )
                         )
-                        tt_sigma_difference_list.append(tt_sigma_difference)
 
                     tt_latents_step_list = self._step(
                         timestep=tt_timestep_list,
@@ -741,39 +687,9 @@ class StableDiffusion3Pipeline:
 
             with timer.time_section("vae_decoding") if timer else nullcontext():
                 image_decoding_start_time = time.time()
-
-                # Sync because we don't pass a persistent buffer or a barrier semaphore.
-                ttnn.synchronize_device(self.vae_device)
-                tt_latents = ttnn.experimental.all_gather_async(
-                    input_tensor=tt_latents_step_list[self.vae_submesh_idx],
-                    dim=1,
-                    multi_device_global_semaphore=self.ccl_managers[self.vae_submesh_idx].get_ag_ping_pong_semaphore(
-                        self.dit_parallel_config.sequence_parallel.mesh_axis
-                    ),
-                    topology=ttnn.Topology.Linear,
-                    mesh_device=self.vae_device,
-                    cluster_axis=self.dit_parallel_config.sequence_parallel.mesh_axis,
-                    num_links=self.ccl_managers[self.vae_submesh_idx].num_links,
-                )
-
-                torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
-                torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
-
-                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-                    # HACK: reshape submesh device 0 from 2D to 1D
-                    # If reshaping, vae device is same as encoder device
-                    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
-
-                tt_latents = ttnn.from_torch(
-                    torch_latents,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                    device=self.vae_device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_device),
-                )
-                decoded_output = self._vae_decoder(tt_latents)
-                # decoded_output = sd_vae_decode(tt_latents, self._vae_parameters)
+                decoded_output = self._vae_decode(tt_latents_step_list[self.vae_submesh_idx], width, height)
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
+
                 # HACK: reshape submesh device 0 from 1D to 2D
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # If reshaping, vae device is same as encoder device
@@ -815,7 +731,7 @@ class StableDiffusion3Pipeline:
             else:
                 latent_model_input = latent
 
-            noise_pred = self.transformers[cfg_index](
+            return self.transformers[cfg_index](
                 spatial=latent_model_input,
                 prompt_embed=prompt,
                 pooled_projections=pooled_projection,
@@ -823,14 +739,6 @@ class StableDiffusion3Pipeline:
                 N=spatial_sequence_length,
                 L=prompt_sequence_length,
             )
-
-            noise_pred = _reshape_noise_pred(
-                noise_pred,
-                height=latent.shape[-3] * self.dit_parallel_config.sequence_parallel.factor,
-                width=latent.shape[-2],
-                patch_size=self.patch_size,
-            )
-            return noise_pred
 
         if traced and self._trace is None:
             print(f"Tracing...")
@@ -851,8 +759,15 @@ class StableDiffusion3Pipeline:
                     submesh_id,
                 )
 
-                ttnn.synchronize_device(self.submesh_devices[0])
-                ttnn.synchronize_device(self.submesh_devices[1])
+                if submesh_id == self.vae_submesh_idx:
+                    print("Initializing VAE buffers for safe tracing...")
+                    self._vae_decode(latent_device, self._prepared_width, self._prepared_height)
+                    if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                        self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+
+                ttnn.synchronize_device(submesh_device)
+                # ttnn.synchronize_device(self.submesh_devices[0])
+                # ttnn.synchronize_device(self.submesh_devices[1])
 
                 print("begin trace capture")
                 trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
@@ -864,8 +779,9 @@ class StableDiffusion3Pipeline:
                     submesh_id,
                 )
                 ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
-                ttnn.synchronize_device(self.submesh_devices[0])
-                ttnn.synchronize_device(self.submesh_devices[1])
+                ttnn.synchronize_device(submesh_device)
+                # ttnn.synchronize_device(self.submesh_devices[0])
+                # ttnn.synchronize_device(self.submesh_devices[1])
                 print("done sync after trace capture")
 
                 self._trace[submesh_id] = PipelineTrace(
@@ -910,14 +826,13 @@ class StableDiffusion3Pipeline:
                 )
 
                 torch_noise_pred = uncond + guidance_scale * (cond - uncond)
-
                 shard_latents_dims = [None, None]
-                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 1  # height of latents
+                shard_latents_dims[self.dit_parallel_config.sequence_parallel.mesh_axis] = 2
                 noise_pred_list[0] = ttnn.from_torch(
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=self.submesh_devices[0],
+                    device=None,  # self.submesh_devices[0],
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         self.submesh_devices[0],
                         tuple(self.submesh_devices[0].shape),
@@ -929,7 +844,7 @@ class StableDiffusion3Pipeline:
                     torch_noise_pred,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=self.submesh_devices[1],
+                    device=None,  # self.submesh_devices[1],
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         self.submesh_devices[1],
                         tuple(self.submesh_devices[1].shape),
@@ -938,9 +853,50 @@ class StableDiffusion3Pipeline:
                 )
 
         for submesh_id, submesh_device in enumerate(self.submesh_devices):
-            ttnn.add_(latents[submesh_id], sigma_difference[submesh_id] * noise_pred_list[submesh_id])
+            ttnn.copy_host_to_device_tensor(noise_pred_list[submesh_id], self._intermediate_noise_list[submesh_id])
+            ttnn.copy_host_to_device_tensor(sigma_difference[submesh_id], self._sigma_difference_list[submesh_id])
+            ttnn.multiply_(
+                self._sigma_difference_list[submesh_id], self._intermediate_noise_list[submesh_id]
+            )  # This allocates during trace. Need to investigate
+            ttnn.add_(latents[submesh_id], self._sigma_difference_list[submesh_id])
 
         return latents
+
+    def _vae_decode(self, tt_latents, width, height):
+        ttnn.synchronize_device(self.vae_device)
+
+        tt_latents = self.ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
+            tt_latents, dim=2, mesh_axis=self.dit_parallel_config.sequence_parallel.mesh_axis
+        )
+
+        torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
+        torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
+        torch_latents = self.transformers[0].unpatchify(
+            torch_latents,
+            width=width // self._torch_vae_scale_factor,
+            height=height // self._torch_vae_scale_factor,
+        )
+
+        if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+            # HACK: reshape submesh device 0 from 2D to 1D
+            # If reshaping, vae device is same as encoder device
+            self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
+
+        tt_latents = ttnn.from_torch(
+            torch_latents,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=None,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_device),
+        )
+
+        if self._vae_input_latents is None:
+            self._vae_input_latents = tt_latents.to(self.vae_device)
+        else:
+            ttnn.copy_host_to_device_tensor(tt_latents, self._vae_input_latents)
+
+        decoded_output = self._vae_decoder(self._vae_input_latents)
+        return decoded_output
 
     def _encode_prompts(
         self,
@@ -1210,34 +1166,3 @@ def _get_t5_prompt_embeds(
     # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
     prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
     return prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
-
-
-def _reshape_noise_pred(
-    noise_pred: ttnn.Tensor,
-    *,
-    height: int,
-    width: int,
-    patch_size: int,
-) -> ttnn.Tensor:
-    # B, H * W, P * Q * C -> B, H * P, W * Q, C
-
-    patch_count_y = height // patch_size
-    patch_count_x = width // patch_size
-
-    shape1 = (
-        noise_pred.shape[0] * patch_count_y,
-        patch_count_x,
-        patch_size,
-        -1,
-    )
-
-    shape2 = (
-        noise_pred.shape[0],
-        patch_count_y * patch_size,
-        patch_count_x * patch_size,
-        -1,
-    )
-
-    noise_pred = noise_pred.reshape(shape1)
-    noise_pred = ttnn.transpose(noise_pred, 1, 2)
-    return noise_pred.reshape(shape2)

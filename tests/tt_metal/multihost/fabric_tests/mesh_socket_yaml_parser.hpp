@@ -14,7 +14,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
-#include "umd/device/types/cluster_descriptor_types.h"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
 namespace tt::tt_fabric::mesh_socket_tests {
@@ -44,7 +44,7 @@ enum class PatternType : uint32_t {
 // Data structures for parsed YAML configuration
 struct PhysicalMeshConfig {
     std::string mesh_descriptor_path;
-    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
+    std::vector<std::vector<EthCoord>> eth_coord_mapping;
 };
 
 struct FabricConfig {
@@ -174,7 +174,7 @@ private:
     static MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
     static CoreCoord parse_core_coordinate(const YAML::Node& node);
     static PatternType parse_pattern_type(const std::string& pattern_string);
-    static std::vector<std::vector<eth_coord_t>> parse_eth_coord_mapping(const YAML::Node& node);
+    static std::vector<std::vector<EthCoord>> parse_eth_coord_mapping(const YAML::Node& node);
 
     // Validation helper methods
     static void validate_memory_config(const MemoryConfig& memory);

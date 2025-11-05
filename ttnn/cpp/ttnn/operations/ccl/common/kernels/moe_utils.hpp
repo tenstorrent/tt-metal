@@ -247,8 +247,7 @@ inline void fabric_send_chip_unicast_noc_unicast(
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
@@ -270,7 +269,7 @@ inline void l1_only_fabric_send_noc_unicast_with_semaphore(
     uint64_t noc_remote_semaphore_address,
     int32_t size_bytes,
     uint32_t alignment,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush) {
     // This api is only for L1 as it can cause a DRAM hang in blackhole
     while (size_bytes > 0) {
@@ -280,7 +279,7 @@ inline void l1_only_fabric_send_noc_unicast_with_semaphore(
             // Fill header for fused unicast + atomic increment command when it is the last packet
             packet_header->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-                    noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, flush),
+                    noc_payload_write_address, noc_remote_semaphore_address, increment_value, flush),
                 align(curr_packet_size, alignment));
         } else {
             // Fill header for fused unicast + atomic increment command when it is not the last packet
@@ -309,7 +308,7 @@ inline void fabric_send_noc_unicast_with_semaphore(
     uint64_t noc_remote_semaphore_address,
     int32_t size_bytes,
     uint32_t alignment,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush,
     uint32_t offset = 0) {
     while (size_bytes > 0) {
@@ -320,8 +319,7 @@ inline void fabric_send_noc_unicast_with_semaphore(
             tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
                 align(curr_packet_size, alignment),
                 packet_header,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                    noc_remote_semaphore_address, increment_value, 32, flush},
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush},
                 payload_page_id,
                 addrgen,
                 offset);
@@ -351,14 +349,13 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint64_t noc_remote_semaphore_address,
     int32_t size_bytes,
     uint32_t alignment,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush) {
     // This api is only for L1 as it can cause a DRAM hang in blackhole
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
@@ -390,14 +387,13 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint64_t noc_remote_semaphore_address,
     int32_t size_bytes,
     uint32_t alignment,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush,
     uint32_t offset = 0) {
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         addrgen,
@@ -421,17 +417,16 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
     uint32_t dest_chip_id,
     uint32_t dest_mesh_id,
     uint64_t noc_remote_semaphore_address,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush) {
     // Set up packet header for semaphore increment
     packet_header->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, 32, flush});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();
@@ -458,7 +453,7 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
     uint32_t offset = 0) {
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
-    packet_header->to_chip_unicast(distance);
+    fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
     uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
@@ -487,12 +482,12 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     uint64_t noc_remote_semaphore_address,
     int32_t size_bytes,
     const uint32_t alignment,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush) {
     // This api is only for L1 as it can cause a DRAM hang in blackhole
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
-    packet_header->to_chip_unicast(distance);
+    fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
     uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
@@ -524,12 +519,12 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     uint64_t noc_remote_semaphore_address,
     int32_t size_bytes,
     const uint32_t alignment,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush,
     uint32_t offset = 0) {
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
-    packet_header->to_chip_unicast(distance);
+    fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
     uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
@@ -553,15 +548,15 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint64_t noc_remote_semaphore_address,
-    uint16_t increment_value,
+    uint32_t increment_value,
     bool flush) {
     // Set up packet header for semaphore increment
     packet_header->to_noc_unicast_atomic_inc(
-        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, 32, flush});
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{noc_remote_semaphore_address, increment_value, flush});
 
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
-    packet_header->to_chip_unicast(distance);
+    fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, distance);
 
     uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
 
@@ -574,6 +569,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
 template <typename T, uint32_t Size, bool ReturnIdx>
 inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
     for (uint32_t i = 0; i < Size; ++i) {
+        invalidate_l1_cache();
         if (ptr[i] == val) {
             if constexpr (ReturnIdx) {
                 return std::make_tuple(true, i);

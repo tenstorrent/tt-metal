@@ -15,7 +15,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -45,8 +44,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     if (is_tiled_layout) {
         // Tiled layout specific calculations
-        input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-        output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        input_unit_size = tt::tile_size(input_cb_data_format);
+        output_unit_size = tt::tile_size(output_cb_data_format);
         aligned_input_unit_size = input_unit_size;
 
         const uint32_t input_tensor_width = input.padded_shape()[-1];
@@ -109,12 +108,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    // Reader compile time arguments
-    const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_input_unit_size);
-    const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(aligned_input_unit_size) : 0;
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
@@ -133,8 +126,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     // Writer compile time arguments
 
     const int32_t writer_unit_size = output.padded_shape()[-1] * output.element_size();
-    const bool dst_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(writer_unit_size);
-    const uint32_t dst_log2_size = dst_size_is_power_of_two ? (std::uint32_t)log2(writer_unit_size) : 0;
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
@@ -172,8 +163,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     // Compute kernel (only for tiled layout)
-    tt::tt_metal::KernelHandle compute_kernel_group1_id = 0;
-    tt::tt_metal::KernelHandle compute_kernel_group2_id = 0;
     if (is_tiled_layout) {
         const uint32_t num_input_tiles_in_row =
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
@@ -187,7 +176,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)output_cb_index          // out_cb_id
             };
 
-            compute_kernel_group1_id = tt::tt_metal::CreateKernel(
+            tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
                 core_group_1,
@@ -203,7 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 (uint32_t)output_cb_index          // out_cb_id
             };
 
-            compute_kernel_group2_id = tt::tt_metal::CreateKernel(
+            tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
                 core_group_2,

@@ -10,8 +10,8 @@ import pytest
 from loguru import logger
 from pathlib import Path
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 # Helper function to sort strings naturally
@@ -23,8 +23,8 @@ def natural_key_from_path(s):
 Runs tests/ttnn/unit_tests/gtests/accessor/test_accessor_benchmarks.cpp test and parses output.
 See the C++ test for more details on what is benchmarked and generated.
 
-Make sure that tt-metal is built with profiler enabled, e.g.:
-./build_metal.sh --release --enable-ccache --build-tests -e -p
+Make sure that tt-metal is built with tests, e.g.:
+./build_metal.sh --release --enable-ccache --build-tests -e
 """
 
 # Bits Encoding: [Bank coordinates][Tensor shape][Shard shape][Number of banks][Rank]01
@@ -49,8 +49,12 @@ ARGS_CONFIGS = [
 ]
 
 # For benchmarks that only support all-static configuration
-STATIC_ONLY_ARGS_CONFIGS = [
-    "0000001",  # Everything static
+STATIC_ONLY_SHARDED_ARGS_CONFIGS = [
+    "0000001",  # Everything static, sharded tensor
+]
+
+STATIC_ONLY_INTERLEAVED_ARGS_CONFIGS = [
+    "0000000",  # Everything static, interleaved tensor
 ]
 
 
@@ -102,6 +106,7 @@ def impl_test(gtest_filter, res_dir, args_configs=None):
 
     ENV = os.environ.copy()
     ENV["TT_METAL_DEVICE_PROFILER"] = "1"
+    ENV["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
     BASE = Path(ENV["TT_METAL_HOME"])
 
     binary_path = Path(BASE / "build" / "test" / "ttnn" / "unit_tests_ttnn_accessor")
@@ -149,9 +154,14 @@ def impl_test(gtest_filter, res_dir, args_configs=None):
             logger.info(f"Zone: {zone_name}: Average: {st['Average']} (cycles)")
 
 
-def impl_test_static_only(gtest_filter, res_dir):
+def impl_test_sharded_static_only(gtest_filter, res_dir):
     """Implementation for tests that only run with all-static configuration."""
-    impl_test(gtest_filter, res_dir, STATIC_ONLY_ARGS_CONFIGS)
+    impl_test(gtest_filter, res_dir, STATIC_ONLY_SHARDED_ARGS_CONFIGS)
+
+
+def impl_test_interleaved_static_only(gtest_filter, res_dir):
+    """Implementation for tests that only run with all-static configuration."""
+    impl_test(gtest_filter, res_dir, STATIC_ONLY_INTERLEAVED_ARGS_CONFIGS)
 
 
 def test_get_noc_addr_page_id():
@@ -168,13 +178,28 @@ def test_constructor():
     impl_test("AccessorTests/AccessorBenchmarks.Constructor/*", res_dir="accessor_constructor_benchmarks")
 
 
-def test_manual_pages_iteration():
-    impl_test_static_only(
-        "AccessorTests/AccessorBenchmarks.ManualPagesIteration/*", res_dir="accessor_manual_pages_iteration_benchmarks"
+def test_manual_pages_iteration_sharded():
+    impl_test_sharded_static_only(
+        "AccessorTests/AccessorBenchmarks.ManualPagesIterationSharded/*",
+        res_dir="accessor_manual_pages_iteration_sharded_benchmarks",
     )
 
 
-def test_pages_iterator():
-    impl_test_static_only(
-        "AccessorTests/AccessorBenchmarks.PagesIterator/*", res_dir="accessor_pages_iterator_benchmarks"
+def test_pages_iterator_sharded():
+    impl_test_sharded_static_only(
+        "AccessorTests/AccessorBenchmarks.PagesIteratorSharded/*", res_dir="accessor_pages_iterator_sharded_benchmarks"
+    )
+
+
+def test_manual_pages_iteration_interleaved():
+    impl_test_interleaved_static_only(
+        "AccessorTests/AccessorBenchmarks.ManualPagesIterationInterleaved/*",
+        res_dir="accessor_manual_pages_iteration_interleaved_benchmarks",
+    )
+
+
+def test_pages_iterator_interleaved():
+    impl_test_interleaved_static_only(
+        "AccessorTests/AccessorBenchmarks.PagesIteratorInterleaved/*",
+        res_dir="accessor_pages_iterator_interleaved_benchmarks",
     )

@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package tt.scaleout_tools.fsd.proto;
+
+// Factory System Descriptor (FSD) message
+message FactorySystemDescriptor {
+    message Host {
+        string hostname = 1;
+        string hall = 2;
+        string aisle = 3;
+        uint32 rack = 4;
+        uint32 shelf_u = 5;
+        string motherboard = 6;
+    }
+
+    message BoardLocationType {
+        uint32 host_id = 1;
+        uint32 tray_id = 2;
+        string board_type = 3;
+    }
+
+    message BoardTypes {
+      repeated BoardLocationType board_locations = 1;
+    }
+
+    message EndPoint {
+        uint32 host_id = 1;
+        uint32 tray_id = 2;
+        uint32 asic_location = 3;
+        uint32 chan_id = 4;
+    }
+
+    message Connection {
+        EndPoint endpoint_a = 1;
+        EndPoint endpoint_b = 2;
+    }
+
+    message EthConnections {
+        repeated Connection connection = 1;
+    }
+    repeated Host hosts = 1;
+    BoardTypes board_types = 2;
+    EthConnections eth_connections = 3;
+
+}

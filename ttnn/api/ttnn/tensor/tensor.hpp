@@ -16,7 +16,6 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -29,6 +28,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/optional_reference.hpp>
+#include "ttnn/tensor/memory_config/memory_config.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "types.hpp"
 
 namespace tt {
@@ -64,24 +65,20 @@ public:
     ~Tensor();
 
     // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
-    [[nodiscard]] Tensor(
-        Storage storage,
-        TensorSpec tensor_spec,
-        DistributedTensorConfig distributed_tensor_config,
-        TensorTopology tensor_topology);
+    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
     [[nodiscard]] Tensor(
         HostBuffer buffer,
-        const ttnn::Shape& shape,
+        const tt::tt_metal::Shape& shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
     [[nodiscard]] Tensor(
         HostBuffer buffer,
-        const ttnn::Shape& logical_shape,
-        const ttnn::Shape& padded_shape,
+        const tt::tt_metal::Shape& logical_shape,
+        const tt::tt_metal::Shape& padded_shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
@@ -97,7 +94,7 @@ public:
         tt::stl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
@@ -119,7 +116,7 @@ public:
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
         tt::stl::Span<T> buffer,
-        const ttnn::Shape& shape,
+        const tt::tt_metal::Shape& shape,
         tt::tt_metal::MemoryPin buffer_pin,
         const std::optional<Tile>& tile = std::nullopt);
 
@@ -127,7 +124,7 @@ public:
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
         tt::stl::Span<T> buffer,
-        const ttnn::Shape& shape,
+        const tt::tt_metal::Shape& shape,
         const std::function<void()>& on_creation_callback,
         const std::function<void()>& on_destruction_callback,
         const std::optional<Tile>& tile = std::nullopt) {
@@ -140,7 +137,7 @@ public:
         const std::vector<T>& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
         return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
     }
@@ -152,7 +149,7 @@ public:
         std::vector<T>&& buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId,
+        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0);
 
     // Converts a `Tensor` to a `std::vector<T>`.
@@ -161,28 +158,31 @@ public:
     //
     // If the tensor resides on a device, it will be brough back to host.
     template <typename T>
-    [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] std::vector<T> to_vector(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
     template <typename T>
-    [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] T item(std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
         ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+        std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
     [[nodiscard]] Tensor to_layout(Layout target_layout) const;
 
     [[nodiscard]] Tensor pad(
-        const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
+        const tt::tt_metal::Shape& output_padded_shape,
+        const tt::tt_metal::Shape& input_tensor_start,
+        float pad_value) const;
 
-    [[nodiscard]] Tensor cpu(bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    [[nodiscard]] Tensor cpu(bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt) const;
 
-    [[nodiscard]] Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
+    [[nodiscard]] Tensor unpad(
+        const tt::tt_metal::Shape& output_tensor_start, const tt::tt_metal::Shape& output_tensor_end) const;
 
     [[nodiscard]] Tensor pad_to_tile(float pad_value) const;
 
-    [[nodiscard]] Tensor unpad_from_tile(const ttnn::Shape& output_tensor_shape) const;
+    [[nodiscard]] Tensor unpad_from_tile(const tt::tt_metal::Shape& output_tensor_shape) const;
 
     [[nodiscard]] std::string write_to_string() const;
     void print() const;
@@ -197,8 +197,11 @@ public:
     // ======================================================================================
     //                                  Low Level APIs
     // ======================================================================================
-    [[nodiscard]] Tensor reshape(const ttnn::Shape& new_shape) const;
-    [[nodiscard]] Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
+    [[nodiscard]] Tensor reshape(const tt::tt_metal::Shape& new_shape) const;
+    [[nodiscard]] Tensor reshape(
+        const tt::tt_metal::Shape& new_logical_shape, const tt::tt_metal::Shape& new_padded_shape) const;
+
+    Tensor with_tensor_topology(TensorTopology tensor_topology) const;
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
@@ -206,12 +209,11 @@ public:
     Storage& storage();
     DataType dtype() const;
     Layout layout() const;
-    const ttnn::Shape& logical_shape() const;
-    const ttnn::Shape& padded_shape() const;
+    const tt::tt_metal::Shape& logical_shape() const;
+    const tt::tt_metal::Shape& padded_shape() const;
     const TensorSpec& tensor_spec() const;
     uint64_t logical_volume() const;
     uint64_t physical_volume() const;
-    const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
 
     // Multi-device topology configuration - tracks how tensor is distributed across mesh devices
@@ -225,7 +227,7 @@ public:
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    ttnn::Shape strides() const;
+    tt::tt_metal::Shape strides() const;
 
     bool is_scalar() const;
 
@@ -265,19 +267,14 @@ public:
     }
 
 private:
-    void init(
-        Storage storage,
-        TensorSpec tensor_spec,
-        DistributedTensorConfig distributed_tensor_config,
-        TensorTopology tensor_topology);
+    void init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
-[[deprecated]]
-Tensor create_device_tensor(
-    const ttnn::Shape& shape,
+[[deprecated]] Tensor create_device_tensor(
+    const tt::tt_metal::Shape& shape,
     DataType dtype,
     Layout layout,
     IDevice* device,
@@ -286,28 +283,18 @@ Tensor create_device_tensor(
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
-    CommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
@@ -329,9 +316,14 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
 // Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
-void write_tensor(const Tensor& src, Tensor& dst, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+void write_tensor(
+    const Tensor& src, Tensor& dst, bool blocking = true, std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt);
 
 Tensor set_tensor_id(const Tensor& tensor);
+
+namespace ops {
+Tensor to_dtype(const Tensor& tensor, DataType dtype);
+}  // namespace ops
 
 }  // namespace tt_metal
 

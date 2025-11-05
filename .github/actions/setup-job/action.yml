@@ -17,12 +17,17 @@ inputs:
     description: 'Enable watcher'
     default: false
     type: boolean
+  fetch-depth:
+    description: 'Fetch depth for git'
+    default: 1
+    type: integer
 runs:
   using: "composite"
   steps:
     - name: 🧬 Checkout Repository
       uses: actions/checkout@v4
       with:
+        fetch-depth: ${{ inputs.fetch-depth }}
         submodules: recursive
         path: ${{ inputs.path }}
 
@@ -35,7 +40,7 @@ runs:
 
     - name: 📦 Download Build Artifact
       if: ${{ inputs.build-artifact-name != '' }}
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.build-artifact-name }}
         path: ${{ inputs.path }}
@@ -43,12 +48,12 @@ runs:
     - name: 📂 Extract Build Files
       if: ${{ inputs.build-artifact-name != '' }}
       working-directory: ${{ inputs.path }}
-      run: tar -xf ttm_any.tar
+      run: tar --zstd -xf ttm_any.tar.zst
       shell: bash
 
     - name: 🧪 Download Python Wheel
       if: ${{ inputs.wheel-artifact-name != '' }}
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}

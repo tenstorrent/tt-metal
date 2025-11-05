@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -55,7 +55,11 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
         });
     }
 
-    threads[num_threads] = std::thread([&]() mutable {
+    threads[num_threads] = std::thread([&m,
+                                        &go_cv,
+                                        &threads_ready,
+                                        total_threads,
+                                        intermediate_fn = std::forward<IntermediateF>(intermediate_fn)]() mutable {
         std::unique_lock lk{m};
         threads_ready++;
         if (threads_ready == total_threads) {

@@ -38,7 +38,6 @@ static Tensor manual_insertion(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
                     DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)),
-            cpu_tensor.distributed_tensor_config(),
             cpu_tensor.tensor_topology())
             .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
@@ -49,7 +48,6 @@ static Tensor manual_insertion(
 }  // namespace detail
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
@@ -73,7 +71,10 @@ ttnn::Tensor ReshapeOperation::invoke(
         ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
          padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.padded_shape()[-1] % TILE_WIDTH != 0 ||
          (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) % TILE_HEIGHT != 0)) {
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16, "Error");
+        TT_FATAL(
+            input_tensor.dtype() == DataType::BFLOAT16,
+            "Input tensor dtype must be BFLOAT16 for this reshape operation but got {}",
+            input_tensor.dtype());
 
         return detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor,
@@ -88,19 +89,17 @@ ttnn::Tensor ReshapeOperation::invoke(
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(queue_id, input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
+    return invoke(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(queue_id, input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
+    return invoke(input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement

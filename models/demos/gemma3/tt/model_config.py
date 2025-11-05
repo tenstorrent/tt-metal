@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 from models.demos.gemma3.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
@@ -41,7 +42,6 @@ from models.tt_transformers.tt.model_config import (
     PrecisionSetting,
     TensorGroup,
 )
-from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -461,7 +461,7 @@ class ModelArgs:
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Tokenizer file: {os.path.join(self.TOKENIZER_PATH, 'tokenizer.model')}")
         logger.info(f"Cache directory: {self.CACHE_PATH}")
         logger.info(f"Model name: {self.model_name}")
 
@@ -470,8 +470,8 @@ class ModelArgs:
         self.model_cache_path = Path(self.CACHE_PATH)
 
         # Load weights and tokenizer
-        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
+        self.consolidated_weights_path = os.path.join(self.CKPT_DIR, "consolidated.00.pth")
+        self.tokenizer_path = os.path.join(self.TOKENIZER_PATH, "tokenizer.model")
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
@@ -515,6 +515,7 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
+                "gemma-3-1b": {"N150": 32, "N300": 32, "T3K": 32, "TG": 32, "P150x4": 32},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -1209,10 +1210,8 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            if self.is_vision():
-                self.VISION_MAX_MM_SEQ = (
-                    self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
-                )
+            if self.is_llama_vision():
+                self.VISION_MAX_MM_SEQ = self.vision_chunk_ntok if self.is_gemma else nearest_32(self.vision_chunk_ntok)
 
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -1235,9 +1234,9 @@ class ModelArgs:
             )
 
             self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
-                ttnn.DRAM_MEMORY_CONFIG if "gemma-3" in self.model_name else ttnn.L1_MEMORY_CONFIG
+                ttnn.DRAM_MEMORY_CONFIG if self.is_gemma else ttnn.L1_MEMORY_CONFIG
             )
-            self.lm_head_dtype = ttnn.bfloat16 if "gemma-3" in self.model_name else None
+            self.lm_head_dtype = ttnn.bfloat16 if self.is_gemma else None
 
             self.set_tg_attention_config()
 
@@ -1255,6 +1254,28 @@ class ModelArgs:
                 f"MLP prefill grids @ max_seq_len({self.max_seq_len}): w1/w3: {mlp1_3_grid(self.max_seq_len)}, w2: {mlp2_grid(self.max_seq_len)}"
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
+
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
+        There is no support to pass them as a tensor, and then inside the trace read it as a number.
+        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
+        """
+        # Trace in prefill is currently supported only for Llama-3.1-8B
+        # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
+        if self.base_model_name != "Llama-3.1-8B":
+            return False
+        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
+            return False
+
+        if self.device_name == "N150":
+            allowed_seq_lens = [128, 256, 512, 1024]
+        else:
+            allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+
+        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
 
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
@@ -1358,7 +1379,7 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if self.is_vision():
+        if self.is_llama_vision():
             return "text_model."
         else:
             return ""
@@ -1385,8 +1406,7 @@ class ModelArgs:
 
     def _set_model_specific_params(self):
         # Gemma3 specific params
-        is_gemma3 = "gemma-3" in self.base_model_name.lower()
-        if is_gemma3:
+        if self.is_gemma:
             self.rms_norm_add_unit_offset = True
             self.embed_scale = self.dim**0.5
 
@@ -1487,6 +1507,9 @@ class ModelArgs:
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
@@ -1510,7 +1533,7 @@ class ModelArgs:
         # self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.is_multimodal = "vision_config" in config or self.is_llama_vision()
 
         self._set_model_specific_params()
 
@@ -1528,6 +1551,10 @@ class ModelArgs:
         Returns the number of tokens per chunk, accounting for the extra class token
         """
         return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
+
+    @property
+    def is_gemma(self):
+        return any(x in self.base_model_name.lower() for x in ["gemma-3", "medgemma"])
 
     def _set_model_params(self, checkpoint_dir):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -1661,7 +1688,7 @@ class ModelArgs:
                 self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
 
             if "text_config" in self.hf_config or "vision_config" in self.hf_config:
-                if "gemma-3" in self.base_model_name:
+                if self.is_gemma:
                     self._set_params_from_dict(self.hf_config, is_hf=True)
                     if "vision_config" in self.hf_config:
                         merged_vision_config = merge_vision_config(self.hf_config)
@@ -1700,11 +1727,11 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    def is_vision(self):
-        return self.vision_chunk_size > 0
+    def is_llama_vision(self):
+        return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        if "gemma-3" in self.model_name:
+        if self.is_gemma:
             if is_vision:
                 text_prefix = "model.vision_tower.vision_model.encoder."
 
@@ -1797,7 +1824,7 @@ class ModelArgs:
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
-                if "gemma-3" in self.model_name:
+                if self.is_gemma:
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
                 else:
                     state_dict = standardize_hf_keys_multimodal(state_dict)
@@ -2164,7 +2191,9 @@ class ModelArgs:
 
             try:
                 # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2203,7 +2232,9 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoTokenizer.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -2323,7 +2354,7 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if "gemma-3" in self.model_name:
+                if self.is_gemma:
                     from transformers import Gemma3ForConditionalGeneration
 
                     model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
@@ -2454,7 +2485,7 @@ class ModelArgs:
             layer = model.model.layers[i]
             rotary_emb = model.model.rotary_emb
 
-            if "gemma-3" in self.model_name:
+            if self.is_gemma:
                 rotary_emb_local = model.model.rotary_emb_local
                 wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
             else:
@@ -2462,7 +2493,7 @@ class ModelArgs:
 
             return wrapper
 
-    def reference_attention(self):
+    def reference_attention(self, rope_embeddings="global"):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 
@@ -2475,9 +2506,14 @@ class ModelArgs:
                 "MistralAttention",
                 "Gemma3Attention",
             )
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            )
+            if "gemma-3" in self.model_name:
+                if rope_embeddings == "local":
+                    rotary_emb = model.model.rotary_emb_local
+                else:
+                    rotary_emb = model.model.rotary_emb
+            else:
+                rotary_emb = model.model.rotary_emb
+            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2568,6 +2604,7 @@ class HfAttentionWrapper:
         super().__init__()
         self.attention = attention
         self.past_key_value = DynamicCache()
+        # self.past_key_value = StaticCache(config=attention.config, max_batch_size=1, max_cache_len=256)
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
 
@@ -2639,17 +2676,13 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        model_name_env = os.getenv("HF_MODEL")
-        if "gemma-3" in model_name_env.lower():
-            position_embeddings = self.rotary_emb(x, position_ids)
-            position_embeddings_local = self.rotary_emb_local(x, position_ids)
-        else:
-            position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
         if self.rotary_emb_local is not None:
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
             result = self.decoder.forward(
                 x,
                 position_embeddings_global=position_embeddings,

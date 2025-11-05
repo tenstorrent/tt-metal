@@ -36,43 +36,42 @@ target_sources(
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
+        builder/fabric_core_placement.cpp
+        builder/fabric_channel_allocator.cpp
+        builder/fabric_static_sized_channels_allocator.cpp
+        builder/fabric_remote_channels_allocator.cpp
+        builder/static_sized_channel_connection_writer_adapter.cpp
+        builder/fabric_router_recipe.cpp
+        builder/channel_to_pool_mapping.cpp
+        builder/multi_pool_channel_allocator.cpp
         fabric.cpp
         fabric_init.cpp
         fabric_host_utils.cpp
         fabric_context.cpp
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
+        fabric_types.cpp
         compressed_routing_table.cpp
-        serialization/intermesh_link_table.cpp
-        serialization/physical_desc.cpp
+        compressed_routing_path.cpp
+        serialization/router_port_directions.cpp
+        serialization/physical_system_descriptor_serialization.cpp
+        serialization/intermesh_connections_serialization.cpp
+        serialization/port_descriptor_serialization.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
         physical_system_descriptor.cpp
+        topology_mapper.cpp
 )
-
-# Make .clang-tidy available in the fabric binary directory for generated files
-configure_file(${CMAKE_CURRENT_SOURCE_DIR}/.clang-tidy ${CMAKE_CURRENT_BINARY_DIR}/.clang-tidy COPYONLY)
-
-# Include helper functions and generate headers from flatbuffer schemas
-include(flatbuffers)
-set(FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/physical_desc.fbs
-)
-
-# Collect all generated headers
-set(GENERATED_FBS_HEADERS)
-foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE})
-    list(APPEND GENERATED_FBS_HEADERS ${FBS_GENERATED_HEADER_FILE})
-endforeach()
-
-# Add the generated headers to your target
-target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
 # Include helper functions and generate headers from protobuf schemas
 include(protobuf)
-set(PROTO_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto)
+set(PROTO_SCHEMAS
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/physical_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/router_port_directions.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/port_descriptor_table.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/intermesh_connection_table.proto
+)
 
 # Collect all generated protobuf files
 set(GENERATED_PROTO_SRCS)
@@ -84,12 +83,8 @@ endforeach()
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
-target_include_directories(
-    fabric
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}
-)
+target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric

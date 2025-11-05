@@ -8,7 +8,7 @@
 #include <tuple>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric {
 
@@ -17,7 +17,7 @@ namespace fabric_router_tests {
 static const std::array t3k_mesh_descriptor_chip_mappings = {
     std::tuple{
         std::string("tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml"),
-        std::vector<std::vector<eth_coord_t>>{
+        std::vector<std::vector<EthCoord>>{
             {{0, 0, 0, 0, 0},
              {0, 1, 0, 0, 0},
              {0, 2, 0, 0, 0},
@@ -28,7 +28,7 @@ static const std::array t3k_mesh_descriptor_chip_mappings = {
              {0, 3, 1, 0, 0}}}},
     std::tuple{
         std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.yaml"),
-        std::vector<std::vector<eth_coord_t>>{
+        std::vector<std::vector<EthCoord>>{
             {{0, 0, 0, 0, 0},
              {0, 1, 0, 0, 0},
              {0, 2, 0, 0, 0},
@@ -39,19 +39,19 @@ static const std::array t3k_mesh_descriptor_chip_mappings = {
              {0, 0, 1, 0, 0}}}},
     std::tuple{
         std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"),
-        std::vector<std::vector<eth_coord_t>>{
+        std::vector<std::vector<EthCoord>>{
             {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
             {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}, {0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}},
     std::tuple{
         std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x2_mesh_graph_descriptor.yaml"),
-        std::vector<std::vector<eth_coord_t>>{
+        std::vector<std::vector<EthCoord>>{
             {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}},
             {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
             {{0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
             {{0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}},
     std::tuple{
         std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x1_mesh_graph_descriptor.yaml"),
-        std::vector<std::vector<eth_coord_t>>{
+        std::vector<std::vector<EthCoord>>{
             {{0, 0, 0, 0, 0}},
             {{0, 1, 0, 0, 0}},
             {{0, 2, 0, 0, 0}},
@@ -62,7 +62,59 @@ static const std::array t3k_mesh_descriptor_chip_mappings = {
             {{0, 3, 1, 0, 0}}}},
     std::tuple{
         std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_1x2_1x1_mesh_graph_descriptor.yaml"),
-        std::vector<std::vector<eth_coord_t>>{
+        std::vector<std::vector<EthCoord>>{
+            {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
+            {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
+            {{0, 2, 1, 0, 0}},
+            {{0, 3, 1, 0, 0}}}},
+    std::tuple{
+        std::string("tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"),
+        std::vector<std::vector<EthCoord>>{
+            {{0, 0, 0, 0, 0},
+             {0, 1, 0, 0, 0},
+             {0, 2, 0, 0, 0},
+             {0, 3, 0, 0, 0},
+             {0, 0, 1, 0, 0},
+             {0, 1, 1, 0, 0},
+             {0, 2, 1, 0, 0},
+             {0, 3, 1, 0, 0}}}},
+    std::tuple{
+        std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto"),
+        std::vector<std::vector<EthCoord>>{
+            {{0, 0, 0, 0, 0},
+             {0, 1, 0, 0, 0},
+             {0, 2, 0, 0, 0},
+             {0, 3, 0, 0, 0},
+             {0, 3, 1, 0, 0},
+             {0, 2, 1, 0, 0},
+             {0, 1, 1, 0, 0},
+             {0, 0, 1, 0, 0}}}},
+    std::tuple{
+        std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto"),
+        std::vector<std::vector<EthCoord>>{
+            {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
+            {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}, {0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}},
+    std::tuple{
+        std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x2_mesh_graph_descriptor.textproto"),
+        std::vector<std::vector<EthCoord>>{
+            {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}},
+            {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
+            {{0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
+            {{0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}},
+    std::tuple{
+        std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x1_mesh_graph_descriptor.textproto"),
+        std::vector<std::vector<EthCoord>>{
+            {{0, 0, 0, 0, 0}},
+            {{0, 1, 0, 0, 0}},
+            {{0, 2, 0, 0, 0}},
+            {{0, 3, 0, 0, 0}},
+            {{0, 0, 1, 0, 0}},
+            {{0, 1, 1, 0, 0}},
+            {{0, 2, 1, 0, 0}},
+            {{0, 3, 1, 0, 0}}}},
+    std::tuple{
+        std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_1x2_1x1_mesh_graph_descriptor.textproto"),
+        std::vector<std::vector<EthCoord>>{
             {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
             {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}},
             {{0, 2, 1, 0, 0}},
@@ -71,10 +123,15 @@ static const std::array t3k_mesh_descriptor_chip_mappings = {
 static const std::array t3k_disjoint_mesh_descriptor_chip_mappings = {
     std::tuple{
         std::string("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_disjoint_mesh_graph_descriptor.yaml"),
-        std::vector<std::vector<eth_coord_t>>{
+        std::vector<std::vector<EthCoord>>{
             {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
             {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}, {0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}},
-};
+    std::tuple{
+        std::string(
+            "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_disjoint_mesh_graph_descriptor.textproto"),
+        std::vector<std::vector<EthCoord>>{
+            {{0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}},
+            {{0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}, {0, 2, 1, 0, 0}, {0, 3, 1, 0, 0}}}}};
 
 }  // namespace fabric_router_tests
 

@@ -176,7 +176,22 @@ void LayerNorm::validate(
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
+                if (program_config.use_welford) {
+                    TT_FATAL(
+                        this->norm_type != LayerNormType::RMSNORM, "Welford's algorithm is not supported for RMSNorm");
+                }
+                if (this->norm_type == LayerNormType::RMSNORM) {
+                    TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
+                }
+            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (program_config.use_welford) {
+                    TT_FATAL(
+                        this->norm_type != LayerNormType::RMSNORM, "Welford's algorithm is not supported for RMSNorm");
+                    TT_FATAL(
+                        this->distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+                        "Welford's algorithm is not supported for distributed layernorm");
+                }
                 if (program_config.inplace) {
                     TT_FATAL(
                         this->output_mem_config.is_sharded(),
@@ -200,10 +215,8 @@ void LayerNorm::validate(
                 uint32_t Mt = M / TILE_WIDTH;
                 uint32_t Kt = K / TILE_WIDTH;
                 // block
-                uint32_t block_w = program_config.block_w * TILE_WIDTH;
                 uint32_t block_h = program_config.block_h * TILE_HEIGHT;
                 const auto shard_spec = a.shard_spec().value();
-                uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
                 // check dims
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
@@ -228,11 +241,14 @@ void LayerNorm::validate(
                 if (mcast_1d) {
                     TT_FATAL(
                         tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
-                        "block_w ({}) must equal to K / num_cores ({})",
+                        "block_w ({}) must equal to K (in tiles) / num_cores ({})",
                         program_config.block_w,
                         tt::div_up(Kt, shard_spec.num_cores()));
                     TT_FATAL(
-                        Mt == program_config.block_h, "block_h ({}) must equal to M ({})", program_config.block_h, Mt);
+                        Mt == program_config.block_h,
+                        "block_h ({}) must equal to M (in tiles) ({})",
+                        program_config.block_h,
+                        Mt);
                     TT_FATAL(
                         a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
                         "Height sharded memory layout is not supported, got: {}",
@@ -241,23 +257,23 @@ void LayerNorm::validate(
                     if (row_wise) {
                         TT_FATAL(
                             tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
-                            "block_w ({}) must equal to K / num_cores_c ({})",
+                            "block_w ({}) must equal to K (in tiles) / num_cores_c ({})",
                             program_config.block_w,
                             tt::div_up(Kt, (bbox.end_coord.x + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.y + 1) == program_config.block_h,
-                            "block_h ({}) must equal to M / num_cores_r ({})",
+                            "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
                             program_config.block_h,
                             Mt / (bbox.end_coord.y + 1));
                     } else {
                         TT_FATAL(
                             tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
-                            "block_w ({}) must equal to K / num_cores_r ({})",
+                            "block_w ({}) must equal to K (in tiles) / num_cores_r ({})",
                             program_config.block_w,
                             tt::div_up(Kt, (bbox.end_coord.y + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.x + 1) == program_config.block_h,
-                            "block_h ({}) must equal to M / num_cores_c ({})",
+                            "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
                             program_config.block_h,
                             Mt / (bbox.end_coord.x + 1));
                     }
@@ -342,7 +358,7 @@ std::vector<TensorSpec> LayerNorm::compute_output_specs(const std::vector<Tensor
 
                 auto mem_config = this->output_mem_config;
                 if (!mem_config.shard_spec().has_value()) {
-                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec().value());
+                    mem_config = mem_config.with_shard_spec(input_tensor.shard_spec());
                 }
 
                 return {ttnn::TensorSpec(
@@ -398,7 +414,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                 TT_FATAL(
                     a.is_sharded(),
                     "ERROR - LayerNormShardedMultiCoreProgramConfig is used with non-sharded input. Please use "
-                    "LayerNormMultiCoreProgramConfig, or shard the tensors.");
+                    "LayerNormDefaultProgramConfig, or shard the tensors.");
 
                 return layernorm_multi_core_sharded(
                     a,
@@ -414,14 +430,29 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     program_config.subblock_w,
                     program_config.block_h,
                     program_config.block_w,
+                    program_config.legacy_reduction,
+                    program_config.legacy_rsqrt,
+                    program_config.use_welford,
                     this->compute_kernel_config);
-            } else {
+            } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 TT_FATAL(
                     !a.is_sharded(),
-                    "ERROR - LayerNormMultiCoreProgramConfig is being used with sharded input. Please use "
+                    "ERROR - LayerNormDefaultProgramConfig is being used with sharded input. Please use "
                     "LayerNormShardedMultiCoreProgramConfig, or interleave the tensors.");
                 return layernorm_multi_core(
-                    a, b, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config);
+                    a,
+                    b,
+                    gamma,
+                    beta,
+                    output_tensor,
+                    this->norm_type,
+                    this->eps,
+                    program_config.legacy_reduction,
+                    program_config.legacy_rsqrt,
+                    program_config.use_welford,
+                    this->compute_kernel_config);
+            } else {
+                TT_THROW("Unsupported program config");
             }
         },
         this->program_config);

@@ -7,17 +7,13 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_mul_int32.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {
 
 // clang-format off
 /**
- * Performs an elementwise mul operation with the two int32 inputs: y = mul(x0,x1)
+ * Performs an elementwise multiplication operation with the two 32-bit integer inputs: y = mul(x0,x1)
  * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
@@ -35,6 +31,10 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void mul_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_mul_int32<APPROX>(idst0, idst1, odst)));
+}
+
+ALWI void mul_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_mul_int32<APPROX>(idst0, idst1, odst)));
 }
 
