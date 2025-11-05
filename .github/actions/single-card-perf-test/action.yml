@@ -118,7 +118,7 @@ runs:
 
         # Output to GitHub Step Summary (markdown format)
         {
-          echo "### Compact test summary"
+          echo "### Compact test log summary"
           echo
           if [[ ! -s "$CI_LOG_FILE" ]]; then
             echo "_no aggregated log at \`$CI_LOG_FILE\`_"
