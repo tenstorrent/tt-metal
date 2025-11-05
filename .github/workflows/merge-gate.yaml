@@ -255,6 +255,27 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  triage-tests:
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changes.outputs.cmake-changed == 'true' ||
+        needs.find-changes.outputs.any-code-changed == 'true'
+      }}
+    needs: [ build-asan, find-changes ]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150",
+        ]
+    uses: ./.github/workflows/triage.yaml
+    with:
+      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-asan.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-asan.outputs.wheel-artifact-name }}
+      runner-label: ${{ matrix.platform }}
+      timeout: 30
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -268,14 +289,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, triage-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
+          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, triage-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

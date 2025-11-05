@@ -1,0 +1,77 @@
+name: "[internal] Triage tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 30
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      enable-watcher:
+        description: 'Enable watcher'
+        default: false
+        type: boolean
+
+jobs:
+  triage-tests:
+    name: Triage tests ${{ inputs.runner-label }}
+    container:
+      image: ${{ (inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && 'harbor.ci.tenstorrent.net/' || '' }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        LOGURU_LEVEL: INFO
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: >-
+      ${{
+        (inputs.runner-label == 'P100' || inputs.runner-label == 'P150') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher }}
+      - name: Run triage tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: |
+            mkdir -p generated/test_reports
+            pip install -r tools/triage/requirements.txt
+            pytest ./tools/tests/triage/
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U066XH7HD6W # Vuk Jovanovic
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - name: Generate test annotations on failure
+        uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
+        if: ${{ failure() }}
