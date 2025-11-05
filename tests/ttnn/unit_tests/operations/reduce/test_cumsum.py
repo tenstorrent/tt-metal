@@ -30,7 +30,7 @@ def is_supported(shape, dim, ttnn_dtype):
     if dim < tensor_rank:
         accumulation_length = shape[dim]
         if ttnn_dtype == ttnn.bfloat16 and accumulation_length > 10000:
-            return False  # for bfloat16, accmulation errors can happen easily on long tensor
+            return False  # for bfloat16, accumulation errors can happen easily on long tensor
 
     return True
 
@@ -71,7 +71,6 @@ def test_cumsum(size, dim, dtypes, device):
 
         expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
-        # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
         if not is_supported(size, dim, expected_output_dtype):
             pytest.skip("Unsupported configuration by ttnn.cumsum")
 
