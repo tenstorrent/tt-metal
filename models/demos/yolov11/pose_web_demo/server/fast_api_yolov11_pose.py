@@ -98,6 +98,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         return {"error": "TTNN model not loaded - check server startup logs"}
 
     try:
+        print(f"DEBUG: Received pose request for file: {file.filename}")
         # Read and process the uploaded image
         contents = await file.read()
         image = Image.open(BytesIO(contents)).convert("RGB")
@@ -126,42 +127,46 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         conf_thresh = 0.6
 
         if results.boxes is not None and len(results.boxes) > 0:
-            boxes = results.boxes.xyxy.cpu().numpy()
-            confs = results.boxes.conf.cpu().numpy()
+            # boxes shape: [num_detections, 6] - (x1,y1,x2,y2,conf,class)
+            boxes_tensor = results.boxes.cpu().numpy()
 
-            for i, (box, conf) in enumerate(zip(boxes, confs)):
+            for i, box in enumerate(boxes_tensor):
+                x1, y1, x2, y2, conf, class_id = box
                 if conf > conf_thresh:
                     # Normalize box coordinates to [0,1]
-                    normalized_box = box / 640.0
+                    normalized_box = [x1 / 640.0, y1 / 640.0, x2 / 640.0, y2 / 640.0]
 
                     # Process keypoints
                     keypoints_data = []
-                    if hasattr(results, "keypoints") and results.keypoints is not None:
-                        kpts = results.keypoints[i].xy.cpu().numpy()  # [17, 2]
-                        kpts_conf = results.keypoints[i].conf.cpu().numpy()  # [17]
+                    if hasattr(results, "keypoints") and results.keypoints is not None and len(results.keypoints) > i:
+                        # keypoints shape: [num_detections, 51] - (17 points × 3 values: x,y,conf)
+                        kpt_data = results.keypoints[i].cpu().numpy()  # [51]
 
-                        # Normalize keypoints to [0,1]
-                        kpts_normalized = kpts / 640.0
+                        # Reshape to [17, 3] - (x, y, confidence) for each keypoint
+                        kpt_reshaped = kpt_data.reshape(17, 3)
 
-                        # Flatten keypoints: [x,y,confidence] for each of 17 points
-                        for j in range(len(kpts_normalized)):
-                            keypoints_data.extend(
-                                [
-                                    float(kpts_normalized[j][0]),  # x
-                                    float(kpts_normalized[j][1]),  # y
-                                    float(kpts_conf[j]),  # confidence
-                                ]
-                            )
+                        # Normalize x,y coordinates to [0,1] (confidence stays as-is)
+                        kpt_reshaped[:, 0] = kpt_reshaped[:, 0] / 640.0  # x coordinates
+                        kpt_reshaped[:, 1] = kpt_reshaped[:, 1] / 640.0  # y coordinates
+
+                        # Flatten to list: [x,y,confidence] for each of 17 points
+                        keypoints_data = kpt_reshaped.flatten().tolist()
                     else:
                         # No keypoints available, fill with zeros
                         keypoints_data = [0.0] * (17 * 3)  # 17 keypoints * 3 values each
 
                     # Format: [x1,y1,x2,y2,conf,class,keypoints...]
-                    detection = list(normalized_box) + [float(conf), 0.0] + keypoints_data
+                    detection = normalized_box + [float(conf), float(class_id)] + keypoints_data
                     output.append(detection)
 
+        print(f"DEBUG: Returning {len(output)} detections")
+        if len(output) > 0:
+            print(f"DEBUG: First detection has {len(output[0])} values")
         return output
 
     except Exception as e:
         logging.error(f"Error in pose estimation: {e}")
+        import traceback
+
+        traceback.print_exc()
         return {"error": f"Pose estimation failed: {str(e)}"}

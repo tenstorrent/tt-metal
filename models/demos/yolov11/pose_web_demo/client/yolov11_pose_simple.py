@@ -122,10 +122,16 @@ class VideoProcessor(VideoProcessorBase):
                 if response.status_code == 200:
                     # Parse JSON response - server returns list directly
                     output = response.json()
+                    print(
+                        f"DEBUG: Server returned: {type(output)}, length: {len(output) if hasattr(output, '__len__') else 'N/A'}"
+                    )
+                    if isinstance(output, list) and len(output) > 0:
+                        print(f"DEBUG: First detection sample: {output[0][:5] if len(output[0]) > 5 else output[0]}")
                     # Wrap in expected format for processing
                     output = {"detections": output}
                 else:
                     print(f"Request failed with status code {response.status_code}")
+                    print(f"Response text: {response.text}")
                     return None
         except requests.exceptions.RequestException as e:
             print(f"Request failed: {e}")
