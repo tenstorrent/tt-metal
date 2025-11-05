@@ -244,7 +244,7 @@ jobs:
             should-run: ${{ needs.update-submodule.outputs.should-run-blackhole }}
           - workflow: "tt-metal-l2-nightly.yaml"
             name: "TT-Metal L2 Nightly APC"
-            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true' }}
+            should-run: ${{ (needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true') && 'true' || 'false' }}
     steps:
       - name: Checkout
         if: matrix.should-run == 'true'
