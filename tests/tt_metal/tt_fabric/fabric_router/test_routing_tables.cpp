@@ -115,6 +115,36 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
+TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32ControlPlaneInit) {
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
+    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+}
+
+TEST_F(ControlPlaneFixture, TestSingleGalaxy1x32FabricRoutes) {
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
+    auto control_plane = make_control_plane(galaxy_6u_mesh_graph_desc_path);
+
+    // Test routing from first chip (0) to last chip (31) in the 1x32 topology
+    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+
+    // Test routing on second routing plane
+    valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+    EXPECT_GT(valid_chans.size(), 0);
+    for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 31), chan);
+        EXPECT_EQ(!path.empty(), true);
+    }
+}
+
 class T3kCustomMeshGraphControlPlaneFixture
     : public ControlPlaneFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<EthCoord>>>> {};
@@ -734,6 +764,25 @@ TEST(MeshGraphValidation, TestDualGalaxyMeshGraph) {
         MeshCoordinateRange(MeshCoordinate(0, 4), MeshCoordinate(7, 7)));
 }
 
+TEST(MeshGraphValidation, TestSingleGalaxy1x32MeshGraph) {
+    const std::filesystem::path galaxy_6u_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.yaml";
+    MeshGraph mesh_graph_desc(galaxy_6u_mesh_graph_desc_path.string());
+
+    // Verify the mesh has correct topology for 1x32 Galaxy configuration
+    EXPECT_EQ(
+        mesh_graph_desc.get_coord_range(MeshId{0}, MeshHostRankId(0)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 31)));
+
+    // Verify mesh shape is 1x32
+    EXPECT_EQ(mesh_graph_desc.get_mesh_shape(MeshId{0}), MeshShape(1, 32));
+
+    // Verify there's only one mesh
+    EXPECT_EQ(mesh_graph_desc.get_mesh_ids().size(), 1);
+    EXPECT_EQ(mesh_graph_desc.get_mesh_ids()[0], MeshId{0});
+}
+
 // Black hole tests for p150, p100, p150 x8
 TEST(MeshGraphValidation, TestP150BlackHoleMeshGraph) {
     const std::filesystem::path p150_mesh_graph_desc_path =
@@ -813,6 +862,53 @@ TEST_F(ControlPlaneFixture, TestP150X8BlackHoleFabricRoutes) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 7), chan);
         EXPECT_EQ(!path.empty(), true);
     }
+}
+
+// Test that FabricConfig can restrict torus topology to mesh (ignore wrap-around links)
+TEST(MeshGraphValidation, TestFabricConfigOverrideTorusToMesh) {
+    using namespace single_galaxy_constants;
+    // Use existing torus XY MGD - this MGD has physical wrap-around connections
+    const std::filesystem::path torus_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_xy_graph_descriptor.textproto";
+
+    // Test 1: Without FabricConfig - should respect dim_types (RING = torus with wrap-around)
+    {
+        MeshGraph mesh_graph_no_override(torus_mgd_path.string());
+        const auto& connectivity = mesh_graph_no_override.get_intra_mesh_connectivity();
+
+        // In torus, NW corner (chip 0) should have wrap-around connections
+        auto& nw_connections = connectivity[0][nw_fabric_id];
+        // Should have all 4 directions due to wrap-around
+        EXPECT_GT(nw_connections.size(), 2);  // More than just E and S
+        // Check wrap-around exists (W and N)
+        EXPECT_GT(nw_connections.count(3), 0);  // Has W connection (wrap-around)
+    }
+
+    // Test 2: With FabricConfig=FABRIC_2D - should restrict to mesh (ignore wrap-around links)
+    {
+        MeshGraph mesh_graph_override(torus_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D);
+        const auto& connectivity = mesh_graph_override.get_intra_mesh_connectivity();
+
+        // In mesh mode, NW corner should only have E and S connections (ignore wrap-around)
+        auto& nw_connections = connectivity[0][nw_fabric_id];
+        EXPECT_EQ(nw_connections.size(), 2);    // Only E and S
+        EXPECT_EQ(nw_connections.count(3), 0);  // No W connection (wrap-around ignored)
+    }
+}
+
+// Test that FabricConfig cannot create topology that doesn't physically exist (mesh→torus)
+TEST(MeshGraphValidation, TestFabricConfigInvalidMeshToTorus) {
+    using namespace single_galaxy_constants;
+    // Use existing mesh MGD - this MGD does NOT have physical wrap-around connections
+    const std::filesystem::path mesh_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
+
+    // Attempting to override mesh to torus should throw - cannot create connections that don't exist
+    EXPECT_THROW(
+        { MeshGraph mesh_graph_invalid(mesh_mgd_path.string(), tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY); },
+        std::runtime_error);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

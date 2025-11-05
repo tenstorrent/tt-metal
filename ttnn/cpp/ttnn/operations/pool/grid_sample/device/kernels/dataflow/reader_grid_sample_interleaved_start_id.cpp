@@ -26,14 +26,15 @@ void kernel_main() {
     constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(2);
     constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(3);
     constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(4);
-    constexpr uint32_t input_height = get_compile_time_arg_val(5);
-    constexpr uint32_t input_width = get_compile_time_arg_val(6);
-    constexpr uint32_t grid_batches = get_compile_time_arg_val(7);
-    constexpr uint32_t grid_dtype = get_compile_time_arg_val(8);
-    constexpr uint32_t output_hw_size = get_compile_time_arg_val(9);
-    constexpr bool use_precomputed_grid = get_compile_time_arg_val(10);
 
-    constexpr auto src_args = TensorAccessorArgs<11>();
+    constexpr uint32_t input_height = get_compile_time_arg_val(6);
+    constexpr uint32_t input_width = get_compile_time_arg_val(7);
+    constexpr uint32_t grid_batches = get_compile_time_arg_val(8);
+    constexpr uint32_t grid_dtype = get_compile_time_arg_val(9);
+    constexpr uint32_t output_hw_size = get_compile_time_arg_val(10);
+    constexpr bool use_precomputed_grid = get_compile_time_arg_val(11);
+
+    constexpr auto src_args = TensorAccessorArgs<12>();
     constexpr auto grid_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     const auto grid_tensor_accessor = TensorAccessor(grid_args, grid_addr, grid_stick_nbytes);

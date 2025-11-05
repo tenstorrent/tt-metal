@@ -10,7 +10,7 @@ run_mid_run_data_dump() {
     echo "Smoke test, checking mid-run device data dump for hangs"
     remove_default_log_locations
     mkdir -p $PROFILER_ARTIFACTS_DIR
-    python -m tracy -v -r -p --cpp-post-process --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_all_devices
+    python -m tracy -v -r -p --cpp-post-process --sync-host-device --dump-device-data-mid-run -m pytest tests/ttnn/tracy/test_profiler_sync.py::test_mesh_device
     runDate=$(ls $PROFILER_OUTPUT_DIR/)
     cat $PROFILER_OUTPUT_DIR/$runDate/ops_perf_results_$runDate.csv
     python $PROFILER_SCRIPTS_ROOT/compare_ops_logs.py

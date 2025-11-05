@@ -90,7 +90,6 @@ def test_forward_pass(
     mode: str,
     seq_len: int,
     hf_config: Any,
-    tmp_path: Path,
     cache_path: Path,
     mesh_device: Any,
     weight_type: str,
@@ -109,9 +108,6 @@ def test_forward_pass(
             reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
         )
 
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
     else:
         assert weight_type == "real"
         state_dict = create_combined_state_dict(module_path, model_path, state_dict)

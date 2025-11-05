@@ -65,7 +65,8 @@ def run_distributed_layernorm(
     fp32_enabled=False,
     iterations=1,
 ):
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_enabled,

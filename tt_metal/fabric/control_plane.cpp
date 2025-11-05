@@ -23,12 +23,14 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <yaml-cpp/yaml.h>
 #include <tt_stl/assert.hpp>
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
 #include "compressed_routing_path.hpp"
+#include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -169,7 +171,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
+            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& /*golden_link_counts*/,
             size_t& val) {
             if (skip_direction(fabric_node_id, direction)) {
                 return;
@@ -422,13 +424,21 @@ void ControlPlane::initialize_distributed_contexts() {
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_asic_id(uint64_t asic_id) const {
+    // Check cache first for faster lookup
+    auto cache_it = asic_id_to_fabric_node_cache_.find(asic_id);
+    if (cache_it != asic_id_to_fabric_node_cache_.end()) {
+        return cache_it->second;
+    }
+
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& chip_unique_ids = cluster.get_unique_chip_ids();
 
     for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
-        // TODO: We can maintain a map of unique_id to physical_chip_id for faster lookup
         if (unique_id == asic_id) {
-            return this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            FabricNodeId fabric_node_id = this->get_fabric_node_id_from_physical_chip_id(physical_chip_id);
+            // Cache the result for future lookups
+            asic_id_to_fabric_node_cache_.emplace(asic_id, fabric_node_id);
+            return fabric_node_id;
         }
     }
 
@@ -440,10 +450,12 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file, fabric_config);
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
@@ -455,8 +467,34 @@ void ControlPlane::init_control_plane(
         this->topology_mapper_ = nullptr;
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
+        std::vector<std::pair<AsicPosition, FabricNodeId>> fixed_asic_position_pinnings;
+
+        // Pin start or mesh to match the Galaxy Topology so that external QSFP links align with corner of fabric mesh
+        // node ids This is for performance optimizations to make sure that MGD mapping does not bisect a device
+
+        // * * o o < Pinned corners marked with *
+        // * o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        // o o o o
+        const bool is_1d = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[0] == 1 ||
+                           this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1] == 1;
+        const size_t board_size = cluster.get_unique_chip_ids().size();
+        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32) {  // Using full board size for UBB Galaxy
+            int y_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1];
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
+            fixed_asic_position_pinnings.push_back({AsicPosition{1, 2}, FabricNodeId(MeshId{0}, y_size)});
+        }
+
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
-            *this->routing_table_generator_->mesh_graph, *this->physical_system_descriptor_, this->local_mesh_binding_);
+            *this->routing_table_generator_->mesh_graph,
+            *this->physical_system_descriptor_,
+            this->local_mesh_binding_,
+            fixed_asic_position_pinnings);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
     }
@@ -1650,12 +1688,9 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
         (this->topology_mapper_ == nullptr)
             ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
             : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
-    uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
-                             ? MAX_CHIPS_LOWLAT_1D
-                             : static_cast<uint16_t>(local_mesh_chip_id_container.size());
-
+    auto mesh_shape = this->get_physical_mesh_shape(mesh_id);
     intra_mesh_routing_path_t<1, false> routing_path;
-    routing_path.calculate_chip_to_all_routing_fields(0, num_chips);
+    routing_path.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), MAX_CHIPS_LOWLAT_1D);
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
@@ -1718,7 +1753,6 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
     // Get mesh shape for 2D routing calculation
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
-    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
         mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
@@ -1731,7 +1765,7 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
-        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
+        routing_path.calculate_chip_to_all_routing_fields(src_fabric_node_id, mesh_shape[0] * mesh_shape[1]);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         write_to_all_tensix_cores(
             &routing_path,
@@ -1921,7 +1955,10 @@ FabricContext& ControlPlane::get_fabric_context() const {
     return *this->fabric_context_;
 }
 
-void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
+void ControlPlane::clear_fabric_context() {
+    this->fabric_context_.reset(nullptr);
+    asic_id_to_fabric_node_cache_.clear();
+}
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(this->fabric_context_ != nullptr, "Fabric context must be initialized first");
@@ -2768,6 +2805,84 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
     }
     return intermesh_connections;
 }
+
+bool ControlPlane::is_fabric_config_valid(tt::tt_fabric::FabricConfig fabric_config) const {
+    if (fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+        return false;
+    }
+
+    static const std::unordered_set<tt::tt_fabric::FabricConfig> torus_fabric_configs = {
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y,
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY
+    };
+
+    if (torus_fabric_configs.count(fabric_config)) {
+        try {
+            validate_torus_setup(fabric_config);
+            return true;  // Validation passed if no exception was thrown
+        } catch (const std::exception& e) {
+            log_warning(tt::LogFabric, "Fabric configuration validation failed: {}", e.what());
+            return false;
+        }
+    }
+
+    // Non-torus configurations are valid by default since we always have at least mesh topology,
+    // and mesh configurations don't require special validation like torus does
+    return true;
+}
+
+void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_config) const {
+    TT_ASSERT(physical_system_descriptor_ != nullptr, "Physical system descriptor not initialized");
+
+    auto all_hostnames = physical_system_descriptor_->get_all_hostnames();
+    auto cabling_descriptor_path = get_cabling_descriptor_path(fabric_config);
+    // Check if the cabling descriptor file exists
+    TT_ASSERT(std::filesystem::exists(cabling_descriptor_path),
+              "Cabling descriptor file not found: {}", cabling_descriptor_path);
+
+    // Generate GSD YAML from the current physical system descriptor
+    YAML::Node gsd_yaml = physical_system_descriptor_->generate_yaml_node();
+
+    // Use the new validation function that handles CablingGenerator internally
+    tt::scaleout_tools::validate_cabling_descriptor_against_gsd(
+        cabling_descriptor_path,
+        all_hostnames,
+        gsd_yaml,
+        false,                      // strict_validation
+        false                       // assert_on_connection_mismatch
+    );
+
+    log_debug(tt::LogFabric, "Torus validation passed for configuration: {}", static_cast<int>(fabric_config));
+}
+
+std::string ControlPlane::get_cabling_descriptor_path(tt::tt_fabric::FabricConfig fabric_config) const {
+    static const std::string X_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_x_torus_superpod.textproto";
+    static const std::string Y_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_y_torus_superpod.textproto";
+    static const std::string XY_TORUS_PATH = "tools/tests/scaleout/cabling_descriptors/wh_galaxy_xy_torus_superpod.textproto";
+
+    // Get fabric type from config and map to cabling descriptor paths
+    FabricType fabric_type = get_fabric_type(fabric_config);
+
+    static const std::unordered_map<FabricType, std::string> cabling_map = {
+        {FabricType::TORUS_X, X_TORUS_PATH},
+        {FabricType::TORUS_Y, Y_TORUS_PATH},
+        {FabricType::TORUS_XY, XY_TORUS_PATH}
+    };
+
+    auto it = cabling_map.find(fabric_type);
+    if (it == cabling_map.end()) {
+        log_warning(tt::LogFabric, "Unknown torus configuration: {}", static_cast<int>(fabric_config));
+        return "";  // Return empty string for unknown configurations
+    }
+
+    const auto& root_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
+    return root_dir + it->second;
+}
+
 
 ControlPlane::~ControlPlane() = default;
 

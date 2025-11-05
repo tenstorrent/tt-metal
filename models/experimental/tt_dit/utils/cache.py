@@ -13,7 +13,8 @@ CACHE_DICT_FILE = "cache_dict.json"
 def config_id(parallel_config):
     config_id = ""
     for n, v in parallel_config._asdict().items():
-        config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
+        if v is not None:
+            config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
     return config_id
 
 

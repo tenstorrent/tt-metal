@@ -593,7 +593,7 @@ inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int to_shif
 }
 
 template <class T>
-inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int bits, unsigned int to_shift) {
+inline typename std::make_unsigned<T>::type pack_field(T x, unsigned int /*bits*/, unsigned int to_shift) {
     typename std::make_unsigned<T>::type u_x(x);
 
     // assert((u_x & ~bitmask<T>(bits)) == 0);

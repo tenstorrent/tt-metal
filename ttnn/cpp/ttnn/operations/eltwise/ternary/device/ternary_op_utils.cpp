@@ -93,6 +93,10 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcast}},
 
+    // TTT configurations for ADDCMUL - only NONE broadcast type supported initially
+    {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::NONE},
+     {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastAddcmul, KernelName::WriterNoBcast}},
+
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
@@ -162,6 +166,7 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeBcastTTS_TST:
             return fmt::format(compute, root, "ternary_sfpu_col_scalar_bcast_tts_tst.cpp");
         case KernelName::ComputeNoBcastTTS_TST: return fmt::format(compute, root, "ternary_sfpu_no_bcast_tts_tst.cpp");
+        case KernelName::ComputeNoBcastAddcmul: return fmt::format(compute, root, "ternary_addcmul.cpp");
         default: __builtin_unreachable();
     }
 }
@@ -267,6 +272,10 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             // LERP will use lerp_tile_init and lerp_tile functions (to be implemented)
             defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = "lerp_tile";
+            break;
+        case TernaryOpType::ADDCMUL:
+            // ADDCMUL uses a separate kernel that implements the operation using existing add/mul tiles
+            // No SFPU macros needed since we use binary operations directly
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }

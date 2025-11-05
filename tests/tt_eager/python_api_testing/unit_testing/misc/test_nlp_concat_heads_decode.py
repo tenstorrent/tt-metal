@@ -17,7 +17,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
-    get_devices_for_t3000,
     nearest_32,
 )
 
@@ -89,20 +88,19 @@ def run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, ba
     "n_local_heads, padded_local_heads, head_dim, batch_size",
     ((8, 32, 128, 32), (17, 32, 96, 32), (32, 32, 64, 32), (8, 32, 128, 16)),
 )
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_concat_head(
     n_local_heads,
     padded_local_heads,
     head_dim,
     batch_size,
-    all_devices,
+    mesh_device,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=1)
-    device = devices[0]
     torch.manual_seed(0)
 
     for i in range(3):
         # multiple loops to test program caching
-        run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, batch_size)
+        run_test_concat_head(mesh_device, n_local_heads, padded_local_heads, head_dim, batch_size)
 
 
 @pytest.mark.parametrize(
@@ -122,18 +120,17 @@ def test_concat_head(
         ),
     ),
 )
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1_grid")], indirect=True)
 def test_concat_head_subcoregrids(
     n_local_heads,
     padded_local_heads,
     head_dim,
     batch_size,
     sub_core_grids,
-    all_devices,
+    mesh_device,
 ):
-    devices = get_devices_for_t3000(all_devices, num_devices=1)
-    device = devices[0]
     torch.manual_seed(0)
 
     for i in range(3):
         # multiple loops to test program caching
-        run_test_concat_head(device, n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids)
+        run_test_concat_head(mesh_device, n_local_heads, padded_local_heads, head_dim, batch_size, sub_core_grids)

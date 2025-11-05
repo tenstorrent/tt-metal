@@ -771,13 +771,9 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     // Input is tiled, and so channels would always be aligned to TILE_WIDTH.
     // So the non aligned copy is needed if the output alignment is less than TILE_WIDTH * element_size.
     auto alignment = TILE_WIDTH * output.element_size();
-    bool use_runtime_tiles_compute_arg = false;
     auto is_non_aligned = false;
     if (output_row_size_bytes % alignment) {
         is_non_aligned = true;
-        if (num_cores_channels > 1) {
-            use_runtime_tiles_compute_arg = true;
-        }
     }
 
     tt::tt_metal::create_cb(

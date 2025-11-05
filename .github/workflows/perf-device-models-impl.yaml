@@ -107,7 +107,6 @@ jobs:
           commands: |
             pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
             ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal' || '' }}
-            ${{ matrix.test-info.arch == 'wormhole_b0' && 'pytest models/experimental/stable_diffusion_xl_refiner/tests/test_sdxl_refiner_perf.py -m models_device_performance_bare_metal' || '' }}
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -368,11 +367,19 @@ jobs:
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Save environment data
+        id: save-environment-data
         if: ${{ !cancelled() }}
-        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

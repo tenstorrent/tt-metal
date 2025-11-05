@@ -91,7 +91,7 @@ TT_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 
 ### Adding new TTNN examples
 
-TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials/2025_dx_rework` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
+TTNN tutorials in this documentation are written as Jupyter notebooks (`.ipynb`) and located in the `ttnn/tutorials` directory. For each notebook, a corresponding Python script is automatically generated and maintained in the `ttnn/tutorials/basic_python` directory. To ensure consistency between notebooks and their exported Python versions, a Git pre-commit hook is provided.
 
 This hook performs the following actions:
 

@@ -10,9 +10,10 @@
  * Metric (i.e., telemetry point) types that we track. Various telemetry values derive from these.
  */
 
- #include <vector>
+#include <vector>
 #include <chrono>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include <fmt/ranges.h>
@@ -73,6 +74,12 @@ public:
     }
 
 protected:
+    void set_timestamp_now() {
+        timestamp_ =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+    }
+
     bool changed_since_transmission_ = false;
     uint64_t timestamp_ = 0;  // Unix timestamp in milliseconds, 0 = never set
 };
@@ -83,6 +90,12 @@ public:
 
     bool value() const {
         return value_;
+    }
+
+    void set_value(bool value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = value;
+        set_timestamp_now();
     }
 
 protected:
@@ -97,6 +110,12 @@ public:
         return value_;
     }
 
+    void set_value(uint64_t value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = value;
+        set_timestamp_now();
+    }
+
 protected:
     uint64_t value_ = 0;
 };
@@ -107,6 +126,28 @@ public:
 
     double value() const { return value_; }
 
+    void set_value(double value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = value;
+        set_timestamp_now();
+    }
+
 protected:
     double value_ = 0.0;
+};
+
+class StringMetric : public Metric {
+public:
+    StringMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
+
+    std::string_view value() const { return value_; }
+
+    void set_value(std::string value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = std::move(value);
+        set_timestamp_now();
+    }
+
+protected:
+    std::string value_;
 };

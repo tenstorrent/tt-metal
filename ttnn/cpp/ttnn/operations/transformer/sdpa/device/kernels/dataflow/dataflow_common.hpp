@@ -766,3 +766,51 @@ void write_block(
     noc_async_write_barrier();
     cb_pop_front(cb_id, num_tiles);
 }
+
+template <uint32_t tile_bytes>
+void fill_attention_sink_tiles(uint32_t cb_id, uint32_t num_tiles, uint32_t source_tile_addr) {
+    /*
+    Fill num_tiles tiles in the CB by copying the first element from the source tile
+    to the first element of every row in each destination tile.
+
+    The source_tile_addr should contain a tile with the attention sink value at position [0,0].
+    Each output tile will have this value replicated in the first column (first element of every row).
+    */
+
+    // Get the first element from the source tile (position [0,0])
+    volatile tt_l1_ptr uint16_t* source_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(source_tile_addr);
+    uint16_t sink_value = source_ptr[0];  // First element is at offset 0 in bfloat16 tile
+
+    uint32_t write_ptr = get_write_ptr(cb_id);
+
+    // Fill each tile in the CB
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        volatile tt_l1_ptr uint16_t* tile_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(write_ptr);
+
+        // Tile is 32x32 in row-major order within faces
+        // For bfloat16, each element is 2 bytes (uint16_t)
+        // Tile layout: Face0, Face1, Face2, Face3
+        // Face0: rows 0-15, cols 0-15 (top-left)
+        // Face1: rows 0-15, cols 16-31 (top-right)
+        // Face2: rows 16-31, cols 0-15 (bottom-left)
+        // Face3: rows 16-31, cols 16-31 (bottom-right)
+
+        constexpr uint32_t face_height = 16;
+        constexpr uint32_t face_width = 16;
+        constexpr uint32_t elements_per_face = face_height * face_width;
+
+        // Fill Face 0 and Face 2 (first column of tile is in these faces)
+        // Face 0: rows 0-15, Face 2: rows 16-31
+        for (uint32_t face = 0; face < 4; face += 2) {  // Process Face 0 and Face 2
+            uint32_t face_offset = face * elements_per_face;
+
+            // Set first element of each row in this face
+            for (uint32_t row = 0; row < face_height; ++row) {
+                uint32_t row_offset = row * face_width;
+                tile_ptr[face_offset + row_offset] = sink_value;
+            }
+        }
+
+        write_ptr += tile_bytes;
+    }
+}

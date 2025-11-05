@@ -386,6 +386,12 @@ run_vovnet_demo(){
 
 }
 
+run_vit_demo(){
+
+ pytest models/demos/wormhole/vit/demo/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
+
+}
+
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
   if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then

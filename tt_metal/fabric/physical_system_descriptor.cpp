@@ -483,7 +483,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
     }
 }
 
-void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) {
+YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
     YAML::Node root;
     YAML::Node compute_nodes;
     YAML::Node local_eth_connections(YAML::NodeType::Sequence);
@@ -497,7 +497,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
 
         std::map<TrayID, std::vector<ASICDescriptor>> grouped_asics;
 
-        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
+        for (const auto& asic : system_graph_.asic_connectivity_graph.at(host_name)) {
             AsicID asic_id = asic.first;
             TrayID tray_id = asic_descriptors_.at(asic_id).tray_id;
             grouped_asics[tray_id].push_back(asic_descriptors_.at(asic_id));
@@ -525,7 +525,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
         host_node["asic_info"] = tray_groups;
         compute_nodes[host_name] = host_node;
 
-        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
+        for (const auto& asic : system_graph_.asic_connectivity_graph.at(host_name)) {
             auto src_asic_id = asic.first;
             const auto& src_asic_desc = asic_descriptors_.at(src_asic_id);
             for (const auto& edge : asic.second) {
@@ -571,9 +571,21 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     root["local_eth_connections"] = local_eth_connections;
     root["global_eth_connections"] = global_eth_connections;
 
+    return root;
+}
+
+void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) const {
+    YAML::Node root = generate_yaml_node();
+
     if (path_to_yaml.has_value()) {
         std::ofstream fout(path_to_yaml.value());
+        if (!fout.is_open()) {
+            TT_THROW("Failed to open file for writing: {}", path_to_yaml.value());
+        }
         fout << root;
+        if (fout.fail()) {
+            TT_THROW("Failed to write YAML content to file: {}", path_to_yaml.value());
+        }
     } else {
         std::cout << root << std::endl;
     }
@@ -893,24 +905,20 @@ std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) con
     return asic_descriptors_.at(asic_id).host_name;
 }
 
-UID PhysicalSystemDescriptor::get_u_id(const std::string& hostname) {
+UID PhysicalSystemDescriptor::get_u_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host UID requires the Cable Spec which is not currently supported.");
 }
 
-RackID PhysicalSystemDescriptor::get_rack_id(const std::string& hostname) {
+RackID PhysicalSystemDescriptor::get_rack_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Rack ID requires the Cable Spec which is not currently supported.");
 }
 
-AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
+AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Aisle ID requires the Cable Spec which is not currently supported.");
 }
 
-HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
+HallID PhysicalSystemDescriptor::get_hall_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
-}
-
-bool PhysicalSystemDescriptor::is_using_mock_cluster() const {
-    return target_device_type_ == TargetDevice::Mock || target_device_type_ == TargetDevice::Simulator;
 }
 
 }  // namespace tt::tt_metal

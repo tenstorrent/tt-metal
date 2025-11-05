@@ -786,8 +786,6 @@ private:
         // 4. Per-device analysis - find worst case
         uint32_t max_configs_per_core_needed = DEFAULT_MIN_CONFIGS_PER_CORE;
         std::optional<FabricNodeId> worst_case_device;
-        uint32_t worst_case_reserved = 0;
-        uint32_t worst_case_receivers = 0;
 
         for (const auto& [device_id, num_receivers] : receiver_load_per_device) {
             // Count reserved cores on this device
@@ -877,8 +875,6 @@ private:
             if (required > max_configs_per_core_needed) {
                 max_configs_per_core_needed = required;
                 worst_case_device = device_id;
-                worst_case_reserved = reserved_cores;
-                worst_case_receivers = num_receivers;
             }
         }
 
