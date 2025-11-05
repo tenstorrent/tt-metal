@@ -114,7 +114,6 @@ void MAIN {
         transpose_wh_init_short(cb_x);
         tile_regs_acquire();
         welford_init();
-        welford_clear_previous_mean_and_m2();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -124,7 +123,7 @@ void MAIN {
                 start_N += tile_width;
             }
         }
-        welford_store_mean_var_to_dst_col<W>(dst1, W - 1, *p_reciprocals);
+        welford_store_mean_var_to_dst_row<W>(dst1, W - 1, *p_reciprocals);
 
         // Process the last tile
         cb_wait_front(cb_x, Wt);
