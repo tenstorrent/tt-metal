@@ -322,6 +322,9 @@ class MaxPool2dConfiguration:
     deallocate_input: bool = False
     reallocate_halo_output: bool = True
 
+    dtype: ttnn.DataType = ttnn.bfloat16
+    output_layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT
+
     slice_strategy: Optional[SliceStrategy] = None
 
     def __post_init__(self):
@@ -699,6 +702,8 @@ class TtMaxPool2d:
             "in_place_halo": self.configuration.in_place,
             "deallocate_input": self.configuration.deallocate_input,
             "reallocate_halo_output": self.configuration.reallocate_halo_output,
+            "dtype": self.configuration.dtype,
+            "output_layout": self.configuration.output_layout,
         }
 
     def _apply_channel_slicing(self, x):
