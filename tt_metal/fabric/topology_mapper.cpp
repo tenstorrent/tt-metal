@@ -447,7 +447,7 @@ std::unordered_map<MeshId, PhysicalAdjacencyMap> TopologyMapper::build_adjacency
     std::unordered_map<MeshId, PhysicalAdjacencyMap> adjacency_map;
 
     auto get_local_adjacents =
-        [&](tt::tt_metal::AsicID asic_id, MeshId mesh_id, const std::unordered_set<HostName>& mesh_hostnames) {
+        [&](tt::tt_metal::AsicID asic_id, MeshId /*mesh_id*/, const std::unordered_set<HostName>& mesh_hostnames) {
             std::vector<tt::tt_metal::AsicID> adjacents;
             for (const auto& neighbor : physical_system_descriptor_.get_asic_neighbors(asic_id)) {
                 // Make sure that the neighbor is in the mesh
