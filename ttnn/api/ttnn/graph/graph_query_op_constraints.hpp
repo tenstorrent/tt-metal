@@ -126,7 +126,13 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
             return ConstraintQueryResponse{
-                ExecutionStatus::Error, {0, 0, 0, 0}, /* output_tensor_spec= */ std::nullopt, e.what()};
+                ExecutionStatus::Error,
+                {.cb_peak_size_per_core = 0,
+                 .l1_buffers_peak_per_core = 0,
+                 .peak_memory_usage_per_core = 0,
+                 .l1_output_buffer_per_core = 0},
+                /* output_tensor_spec= */ std::nullopt,
+                e.what()};
         }
         op_trace = capture_outer.end_graph_capture();
     }  // end of outer graph capture
