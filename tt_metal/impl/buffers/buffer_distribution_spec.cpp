@@ -189,14 +189,7 @@ BufferDistributionSpecImpl::BufferDistributionSpecImpl(
 }
 
 // Copy constructor
-BufferDistributionSpecImpl::BufferDistributionSpecImpl(const BufferDistributionSpecImpl& other) :
-    ,
-    ,
-    ,
-    ,
-    ,
-    ,
-    = default;
+BufferDistributionSpecImpl::BufferDistributionSpecImpl(const BufferDistributionSpecImpl& other) = default;
 
 // Copy assignment operator
 BufferDistributionSpecImpl& BufferDistributionSpecImpl::operator=(const BufferDistributionSpecImpl& other) {
