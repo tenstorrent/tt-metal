@@ -39,7 +39,7 @@ jobs:
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true
             timeout: 15
           - name: "BH P100 pgm dispatch nightly"
-            arch: wormhole_b0
+            arch: blackhole
             runs-on: ["cloud-virtual-machine", "P100", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
@@ -47,7 +47,7 @@ jobs:
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py -g tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_blackhole_golden.json pgm_bench.json
             timeout: 15
           - name: "BH P100 dispatch bandwidth nightly"
-            arch: wormhole_b0
+            arch: blackhole
             runs-on: ["cloud-virtual-machine", "P100", "in-service"]
             run-args: |
               mkdir -p generated/test_reports
