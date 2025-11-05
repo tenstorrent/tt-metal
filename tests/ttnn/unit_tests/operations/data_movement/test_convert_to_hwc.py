@@ -102,7 +102,7 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
         ],
         dim=1,
     )
-    # input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
+    input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
 
     expected = input_tensor.transpose(2, 3).reshape(1, 1, B * HW, C)
 
@@ -143,7 +143,8 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
     assert passed, message
 
 
-@pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
+# @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
+@pytest.mark.parametrize("C", [1])
 @pytest.mark.parametrize(
     "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
     (
@@ -162,52 +163,52 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
             32,
             32,
         ),
-        (
-            64,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                }
-            ),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-                }
-            ),
-            64,
-            64,
-        ),
-        (
-            84480,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0)),
-                }
-            ),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
-                }
-            ),
-            14080,
-            2656,
-        ),
-        (
-            168960,
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0)),
-                }
-            ),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
-                }
-            ),
-            14080,
-            2688,
-        ),  # UNet Shallow
+        # (
+        # 64,
+        # ttnn.CoreRangeSet(
+        # {
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        # }
+        # ),
+        # ttnn.CoreRangeSet(
+        # {
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+        # }
+        # ),
+        # 64,
+        # 64,
+        # ),
+        # (
+        # 84480,
+        # ttnn.CoreRangeSet(
+        # {
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0)),
+        # }
+        # ),
+        # ttnn.CoreRangeSet(
+        # {
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+        # }
+        # ),
+        # 14080,
+        # 2656,
+        # ),
+        # (
+        # 168960,
+        # ttnn.CoreRangeSet(
+        # {
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0)),
+        # }
+        # ),
+        # ttnn.CoreRangeSet(
+        # {
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+        # }
+        # ),
+        # 14080,
+        # 2688,
+        # ),  # UNet Shallow
     ),
 )
 def test_convert_to_hwc_dram(

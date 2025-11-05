@@ -81,7 +81,7 @@ void kernel_main() {
     static_assert(hw % TILE_SIZE == 0, "Shard width must be multiple of tile width");
 
     constexpr bool is_input_in_dram = get_compile_time_arg_val(10);
-    constexpr bool should_wait = get_compile_time_arg_val(11);
+    constexpr bool is_reader = get_compile_time_arg_val(11);
     constexpr uint32_t dram_write_stride_bytes = get_compile_time_arg_val(12);
     constexpr uint32_t dram_read_stride_bytes = get_compile_time_arg_val(13);
     constexpr uint32_t input_sticks_per_core = get_compile_time_arg_val(14);
@@ -112,7 +112,7 @@ void kernel_main() {
     uint32_t args_idx = 0;
 
     for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {
-        if constexpr (should_wait) {
+        if constexpr (is_reader) {
             cb_reserve_back(cb_in, input_block_size_sticks_per_core);
 
             uint32_t src_x = args[args_idx++];
@@ -120,8 +120,26 @@ void kernel_main() {
             uint32_t src_offset = args[args_idx++];  // only used if source is in DRAM
             uint32_t dst_offset = args[args_idx++];
             uint32_t size = args[args_idx++];
+            uint32_t bank_id = 0;
 
-            uint64_t src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_full_input));
+            // Extract bank_id if input is in DRAM
+            if constexpr (is_input_in_dram) {
+                bank_id = args[args_idx++];
+                DPRINT << "Extracted bank_id=" << bank_id << " for DRAM transfer" << ENDL();
+            }
+
+            uint64_t src_addr_base;
+            if constexpr (is_input_in_dram) {
+                // Use bank-based addressing for DRAM reads
+                src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
+                DPRINT << "Using DRAM bank_id=" << bank_id << " base_addr=0x" << std::hex << src_addr_base << std::dec
+                       << ENDL();
+            } else {
+                // Use NOC coordinates for L1 reads
+                src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_full_input));
+                DPRINT << "Using L1 NOC addr src_x=" << src_x << " src_y=" << src_y << ENDL();
+            }
+
             uint32_t block_size_bytes = (input_block_size_sticks_per_core * channel_size);
             noc_async_read(src_addr_base + src_offset, get_write_ptr(cb_in) + (dst_offset % block_size_bytes), size);
             noc_async_read_barrier();

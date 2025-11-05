@@ -18,6 +18,17 @@ struct BatchTransferInstruction {
     uint32_t transfer_size;
 };
 
+struct DramTransferInstruction {
+    uint32_t src_core_idx;
+    uint32_t dst_core_idx;
+    CoreCoord src_core_coord;
+    CoreCoord dst_core_coord;
+    uint32_t src_offset;
+    uint32_t dst_offset;
+    uint32_t transfer_size;
+    uint32_t bank_id;
+};
+
 struct TransferData {
     uint32_t src_offset;
     uint32_t dst_offset;
@@ -64,6 +75,15 @@ std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
     const std::vector<CoreCoord>& input_cores,
     const std::vector<CoreCoord>& output_cores,
     uint32_t element_size_bytes);
+
+template <typename T>
+std::vector<std::vector<T>> group_by_destination_core(const std::vector<T>& transfers, int num_output_cores);
+
+std::vector<DramTransferInstruction> convert_l1_to_dram_transfers(
+    const std::vector<BatchTransferInstruction>& l1_transfers,
+    const std::vector<CoreCoord>& dram_cores,
+    const tt::tt_metal::BufferType& dram_buffer_type,
+    tt::tt_metal::IDevice* device);
 
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor);
 
