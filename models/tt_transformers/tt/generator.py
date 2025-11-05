@@ -42,17 +42,14 @@ class SamplingParams:
     top_p: float | list[float]
 
 
-# Split lists into chunks without numpy
+# Split lists into chunks
 def split_list(lst, n):
-    """Split list into n roughly equal parts"""
+    """Split list into n equal parts"""
     chunk_size = len(lst) // n
-    remainder = len(lst) % n
     chunks = []
     start = 0
     for i in range(n):
-        # Add 1 to chunk_size for the first 'remainder' chunks
-        end = start + chunk_size + (1 if i < remainder else 0)
-        chunks.append(list(lst[start:end]))  # Convert to list explicitly
+        chunks.append(list(lst[start : start + chunk_size]))  # Convert to list explicitly
         start = end
     return chunks
 
