@@ -55,7 +55,7 @@ def _get_golden_activation_from_string(activation: str) -> callable:
     return get_golden_function(op)
 
 
-def get_golden_function_for_activation(activation: Optional[object]) -> callable:
+def get_golden_function_for_activation(activation: Optional[object]) -> Optional[callable]:
     """Return a torch golden function for an activation.
 
     The activation can be:
