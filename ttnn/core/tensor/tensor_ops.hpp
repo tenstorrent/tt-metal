@@ -54,5 +54,6 @@ Tensor tensor_view(
     const Tensor& input_tensor,
     const tt::tt_metal::Shape& new_logical_shape,
     const tt::tt_metal::Shape& new_padded_shape);
+Tensor tensor_to_dtype(const Tensor& input_tensor, DataType dtype);
 
 }  // namespace tt::tt_metal::tensor_ops

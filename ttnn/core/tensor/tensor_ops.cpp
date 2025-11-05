@@ -279,4 +279,8 @@ Tensor tensor_reshape(const Tensor& input_tensor, const tt::tt_metal::Shape& new
     return tensor_reshape(input_tensor, new_shape, new_shape);
 }
 
+Tensor tensor_to_dtype(const Tensor& input_tensor, DataType dtype) {
+    return tensor_impl::to_dtype(input_tensor, dtype);
+}
+
 }  // namespace tt::tt_metal::tensor_ops
