@@ -89,7 +89,8 @@ runs:
 
           # Main compact summary:
           grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
-            | head -n "${{ inputs.summary_max_lines }}" > compact-summary.txt || true
+            | head -n "${{ inputs.summary_max_lines }}" \
+            | grep -v "PytestBenchmarkWarning\|pytest_benchmark" > compact-summary.txt || true
 
           # Build summary content
           summary_content=""
