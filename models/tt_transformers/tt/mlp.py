@@ -33,6 +33,8 @@ class MLP(LightweightModule):
         self.dim = args.dim
         self.model_config = model_config
         self.layer_num = layer_num
+
+        # Define the prefetcher object
         self.prefetcher = prefetcher
 
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
@@ -88,6 +90,7 @@ class MLP(LightweightModule):
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
         )
 
+        # Insert the tensors into the prefetcher if it is used
         if self.prefetcher is not None:
             self.prefetcher.insert_tensor(self.w1)
             self.prefetcher.insert_tensor(self.w3)
@@ -117,6 +120,7 @@ class MLP(LightweightModule):
                 pc_3 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
             else:
                 if self.prefetcher is not None:
+                    # program configs do not take core range sets, just need to know ring size
                     pc_1 = self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"]
                     pc_2 = self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"]
                     pc_3 = self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"]
@@ -134,7 +138,18 @@ class MLP(LightweightModule):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
-        memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        def get_ff1_3_memory_config():
+            if self.prefetcher is not None:
+                return self.model_config["PREFETCHER_SHARDED_FF13_OUT_RING_MEMCFG"]
+            else:
+                return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
+        def get_ff2_memory_config():
+            if self.prefetcher is not None:
+                return self.model_config["PREFETCHER_SHARDED_FF2_OUT_RING_MEMCFG"]  # takes in the active receiver cores
+            else:
+                return ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -142,7 +157,9 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_1,
-            memory_config=memory_config,
+            memory_config=get_ff1_3_memory_config(),
+            global_cb=self.prefetcher.global_circular_buffer if self.prefetcher is not None else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
         )
 
         w3_out = ttnn.linear(
@@ -152,7 +169,9 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
             program_config=pc_3,
-            memory_config=memory_config,
+            memory_config=get_ff1_3_memory_config(),
+            global_cb=self.prefetcher.global_circular_buffer if self.prefetcher is not None else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
         )
         ttnn.deallocate(x)
 
@@ -261,12 +280,16 @@ class MLP(LightweightModule):
             compute_kernel_config=li_ff2_compute_kernel_cfg,
             dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
             program_config=pc_2,
-            memory_config=memory_config,
+            memory_config=get_ff2_memory_config(),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            global_cb=self.prefetcher.global_circular_buffer if self.prefetcher is not None else None,
+            sub_device_id=self.prefetcher.worker_sub_device_id if mode == "decode" else None,
         )
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+
+        # TODO: Update all reduce to use sub device
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,

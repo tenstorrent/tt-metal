@@ -1,29 +1,61 @@
 from dataclasses import dataclass
-from typing import List
+from itertools import chain
+from typing import List, Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 
 @dataclass
 class PrefetcherCoreConfig:
     """
     Defines the core locations of the sender cores and receiver cores of the prefetcher
-    For wormhole,
-    For blackhole,
     """
 
-    wh_sender_cores = [ttnn.CoreCoord(0, i) for i in [0, 4, 5, 9]] + [
-        ttnn.CoreCoord(4, i) for i in [0, 1, 2, 4, 5, 6, 7, 9]
-    ]
-    bh_sender_cores = [ttnn.CoreCoord(0, i) for i in range(10)] + [ttnn.CoreCoord(6, i) for i in range(10)]
-    wh_receiver_cores = [ttnn.CoreCoord(j, i) for i in [0, 4, 5, 9] for j in [1, 2]] + [
-        ttnn.CoreCoord(j, i) for i in [0, 1, 2, 4, 5, 6, 7, 9] for j in [5, 6]
-    ]
-    bh_receiver_cores = [ttnn.CoreCoord(j, i) for i in range(10) for j in [1, 2]] + [
-        ttnn.CoreCoord(j, i) for i in range(10) for j in [7, 8]
-    ]
+    num_receiver_cores: int
+    mesh_device: ttnn.MeshDevice
+
+    def __post_init__(self):
+        left_dram_range = [0, 4, 5, 9]
+        right_dram_range = [0, 1, 2, 4, 5, 6, 7, 9] if is_wormhole_b0() else [0, 1, 2, 4]
+
+        # Prefetcher sender cores
+        def wh_sender_cores(active: Optional[bool] = None):
+            return [ttnn.CoreCoord(0, i) for i in left_dram_range] + [ttnn.CoreCoord(4, i) for i in right_dram_range]
+
+        def bh_sender_cores(active: Optional[bool] = None):
+            return [ttnn.CoreCoord(0, i) for i in left_dram_range] + [ttnn.CoreCoord(6, i) for i in right_dram_range]
+
+        # Prefetcher receiver cores
+        def wh_receiver_cores(active: Optional[bool] = None):
+            left_recv_range = chain(
+                [] if active == False else range(1, self.num_receiver_cores + 1),
+                [] if active == True else range(self.num_receiver_cores + 1, 5),
+            )
+            right_recv_range = chain(
+                [] if active == False else range(5, self.num_receiver_cores + 5),
+                [] if active == True else range(self.num_receiver_cores + 5, 8),
+            )
+            return [ttnn.CoreCoord(j, i) for i in left_dram_range for j in left_recv_range] + [
+                ttnn.CoreCoord(j, i) for i in right_dram_range for j in right_recv_range
+            ]
+
+        def bh_receiver_cores(active: Optional[bool] = None):
+            left_recv_range = chain(
+                [] if active == False else range(1, self.num_receiver_cores + 1),
+                [] if active == True else range(self.num_receiver_cores + 1, 5),
+            )
+            right_recv_range = chain(
+                [] if active == False else range(7, self.num_receiver_cores + 7),
+                [] if active == True else range(self.num_receiver_cores + 7, 10),
+            )
+            return [ttnn.CoreCoord(j, i) for i in left_dram_range for j in left_recv_range] + [
+                ttnn.CoreCoord(j, i) for i in right_dram_range for j in right_recv_range
+            ]
+
+        self.sender_cores = wh_sender_cores if is_wormhole_b0() else bh_sender_cores
+        self.receiver_cores = wh_receiver_cores if is_wormhole_b0() else bh_receiver_cores
 
 
 ### Helper class to manage subdevices for the Prefetcher
@@ -47,16 +79,23 @@ class PrefetcherSubDevice:
 
 
 class Prefetcher(LightweightModule):
-    def __init__(self, mesh_device: ttnn.MeshDevice, num_tensors: int, num_layers: int, mode: str):
+    def __init__(
+        self, mesh_device: ttnn.MeshDevice, num_tensors: int, num_receiver_cores: int, num_layers: int, mode: str
+    ):
         """
         Prefetcher class that prefetches tensors from DRAM to
         """
         ### Device, Global CB, Parameters
-        self.global_cb = glv
+        self.global_cb = None
         self.mesh_device = mesh_device
         self.num_tensors = num_tensors
         self.num_layers = num_layers
         self.enable_performance_mode = False
+        self.worker_sub_device_id = None
+        self.global_cb_size = 0
+        self.num_receiver_cores = num_receiver_cores
+        self.ring_size = num_receiver_cores * self.mesh_device.dram_grid_size().x
+        # Only ring size of 24 has been tested on WH
 
         ### Prefetcher Subdevices
         self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
@@ -70,6 +109,13 @@ class Prefetcher(LightweightModule):
         self.receiver_cores = None
         self.all_cores = None
 
+        ### Initialize sub device manager
+        self.init(mode)
+        self.worker_sub_device_id = self.prefetcher_sub_device.sub_devices_id[-1]
+
+    def to_core_range_set(self, cores: List[ttnn.CoreCoord]) -> ttnn.CoreRangeSet:
+        return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
+
     def init(self, mode: str = "decode") -> None:
         """ """
         if mode == "decode":
@@ -80,13 +126,16 @@ class Prefetcher(LightweightModule):
         else:
             raise ValueError(f"Provided mode {mode} is not supported, only `prefill` and `decode` are supported")
 
-    def create_prefetcher_cores(self):
-        if is_blackhole():
-            self.sender_cores = PrefetcherCoreConfig.bh_sender_cores
-            self.receiver_cores = PrefetcherCoreConfig.bh_receiver_cores
-        if is_wormhole_b0():
-            self.sender_cores = PrefetcherCoreConfig.wh_sender_cores
-            self.receiver_cores = PrefetcherCoreConfig.wh_receiver_cores
+        # Get the sender and receiver cores
+        self.sender_cores = PrefetcherCoreConfig(
+            self.mesh_device, num_receiver_cores=self.num_receiver_cores
+        ).sender_cores
+        self.receiver_cores = PrefetcherCoreConfig(
+            self.mesh_device, num_receiver_cores=self.num_receiver_cores
+        ).receiver_cores
+        self.sender_receiver_mapping = list(zip(self.sender_cores(), self.receiver_cores()))
+        self.sender_cores_crs = self.to_core_range_set(self.sender_cores())
+        self.receiver_cores_crs = self.to_core_range_set(self.receiver_cores())
 
     def create_address_tensor(self):
         """
@@ -117,6 +166,8 @@ class Prefetcher(LightweightModule):
         """
         Populates the tensor addressess that need to be prefetched
         """
+        tensor_dtype = tensor.dtype()
+        self.global_cb_size += tensor.shape[0] * tensor.shape[1] * tensor_dtype.itemsize
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
 
@@ -126,6 +177,7 @@ class Prefetcher(LightweightModule):
         """
         # Create global cb buffer if it was not
         if self.global_cb is None:
+            self.global_cb_size = 728 * 1088
             self.global_cb = ttnn.create_global_circular_buffer(
                 self.mesh_device,
                 self.sender_receiver_mapping,
