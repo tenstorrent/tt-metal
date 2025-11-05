@@ -135,19 +135,17 @@ private:
         requires(LazifyableCompositeOperationConcept<operation_t, args_t && ...>)
     auto invoke(args_t&&... args) const {
         auto operation = operation_t(std::forward<args_t>(args)...);
-        auto [inputs, optional_inputs, optional_outputs] =
-            operation_t::get_tensor_inputs(std::forward<args_t>(args)...);
-        operation.validate(inputs, optional_inputs, optional_outputs);
+        auto inputs = operation_t::get_tensor_inputs(std::forward<args_t>(args)...);
+        operation.validate(inputs);
 
         if (ttnn::experimental::lazy::is_lazy_enabled()) {
             // Get output specs to create placeholder tensors
-            auto output_specs = operation.compute_output_specs(inputs, optional_inputs, optional_outputs);
+            auto output_specs = operation.compute_output_specs(inputs);
 
             // Create lazy operation wrapper
             auto lazy_op = ttnn::experimental::lazy::make_lazy_composite_operation<operation_t>(
                 operation, std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
 
-            // TODO: We shouldn't ignore optional tensors
             // TODO: Support other return types for lazy execution
             if constexpr (std::same_as<typename operation_t::tensor_return_value_t, Tensor>) {
                 // Single tensor output
@@ -167,7 +165,7 @@ private:
                     "Unsupported return type for lazy execution");
             }
         }
-        return operation.invoke(inputs, optional_inputs, optional_outputs);
+        return operation.invoke(inputs);
     }
 
     template <typename... args_t>

@@ -18,25 +18,15 @@ struct SetTensorSpecOperation {
     SetTensorSpecOperation(const Tensor& input_tensor, const TensorSpec& new_tensor_spec) :
         new_tensor_spec(new_tensor_spec) {}
 
-    static std::tuple<Tensors, OptionalTensors, OptionalTensors> get_tensor_inputs(
-        const Tensor& input_tensor, const TensorSpec& new_tensor_spec) {
-        return {{input_tensor}, {}, {}};
+    static std::vector<Tensor> get_tensor_inputs(const Tensor& input_tensor, const TensorSpec& new_tensor_spec) {
+        return {input_tensor};
     }
 
-    spec_return_value_t compute_output_specs(
-        const Tensors& input_tensors,
-        const OptionalTensors& optional_input_tensors,
-        OptionalTensors& optional_output_tensors) const;
+    spec_return_value_t compute_output_specs(const std::vector<Tensor>& input_tensors) const;
 
-    void validate(
-        const Tensors& input_tensors,
-        const OptionalTensors& optional_input_tensors,
-        OptionalTensors& optional_output_tensors) const;
+    void validate(const std::vector<Tensor>& input_tensors) const;
 
-    tensor_return_value_t invoke(
-        const Tensors& input_tensors,
-        const OptionalTensors& optional_input_tensors,
-        OptionalTensors& optional_output_tensors) const;
+    tensor_return_value_t invoke(const std::vector<Tensor>& input_tensors) const;
 
 private:
     spec_return_value_t new_tensor_spec;

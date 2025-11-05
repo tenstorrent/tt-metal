@@ -75,26 +75,16 @@ static ttnn::Tensor update_device_tensor_metadata(const ttnn::Tensor& input_tens
 
 // Compute output specs for lazy mode
 SetTensorSpecOperation::spec_return_value_t SetTensorSpecOperation::compute_output_specs(
-    const Tensors& input_tensors,
-    const OptionalTensors& optional_input_tensors,
-    OptionalTensors& optional_output_tensors) const {
+    const std::vector<Tensor>& input_tensors) const {
     return new_tensor_spec;
 }
 
-void SetTensorSpecOperation::validate(
-    const Tensors& input_tensors,
-    const OptionalTensors& optional_input_tensors,
-    OptionalTensors& optional_output_tensors) const {
+void SetTensorSpecOperation::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Expected exactly one input tensor");
-    TT_FATAL(optional_input_tensors.empty(), "Optional input tensors are not allowed");
-    TT_FATAL(optional_output_tensors.empty(), "Optional output tensors are not allowed");
 }
 
 // Main invoke function - handles both eager and lazy modes
-ttnn::Tensor SetTensorSpecOperation::invoke(
-    const Tensors& input_tensors,
-    const OptionalTensors& optional_input_tensors,
-    OptionalTensors& optional_output_tensors) const {
+ttnn::Tensor SetTensorSpecOperation::invoke(const std::vector<Tensor>& input_tensors) const {
     // Get the materialized tensor
     const auto& tensor = input_tensors[0];
 

@@ -34,11 +34,7 @@ public:
             input_tensors.begin(), input_tensors.end(), std::back_inserter(tnn_input_tensors), [](const auto& tensor) {
                 return Tensor(tensor);
             });
-        // TODO: this shouldn't ignore optional tensors
-        OptionalTensors optional_input_tensors;
-        OptionalTensors optional_output_tensors;
-        return convert_result_to_vector(
-            operation_.invoke(tnn_input_tensors, optional_input_tensors, optional_output_tensors));
+        return convert_result_to_vector(operation_.invoke(tnn_input_tensors));
     }
 
     tt::stl::hash::hash_t operation_type_id() const override { return tt::stl::hash::type_hash<operation_t>; }
