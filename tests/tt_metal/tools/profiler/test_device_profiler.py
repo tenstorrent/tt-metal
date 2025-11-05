@@ -921,9 +921,10 @@ def validate_ops_perf_durations(perf_data):
 def test_get_ops_perf_data():
     # Op IDs and the number of ops are validated in the test_get_ops_perf_data gtests
     # In this file, we validate the durations of the ops
+    test_get_ops_perf_data_binary = "./build/test/ttnn/tracy/test_get_ops_perf_data"
 
     run_gtest_profiler_test(
-        "./build/test/ttnn/tracy/test_get_ops_perf_data",
+        test_get_ops_perf_data_binary,
         "GetOpsPerfDataFixture.TestGetOpsPerfDataBeforeReadMeshDeviceProfilerResultsCall",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
@@ -932,7 +933,7 @@ def test_get_ops_perf_data():
     validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
 
     run_gtest_profiler_test(
-        "./build/test/ttnn/tracy/test_get_ops_perf_data",
+        test_get_ops_perf_data_binary,
         "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterSingleReadMeshDeviceProfilerResultsCall",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
@@ -941,7 +942,7 @@ def test_get_ops_perf_data():
     validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
 
     run_gtest_profiler_test(
-        "./build/test/ttnn/tracy/test_get_ops_perf_data",
+        test_get_ops_perf_data_binary,
         "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
