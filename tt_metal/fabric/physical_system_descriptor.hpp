@@ -17,10 +17,6 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
-namespace YAML {
-class Node;
-}
-
 namespace tt::umd {
 class Cluster;
 }
@@ -214,8 +210,7 @@ public:
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
 
     // Utility APIs to Print Physical System Descriptor
-    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
-    YAML::Node generate_yaml_node() const;
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
 private:

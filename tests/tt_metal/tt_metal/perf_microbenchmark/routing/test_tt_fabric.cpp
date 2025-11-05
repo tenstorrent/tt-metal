@@ -143,7 +143,6 @@ int main(int argc, char** argv) {
     }
 
     bool device_opened = false;
-    uint32_t tests_ran = 0;
     for (auto& test_config : raw_test_configs) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
@@ -167,14 +166,7 @@ int main(int argc, char** argv) {
             topology,
             routing_type,
             fabric_tensix_config);
-
-        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
-        if (!open_devices_success) {
-            log_warning(
-                tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
-            continue;
-        }
-        tests_ran++;
+        test_context.open_devices(test_config.fabric_setup);
         device_opened = true;
 
         for (uint32_t iter = 0; iter < test_config.num_top_level_iterations; ++iter) {
@@ -273,15 +265,6 @@ int main(int argc, char** argv) {
             log_error(tt::LogTest, "  - {}", failed_test);
         }
         TT_THROW("Some tests failed golden comparison validation. See summary above.");
-    }
-
-    auto total_tests_count = raw_test_configs.size();
-    if (tests_ran < total_tests_count) {
-        log_warning(
-            tt::LogTest,
-            "{} out of {} test groups did not run (filtered, skipped, or unsupported)",
-            total_tests_count - tests_ran,
-            total_tests_count);
     }
 
     if (device_opened) {
