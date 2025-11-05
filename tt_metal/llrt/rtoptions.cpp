@@ -233,7 +233,7 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
-    {        
+    {   
         using_slow_dispatch = false;
         const char* env = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (env) {
