@@ -80,8 +80,7 @@ class Experts:
         col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
         row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
 
-        # Use higher precision weights to improve numerical match (especially for 1x1 case)
-        weight_dtype = ttnn.bfloat16
+        weight_dtype = ttnn.bfloat4_b
         self.gate_proj = ttnn.as_tensor(
             gate_proj,
             device=mesh_device,
