@@ -10,9 +10,10 @@
  * Metric (i.e., telemetry point) types that we track. Various telemetry values derive from these.
  */
 
- #include <vector>
+#include <vector>
 #include <chrono>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include <fmt/ranges.h>
@@ -92,8 +93,8 @@ public:
     }
 
     void set_value(bool value) {
+        changed_since_transmission_ = (value_ != value);
         value_ = value;
-        changed_since_transmission_ = true;
         set_timestamp_now();
     }
 
@@ -110,8 +111,8 @@ public:
     }
 
     void set_value(uint64_t value) {
+        changed_since_transmission_ = (value_ != value);
         value_ = value;
-        changed_since_transmission_ = true;
         set_timestamp_now();
     }
 
@@ -126,11 +127,27 @@ public:
     double value() const { return value_; }
 
     void set_value(double value) {
+        changed_since_transmission_ = (value_ != value);
         value_ = value;
-        changed_since_transmission_ = true;
         set_timestamp_now();
     }
 
 protected:
     double value_ = 0.0;
+};
+
+class StringMetric : public Metric {
+public:
+    StringMetric(MetricUnit metric_units = MetricUnit::UNITLESS) : Metric(metric_units) {}
+
+    std::string_view value() const { return value_; }
+
+    void set_value(std::string value) {
+        changed_since_transmission_ = (value_ != value);
+        value_ = std::move(value);
+        set_timestamp_now();
+    }
+
+protected:
+    std::string value_;
 };

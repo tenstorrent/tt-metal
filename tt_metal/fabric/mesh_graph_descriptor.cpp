@@ -15,6 +15,7 @@
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include "tt-metalium/mesh_graph_descriptor.hpp"
 #include "tt-metalium/mesh_coord.hpp"
+#include "tt-metalium/fabric_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 #include <google/protobuf/text_format.h>
@@ -171,6 +172,25 @@ proto::Architecture MeshGraphDescriptor::get_arch() const {
 
 uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
+}
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
+    const auto& dim_types = mesh_desc->device_topology().dim_types();
+    if (dim_types.size() < 2) {
+        return FabricType::MESH;
+    }
+
+    bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
+    bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
+
+    if (y_is_ring && x_is_ring) {
+        return FabricType::TORUS_XY;
+    } else if (y_is_ring) {
+        return FabricType::TORUS_Y;
+    } else if (x_is_ring) {
+        return FabricType::TORUS_X;
+    }
+    return FabricType::MESH;
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
