@@ -39,11 +39,14 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    tt::DataFormat out_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    uint32_t out_single_tile_size = tt::tile_size(out_cb_data_format);
 
     ttnn::Shape output_padded_shape = output.padded_shape();
     ttnn::Shape input_padded_shape = input_tensor.padded_shape();
 
-    log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "in_cb_data_format: {}", cb_data_format);
+    log_debug(tt::LogOp, "out_cb_data_format: {}", out_cb_data_format);
     log_debug(tt::LogOp, "single_tile_size: {}", single_tile_size);
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_padded_shape);
     log_debug(tt::LogOp, "output_tensor_shape: {}", output_padded_shape);
@@ -58,7 +61,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     uint32_t num_blocks =
         std::ceil(static_cast<float>(ntiles) / (tiles_per_complete_row));  // Total number of blocks for batch * height
 
-    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, TILE_WIDTH * tt::datum_size(cb_data_format));
+    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, TILE_WIDTH * tt::datum_size(out_cb_data_format));
     log_debug(
         tt::LogOp, "tiles_per_channel_dim: {}, ntiles: {}, num_blocks: {}", tiles_per_channel_dim, ntiles, num_blocks);
 
@@ -84,8 +87,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
+        tt::tt_metal::CircularBufferConfig(
+            num_input_tiles * out_single_tile_size, {{src1_cb_index, out_cb_data_format}})
+            .set_page_size(src1_cb_index, out_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // Configure compile-time arguments for reader kernel
@@ -105,7 +109,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         aligned_stick_nbytes,
         tiles_per_channel_dim,
         tiles_per_width_dim,
-        datum_size(cb_data_format),
+        datum_size(out_cb_data_format),
         src1_cb_index,
     };
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
