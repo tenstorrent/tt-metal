@@ -272,12 +272,29 @@ CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, 
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
-    return Builder(parent, buffer_index);
+    auto is_remote_index =
+        parent.impl()->remote_buffer_indices_.find(buffer_index) != parent.impl()->remote_buffer_indices_.end();
+    if (is_remote_index) {
+        TT_THROW("Buffer index {} is already marked as remote", buffer_index);
+    }
+    auto builder = Builder(parent, buffer_index);
+    parent.impl()->local_buffer_indices_.insert(buffer_index);
+    return builder;
 }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
-    return Builder(parent, buffer_index);
+    auto is_local_index =
+        parent.impl()->local_buffer_indices_.find(buffer_index) != parent.impl()->local_buffer_indices_.end();
+    if (is_local_index) {
+        TT_THROW("Buffer index {} is already marked as local", buffer_index);
+    }
+    if (parent.impl()->remote_buffer_indices_.find(buffer_index) == parent.impl()->remote_buffer_indices_.end()) {
+        TT_FATAL(parent.impl()->remote_buffer_indices_.empty(), "Can only specify one remote buffer index per config");
+    }
+    auto builder = Builder(parent, buffer_index);
+    parent.impl()->remote_buffer_indices_.insert(buffer_index);
+    return builder;
 }
 
 CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buffer_index) :
