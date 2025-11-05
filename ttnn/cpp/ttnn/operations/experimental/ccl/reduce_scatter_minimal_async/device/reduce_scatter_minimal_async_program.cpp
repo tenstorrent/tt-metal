@@ -321,9 +321,6 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
     const uint32_t input_tensor_B,
     const uint32_t slice_B,
     const uint32_t slice_C,
-    const uint32_t dir,
-    const uint32_t start_tiles_read,
-    const uint32_t start_tiles_to_read,
     const uint32_t normalized_dim) {
     if (normalized_dim == 0) {
         return {
@@ -333,9 +330,6 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
             tile_granularity,         // tile_granularity
             ring_size,                // ring_size
             slice_B,                  // slice_B
-            dir,                      // dir
-            start_tiles_read,         // start_tiles_read
-            start_tiles_to_read       // start_tiles_to_read
         };
     } else {
         return {
@@ -346,9 +340,6 @@ std::vector<uint32_t> get_ring_reduce_compile_args(
             ring_size,                // ring_size
             input_tensor_B,           // input_tensor_B
             slice_C,                  // slice_C
-            dir,                      // dir
-            start_tiles_read,         // start_tiles_read
-            start_tiles_to_read       // start_tiles_to_read
         };
     }
 }
@@ -484,31 +475,12 @@ std::vector<uint32_t> get_line_reduce_compile_args(
     const uint32_t input_tensor_B,
     const uint32_t slice_B,
     const uint32_t slice_C,
-    const uint32_t num_total_reduction_steps,
-    const uint32_t start_tiles_read,
-    const uint32_t start_tiles_to_read,
     const uint32_t normalized_dim) {
     if (normalized_dim == 0) {
-        return {
-            input_cb_index,
-            intermediate_cb_index,
-            compute_output_cb_index,
-            tile_granularity,
-            slice_B,
-            num_total_reduction_steps,
-            start_tiles_read,
-            start_tiles_to_read};
+        return {input_cb_index, intermediate_cb_index, compute_output_cb_index, tile_granularity, slice_B};
     } else {
         return {
-            input_cb_index,
-            intermediate_cb_index,
-            compute_output_cb_index,
-            tile_granularity,
-            input_tensor_B,
-            slice_C,
-            num_total_reduction_steps,
-            start_tiles_read,
-            start_tiles_to_read};
+            input_cb_index, intermediate_cb_index, compute_output_cb_index, tile_granularity, input_tensor_B, slice_C};
     }
 }
 
@@ -881,7 +853,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     }
 
     // KERNEL CREATION
-    std::vector<KernelHandle> reduce_kernel_ids;
     std::vector<KernelHandle> mux_kernel_ids;
     std::vector<size_t> mux_termination_signal_addresses;
     if (fuse_op) {
@@ -1007,6 +978,28 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         sender_writer_kernel_path,
         sender_worker_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+
+    // Reduce kernel
+    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
+    sender_reduce_kernel_config.compile_args = operations::experimental::ccl::detail::get_ring_reduce_compile_args(
+        input_cb_index,
+        intermediate_cb_index,
+        compute_output_cb_index,
+        tile_granularity,
+        ring_size,
+        input_tensor_B,
+        slice_B,
+        slice_C,
+        normalized_dim);
+
+    std::string sender_reduce_kernel_path =
+        normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                              "device/kernels/dim_zero_ring_reduction.cpp"
+                            : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                              "device/kernels/ring_reduction.cpp";
+
+    auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
+        program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
@@ -1137,48 +1130,11 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 }
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
 
-                // Reduce kernel
-                auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-                sender_reduce_kernel_config.compile_args = {
-                    input_cb_index,           // input_cb_id
-                    intermediate_cb_index,    // intermediate_cb
-                    compute_output_cb_index,  // output_cb
-                    tile_granularity,         // tile_granularity
-                    ring_size,                // ring_size
-                    input_tensor_B,           // input_tensor_B
-                    slice_C,                  // slice_C
-                    dir};                     // dir
-
-                // Reduce CT args
-                std::vector<uint32_t> sender_reduce_compile_args =
-                    operations::experimental::ccl::detail::get_ring_reduce_compile_args(
-                        input_cb_index,
-                        intermediate_cb_index,
-                        compute_output_cb_index,
-                        tile_granularity,
-                        ring_size,
-                        input_tensor_B,
-                        slice_B,
-                        slice_C,
-                        dir,
-                        start_tiles_read,
-                        start_tiles_to_read,
-                        normalized_dim);
-                std::string sender_reduce_kernel_path =
-                    normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                          "device/kernels/dim_zero_ring_reduction.cpp"
-                                        : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                          "device/kernels/ring_reduction.cpp";
-                auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
-                    program,
-                    sender_reduce_kernel_path,
-                    {core},
-                    tt::tt_metal::ComputeConfig{.compile_args = sender_reduce_compile_args});
-                reduce_kernel_ids.push_back(sender_reduce_kernel_id);
-
-                // Reduce RT args
-                std::vector<uint32_t> sender_reduce_runtime_args = {};
-                tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, sender_reduce_runtime_args);
+                std::vector<uint32_t> reduce_rt_args = {
+                    start_tiles_read,     // start_tiles_read
+                    start_tiles_to_read,  // start_tiles_to_read
+                    dir};                 // dir
+                tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
     }
@@ -1327,6 +1283,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 input,
                 intermed,
                 output);
+
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
@@ -1571,7 +1528,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     }
 
     // KERNEL CREATION
-    std::vector<KernelHandle> reduce_kernel_ids;
     std::vector<KernelHandle> mux_kernel_ids;
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
@@ -1711,6 +1667,27 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         sender_writer_kernel_path,
         sender_worker_core_range_set,
         tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+
+    // Reduce kernel
+    auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
+    sender_reduce_kernel_config.compile_args = operations::experimental::ccl::detail::get_line_reduce_compile_args(
+        input_cb_index,
+        intermediate_cb_index,
+        compute_output_cb_index,
+        tile_granularity,
+        input_tensor_B,
+        slice_B,
+        slice_C,
+        normalized_dim);
+
+    std::string sender_reduce_kernel_path =
+        normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                              "device/kernels/dim_zero_line_reduction.cpp"
+                            : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
+                              "device/kernels/line_reduction.cpp";
+
+    auto reduce_kernel_id = tt::tt_metal::CreateKernel(
+        program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
@@ -1882,57 +1859,13 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 }
 
                 tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, {core}, writer_rt_args);
-                // Reduce kernel
-                auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
-                sender_reduce_kernel_config.compile_args = {
-                    input_cb_index,
-                    intermediate_cb_index,
-                    compute_output_cb_index,
-                    tile_granularity,
-                    input_tensor_B,
-                    slice_C,
+
+                std::vector<uint32_t> reduce_rt_args = {
                     num_total_reduction_steps,
                     start_tiles_read,
                     start_tiles_to_read,
                 };
-                auto reduce_kernel_id = tt::tt_metal::CreateKernel(
-                    program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
-                    "line_reduction.cpp",
-                    {core},
-                    sender_reduce_kernel_config);
-                reduce_kernel_ids.push_back(reduce_kernel_id);
-
-                // Reduce CT args
-                std::vector<uint32_t> sender_reduce_compile_args =
-                    operations::experimental::ccl::detail::get_line_reduce_compile_args(
-                        input_cb_index,
-                        intermediate_cb_index,
-                        compute_output_cb_index,
-                        tile_granularity,
-                        input_tensor_B,
-                        slice_B,
-                        slice_C,
-                        num_total_reduction_steps,
-                        start_tiles_read,
-                        start_tiles_to_read,
-                        normalized_dim);
-
-                std::string sender_reduce_kernel_path =
-                    normalized_dim == 0 ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                          "device/kernels/dim_zero_line_reduction.cpp"
-                                        : "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
-                                          "device/kernels/line_reduction.cpp";
-                auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
-                    program,
-                    sender_reduce_kernel_path,
-                    {core},
-                    tt::tt_metal::ComputeConfig{.compile_args = sender_reduce_compile_args});
-                reduce_kernel_ids.push_back(sender_reduce_kernel_id);
-
-                // Reduce RT args
-                std::vector<uint32_t> reduce_rt_args = {};
-                tt::tt_metal::SetRuntimeArgs(program, sender_reduce_kernel_id, {core}, reduce_rt_args);
+                tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
     }
