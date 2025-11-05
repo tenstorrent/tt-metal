@@ -95,11 +95,8 @@ def get_default_dispatch_core_type():
 def get_default_dispatch_core_axis(fabric_tensix_config=None):
     """Get default dispatch core axis, considering fabric tensix config if available."""
     if is_blackhole():
-        # On Blackhole, if fabric tensix MUX is enabled, use ROW; otherwise use COL
-        if fabric_tensix_config == ttnn.FabricTensixConfig.MUX:
-            return DispatchCoreAxis.ROW
-        else:
-            return DispatchCoreAxis.COL
+        # On Blackhole, default to use COL
+        return DispatchCoreAxis.COL
     else:
         # Non-Blackhole architectures default to ROW
         return DispatchCoreAxis.ROW
