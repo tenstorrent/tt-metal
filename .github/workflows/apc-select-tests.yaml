@@ -253,3 +253,19 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
+
+  triage-tests:
+    needs: [ build-artifact ]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150",
+        ]
+    uses: ./.github/workflows/triage.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      runner-label: ${{ matrix.platform }}
+      timeout: 30
