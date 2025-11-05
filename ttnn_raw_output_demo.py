@@ -831,10 +831,83 @@ def visualize_pose_results(image_path, predictions, orig_w, orig_h, scale, pad_l
     keypoints = predictions[0, 5:56, :]  # [51, num_anchors] - 17 keypoints * 3 values each
 
     # Find detections above confidence threshold
-    conf_threshold = 0.3
-    valid_indices = torch.where(conf[0] > conf_threshold)[0]
+    conf_threshold = 0.6  # Increased from 0.3 to reduce overlapping detections
+    iou_threshold = 0.5  # IoU threshold for NMS to remove overlapping detections
 
-    logger.info(f"Found {len(valid_indices)} detections above confidence threshold {conf_threshold}")
+    # Create predictions tensor in format expected by NMS: [batch, num_anchors, 56]
+    # Format: [x, y, w, h, conf, kpt1_x, kpt1_y, kpt1_v, ...]
+    preds_for_nms = predictions.clone()
+
+    # Apply NMS using simplified implementation
+    def apply_nms(preds, conf_thres, iou_thres):
+        """Apply non-maximum suppression to remove overlapping detections"""
+        # Filter by confidence first
+        conf_mask = preds[0, 4, :] > conf_thres
+        if not conf_mask.any():
+            return torch.empty(0, 56)
+
+        # Get valid predictions
+        valid_preds = preds[:, :, conf_mask]  # [1, 56, num_valid]
+        valid_preds = valid_preds.squeeze(0).transpose(0, 1)  # [num_valid, 56]
+
+        if len(valid_preds) == 0:
+            return torch.empty(0, 56)
+
+        # Sort by confidence (highest first)
+        conf_scores = valid_preds[:, 4]
+        _, sort_idx = torch.sort(conf_scores, descending=True)
+        valid_preds = valid_preds[sort_idx]
+
+        # Simple NMS: keep detections with IoU < threshold
+        keep = []
+        for i in range(len(valid_preds)):
+            keep_current = True
+            for j in keep:
+                # Calculate IoU between current detection and kept detections
+                iou = calculate_iou(valid_preds[i, :4], valid_preds[j, :4])
+                if iou > iou_thres:
+                    keep_current = False
+                    break
+            if keep_current:
+                keep.append(i)
+
+        return valid_preds[keep] if len(keep) > 0 else torch.empty(0, 56)
+
+    def calculate_iou(box1, box2):
+        """Calculate IoU between two boxes in (x, y, w, h) format"""
+        # Convert to (x1, y1, x2, y2)
+        x1_1, y1_1 = box1[0] - box1[2] / 2, box1[1] - box1[3] / 2
+        x2_1, y2_1 = box1[0] + box1[2] / 2, box1[1] + box1[3] / 2
+        x1_2, y1_2 = box2[0] - box2[2] / 2, box2[1] - box2[3] / 2
+        x2_2, y2_2 = box2[0] + box2[2] / 2, box2[1] + box2[3] / 2
+
+        # Intersection
+        x1_i = max(x1_1, x1_2)
+        y1_i = max(y1_1, y1_2)
+        x2_i = min(x2_1, x2_2)
+        y2_i = min(y2_1, y2_2)
+
+        if x2_i <= x1_i or y2_i <= y1_i:
+            return 0.0
+
+        intersection = (x2_i - x1_i) * (y2_i - y1_i)
+
+        # Union
+        area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+        area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+        union = area1 + area2 - intersection
+
+        return intersection / union if union > 0 else 0.0
+
+    # Apply NMS
+    nms_results = apply_nms(preds_for_nms, conf_threshold, iou_threshold)
+
+    logger.info(f"Found {len(nms_results)} detections after NMS (conf={conf_threshold}, iou={iou_threshold})")
+
+    # Process NMS results
+    if len(nms_results) == 0:
+        logger.info("No detections found after NMS")
+        return
 
     # Colors for keypoints (COCO format)
     colors = [
@@ -882,15 +955,18 @@ def visualize_pose_results(image_path, predictions, orig_w, orig_h, scale, pad_l
 
     detections_count = 0
 
-    for j in valid_indices[:5]:  # Limit to first 5 detections
+    # Process each detection from NMS results (already sorted by confidence)
+    for j in range(min(len(nms_results), 5)):  # Limit to first 5 detections
         detections_count += 1
+        det = nms_results[j]  # [56] tensor: [x, y, w, h, conf, kpts...]
 
-        # Get bounding box (already decoded by post-processing)
-        x, y, w, h = bbox[:, j]
+        # Get bounding box from detection (already decoded by post-processing)
+        x, y, w, h = det[:4]
+        conf_score = det[4]
 
         # Debug: print raw coordinates
         if detections_count == 1:
-            print(f"Detection {detections_count}: raw bbox=({x:.1f}, {y:.1f}, {w:.1f}, {h:.1f}), conf={conf[0, j]:.3f}")
+            print(f"Detection {detections_count}: raw bbox=({x:.1f}, {y:.1f}, {w:.1f}, {h:.1f}), conf={conf_score:.3f}")
 
         # Transform bbox to original image space
         x_orig = (x - pad_left) / scale
@@ -913,7 +989,7 @@ def visualize_pose_results(image_path, predictions, orig_w, orig_h, scale, pad_l
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
         cv2.putText(
             img,
-            f"Person {detections_count}: {conf[0, j]:.2f}",
+            f"Person {detections_count}: {conf_score:.2f}",
             (x1, y1 - 10),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
@@ -921,8 +997,10 @@ def visualize_pose_results(image_path, predictions, orig_w, orig_h, scale, pad_l
             2,
         )
 
-        # Process keypoints (already decoded by post-processing)
-        kpts = keypoints[:, j].reshape(17, 3)
+        # Process keypoints from detection (already decoded by post-processing)
+        # det[5:] contains keypoints: [kpt1_x, kpt1_y, kpt1_v, kpt2_x, kpt2_y, kpt2_v, ...]
+        kpt_data = det[5:]  # [51] tensor
+        kpts = kpt_data.reshape(17, 3)  # [17, 3] - x, y, visibility
         kpts_transformed = []
 
         visible_count = 0
