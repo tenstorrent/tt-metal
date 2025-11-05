@@ -25,7 +25,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     const auto input_shape = input.padded_shape();
     const auto n = input_shape.rank();
     uint32_t num_rows_in_dim = 1;
-    for (int i = n - 2; i > dim; --i) {
+    for (int i = n - 2; i > static_cast<int>(dim); --i) {
         num_rows_in_dim *= input_shape[i];
     }
 
@@ -57,7 +57,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     auto index_dataformat = datatype_to_dataformat_converter(index.dtype());
 
     uint32_t input_page_size = input.buffer()->aligned_page_size();
-    uint32_t index_page_size = index.buffer()->aligned_page_size();
+    uint32_t index_total_size = index.buffer()->aligned_size();
     uint32_t output_page_size = output.buffer()->aligned_page_size();
 
     uint32_t input_cb_depth = 2;
@@ -75,8 +75,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     CreateCircularBuffer(
         program,
         all_cores,
-        tt::tt_metal::CircularBufferConfig(index_page_size, {{cb_index, index_dataformat}})
-            .set_page_size(cb_index, index_page_size));
+        tt::tt_metal::CircularBufferConfig(index_total_size, {{cb_index, index_dataformat}})
+            .set_page_size(cb_index, index_total_size));
 
     // CB to store an input page filled with fill_value
     cb_index = tt::CBIndex::c_2;
@@ -88,8 +88,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     // Create reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)input_page_size,          // input page size
-        (std::uint32_t)index_page_size,          // index page size
+        (std::uint32_t)input_page_size,          // input tensor page size
+        (std::uint32_t)index_total_size,         // index tensor total size
         (std::uint32_t)index.physical_volume(),  // num elements in index array
         (std::uint32_t)(dim == n - 1)            // is last dim
     };
@@ -104,7 +104,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
 
     // Create writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_page_size,         // output page size
+        (std::uint32_t)output_page_size,         // output tensor page size
         (std::uint32_t)index.physical_volume(),  // num elements in index array
         (std::uint32_t)input.element_size(),     // element size in bytes
         (std::uint32_t)(dim == n - 1)            // is last dim
