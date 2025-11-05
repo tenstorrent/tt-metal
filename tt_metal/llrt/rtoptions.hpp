@@ -156,7 +156,8 @@ class RunTimeOptions {
 
     // Fabric profiling settings
     struct FabricProfilingSettings {
-        bool enable_rx_ch_fwd = false;
+        // Check CodeProfilingTimerType in code_profiling_types.hpp for a map of timer types to bitfield positions
+        std::string enabled_timer_str{};
     } fabric_profiling_settings;
 
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
@@ -606,9 +607,10 @@ public:
     const FabricTelemetrySettings& get_fabric_telemetry_settings() const { return fabric_telemetry_settings; }
 
     // If true, enables code profiling for receiver channel forward operations
-    bool get_enable_fabric_code_profiling_rx_ch_fwd() const { return fabric_profiling_settings.enable_rx_ch_fwd; }
-    void set_enable_fabric_code_profiling_rx_ch_fwd(bool enable) {
-        fabric_profiling_settings.enable_rx_ch_fwd = enable;
+    bool fabric_code_profiling_enabled() const { return !fabric_profiling_settings.enabled_timer_str.empty(); }
+    std::string get_fabric_code_profiling_timer_str() const { return fabric_profiling_settings.enabled_timer_str; }
+    void set_fabric_code_profiling_timer_str(const std::string& timer_str) {
+        fabric_profiling_settings.enabled_timer_str = timer_str;
     }
 
     // Reliability mode override accessor

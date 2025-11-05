@@ -39,7 +39,7 @@ void CodeProfiler::clear_code_profiling_buffers() {
 
     // Check if any code profiling is enabled
     auto& rtoptions = ctx.rtoptions();
-    if (!rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+    if (!rtoptions.fabric_code_profiling_enabled()) {
         return;  // No profiling enabled, nothing to clear
     }
 
@@ -57,7 +57,7 @@ void CodeProfiler::read_code_profiling_results() {
 
     // Check if any code profiling is enabled
     auto& rtoptions = ctx.rtoptions();
-    if (!rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
+    if (!rtoptions.fabric_code_profiling_enabled()) {
         return;  // No profiling enabled, nothing to read
     }
 
@@ -71,8 +71,14 @@ void CodeProfiler::read_code_profiling_results() {
 
     // Process results for each enabled timer type
     std::vector<CodeProfilingTimerType> enabled_timers;
-    if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
-        enabled_timers.push_back(CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD);
+    if (rtoptions.fabric_code_profiling_enabled()) {
+        CodeProfilingTimerType code_profiling_timer_type =
+            convert_to_code_profiling_timer_type(rtoptions.get_fabric_code_profiling_timer_str());
+        TT_FATAL(
+            code_profiling_timer_type != CodeProfilingTimerType::NONE,
+            "Invalid code profiling timer string: {}",
+            rtoptions.get_fabric_code_profiling_timer_str());
+        enabled_timers.push_back(code_profiling_timer_type);
     }
 
     for (const auto& location : results) {

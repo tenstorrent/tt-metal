@@ -82,7 +82,7 @@ enum class EnvVarID {
     TT_METAL_ENABLE_GATHERING,              // Enable instruction gathering
     TT_METAL_FABRIC_BW_TELEMETRY,           // Enable fabric bandwidth telemetry
     TT_METAL_FABRIC_TELEMETRY,              // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,            // Enable fabric RX channel forwarding profiling
+    TT_FABRIC_PROFILER,                     // Enable fabric codepath profiling
     TT_METAL_FORCE_REINIT,                  // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,      // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,  // Log kernel compilation commands
@@ -522,11 +522,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         //        export TT_METAL_FABRIC_TELEMETRY="chips=all;eth=0,2,7;erisc=all;stats=ROUTER_STATE|BANDWIDTH"
         case EnvVarID::TT_METAL_FABRIC_TELEMETRY: this->ParseFabricTelemetryEnv(value); break;
 
-        // TT_FABRIC_PROFILE_RX_CH_FWD
-        // Enables fabric RX channel forwarding profiling.
-        // Default: false
-        // Usage: export TT_FABRIC_PROFILE_RX_CH_FWD=1
-        case EnvVarID::TT_FABRIC_PROFILE_RX_CH_FWD: this->fabric_profiling_settings.enable_rx_ch_fwd = true; break;
+        // TT_FABRIC_PROFILER
+        // Enables fabric codepath profiling and allows the user to select the specific profiler.
+        // Default: blank
+        // Usage: export TT_FABRIC_PROFILER=RECEIVER_CHANNEL_FORWARD
+        case EnvVarID::TT_FABRIC_PROFILER: this->set_fabric_code_profiling_timer_str(std::string(value)); break;
 
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).

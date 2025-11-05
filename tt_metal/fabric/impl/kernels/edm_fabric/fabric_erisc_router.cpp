@@ -1439,6 +1439,16 @@ FORCE_INLINE
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
+
+    // Code profiling timer for sender channel forward
+    NamedProfiler<
+        CodeProfilingTimerType::SENDER_CHANNEL_FORWARD,
+        code_profiling_enabled_timers_bitfield,
+        code_profiling_buffer_base_addr>
+        sender_send_data_timer;
+    sender_send_data_timer.set_should_dump(can_send);
+    sender_send_data_timer.open();
+
     if (can_send) {
         did_something = true;
         progress = true;
@@ -1460,6 +1470,9 @@ FORCE_INLINE
         }
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
+
+    // Close the code profiling timer
+    sender_send_data_timer.close();
 
     // Process COMPLETIONs from receiver
     int32_t completions_since_last_check =

@@ -99,6 +99,10 @@ using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
 using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
 
+// Helper functions for code profiling
+using tt::tt_fabric::convert_code_profiling_timer_type_to_str;
+using tt::tt_fabric::convert_to_code_profiling_timer_type;
+
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
 
@@ -210,6 +214,12 @@ public:
 
     // Configures latency test mode by extracting and storing parameters from the test config
     void setup_latency_test_mode(const TestConfig& config);
+    
+    void initialize_code_profiling_results_csv_file();
+
+    std::string convert_coord_to_string(const ::tt::tt_metal::distributed::MeshCoordinate& coord);
+
+    void dump_code_profiling_results_to_csv(const TestConfig& config);
 
 private:
     void reset_local_variables();
@@ -266,6 +276,9 @@ private:
 
     std::vector<std::string> all_failed_bandwidth_tests_;  // Accumulates failed bandwidth tests
     bool has_test_failures_ = false;  // Track if any tests failed validation
+
+    // Code profiling results CSV file path (TODO: Move to tt_fabric_test_Results)
+    std::filesystem::path code_profiling_csv_file_path_;
 
     // Ethernet core buffer readback helper
     std::unique_ptr<EthCoreBufferReadback> eth_readback_;
