@@ -20,51 +20,6 @@ FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_a
     }
 }
 
-template <uint32_t ReadStrideBytes, uint32_t WriteStrideBytes, uint32_t NumSticks, bool DRAM>
-FORCE_INLINE void copy_segment(
-    uint32_t copy_size,
-    uint32_t base_write_addr,
-    uint32_t write_offset,
-    uint32_t bank_id,
-    uint32_t base_read_addr,
-    uint32_t read_offset) {
-    uint32_t l1_write_addr = base_write_addr + write_offset;
-    uint32_t read_addr = base_read_addr + read_offset;
-    uint64_t noc_read_addr;
-    if constexpr (DRAM) {
-        noc_read_addr = get_noc_addr_from_bank_id<true>(bank_id, read_addr);
-    } else {
-        noc_read_addr = get_noc_addr(read_addr);
-    }
-    noc_async_read_one_packet_set_state(noc_read_addr, copy_size);
-    for (uint32_t j = 0; j < NumSticks; ++j) {
-        // DPRINT << "copy stick from input at " << noc_read_addr << "  to output at " << l1_write_addr << ENDL();
-        //  tt::data_movement::common::print_bf16_pages(noc_read_addr, 32, 1);
-        noc_async_read_one_packet_with_state<true>(noc_read_addr, l1_write_addr);
-        l1_write_addr += WriteStrideBytes;
-        noc_read_addr += ReadStrideBytes;
-    }
-}
-
-template <
-    uint32_t DramReadStrideBytes,
-    uint32_t DramWriteStrideBytes,
-    uint32_t InputBlockSizeSticksPerCore,
-    bool IsInputInDram,
-    uint32_t CbIn>
-FORCE_INLINE void partial_reshard_from_input_cb(
-    tt_l1_ptr uint32_t* args, uint32_t num_segments, uint32_t block_id, uint32_t dram_base_read_addr) {
-    uint32_t args_idx = 0;
-    for (uint32_t i = 0; i < num_segments; ++i) {
-        uint32_t copy_size = args[args_idx++];
-        uint32_t write_offset = args[args_idx++];
-        uint32_t bank_id = args[args_idx++];  // only used if source is in DRAM
-        uint32_t read_offset = args[args_idx++] + (block_id * copy_size * (2 * InputBlockSizeSticksPerCore));
-        copy_segment<DramReadStrideBytes, DramWriteStrideBytes, 2 * InputBlockSizeSticksPerCore, IsInputInDram>(
-            copy_size, get_write_ptr(CbIn), write_offset, bank_id, dram_base_read_addr, read_offset);
-    }
-    noc_async_read_barrier();
-}
 
 void kernel_main() {
     constexpr uint32_t cb_full_input = get_compile_time_arg_val(0);

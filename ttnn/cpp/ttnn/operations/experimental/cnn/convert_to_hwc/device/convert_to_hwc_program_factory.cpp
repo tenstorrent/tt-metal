@@ -589,7 +589,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              l1_input_cores,
                              grouped_transfers,
                              grouped_dram_transfers,
-                             runtime_args_for_each_core,
                              writer_kernel_id0,
                              writer_kernel_id1,
                              total_num_sticks_kernel_0,
@@ -666,9 +665,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             SetRuntimeArgs(program, writer_kernel_id0, l1_input_cores[core_idx], runtime_args_0);
             SetRuntimeArgs(program, writer_kernel_id1, l1_input_cores[core_idx], runtime_args_1);
         }
-        if (is_input_in_dram) {
-            // Do nothing for now
-        } else {
+        // Only update input CB address for L1 input (DRAM input doesn't need CB update)
+        if (!is_input_in_dram) {
             tt::tt_metal::Buffer* a_buffer = a.buffer();
             log_info(tt::LogType::LogAlways, "convert_to_hwc: Updating CB addresses for L1 input");
             UpdateDynamicCircularBufferAddress(program, cb_full_input, *a_buffer);
