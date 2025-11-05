@@ -232,10 +232,9 @@ void PhysicalSystemDescriptor::clear() {
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
 
-    TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run discovery");
-    tt::umd::Cluster& cluster = *cluster_;
-
     if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
+        TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        tt::umd::Cluster& cluster = *cluster_;
         cluster_desc_ = std::make_unique<tt::umd::ClusterDescriptor>(*cluster.get_cluster_description());
     } else {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
@@ -256,6 +255,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
+        TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run live discovery");
+        tt::umd::Cluster& cluster = *cluster_;
         auto [tray_id, asic_location] =
             get_asic_position(cluster, src_chip_id, target_device_type_ != TargetDevice::Silicon);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
