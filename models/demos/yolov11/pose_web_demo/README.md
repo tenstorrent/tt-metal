@@ -64,6 +64,8 @@ streamlit run yolov11_pose.py --server.port 8501 --server.address 0.0.0.0 -- --s
 
 **HTTPS Requirement:** Camera access requires HTTPS. Use `./run_streamlit_https.sh` or ngrok for secure access.
 
+**Distributed Setup:** Server can run on TTNN machine, client on separate machine. Update `SERVER_URL` in client scripts to point to server IP.
+
 ### 3. HTTPS Setup for Camera Access
 
 Modern browsers require HTTPS for camera access. Choose one of these options:
@@ -73,9 +75,10 @@ Modern browsers require HTTPS for camera access. Choose one of these options:
 # Run with auto-generated SSL certificates
 ./run_streamlit_https.sh
 ```
-- Automatically generates self-signed certificates
-- Accept the security warning in your browser
-- Access at: `https://localhost:8501`
+- Automatically generates self-signed certificates with proper SAN (Subject Alternative Names)
+- Accept the security warning in your browser (click "Advanced" → "Proceed to localhost")
+- **Access at: `https://localhost:8501` or `https://127.0.0.1:8501`**
+- ❌ **DO NOT use `https://0.0.0.0:8501`** (certificate won't match)
 
 **Option B: Ngrok (Easy HTTPS tunneling)**
 ```bash
@@ -92,7 +95,42 @@ ngrok http 8501
 google-chrome --allow-http-screen-capture --unsafely-treat-insecure-origin-as-secure=http://localhost:8501
 ```
 
-### 4. Alternative Manual Run
+### 4. Distributed Setup (Server + Client on Different Machines)
+
+**Server Machine (Ubuntu with TTNN):**
+```bash
+# Get server IP
+ip addr show | grep 'inet ' | grep -v 127.0.0.1
+
+# Start server
+cd pose_web_demo/server
+./run_uvicorn.sh
+```
+
+**Client Machine (Mac/Windows):**
+```bash
+# Transfer client files from server
+scp user@server-ip:/path/to/pose_web_demo_client.tar.gz .
+
+# Extract and setup
+tar -xzf pose_web_demo_client.tar.gz
+cd pose_web_demo/client
+pip install -r requirements.txt
+
+# Configure server URL (edit run scripts)
+# Replace YOUR_UBUNTU_IP with actual server IP
+export SERVER_URL=http://YOUR_SERVER_IP:8000
+
+# Run with HTTPS
+./run_streamlit_https.sh
+```
+
+**Network Requirements:**
+- Both machines on same network
+- Server firewall allows port 8000
+- Client can reach server IP:8000
+
+### 5. Alternative Manual Run
 
 **Server:**
 ```bash
@@ -160,7 +198,8 @@ Each keypoint includes (x, y, visibility) values.
 7. **Network timeout**: Check network connectivity between client and server machines
 8. **WebRTC/camera errors**: Try Chrome browser, refresh page, or check camera permissions
 9. **"navigator.mediaDevices is undefined"**: Page not loaded securely - use HTTPS (see HTTPS Setup section)
-10. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
+10. **"net::ERR_CERT_AUTHORITY_INVALID"**: Use `https://localhost:8501` not `https://0.0.0.0:8501`, click "Advanced" → "Proceed to localhost"
+11. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
 
 ## Comparison with Object Detection Demo
 

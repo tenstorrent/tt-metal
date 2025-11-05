@@ -7,7 +7,7 @@
 cd /home/ubuntu/pose/tt-metal/models/demos/yolov11/pose_web_demo/client
 
 # Default values
-SERVER_URL="${SERVER_URL:-http://localhost:8000}"
+SERVER_URL="${SERVER_URL:-http://YOUR_UBUNTU_IP:8000}"  # Replace YOUR_UBUNTU_IP with actual IP
 DEVICE="${DEVICE:-0}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-false}"
 
