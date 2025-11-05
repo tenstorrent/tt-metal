@@ -154,3 +154,108 @@ __all__ = [
     "create_generator",
     "init_ds_r1_qwen_1_5b",
 ]
+
+
+def main():
+    """Simple CLI to run a prompt on DS-R1-Distill-Qwen-1.5B using TTNN.
+
+    Example
+    - python -m models.ds_r1_qwen.ds_r1_qwen \
+        --checkpoint-dir /path/to/DeepSeek-R1-Distill-Qwen-1.5B \
+        --prompt "Explain backpropagation briefly." --max-gen-len 128
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser("DeepSeek-R1-Distill-Qwen-1.5B (TTNN)")
+    parser.add_argument(
+        "--checkpoint-dir", type=str, default=None, help="Local HF snapshot directory with config+weights"
+    )
+    parser.add_argument("--hf-model-id", type=str, default=DEFAULT_HF_ID, help="HF repo id (use only if cached)")
+    parser.add_argument("--mesh-rows", type=int, default=1)
+    parser.add_argument("--mesh-cols", type=int, default=1)
+    parser.add_argument("--prompt", type=str, default="Hello! Explain what TTNN is.")
+    parser.add_argument("--system-prompt", type=str, default=None)
+    parser.add_argument("--max-gen-len", type=int, default=128)
+    parser.add_argument("--max-seq-len", type=int, default=32768)
+    parser.add_argument("--batch-size", type=int, default=1, help="Decode batch (must equal B for decode)")
+    parser.add_argument(
+        "--dtype",
+        type=str,
+        default="bf16",
+        choices=["bf16", "bf8"],
+        help="Model compute/weight dtype preference",
+    )
+    parser.add_argument("--accuracy-mode", action="store_true", help="Use accuracy-optimized settings")
+    parser.add_argument("--paged-kv", action="store_true", help="Use paged KV cache (for external schedulers)")
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top-p", type=float, default=0.9)
+    parser.add_argument("--stream", action="store_true", help="Stream token outputs instead of single message")
+
+    args_cli = parser.parse_args()
+
+    # Map dtype string to TTNN dtype
+    dtype_map = {
+        "bf16": ttnn.bfloat16,
+        "bf8": ttnn.bfloat8_b,
+    }
+    dtype = dtype_map[args_cli.dtype]
+
+    # Open mesh and build model
+    mesh_shape = ttnn.MeshShape(args_cli.mesh_rows, args_cli.mesh_cols)
+    mesh = None
+    try:
+        mesh = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+
+        ds_args, model = init_ds_r1_qwen_1_5b(
+            mesh_device=mesh,
+            checkpoint_dir=args_cli.checkpoint_dir,
+            hf_model_id=args_cli.hf_model_id,
+            max_batch_size=args_cli.batch_size,
+            max_seq_len=args_cli.max_seq_len,
+            dtype=dtype,
+            accuracy_mode=args_cli.accuracy_mode,
+            use_paged_kv_cache=args_cli.paged_kv,
+        )
+
+        # Create generator (uses tokenizer from ModelArgs)
+        gen = create_generator(model, ds_args, mesh, tokenizer=ds_args.tokenizer)
+
+        if args_cli.stream:
+            # Stream tokens using generate()
+            prompt_tokens = ds_args.encode_prompt(
+                args_cli.prompt, system_prompt_text=args_cli.system_prompt, instruct=True
+            )
+            text_out = []
+            for tok in gen.generate(
+                vision_images=None,
+                vision_mask=None,
+                prompt_tokens=prompt_tokens,
+                max_gen_len=args_cli.max_gen_len,
+                temperature=args_cli.temperature,
+                top_p=args_cli.top_p,
+            ):
+                sys.stdout.write(tok.text)
+                sys.stdout.flush()
+                text_out.append(tok.text)
+            sys.stdout.write("\n")
+        else:
+            # Single message via chat template
+            messages = []
+            if args_cli.system_prompt:
+                messages.append({"role": "system", "content": args_cli.system_prompt})
+            messages.append({"role": "user", "content": args_cli.prompt})
+            msg = gen.chat_completion(
+                messages,
+                temperature=args_cli.temperature,
+                top_p=args_cli.top_p,
+                max_gen_len=args_cli.max_gen_len,
+            )
+            print(msg.message)
+    finally:
+        if mesh is not None:
+            ttnn.close_mesh_device(mesh)
+
+
+if __name__ == "__main__":
+    main()
