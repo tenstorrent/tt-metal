@@ -190,13 +190,13 @@ BufferDistributionSpecImpl::BufferDistributionSpecImpl(
 
 // Copy constructor
 BufferDistributionSpecImpl::BufferDistributionSpecImpl(const BufferDistributionSpecImpl& other) :
-    tensor_shape_in_pages_(other.tensor_shape_in_pages_),
-    shard_shape_in_pages_(other.shard_shape_in_pages_),
-    cores_(other.cores_),
-    core_groups_(other.core_groups_),
-    cores_with_data_(other.cores_with_data_),
-    shard_volume_(other.shard_volume_),
-    num_shards_(other.num_shards_) {}
+    ,
+    ,
+    ,
+    ,
+    ,
+    ,
+    = default;
 
 // Copy assignment operator
 BufferDistributionSpecImpl& BufferDistributionSpecImpl::operator=(const BufferDistributionSpecImpl& other) {
