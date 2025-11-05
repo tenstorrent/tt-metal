@@ -20,6 +20,16 @@ void bind_flip(py::module& module) {
 
             Reverse the order of an n-D tensor along given axis in dims.
 
+            Input Specs:
+                - **Supported:**
+                    - Tensors with up to 4 dimensions
+                    - Interleaved row-major layout tensors of following dtypes: `bfloat16`, `float32`, `int32`
+                    - Interleaved tiled layout tensors of following dtypes: `bfloat16`, `float32`
+
+                - **Not Supported:**
+                    - Sharded tensors
+                    - Interleaved tiled layout tensors  of `int32` dtype
+
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
                 dim (number): tthe permutation of the dimensions of the input tensor.
@@ -27,7 +37,7 @@ void bind_flip(py::module& module) {
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-           Returns:
+            Returns:
                List of ttnn.Tensor: the output tensor.
 
             Example:
