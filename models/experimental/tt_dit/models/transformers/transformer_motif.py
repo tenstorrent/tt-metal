@@ -253,6 +253,7 @@ class MotifTransformer(Module):
         assert prompt.shape[0] == batch_size
         assert pooled.shape[0] == batch_size
 
+        sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
         time_embed = self.time_text_embed(timestep=timestep, pooled_projection=pooled)
@@ -288,6 +289,7 @@ class MotifTransformer(Module):
         # we keep the register tokens in the sequence
         # spatial = spatial[:, self.register_tokens.shape[1] :]
 
+        spatial = self.ccl_manager.all_gather_persistent_buffer(spatial, dim=1, mesh_axis=sp_axis, use_hyperparams=True)
         spatial = self.ccl_manager.all_gather_persistent_buffer(spatial, dim=2, mesh_axis=tp_axis, use_hyperparams=True)
 
         # same as in SD3 but without norm and silu
@@ -296,9 +298,7 @@ class MotifTransformer(Module):
 
         spatial = spatial * (1 + scale) + shift
 
-        return self.proj_out(
-            spatial  # , core_grid=self.core_grid, compute_kernel_config=self.hifi_compute_kernel_config
-        )
+        return self.proj_out(spatial)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "norm_out.linear", "time_embed_out")  # chunks=2 if sharded
