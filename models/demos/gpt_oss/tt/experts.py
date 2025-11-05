@@ -176,7 +176,6 @@ class Experts:
         seq_len_global = hidden_states.shape[1]
 
         if sp > 1:
-            seq_len_local = seq_len_global // sp
             hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
             routing_weights_torch = ttnn.to_torch(ttnn.get_device_tensors(routing_weights)[0])
             hidden_states.deallocate(True)

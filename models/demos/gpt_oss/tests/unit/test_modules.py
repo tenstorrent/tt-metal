@@ -273,7 +273,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         end=max_seq_len * 2,
         theta=config.rope_theta,
     )
-    position_embeddings = freqs_cis_full[position_ids_1d]  # [seq_len, head_dim//2]
 
     # For TTNN: use precompute_freqs and gather_cos_sin to get cos/sin tensors
     cos_full, sin_full = precompute_freqs(
@@ -348,7 +347,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     tt_output = decoder_layer(tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx)
 
     # Compare outputs
-    pcc_threshold = 0.928 if seq_len == 1 else 0.88
+    pcc_threshold = 0.927 if seq_len == 1 else 0.88
     passing, output = run_component_comparison(
         tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
     )

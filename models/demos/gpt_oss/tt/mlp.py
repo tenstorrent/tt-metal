@@ -6,7 +6,7 @@ MoE MLP: Router + Experts with minimal abstraction
 """
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
-from models.experimental.stable_diffusion_35_large.tt.substate import substate
+from models.demos.gpt_oss.utils.substate import substate
 
 from .experts import Experts
 from .topk import TopKRouter
