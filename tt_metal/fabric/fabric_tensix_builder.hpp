@@ -182,11 +182,27 @@ private:
     // Private constructor - use build() factory method
     FabricTensixDatamoverBuilder(
         std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder,
-        std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder = nullptr);
+        std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder,
+        const CoreCoord& logical_core,
+        tt::tt_fabric::FabricNodeId local_fabric_node_id,
+        tt::tt_fabric::FabricNodeId remote_fabric_node_id,
+        uint32_t ethernet_channel_id,
+        uint32_t noc_x,
+        uint32_t noc_y,
+        eth_chan_directions direction);
 
     // Sub-builders based on mode
     std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder_;      // Always created
     std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder_;  // Only in UDM mode
+
+    // Common properties shared by both mux and relay builders
+    CoreCoord logical_core_;
+    tt::tt_fabric::FabricNodeId local_fabric_node_id_;
+    tt::tt_fabric::FabricNodeId remote_fabric_node_id_;
+    uint32_t ethernet_channel_id_;
+    uint32_t noc_x_;
+    uint32_t noc_y_;
+    eth_chan_directions direction_;
 };
 
 }  // namespace tt::tt_fabric
