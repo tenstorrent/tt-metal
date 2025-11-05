@@ -16,13 +16,13 @@ from ....utils.test import line_params, ring_params
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
     ],
     ids=[
         "2x4sp0tp1",
@@ -55,6 +55,7 @@ def test_pipeline_performance(
     height: int,
     is_ci_env: bool,
     galaxy_type: str,
+    is_fsdp: bool,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -118,6 +119,7 @@ def test_pipeline_performance(
         boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
+        is_fsdp=is_fsdp,
     )
 
     # Warmup run (not timed)
