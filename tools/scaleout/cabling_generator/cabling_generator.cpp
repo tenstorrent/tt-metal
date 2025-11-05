@@ -96,8 +96,7 @@ Node build_node(
     const std::string& node_descriptor_name,
     HostId host_id,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<BoardType, Board>& board_templates) {
+    std::unordered_map<std::string, Node>& node_templates) {
     const std::string& node_type = node_descriptor_name;
     auto it = node_templates.find(node_type);
     if (it != node_templates.end()) {
@@ -119,17 +118,7 @@ Node build_node(
     for (const auto& board_item : node_descriptor.boards().board()) {
         TrayId tray_id = TrayId(board_item.tray_id());
         auto board_type = get_board_type_from_string(board_item.board_type());
-
-        // Check cache first
-        auto board_it = board_templates.find(board_type);
-        if (board_it != board_templates.end()) {
-            template_node.boards.emplace(tray_id, board_it->second);
-        } else {
-            // Create new board and cache it
-            Board board = create_board(board_type);
-            board_templates.emplace(board_type, board);
-            template_node.boards.emplace(tray_id, board);
-        }
+        template_node.boards.emplace(tray_id, create_board(board_type));
     }
 
     // Add inter-board connections and validate/mark ports
@@ -206,8 +195,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<BoardType, Board>& board_templates) {
+    std::unordered_map<std::string, Node>& node_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;
@@ -243,8 +231,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
             }
 
             // Find node descriptor and build node inside build_node
-            resolved->nodes[child_name] =
-                build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates, board_templates);
+            resolved->nodes[child_name] = build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates);
 
         } else if (child_def.has_graph_ref()) {
             // Non-leaf node - recursively build subgraph
@@ -254,12 +241,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
             }
 
             resolved->subgraphs[child_name] = build_graph_instance(
-                child_mapping.sub_instance(),
-                cluster_descriptor,
-                deployment_descriptor,
-                child_name,
-                node_templates,
-                board_templates);
+                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, node_templates);
         }
     }
 
@@ -327,12 +309,7 @@ CablingGenerator::CablingGenerator(
 
     // Build cluster with all connections and port validation
     root_instance_ = build_graph_instance(
-        cluster_descriptor.root_instance(),
-        cluster_descriptor,
-        deployment_descriptor,
-        "",
-        node_templates_,
-        board_templates_);
+        cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
 
     // Validate host_id uniqueness across all nodes
     validate_host_id_uniqueness();
