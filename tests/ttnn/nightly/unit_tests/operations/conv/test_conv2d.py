@@ -4000,6 +4000,7 @@ def test_conv_yolov10x(
     ],
 )
 @pytest.mark.parametrize("slice_type, num_slices", [
+    (None, None),
     (L1Full,1), # no slicing
     (SliceHeight, 2),
 ])
@@ -4109,7 +4110,10 @@ def test_conv2d_act_dealloc(
         slice_config=slice_config,
         dtype=output_dtype,
     )
-    assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"
+    if tt_input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM:
+        assert tt_input_tensor.is_allocated(), "DRAM input tensor is not allocated"
+    else:
+        assert not tt_input_tensor.is_allocated(), "Input tensor is allocated"
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
