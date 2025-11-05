@@ -384,9 +384,12 @@ jobs:
           echo "$WH_RESULT" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-          # Format L2 Nightly results (runs with All post-commit tests)
-          L2_RESULT=$(format_test_result "Wormhole C++" \
-            "${{ needs.detect-changes.outputs.run-wormhole }}" \
+          # Format L2 Nightly results (runs for both Wormhole and Blackhole changes)
+          RUN_WH="${{ needs.detect-changes.outputs.run-wormhole }}"
+          RUN_BH="${{ needs.detect-changes.outputs.run-blackhole }}"
+          [[ "$RUN_WH" == "true" || "$RUN_BH" == "true" ]] && RUN_L2="true" || RUN_L2="false"
+          L2_RESULT=$(format_test_result "C++ post-commit" \
+            "$RUN_L2" \
             "${{ steps.parse-results.outputs.l2-status }}" \
             "${{ steps.parse-results.outputs.l2-url }}" \
             "${{ needs.trigger-tt-metal-tests.result }}")
