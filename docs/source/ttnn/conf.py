@@ -55,6 +55,7 @@ extensions = [
     "breathe",
     "myst_parser",
     "op_documenter",
+    "doc_modifier",
 ]
 
 # For markdown and RST files
