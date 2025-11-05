@@ -433,22 +433,6 @@ inline void llk_pack_reduce_mask_config() {
     _llk_pack_reduce_mask_config_<untilize, dim>();
 }
 
-/**
- * Configures pack masking for specialized reduce_max_row operations.
- *
- * This function works with the following assumptions:
- * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
- * - The scaler doesn't change for the duration of the whole tile operation
- * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
- * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
- * - Does only MAX pool on ROW dimension
- *
- * This function should NOT be used as a substitute for native reduce pack configuration.
- * Use the standard llk_pack_reduce_mask_config for general-purpose reduction operations.
- */
-inline void llk_pack_reduce_max_row_mask_config() { _llk_pack_reduce_max_row_mask_config_(); }
-
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
 
 // FIXME-WH-UPLIFT

@@ -103,13 +103,16 @@ static bool test_sdpa_reduce_c(
     uint32_t k_chunk_size,
     uint32_t head_dim,
     bool fp32_dest_acc_en,
-    bool do_eltwise_max) {
+    bool do_eltwise_max,
+    const std::string& kernel_path,
+    const std::string& kernel_name) {
     bool pass = true;
 
     log_info(
         LogTest,
-        "Running sdpa_reduce_c test with q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: {}, "
+        "Running {} test with q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: {}, "
         "do_eltwise_max: {}",
+        kernel_name,
         q_chunk_size,
         k_chunk_size,
         head_dim,
@@ -227,7 +230,7 @@ static bool test_sdpa_reduce_c(
 
         tt_metal::CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp",
+            kernel_path,
             core,
             tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi2,
@@ -278,9 +281,9 @@ static bool test_sdpa_reduce_c(
 
         float mse = compare_first_col_mse(out_max_rm, golden_first_col_rm);
         const float max_mse = 0.0f;  // expect exact max match in first column
-        log_info(LogTest, "reduce_c first-col mse: {} (do_eltwise: {})", mse, do_eltwise_max);
+        log_info(LogTest, "{} first-col mse: {} (do_eltwise: {})", kernel_name, mse, do_eltwise_max);
         if (mse > max_mse) {
-            log_error(LogTest, "reduce_c first-col mse: {} > {} (do_eltwise: {})", mse, max_mse, do_eltwise_max);
+            log_error(LogTest, "{} first-col mse: {} > {} (do_eltwise: {})", kernel_name, mse, max_mse, do_eltwise_max);
             pass = false;
         }
 
@@ -319,25 +322,43 @@ int main(int argc, char** argv) {
     // std::vector<bool> fp32_dest_acc_ens = {false};
     // std::vector<bool> do_eltwise = {false, true};
 
-    for (uint32_t q_chunk_size : q_chunk_sizes) {
-        for (uint32_t k_chunk_size : k_chunk_sizes) {
-            for (uint32_t head_dim : head_dims) {
-                for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
-                    for (bool do_elt : do_eltwise) {
-                        bool this_passed = test_sdpa_reduce_c(
-                            mesh_device, q_chunk_size, k_chunk_size, head_dim, fp32_dest_acc_en, do_elt);
-                        if (!this_passed) {
-                            log_error(
-                                LogTest,
-                                "Test Failed for q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, fp32_dest_acc_en: "
-                                "{}, do_eltwise: {}",
+    // Test all three implementations
+    std::vector<std::pair<std::string, std::string>> kernel_variants = {
+        {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp", "reduce_c"},
+        {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_max_row/compute.cpp", "reduce_max_row"},
+        {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp", "reduce_block_max_row"}};
+
+    for (const auto& [kernel_path, kernel_name] : kernel_variants) {
+        log_info(LogTest, "Testing kernel variant: {}", kernel_name);
+        for (uint32_t q_chunk_size : q_chunk_sizes) {
+            for (uint32_t k_chunk_size : k_chunk_sizes) {
+                for (uint32_t head_dim : head_dims) {
+                    for (bool fp32_dest_acc_en : fp32_dest_acc_ens) {
+                        for (bool do_elt : do_eltwise) {
+                            bool this_passed = test_sdpa_reduce_c(
+                                mesh_device,
                                 q_chunk_size,
                                 k_chunk_size,
                                 head_dim,
                                 fp32_dest_acc_en,
-                                do_elt);
+                                do_elt,
+                                kernel_path,
+                                kernel_name);
+                            if (!this_passed) {
+                                log_error(
+                                    LogTest,
+                                    "Test Failed for kernel: {}, q_chunk_size: {}, k_chunk_size: {}, head_dim: {}, "
+                                    "fp32_dest_acc_en: "
+                                    "{}, do_eltwise: {}",
+                                    kernel_name,
+                                    q_chunk_size,
+                                    k_chunk_size,
+                                    head_dim,
+                                    fp32_dest_acc_en,
+                                    do_elt);
+                            }
+                            pass &= this_passed;
                         }
-                        pass &= this_passed;
                     }
                 }
             }
