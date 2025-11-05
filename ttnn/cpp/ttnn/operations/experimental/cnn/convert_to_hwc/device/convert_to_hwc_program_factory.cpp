@@ -86,6 +86,20 @@ void ConvertToHwcConfig::validate() const {
         alignment_elements);
     TT_FATAL(output_shard_height % 32 == 0, "Shard height {} must be multiple of tile width (32)", output_shard_height);
     TT_FATAL(!l1_input_cores.empty(), "No input cores available for processing");
+
+    // Check for uneven sharding and validate B=1 requirement
+    uint32_t input_num_cores = l1_input_cores.size();
+    // Uneven sharding occurs when the last core has fewer logical elements than the shard width
+    uint32_t total_padded_elements = input_num_cores * l1_input_shard_width;
+    bool is_uneven_sharding = hw_total < total_padded_elements;
+    if (is_uneven_sharding) {
+        TT_FATAL(
+            batch_size == 1,
+            "Uneven sharding (HW={} < total_padded_capacity={}) is only supported for batch_size=1, got batch_size={}",
+            hw_total,
+            total_padded_elements,
+            batch_size);
+    }
 }
 
 tt::tt_metal::CBHandle create_circular_buffer(
@@ -173,16 +187,39 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
     uint32_t hw_total,
     uint32_t input_num_cores,
     uint32_t output_num_cores,
-    uint32_t element_size_bytes) {
+    uint32_t element_size_bytes,
+    uint32_t padded_shard_width) {
     std::map<uint32_t, std::vector<TransferData>> transfers_by_src;
 
-    uint32_t hw_per_input_core = hw_total / input_num_cores;
-    uint32_t bhw_total = batch_size * hw_total;
-    uint32_t bhw_per_output_core = bhw_total / output_num_cores;
+    // Helper function to get actual HW count for a given core (first cores get full shard, last may be partial)
+    auto get_hw_count_for_core = [&](uint32_t core_idx) -> uint32_t {
+        uint32_t remaining_hw = hw_total - (core_idx * padded_shard_width);
+        return std::min(padded_shard_width, remaining_hw);
+    };
 
-    // Calculate BHW range this output core handles
-    uint32_t dst_bhw_start = dst_core * bhw_per_output_core;
-    uint32_t dst_bhw_end = std::min(dst_bhw_start + bhw_per_output_core, bhw_total);
+    // Helper function to get starting HW index for a given core
+    auto get_hw_start_for_core = [&](uint32_t core_idx) -> uint32_t { return core_idx * padded_shard_width; };
+
+    // Check if we have uneven sharding (total logical HW < total padded capacity)
+    uint32_t total_padded_capacity = input_num_cores * padded_shard_width;
+    bool is_uneven_sharding = hw_total < total_padded_capacity;
+
+    uint32_t dst_bhw_start, dst_bhw_end;
+
+    if (is_uneven_sharding && batch_size == 1) {
+        // For uneven sharding with B=1, output core distribution should match input core distribution
+        // Since BHW is just a flattened version of (B, HW), and with B=1, BHW index == HW index
+        uint32_t dst_hw_start = get_hw_start_for_core(dst_core);
+        uint32_t dst_hw_count = get_hw_count_for_core(dst_core);
+        dst_bhw_start = dst_hw_start;
+        dst_bhw_end = dst_bhw_start + dst_hw_count;
+    } else {
+        // For even sharding or B>1, use uniform distribution
+        uint32_t bhw_total = batch_size * hw_total;
+        uint32_t bhw_per_output_core = bhw_total / output_num_cores;
+        dst_bhw_start = dst_core * bhw_per_output_core;
+        dst_bhw_end = std::min(dst_bhw_start + bhw_per_output_core, bhw_total);
+    }
 
     for (uint32_t bhw_idx = dst_bhw_start; bhw_idx < dst_bhw_end; bhw_idx++) {
         // Convert BHW index back to (batch_id, hw_idx)
@@ -190,13 +227,19 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
         uint32_t hw_idx = bhw_idx % hw_total;
 
         // Find which input core has this hw_idx data
-        uint32_t src_core = hw_idx / hw_per_input_core;
-        uint32_t src_hw_offset = hw_idx % hw_per_input_core;
+        uint32_t src_core = hw_idx / padded_shard_width;
+        uint32_t src_hw_offset = hw_idx % padded_shard_width;
 
-        // Calculate source offset: [B*C, HW_per_input_core] layout (interleaved batch-channel)
-        // For batch_id and hw_offset, we need to find the position in the flattened [B*C, HW] layout
-        // Each batch occupies 'channels' consecutive rows starting at batch_id * channels
-        uint32_t src_offset = (batch_id * channels * hw_per_input_core + src_hw_offset * channels) * element_size_bytes;
+        // Skip if this hw_idx exceeds the logical HW range for this core
+        uint32_t src_core_hw_count = get_hw_count_for_core(src_core);
+        if (src_hw_offset >= src_core_hw_count) {
+            continue;  // This should not happen for valid logical indices
+        }
+
+        // Calculate source offset: [B*C, padded_shard_width] layout (interleaved batch-channel)
+        // Each core physically has padded_shard_width elements, but logically may have fewer
+        uint32_t src_offset =
+            (batch_id * channels * padded_shard_width + src_hw_offset * channels) * element_size_bytes;
 
         // Calculate destination offset: [1, C, BHW_per_output_core] layout
         uint32_t dst_bhw_offset = bhw_idx - dst_bhw_start;
@@ -223,9 +266,9 @@ std::vector<BatchTransferInstruction> optimize_transfers(
     uint32_t input_num_cores,
     uint32_t element_size_bytes,
     const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores) {
+    const std::vector<CoreCoord>& output_cores,
+    uint32_t padded_shard_width) {
     std::vector<BatchTransferInstruction> instructions;
-    uint32_t hw_per_input_core = hw_total / input_num_cores;
 
     for (const auto& [src_core, transfer_list] : transfers_by_src) {
         // Sort by source offset
@@ -240,12 +283,11 @@ std::vector<BatchTransferInstruction> optimize_transfers(
 
         // Group transfers by batch to ensure at least one transfer per batch
         std::map<uint32_t, std::vector<TransferData>> transfers_by_batch;
-        uint32_t batch_size_bytes = channels * hw_per_input_core * element_size_bytes;
+        uint32_t batch_size_bytes = channels * padded_shard_width * element_size_bytes;
 
         for (const TransferData& transfer : sorted_transfers) {
             // Determine which batch this transfer belongs to
-            // The src_offset was calculated as: batch_id * channels * hw_per_input_core + src_hw_offset * channels
-            // Let's use the original calculation that worked before for now
+            // The src_offset was calculated as: batch_id * channels * padded_shard_width + src_hw_offset * channels
             uint32_t batch_id = transfer.src_offset / batch_size_bytes;
             transfers_by_batch[batch_id].push_back(transfer);
         }
@@ -377,7 +419,8 @@ std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
     uint32_t hw_total,
     const std::vector<CoreCoord>& input_cores,
     const std::vector<CoreCoord>& output_cores,
-    uint32_t element_size_bytes) {
+    uint32_t element_size_bytes,
+    uint32_t padded_shard_width) {
     std::vector<BatchTransferInstruction> instructions;
 
     uint32_t input_num_cores = input_cores.size();
@@ -387,7 +430,14 @@ std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
     for (uint32_t dst_core = 0; dst_core < output_num_cores; dst_core++) {
         // Generate individual transfers for this destination core
         auto transfers_by_src = generate_transfers_for_output_core(
-            dst_core, batch_size, channels, hw_total, input_num_cores, output_num_cores, element_size_bytes);
+            dst_core,
+            batch_size,
+            channels,
+            hw_total,
+            input_num_cores,
+            output_num_cores,
+            element_size_bytes,
+            padded_shard_width);
 
         // Optimize transfers using batch-aware grouping
         auto core_instructions = optimize_transfers(
@@ -399,7 +449,8 @@ std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
             input_num_cores,
             element_size_bytes,
             input_cores,
-            output_cores);
+            output_cores,
+            padded_shard_width);
 
         // Add to overall instruction list
         instructions.insert(instructions.end(), core_instructions.begin(), core_instructions.end());
@@ -458,7 +509,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         config.hw_total,
         config.l1_input_cores,
         config.l1_input_cores,
-        config.element_size_bytes);
+        config.element_size_bytes,
+        config.l1_input_shard_width);
 
     const uint32_t total_tiles_per_core = tt::div_up(config.l1_input_shard_width, TILE_HEIGHT);
     const uint32_t total_tiles_writer0 = tt::div_up(total_tiles_per_core, 2);

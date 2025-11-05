@@ -42,8 +42,9 @@ TEST_F(ConvertToHWCGenerateBatchRedistributionTransfersTest, SimpleSingleCoreCas
     auto output_cores = make_cores(1);
     uint32_t element_size_bytes = 2;
 
+    uint32_t padded_shard_width = hw_total / input_cores.size();  // Even sharding for test
     auto instructions = generate_batch_redistribution_transfers(
-        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes);
+        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes, padded_shard_width);
 
     // Should generate exactly 2 transfers (one per batch)
     EXPECT_EQ(instructions.size(), 2u);
@@ -72,8 +73,9 @@ TEST_F(ConvertToHWCGenerateBatchRedistributionTransfersTest, MultipleBatchesCase
     auto output_cores = make_cores(1);
     uint32_t element_size_bytes = 2;
 
+    uint32_t padded_shard_width = hw_total / input_cores.size();  // Even sharding for test
     auto instructions = generate_batch_redistribution_transfers(
-        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes);
+        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes, padded_shard_width);
 
     // Should generate exactly 3 transfers (one per batch)
     EXPECT_EQ(instructions.size(), 3u);
@@ -98,8 +100,9 @@ TEST_F(ConvertToHWCGenerateBatchRedistributionTransfersTest, MultiCoreCase) {
     auto output_cores = make_cores(2);
     uint32_t element_size_bytes = 2;
 
+    uint32_t padded_shard_width = hw_total / input_cores.size();  // Even sharding for test
     auto instructions = generate_batch_redistribution_transfers(
-        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes);
+        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes, padded_shard_width);
 
     // Should have transfers for each output core
     // Each output core gets data from both input cores
@@ -140,8 +143,9 @@ TEST_F(ConvertToHWCGenerateBatchRedistributionTransfersTest, DifferentGridSizes)
     auto output_cores = make_cores(4);
     uint32_t element_size_bytes = 2;
 
+    uint32_t padded_shard_width = hw_total / input_cores.size();  // Even sharding for test
     auto instructions = generate_batch_redistribution_transfers(
-        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes);
+        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes, padded_shard_width);
 
     // Should have transfers for each output core
     EXPECT_GT(instructions.size(), 0u);
@@ -168,8 +172,9 @@ TEST_F(ConvertToHWCGenerateBatchRedistributionTransfersTest, SingleBatchCase) {
     auto output_cores = make_cores(1);
     uint32_t element_size_bytes = 2;
 
+    uint32_t padded_shard_width = hw_total / input_cores.size();  // Even sharding for test
     auto instructions = generate_batch_redistribution_transfers(
-        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes);
+        batch_size, channels, hw_total, input_cores, output_cores, element_size_bytes, padded_shard_width);
 
     // Should generate exactly 1 transfer (single batch)
     EXPECT_EQ(instructions.size(), 1u);

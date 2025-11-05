@@ -76,7 +76,8 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
     uint32_t hw_total,
     uint32_t input_num_cores,
     uint32_t output_num_cores,
-    uint32_t element_size_bytes);
+    uint32_t element_size_bytes,
+    uint32_t padded_shard_width);
 
 // Optimize transfers using batch-aware grouping
 std::vector<BatchTransferInstruction> optimize_transfers_batch_aware(
@@ -107,7 +108,8 @@ std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
     uint32_t hw_total,
     const std::vector<CoreCoord>& input_cores,
     const std::vector<CoreCoord>& output_cores,
-    uint32_t element_size_bytes);
+    uint32_t element_size_bytes,
+    uint32_t padded_shard_width);
 
 template <typename T>
 std::vector<std::vector<T>> group_by_destination_core(const std::vector<T>& transfers, int num_output_cores);

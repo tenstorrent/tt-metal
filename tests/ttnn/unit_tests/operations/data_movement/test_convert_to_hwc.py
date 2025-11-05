@@ -66,6 +66,15 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
             ),
             128,
         ),
+        (
+            60,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)),
+                }
+            ),
+            32,
+        ),
         # (
         # 224 * 224,
         # ttnn.CoreRangeSet(
@@ -75,16 +84,16 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
         # ),
         # 784,
         # ),
-        # (
-        # 168960,
-        # ttnn.CoreRangeSet(
-        # {
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
-        # }
-        # ),
-        # 2688,
-        # ),  # UNet Shallow
+        (
+            168960,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+                }
+            ),
+            2688,
+        ),  # UNet Shallow
     ),
 )
 def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide_memory_config):
@@ -193,22 +202,22 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
         # 14080,
         # 2656,
         # ),
-        # (
-        # 168960,
-        # ttnn.CoreRangeSet(
-        # {
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0)),
-        # }
-        # ),
-        # ttnn.CoreRangeSet(
-        # {
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
-        # }
-        # ),
-        # 14080,
-        # 2688,
-        # ),  # UNet Shallow
+        (
+            168960,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0)),
+                }
+            ),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(6, 7)),
+                }
+            ),
+            14080,
+            2688,
+        ),  # UNet Shallow
     ),
 )
 def test_convert_to_hwc_dram(
