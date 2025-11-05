@@ -41,11 +41,9 @@ bool SingleHostContext::is_revoked() { return false; }
 
 void SingleHostContext::abort(int error_code) const { std::exit(error_code); }
 
-/* Remaining methods throw for single-host context */
-void SingleHostContext::barrier() const {
-    TT_THROW("method barrier is unsupported for single-host distributed contexts.");
-}
+void SingleHostContext::barrier() const { return; }
 
+  /* Remaining methods throw for single-host context */
 void SingleHostContext::send(
     tt::stl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method send is unsupported for single-host distributed contexts.");

@@ -7,6 +7,7 @@
 #include "tt_metal/common/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include <utility>
@@ -109,6 +110,11 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
+
+    // Barrier across all hosts of the mesh
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
+        mesh_device_->get_view().mesh_id());
+    distributed_context->barrier();
 }
 
 void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
