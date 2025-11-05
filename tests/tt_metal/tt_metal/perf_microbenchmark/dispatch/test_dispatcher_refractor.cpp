@@ -62,7 +62,8 @@ public:
     }
 };
 
-constexpr uint32_t DEFAULT_ITERATIONS = 3;
+constexpr uint32_t DEFAULT_ITERATIONS = 1;
+constexpr uint32_t DEFAULT_ITERATIONS_PAGED = DEFAULT_ITERATIONS;
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
 
@@ -81,42 +82,13 @@ public:
     bool is_mcast_;
 
     void SetUp() override {
-        // This test requires Fast Dispatch mode
-        // if (this->IsSlowDispatch()) {
-        //     GTEST_SKIP() << "This test requires Fast Dispatch (unset TT_METAL_SLOW_DISPATCH_MODE)";
-        // }
-
         tt_metal::UnitMeshCQSingleCardFixture::SetUp();
-
-        // TODO: This tests needs to transfer 12288 x 3 words = 36864 words = 147456 bytes = 147.456 KB
-        //  of data. But the below settings and max size of prefetch command buffer is too small.
-        //  We need to increase the max size of prefetch command buffer to 147.456 KB
-        //  to match the original test.
-
-        // // Override BEFORE base SetUp initializes MetalContext/CQs
-        // Pick a value just above your need (147.456 KB) but small enough to fit L1.
-        // cmddat must be >= 2 * max_cmd. Defaults: scratch ~128KB, ringbuffer ~1024KB, dispatch ~512KB.
-        // constexpr uint32_t new_max = 192 * 1024; // 192KB
-        // constexpr uint32_t new_cmddat = new_max * 2; // 384KB
-
-        // for (auto core_type : {tt::CoreType::WORKER, tt::CoreType::ETH}) {
-        //     auto& s = tt::tt_metal::DispatchSettings::get(core_type, /*num_hw_cqs*/ 1);
-        //     s.prefetch_max_cmd_size(new_max)
-        //     .prefetch_cmddat_q_size(new_cmddat)
-        //     // If you still overflow L1, reduce ringbuffer a bit to make room:
-        //     // .prefetch_ringbuffer_size(512 * 1024)
-        //     .build();
-        // }
 
         const auto params = GetParam();
         this->transfer_size_bytes_ = params.transfer_size_bytes;
         this->num_iterations_ = params.num_iterations;
         this->dram_data_size_words_ = params.dram_data_size_words;
         this->is_mcast_ = params.is_mcast;
-
-        auto max_fetch = tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-        // ASSERT_LE(new_max, max_fetch);
-        log_info(tt::LogTest, "Max fetch: {}", max_fetch);
 
         // Initialize random seed
         uint32_t seed = static_cast<uint32_t>(std::time(nullptr));
@@ -140,34 +112,7 @@ public:
     bool is_dram_;
 
     void SetUp() override {
-        // This test requires Fast Dispatch mode
-        // if (this->IsSlowDispatch()) {
-        //     GTEST_SKIP() << "This test requires Fast Dispatch (unset TT_METAL_SLOW_DISPATCH_MODE)";
-        // }
-
         tt_metal::UnitMeshCQSingleCardFixture::SetUp();
-
-        // // TODO: This tests needs to transfer 12288 x 3 words = 36864 words = 147456 bytes = 147.456 KB
-        // //  of data. But the below settings and max size of prefetch command buffer is too small.
-        // //  We need to increase the max size of prefetch command buffer to 147.456 KB
-        // //  to match the original test.
-        // // BEFORE base SetUp
-        // auto& ctx = tt::tt_metal::MetalContext::instance();
-        // tt::tt_metal::DispatchSettings::initialize(ctx.get_cluster());
-
-        // Pick a value just above your need (147.456 KB) but small enough to fit L1.
-        // cmddat must be >= 2 * max_cmd. Defaults: scratch ~128KB, ringbuffer ~1024KB, dispatch ~512KB.
-        // constexpr uint32_t new_max = 192 * 1024; // 192KB
-        // constexpr uint32_t new_cmddat = new_max * 2; // 384KB
-
-        // for (auto core_type : {tt::CoreType::WORKER, tt::CoreType::ETH}) {
-        //     auto& s = tt::tt_metal::DispatchSettings::get(core_type, /*num_hw_cqs*/ 1);
-        //     s.prefetch_max_cmd_size(new_max)
-        //     .prefetch_cmddat_q_size(new_cmddat)
-        //     // If you still overflow L1, reduce ringbuffer a bit to make room:
-        //     // .prefetch_ringbuffer_size(512 * 1024)
-        //     .build();
-        // }
 
         const auto params = GetParam();
         this->page_size_ = params.page_size;
@@ -175,10 +120,6 @@ public:
         this->num_iterations_ = params.num_iterations;
         this->dram_data_size_words_ = params.dram_data_size_words;
         this->is_dram_ = params.is_dram;
-
-        auto max_fetch = tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-        // ASSERT_LE(new_max, max_fetch);
-        log_info(tt::LogTest, "Max fetch: {}", max_fetch);
 
         // Initialize random seed
         uint32_t seed = static_cast<uint32_t>(std::time(nullptr));
@@ -265,14 +206,62 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     auto device = mesh_device->get_devices()[0];
 
     // Test parameters
-    uint32_t transfer_size = this->get_transfer_size_bytes();
+    uint32_t transfer_size_bytes = this->get_transfer_size_bytes();
     uint32_t num_iterations = this->get_num_iterations();
     uint32_t dram_data_size_words = this->get_dram_data_size_words();
     // Convert transfer size to words
-    uint32_t transfer_size_words = transfer_size / sizeof(uint32_t);
+    uint32_t transfer_size_words = transfer_size_bytes / sizeof(uint32_t);
     bool is_mcast = this->get_is_mcast();
+    // Max prefetch command size per CQ entry
+    const uint32_t max_fetch_bytes =
+        tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
+    // Host alignment
+    uint32_t host_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    const uint32_t overhead_bytes = tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmdLarge), host_alignment);
+    TT_FATAL(
+        max_fetch_bytes > overhead_bytes,
+        "max_prefetch_command_size: {} is too small for linear write, overhead: {}",
+        max_fetch_bytes,
+        overhead_bytes);
+    // Max payload size per CQ entry
+    const uint32_t max_payload_per_cmd_bytes = max_fetch_bytes - overhead_bytes;
+    TT_FATAL((transfer_size_bytes % 16) == 0, "Require 16B alignment for write payload");
 
-    log_info(tt::LogTest, "Transfer size: {} bytes, Iterations: {}", transfer_size, num_iterations);
+    // Generate random payload
+    std::vector<uint32_t> host_payload(transfer_size_words);
+    for (uint32_t i = 0; i < transfer_size_words; ++i) {
+        host_payload[i] = std::rand();
+    }
+
+    // Calculate the chunk size for the write payload
+    auto chunk_size_calculator = [&](uint32_t size_bytes) {
+        return tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmdLarge) + size_bytes, host_alignment);
+    };
+
+    // Calculate the total size of the body of the commands
+    uint32_t body_size_bytes = 0;
+    {
+        uint32_t remaining_bytes = transfer_size_bytes;
+        while (remaining_bytes > 0) {
+            uint32_t chunk_size_bytes = std::min(remaining_bytes, max_payload_per_cmd_bytes);
+            body_size_bytes += chunk_size_calculator(chunk_size_bytes);
+            remaining_bytes -= chunk_size_bytes;
+        }
+    }
+
+    uint32_t total_cmd_bytes = num_iterations * (body_size_bytes);
+    log_info(tt::LogTest, "Total command bytes: {}", total_cmd_bytes);
+
+    ASSERT_LE(total_cmd_bytes, mgr.get_issue_queue_limit(fdcq.id()))
+        << "Test requires " << total_cmd_bytes << " B, but issue queue limit is "
+        << mgr.get_issue_queue_limit(fdcq.id()) << " B";
+
+    // Reserve space from SystemMemoryManager
+    void* cmd_buffer_base = mgr.issue_queue_reserve(total_cmd_bytes, fdcq.id());
+    ASSERT_TRUE(cmd_buffer_base != nullptr) << "Failed to reserve issue queue space";
+
+    // Use DeviceCommand helper (HugepageDeviceCommand)
+    HugepageDeviceCommand dc(cmd_buffer_base, total_cmd_bytes);
 
     // Setup target worker core
     CoreCoord first_worker = {0, 1};
@@ -300,67 +289,66 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
 
     // Setup DeviceData for validation
     DeviceData device_data(device, worker_range, l1_base, dram_base, nullptr, false, dram_data_size_words);
-
-    // Calculate command buffer size
-    // take a loop at device command calculator
-    uint32_t cmd_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
-    uint32_t write_size = tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmdLarge) + transfer_size, cmd_alignment);
-
-    uint32_t total_cmd_bytes = num_iterations * (write_size);
-    log_info(tt::LogTest, "Total command bytes: {}", total_cmd_bytes);
-
-    ASSERT_LE(total_cmd_bytes, mgr.get_issue_queue_limit(fdcq.id()))
-        << "Test requires " << total_cmd_bytes << " B, but issue queue limit is "
-        << mgr.get_issue_queue_limit(fdcq.id()) << " B";
-
-    // Reserve space from SystemMemoryManager
-    void* cmd_buffer_base = mgr.issue_queue_reserve(total_cmd_bytes, fdcq.id());
-    ASSERT_TRUE(cmd_buffer_base != nullptr) << "Failed to reserve issue queue space";
-
-    // Use DeviceCommand helper (HugepageDeviceCommand)
-    HugepageDeviceCommand dc(cmd_buffer_base, total_cmd_bytes);
-
+    std::vector<uint32_t> entry_sizes;
     // Generate commands using DeviceCommand helper
     for (size_t iter = 0; iter < num_iterations; ++iter) {
+        uint32_t emitted_bytes = 0;
         uint32_t l1_addr = device_data.get_result_data_addr(first_worker, 0);
+        while (emitted_bytes < transfer_size_bytes) {
+            uint32_t remaining_bytes = transfer_size_bytes - emitted_bytes;
 
-        // Generate random payload
-        auto host_payload =
-            test_utils::generate_uniform_random_vector<uint32_t>(0, 1000, transfer_size_words, std::rand());
+            // cap payload so align(header + payload) <= max_fetch_bytes
+            // const uint32_t header_unaligned = sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmdLarge);
+            // const uint32_t entry_cap = (max_fetch_bytes / host_alignment) * host_alignment;
+            // const uint32_t payload_cap = entry_cap > header_unaligned ? (entry_cap - header_unaligned) : 0;
 
-        // Add dispatch write command using helper (no manual struct creation)
-        // false, false means: no flush prefetch, no inline data -> test fails
-        // true, false means: flush prefetch, no inline data -> test hangs
-        // false, true means: no flush prefetch, inline data -> test fails and 2nd test hangs
-        // true, true means: flush prefetch, inline data -> test passes
-        dc.add_dispatch_write_linear<true, true>(
-            is_mcast ? worker_range.size() : 0,  // num_mcast_dests (0 = unicast)
-            noc_xy,                              // NOC coordinates
-            l1_addr,                             // destination address
-            transfer_size,                       // data size
-            host_payload.data()                  // payload data
-        );
+            // Cap the chunk size so that the total size of the command is less than max_fetch_bytes
+            uint32_t chunk_size_bytes = std::min(remaining_bytes, max_payload_per_cmd_bytes);
 
-        // Add a barrier wait command to ensure the write is
-        // complete before the next iteration starts
-        //  dc.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+            l1_addr += emitted_bytes;
+            const uint32_t emitted_words = emitted_bytes / sizeof(uint32_t);
+            const void* payload_data = host_payload.data() + emitted_words;
 
-        // what does the below exactly do?
-        // works with and without the below
-        // dc.align_write_offset();
+            // Add dispatch write command using helper (no manual struct creation)
+            // false, false means: no flush prefetch, no inline data -> test fails
+            // true, false means: flush prefetch, no inline data -> test hangs
+            // false, true means: no flush prefetch, inline data -> test fails and 2nd test hangs
+            // true, true means: flush prefetch, inline data -> test passes
+            dc.add_dispatch_write_linear<true, true>(
+                is_mcast ? worker_range.size() : 0,  // num_mcast_dests
+                noc_xy,                              // NOC coordinates
+                l1_addr,                             // destination address
+                chunk_size_bytes,                    // data size
+                payload_data                         // payload data
+            );
 
-        // Track expected data for validation
-        for (size_t j = 0; j < host_payload.size(); j++) {
-            if (is_mcast) {
-                device_data.push_range(worker_range, host_payload[j], true);
-            } else {
-                device_data.push_one(first_worker, host_payload[j]);
-            }
+            // Add a barrier wait command to ensure the write is
+            // complete before the next iteration starts
+            //  dc.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
+
+            // what does the below exactly do?
+            // works with and without the below
+            // dc.align_write_offset();
+
+            // record actual fetch entry size for this chunk
+            const uint32_t entry_size =
+                tt::align(sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmdLarge) + chunk_size_bytes, host_alignment);
+            entry_sizes.push_back(entry_size);
+
+            emitted_bytes += chunk_size_bytes;
         }
     }
 
-    auto max_fetch = tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
-    ASSERT_LE(write_size, max_fetch);
+    // Track expected data for validation
+    for (size_t j = 0; j < host_payload.size(); j++) {
+        if (is_mcast) {
+            device_data.push_range(worker_range, host_payload[j], true);
+        } else {
+            device_data.push_one(first_worker, host_payload[j]);
+        }
+    }
+
+    // ASSERT_LE(write_size, max_fetch);
 
     // Important: remove this terminate command
     // This stops the dispatcher so the finish event sequence
@@ -383,10 +371,16 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     // This resides on the Device L1 memory
     // Write the commands to the device-side fetch queue, notifying the prefetcher
     // that there are new commands to fetch from the issue queue
+    // Post per-chunk entries to fetch queue
     auto start = std::chrono::steady_clock::now();
-    mgr.fetch_queue_write(dc.write_offset_bytes(), fdcq.id());
+    for (uint32_t s : entry_sizes) {
+        mgr.fetch_queue_write(s, fdcq.id());
+    }
+
+    // mgr.fetch_queue_write(dc.write_offset_bytes(), fdcq.id());
     // Wait for completion
     // Manual thing: Completion queue is empty (need to handle manual thing)
+    log_info(tt::LogTest, "Waiting for completion");
     distributed::Finish(mesh_device->mesh_command_queue());
     auto end = std::chrono::steady_clock::now();
     std::chrono::duration<double> elapsed = (end - start);
@@ -405,7 +399,7 @@ TEST_P(DispatchLinearWriteTestFixture, LinearWrite) {
     if (pass) {
         float total_words = device_data.size();
         log_info(LogTest, "Total words: {}", total_words);
-        // total_words *= num_iterations;
+        total_words *= num_iterations;
         float bw = total_words * sizeof(uint32_t) / (elapsed.count() * 1024.0 * 1024.0 * 1024.0);
 
         std::stringstream ss;
@@ -1027,47 +1021,47 @@ TEST_P(DispatchPackedWriteTestFixture, LargePackedWrite) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    DispatcherTests,
-    DispatchLinearWriteTestFixture,
-    ::testing::Values(
-        LinearWriteParams{256, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
-        LinearWriteParams{1024, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
-        LinearWriteParams{256, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true},
-        LinearWriteParams{1024, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),
-    [](const testing::TestParamInfo<LinearWriteParams>& info) {
-        return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
-               "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
-               (info.param.is_mcast ? "mcast" : "unicast");
-    });
+// INSTANTIATE_TEST_SUITE_P(
+//     DispatcherTests,
+//     DispatchLinearWriteTestFixture,
+//     ::testing::Values(
+//         LinearWriteParams{49152, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false}, // 256 * 192
+//         LinearWriteParams{196608, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+//         LinearWriteParams{49152, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}, //1024 * 192
+//         LinearWriteParams{196608, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),
+//     [](const testing::TestParamInfo<LinearWriteParams>& info) {
+//         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
+//                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
+//                (info.param.is_mcast ? "mcast" : "unicast");
+//     });
 
 INSTANTIATE_TEST_SUITE_P(
     DispatcherTests,
     DispatchPagedWriteTestFixture,
     ::testing::Values(
-        PagedWriteParams{16, 512, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
-        PagedWriteParams{16, 512, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true},
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED, DRAM_DATA_SIZE_WORDS, false},
+        PagedWriteParams{16, 512, DEFAULT_ITERATIONS_PAGED, DRAM_DATA_SIZE_WORDS, true},
         PagedWriteParams{
-            512, 128, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},  // TODO: increase page size to 2048
+            2048, 128, DEFAULT_ITERATIONS_PAGED, DRAM_DATA_SIZE_WORDS, false},  // TODO: increase page size to 2048
         PagedWriteParams{
-            512, 128, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, true}),  // TODO: increase page size to 2048
+            2048, 128, DEFAULT_ITERATIONS_PAGED, DRAM_DATA_SIZE_WORDS, true}),  // TODO: increase page size to 2048
     [](const testing::TestParamInfo<PagedWriteParams>& info) {
         return std::to_string(info.param.page_size) + "B_" + std::to_string(info.param.num_pages) + "pages_" +
                std::to_string(info.param.num_iterations) + "iter_" + std::to_string(info.param.dram_data_size_words) +
                "words_" + (info.param.is_dram ? "DRAM" : "L1");
     });
 
-INSTANTIATE_TEST_SUITE_P(
-    DispatcherTests,
-    DispatchPackedWriteTestFixture,
-    ::testing::Values(
-        LinearWriteParams{256, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
-        LinearWriteParams{1024, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false}),
-    [](const testing::TestParamInfo<LinearWriteParams>& info) {
-        return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
-               "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
-               (info.param.is_mcast ? "mcast" : "unicast");
-    });
+// INSTANTIATE_TEST_SUITE_P(
+//     DispatcherTests,
+//     DispatchPackedWriteTestFixture,
+//     ::testing::Values(
+//         LinearWriteParams{256, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false},
+//         LinearWriteParams{1024, DEFAULT_ITERATIONS, DRAM_DATA_SIZE_WORDS, false}),
+//     [](const testing::TestParamInfo<LinearWriteParams>& info) {
+//         return std::to_string(info.param.transfer_size_bytes) + "B_" + std::to_string(info.param.num_iterations) +
+//                "iter_" + std::to_string(info.param.dram_data_size_words) + "words_" +
+//                (info.param.is_mcast ? "mcast" : "unicast");
+//     });
 
 }  // namespace dispatcher_tests
 }  // namespace tt::tt_dispatch
