@@ -6,7 +6,6 @@
 # You also need to install everything needed to run tt-triage.py in that environment
 # Run manually ./tools/tt-triage.py --help to see if it works and install requirements
 
-from re import A
 import os
 import pytest
 import subprocess
