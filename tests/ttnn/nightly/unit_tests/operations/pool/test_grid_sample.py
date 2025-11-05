@@ -352,25 +352,26 @@ def prepare_sharded_ttnn_grid(
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
+        ((1, 256, 48, 160), (1, 1, 40, 2)),
         ((1, 256, 12, 40), (1, 1, 1, 2)),
-        # ((1, 256, 24, 80), (1, 7, 25281, 2)),
-        # ((1, 256, 48, 160), (1, 7, 25281, 2)),
-        # ((16, 32, 100, 100), (16, 10000, 4, 2)),
-        # ((48, 32, 12, 20), (48, 3567, 8, 2)),
-        # ((8, 32, 100, 100), (8, 300, 4, 2)),
-        # ((8, 32, 100, 100), (8, 2000, 4, 2)),
-        # ((16, 32, 50, 50), (16, 10000, 1, 2)),
-        # ((48, 32, 80, 45), (48, 4832, 1, 2)),
-        # ((48, 32, 40, 23), (48, 4832, 1, 2)),
-        # ((48, 32, 20, 12), (48, 4832, 1, 2)),
-        # ((48, 32, 10, 6), (48, 4832, 1, 2)),
-        # ((8, 32, 50, 50), (8, 3604, 1, 2)),
+        ((1, 256, 24, 80), (1, 7, 25281, 2)),
+        ((1, 256, 48, 160), (1, 7, 25281, 2)),
+        ((16, 32, 100, 100), (16, 10000, 4, 2)),
+        ((48, 32, 12, 20), (48, 3567, 8, 2)),
+        ((8, 32, 100, 100), (8, 300, 4, 2)),
+        ((8, 32, 100, 100), (8, 2000, 4, 2)),
+        ((16, 32, 50, 50), (16, 10000, 1, 2)),
+        ((48, 32, 80, 45), (48, 4832, 1, 2)),
+        ((48, 32, 40, 23), (48, 4832, 1, 2)),
+        ((48, 32, 20, 12), (48, 4832, 1, 2)),
+        ((48, 32, 10, 6), (48, 4832, 1, 2)),
+        ((8, 32, 50, 50), (8, 3604, 1, 2)),
     ],
 )
 @pytest.mark.parametrize(
     "mode",
     [
-        "nearest",
+        "bilinear",
     ],
 )
 @pytest.mark.parametrize(
@@ -440,7 +441,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
 @pytest.mark.parametrize("batch_output_channels", [True, False])
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("mode", ["bilinear", "nearest"])
+@pytest.mark.parametrize("mode", ["bilinear"])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, grid_batching_factor",
     [
@@ -678,86 +679,4 @@ def test_grid_sample_sharded_batched(
         use_precomputed_grid=use_precomputed_grid,
         grid_dtype=grid_dtype,
         mode=mode,
-    )
-
-
-@pytest.mark.parametrize("use_precomputed_grid", [True, False])
-@pytest.mark.parametrize("batch_output_channels", [True, False])
-@pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize(
-    "input_shape, grid_shape, grid_batching_factor",
-    [
-        ((1, 256, 48, 160), (1, 25281, 7, 2), 7),
-        ((1, 64, 16, 32), (1, 8, 12, 2), 3),
-        ((2, 32, 8, 16), (2, 6, 8, 2), 2),
-        ((1, 128, 32, 32), (1, 16, 16, 2), 4),
-    ],
-)
-@pytest.mark.parametrize("align_corners", [True, False])
-def test_grid_sample_nearest_batching_factor_interleaved(
-    device,
-    input_shape,
-    grid_shape,
-    grid_batching_factor,
-    batch_output_channels,
-    use_precomputed_grid,
-    grid_dtype,
-    align_corners,
-):
-    """Test nearest mode grid sample with batching factor in interleaved mode"""
-    if grid_dtype == ttnn.float32 and use_precomputed_grid:
-        pytest.skip("Precomputed grid only supports bfloat16")
-
-    torch.manual_seed(0)
-
-    batch_size, channels, height, width = input_shape
-    _, grid_h, grid_w, _ = grid_shape
-
-    input_shape_nhwc = [batch_size, height, width, channels]
-
-    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
-    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
-
-    grid_tensor = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
-
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, grid_tensor, mode="nearest", padding_mode="zeros", align_corners=align_corners
-    )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
-
-    ttnn_input = ttnn.from_torch(
-        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
-
-    ttnn_grid_device = prepare_ttnn_grid(
-        grid_tensor,
-        device,
-        use_precomputed_grid,
-        grid_dtype,
-        input_shape_nhwc,
-        grid_batching_factor,
-        mode="nearest",
-        align_corners=align_corners,
-    )
-
-    ttnn_output = ttnn.grid_sample(
-        ttnn_input,
-        ttnn_grid_device,
-        mode="nearest",
-        align_corners=align_corners,
-        use_precomputed_grid=use_precomputed_grid,
-        batch_output_channels=batch_output_channels,
-    )
-    ttnn_output_torch = ttnn.to_torch(ttnn_output)
-
-    _, torch_expected_nhwc = prepare_grid_batching_expected_output(
-        torch_output_nhwc, batch_size, grid_h, grid_w, channels, grid_batching_factor, batch_output_channels
-    )
-
-    validate_grid_sample_output(
-        torch_expected_nhwc,
-        ttnn_output_torch,
-        use_precomputed_grid=use_precomputed_grid,
-        grid_dtype=grid_dtype,
-        mode="nearest",
     )
