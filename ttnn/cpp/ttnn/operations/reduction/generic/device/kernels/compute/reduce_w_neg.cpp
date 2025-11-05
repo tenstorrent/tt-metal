@@ -27,7 +27,7 @@ void MAIN {
     constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_output = tt::CBIndex::c_3;
     constexpr uint32_t cb_acc = tt::CBIndex::c_4;
-    constexpr uint32_t cb_ineg = tt::CBIndex::c_5;
+    constexpr uint32_t cb_inv = tt::CBIndex::c_5;
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
@@ -48,24 +48,24 @@ void MAIN {
                 // This section crashes device completely, neither debug print nor watcher works after crash
                 // Just acquiring and releasing tile registers does not seem to have this effect,
                 // lines marked with 'XX' cause a problem
-                tile_regs_acquire();
-                cb_wait_front(cb_input, onetile);  // XX
-                copy_tile_init(cb_input);          // XX
-                copy_tile(cb_input, 0, 0);         // XX
+                // tile_regs_acquire();
+                // cb_wait_front(cb_input, onetile);  // XX
+                // copy_tile_init(cb_input);          // XX
+                // copy_tile(cb_input, 0, 0);         // XX
                 // negative_tile_init();
                 // negative_tile(reduce_dst_idx);
-                cb_pop_front(cb_input, onetile);  // XX
-                tile_regs_commit();
-                cb_reserve_back(cb_ineg, onetile);  // XX
-                tile_regs_wait();
-                pack_tile(cb_ineg, onetile);  // XX
-                tile_regs_release();
-                cb_push_back(cb_ineg, onetile);  // XX
+                // cb_pop_front(cb_input, onetile);  // XX
+                // tile_regs_commit();
+                // cb_reserve_back(cb_ineg, onetile);  // XX
+                // tile_regs_wait();
+                // pack_tile(cb_ineg, onetile);  // XX
+                // tile_regs_release();
+                // cb_push_back(cb_ineg, onetile);  // XX
 
                 // DPRINT << "reduce:  tile_regs_acquire() wt=" << wt << " ht=" << ht << ENDL();
 
                 tile_regs_acquire();
-                cb_wait_front(cb_ineg, onetile);
+                cb_wait_front(cb_input, onetile);
                 if (wt > 0) {
                     cb_wait_front(cb_acc, onetile);
                     copy_tile_init(cb_acc);
@@ -73,14 +73,14 @@ void MAIN {
                 }
                 // REDUCE_OP is expected to come from add_define
 
-#ifndef REDUCE_ROW_SUM_VIA_MM
-                reduce_init(cb_ineg, cb_scaler, cb_acc);
-                reduce_tile(cb_ineg, cb_scaler, 0, 0, reduce_dst_idx);
+                // #ifndef REDUCE_ROW_SUM_VIA_MM
+                reduce_init(cb_input, cb_scaler, cb_acc);
+                reduce_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
                 reduce_uninit();
-#else
-                matmul_tiles(cb_ineg, cb_scaler, 0, 0, 0, false);
-#endif
-                cb_pop_front(cb_ineg, onetile);
+                // #else
+                //                 matmul_tiles(cb_input, cb_scaler, 0, 0, 0, false);
+                // #endif
+                cb_pop_front(cb_input, onetile);
                 if (wt > 0) {
                     cb_pop_front(cb_acc, onetile);
                 }
