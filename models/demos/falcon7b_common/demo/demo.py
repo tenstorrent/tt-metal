@@ -569,7 +569,7 @@ def run_falcon_demo_kv(
     #     if num_devices == 32:  # set higher margin to 20% for Galaxy due to larger variance on CI
     #         verify_perf(measurements, expected_perf_metrics, high_tol_percentage=1.20)
     #     else:
-    verify_perf(measurements, expected_perf_metrics) #see issue #31939
+    verify_perf(measurements, expected_perf_metrics)  # see issue #31939
     if expected_greedy_output_path is not None:
         if token_check_does_pass:
             logger.info("Output Check Passed!")
