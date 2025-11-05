@@ -8,8 +8,6 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
-using namespace sfpi;
-
 namespace ckernel {
 namespace sfpu {
 
@@ -120,12 +118,9 @@ inline void calculate_tanh() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void tanh_init() {
     if constexpr (APPROXIMATION_MODE) {
-        uint imm0;
-        uint imm1;
-        uint imm2;
-        imm0 = 0x1DFF;  // 0.90625*x
-        imm1 = 0x481A;  // 0.09375*x + 0.8125
-        imm2 = 0xFF00;  // 1
+        uint imm0 = 0x1DFF;  // 0.90625*x
+        uint imm1 = 0x481A;  // 0.09375*x + 0.8125
+        uint imm2 = 0xFF00;  // 1
         _sfpu_load_imm16_(0, imm0);
         _sfpu_load_imm16_(1, imm1);
         _sfpu_load_imm16_(2, imm2);
