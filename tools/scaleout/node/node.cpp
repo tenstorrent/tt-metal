@@ -257,7 +257,6 @@ public:
         // Add WARP400 connections
         auto* const warp400_connections = get_port_connections(&node, "WARP400");
         add_connection(warp400_connections, 1, 1, 2, 1);
-        add_connection(warp400_connections, 1, 2, 2, 2);
 
         return node;
     }

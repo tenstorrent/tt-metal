@@ -115,6 +115,24 @@ run_t3000_dit_tests() {
   fi
 }
 
+run_t3000_gemma3_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it pytest models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: Gemma3 27B ViT test completed"
+  echo "LOG_METAL: run_t3000_gemma3_tests $duration seconds to complete"
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_wan22_tests() {
   # Record the start time
   fail=0
