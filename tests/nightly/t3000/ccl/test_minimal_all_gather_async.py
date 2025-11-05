@@ -963,7 +963,7 @@ def test_all_gather_async_interleaved_to_sharded(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear", "fabric2d_linear", "fabric2d_dynamic_linear"],
+    ids=["fabric_linear", "fabric2d_linear"],
 )
 def test_all_gather_async_2x4(
     mesh_device,
