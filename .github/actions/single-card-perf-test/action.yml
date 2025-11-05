@@ -116,18 +116,6 @@ runs:
           fi
         fi
 
-        echo "Fail-first and compact summary generated."
-        echo "Fail-first:"
-        cat fail-first.txt
-        echo "Compact summary:"
-        cat compact-summary.txt
-
-        # Output to CI console (plain text format)
-        echo "########################################################"
-        echo "# COMPACT TEST SUMMARY (CI LOG)"
-        echo "########################################################"
-        echo "$summary_content"
-
         # Output to GitHub Step Summary (markdown format)
         {
           echo "### Compact test summary"
