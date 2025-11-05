@@ -194,6 +194,7 @@ shard_or_reshard_tensor_if_required(
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,
+    Layout input_layout,
     const DataType& input_dtype,
     std::optional<bool> enable_folding_,
     uint32_t input_height,

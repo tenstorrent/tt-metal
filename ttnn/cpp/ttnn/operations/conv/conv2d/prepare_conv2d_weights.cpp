@@ -1116,6 +1116,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     const bool is_conv1d = is_1d_conv(kernel_size[1], input_width);
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_memory_config,
+        input_layout,
         input_dtype,
         conv_config.enable_kernel_stride_folding,
         input_height,

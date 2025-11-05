@@ -609,12 +609,12 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
                     shard_layout = TensorMemoryLayout::BLOCK_SHARDED;
                 }
             }
+
             // Additional check for mm convs to ensure shard height is multiple of TILE_HEIGHT since tiling requires
             // that
             if (is_mm_conv && (input_shard_spec.shape[0] % tt::constants::TILE_HEIGHT != 0)) {
                 needs_shard_or_reshard = true;
             }
-
             if (conv_config.override_sharding_config) {
                 TT_FATAL(
                     conv_config.core_grid.has_value(),
@@ -1549,6 +1549,7 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,
+    Layout input_layout,
     const DataType& input_dtype,
     std::optional<bool> enable_folding_,
     uint32_t input_height,
@@ -1573,12 +1574,10 @@ bool auto_enable_kernel_folding(
         if (input_padded_height % stride[0] != 0 || input_padded_width % stride[1] != 0) {
             return false;
         }
-        if (!((input_memory_config.is_dram() && input_dtype != DataType::BFLOAT8_B) ||
-              (input_memory_config.is_l1() && input_memory_config.is_sharded() &&
-               input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED))) {
-            return false;
-        }
-        return true;
+        auto is_zero_padding = padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0;
+        return (
+            (input_memory_config.is_dram() && !(input_layout == Layout::TILE && is_zero_padding)) ||
+            (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
     } else {
         return enable_folding_.value();
     }
@@ -1599,6 +1598,7 @@ Tensor fold_input_tensor_if_required(
     // also need to be folded.
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         input_tensor.memory_config(),
+        input_tensor.layout(),
         input_tensor.dtype(),
         conv_config.enable_kernel_stride_folding,
         input_height,
