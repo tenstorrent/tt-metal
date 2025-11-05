@@ -76,6 +76,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
+#include "tt_stl/reflection.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -176,7 +177,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint32_t build_key) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
@@ -1093,7 +1094,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         for (const auto& [kernel_id, kernel] : kernels) {
             auto& kernel_impl = KernelImpl::from(*kernel);
             const auto& binaries = kernel_impl.binaries(
-                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1309,11 +1310,11 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
-        device_hash = (device_hash << 32) | (device->id());
+        ttsl::hash::hash_combine(device_hash, device->id());
     }
     if (!is_cached()) {
         set_cached(device_hash);
@@ -1351,7 +1352,7 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
+    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -1392,8 +1393,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
     auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
 
-    if (compiled_.contains(build_env.build_key)) {
-        Inspector::program_compile_already_exists(this, device, build_env.build_key);
+    if (compiled_.contains(build_env.build_key())) {
+        Inspector::program_compile_already_exists(this, device, build_env.build_key());
         return;
     }
     // Clear the determined sub_device_ids when we compile the program for the first time
@@ -1402,7 +1403,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         this->sub_device_ids_[device->id()].erase(device->get_active_sub_device_manager_id());
     }
 
-    Inspector::program_compile_started(this, device, build_env.build_key);
+    Inspector::program_compile_started(this, device, build_env.build_key());
 
     TT_FATAL(
         device->is_initialized(),
@@ -1425,7 +1426,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key);
+                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
                     const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
@@ -1461,9 +1462,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
 
-    compiled_.insert(build_env.build_key);
+    compiled_.insert(build_env.build_key());
 
-    Inspector::program_compile_finished(this, device, build_env.build_key);
+    Inspector::program_compile_finished(this, device, build_env.build_key());
 }
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }

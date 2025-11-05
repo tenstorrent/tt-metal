@@ -358,7 +358,7 @@ private:
 
     std::vector<Semaphore> semaphores_;
 
-    std::unordered_set<uint32_t> compiled_;
+    std::unordered_set<uint64_t> compiled_;
     bool local_circular_buffer_allocation_needed_;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
