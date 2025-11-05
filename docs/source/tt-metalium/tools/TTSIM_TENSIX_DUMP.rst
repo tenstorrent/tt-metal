@@ -11,8 +11,8 @@ To build and execute, you may use the following commands:
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/metal_example_llk_init_uninit_ttsim_tensix_dump
 
-## How to use TTSIM_TENSIX_DUMP
-
+How to use TTSIM_TENSIX_DUMP
+----------------------------
 To use this debug feature, we need to do a few things:
 
 1. Ensure TTSIM is enabled with ``export TT_METAL_SIMULATOR=~/sim/libttsim.so``, i.e., ``TT_METAL_SIMULATOR`` must be set to the location of ``libttsim.so``.
@@ -33,7 +33,8 @@ At the point where you wish to perform the Tensix dump, there are a few options 
 
 4. Calling ``TTSIM_TENSIX_DUMP()`` is the same as calling ``TTSIM_TENSIX_DUMP("", false)``.
 
-## Example in Demo
+Example in Demo
+---------------
 
 .. code-block:: cpp
 	#include "compute_kernel_api.h"
@@ -53,9 +54,8 @@ At the point where you wish to perform the Tensix dump, there are a few options 
 
 	}
 
-
-
-## Output of the Demo Tensix Dumps
+Output of the Demo Tensix Dumps
+-------------------------------
 
 Below is the output of running the demo kernel with ``export TT_METAL_DPRINT_CORES=0,0``.
 
