@@ -7,6 +7,7 @@ The demo kernel code is present in
 
 To build and execute, you may use the following commands:
 .. code-block:: bash
+
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/metal_example_llk_init_uninit_ttsim_tensix_dump
@@ -17,7 +18,9 @@ To use this debug feature, we need to do a few things:
 
 1. Ensure TTSIM is enabled with ``export TT_METAL_SIMULATOR=~/sim/libttsim.so``, i.e., ``TT_METAL_SIMULATOR`` must be set to the location of ``libttsim.so``.
 2. The environment variable `TT_METAL_DPRINT_CORES` must also be set to select which Tensix cores to perform the Tensix dump on. For instance to dump the Tensix states for one single Tensix core (0,0), set:
+
 .. code-block:: bash
+
 	export TT_METAL_DPRINT_CORES=0,0                    # required, x,y OR (x1,y1),(x2,y2),(x3,y3) OR (x1,y1)-(x2,y2) OR all OR worker OR dispatch
 
 3. Include ``debug/ttsim_dump.h`` in the kernel source file where the Tensix dump is to be performed.
@@ -37,6 +40,7 @@ Example in Demo
 ---------------
 
 .. code-block:: cpp
+
 	#include "compute_kernel_api.h"
 	#include "debug/ttsim_dump.h" //including debug/ttsim_dump.h
 
@@ -60,6 +64,7 @@ Output of the Demo Tensix Dumps
 Below is the output of running the demo kernel with ``export TT_METAL_DPRINT_CORES=0,0``.
 
 .. code-block:: text
+
 	0:(x=0,y=0):TR0: BEFORE llk_unpack_untilize_init(0)
 	===== TENSIX_STATE tile=0 core=0 =====
 	dst:
