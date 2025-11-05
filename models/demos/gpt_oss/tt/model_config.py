@@ -17,6 +17,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
+from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
 
 class ModelArgs:
@@ -39,6 +40,7 @@ class ModelArgs:
         self.max_seq_len = max_seq_len
         self.optimizations = optimizations
         self.cache_hf = cache_hf
+        self.can_enable_trace = lambda seqlen: False
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
@@ -108,8 +110,13 @@ class ModelArgs:
             # prompt_text is already a list of chat messages
             return self.tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
-    def load_state_dict(self):
-        """Load model state dict compatible with tt_transformers"""
+    def load_state_dict(self, convert_to_meta_format=True):
+        """Load model state dict compatible with tt_transformers
+
+        Args:
+            convert_to_meta_format: If True, convert HF QKV weights to Meta format for RoPE.
+                                   Set to False when loading for HuggingFace reference models.
+        """
         if self.dummy_weights:
             # Return dummy state dict for testing
             return {}
@@ -137,6 +144,11 @@ class ModelArgs:
                     k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
                     for k, v in tqdm(weights_dict.items(), desc="Converting to bfloat16")
                 }
+
+            # Convert HF QKV weights to Meta format for RoPE compatibility (if requested)
+            if convert_to_meta_format:
+                logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE")
+                weights_dict = convert_hf_qkv_to_meta_format(weights_dict, self.hf_config.head_dim)
 
             return weights_dict
 

@@ -42,6 +42,7 @@ jobs:
           { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
           { name: "t3k_qwen25_vl_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_tests, timeout: 30, owner_id: U07RY6B5FLJ},  #Gongyu Wang
           { name: "t3k_gemma3_tests", arch: wormhole_b0, cmd: run_t3000_gemma3_tests, timeout: 30, owner_id: U08TJ70UFRT},  # Harry Andrews
+          { name: "t3k_wan2.2_tests", arch: wormhole_b0, cmd: run_t3000_wan22_tests, timeout: 45, owner_id: U03FJB5TM5Y},  #Colman Glagovich
           { name: "t3k_mochi_tests", arch: wormhole_b0, cmd: run_t3000_mochi_tests, timeout: 60, owner_id: U09ELB03XRU}, # Stephen Osborne
         ]
 
@@ -90,12 +91,20 @@ jobs:
           ${{ matrix.test-group.cmd }}
 
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_falcon40b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_qwen25_tests' || matrix.test-group.name == 't3k_qwen3_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
+        id: save-environment-data
+        if: ${{ !cancelled() }}
         shell: bash
-        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 't3k_falcon7b_tests' || matrix.test-group.name == 't3k_falcon40b_tests' || matrix.test-group.name == 't3k_mixtral_tests' || matrix.test-group.name == 't3k_qwen25_tests' || matrix.test-group.name == 't3k_qwen3_tests' || matrix.test-group.name == 't3k_llama3_tests' || matrix.test-group.name == 't3k_llama3_70b_tests' || matrix.test-group.name == 't3k_llama3_vision_tests') && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

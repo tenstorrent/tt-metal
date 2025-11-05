@@ -2457,7 +2457,7 @@ class ModelArgs:
                     raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
+            if not hasattr(tokenizer, "stop_tokens") or tokenizer.stop_tokens is None:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
                 # Phi-3-mini uses "<|end|>" as EOS token
                 if "phi-3-mini" in self.base_model_name.lower():
@@ -3078,6 +3078,7 @@ def determine_device_name(mesh_device):
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            32: "BHGLX",
         }
     elif is_wormhole_b0():
         dict_device_names = {

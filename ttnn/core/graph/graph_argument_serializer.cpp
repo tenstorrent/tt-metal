@@ -46,7 +46,7 @@ std::ostream& operator<<(
     return os;
 }
 
-std::ostream& operator<<(std::ostream& os, const tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>& h) {
+std::ostream& operator<<(std::ostream& os, const tt::stl::StrongType<uint8_t, tt::tt_metal::QueueIdTag>& h) {
     return os << *h;
 }
 
@@ -185,7 +185,7 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<tt::tt_metal::Shape>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Tensor>();
     GraphArgumentSerializer::register_type<tt::tt_metal::Tile>();
-    GraphArgumentSerializer::register_type<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>();
+    GraphArgumentSerializer::register_type<tt::stl::StrongType<uint8_t, tt::tt_metal::QueueIdTag>>();
     GraphArgumentSerializer::register_type<ttnn::types::CoreGrid>();
     GraphArgumentSerializer::register_type<
         std::variant<ttnn::GrayskullComputeKernelConfig, ttnn::WormholeComputeKernelConfig>>();

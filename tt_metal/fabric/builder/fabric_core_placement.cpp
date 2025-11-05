@@ -14,8 +14,7 @@ namespace {
 void run_default_galaxy_optimizer(
     const CorePlacementContext& ctx,
     tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder1,
-    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2,
-    size_t l) {
+    tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder2) {
     if (!ctx.is_galaxy) return;
 
     constexpr uint32_t ring_noc_selection_link_threshold = 3;
@@ -76,7 +75,7 @@ void apply_core_placement_optimizations(
     const CorePlacementContext& ctx,
     FabricEriscDatamoverBuilder& edm_fwd,
     FabricEriscDatamoverBuilder& edm_bwd,
-    size_t link_index) {
+    size_t /*link_index*/) {
     bool enable_core_placement_opt = false;
     // currently is_galaxy is only being passed in through the fabric unit test, once we switch to fabric
     // device init, will use proper cluster type to decide which machine it is. For the optimzation on noc
@@ -91,11 +90,8 @@ void apply_core_placement_optimizations(
     }
 
     if (enable_core_placement_opt) {
-        run_default_galaxy_optimizer(ctx, edm_fwd, edm_bwd, link_index);
+        run_default_galaxy_optimizer(ctx, edm_fwd, edm_bwd);
     }
-
 }
-
-
 
 } // namespace tt::tt_fabric::core_placement

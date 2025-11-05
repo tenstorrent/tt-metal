@@ -147,8 +147,7 @@ void EthernetEndpointUpMetric::update(
     bool is_up_old = value_;
     changed_since_transmission_ = is_up_now != is_up_old;
     value_ = is_up_now;
-    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    set_timestamp_now();
 }
 
 /**************************************************************************************************
@@ -182,8 +181,7 @@ void EthernetCRCErrorCountMetric::update(
     uint32_t crc_error_val = 0;
     cluster->read_from_device(&crc_error_val, chip_id_, ethernet_core_, crc_addr_, sizeof(uint32_t));
     value_ = uint64_t(crc_error_val);
-    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    set_timestamp_now();
 }
 
 /**************************************************************************************************
@@ -215,8 +213,7 @@ void EthernetRetrainCountMetric::update(
     uint32_t data = 0;
     cluster->read_from_device(&data, chip_id_, ethernet_core_, retrain_count_addr_, sizeof(uint32_t));
     value_ = uint64_t(data);
-    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    set_timestamp_now();
 }
 
 /**************************************************************************************************
@@ -252,8 +249,7 @@ void EthernetCorrectedCodewordCountMetric::update(
     cluster->read_from_device(&hi, chip_id_, ethernet_core_, corr_addr_ + 0, sizeof(uint32_t));
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, corr_addr_ + 4, sizeof(uint32_t));
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
-    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    set_timestamp_now();
 }
 
 /**************************************************************************************************
@@ -289,6 +285,5 @@ void EthernetUncorrectedCodewordCountMetric::update(
     cluster->read_from_device(&hi, chip_id_, ethernet_core_, uncorr_addr_ + 0, sizeof(uint32_t));
     cluster->read_from_device(&lo, chip_id_, ethernet_core_, uncorr_addr_ + 4, sizeof(uint32_t));
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
-    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    set_timestamp_now();
 }

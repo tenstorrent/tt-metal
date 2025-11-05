@@ -105,8 +105,6 @@ ttnn.experimental.add
 ttnn.experimental.all_gather_async
 ttnn.experimental.all_gather_matmul
 ttnn.experimental.all_reduce
-ttnn.experimental.argmax
-ttnn.experimental.argmin
 ttnn.experimental.attn_matmul
 ttnn.experimental.attn_matmul_from_cache
 ttnn.experimental.bias_gelu

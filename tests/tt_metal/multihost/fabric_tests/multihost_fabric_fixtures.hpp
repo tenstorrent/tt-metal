@@ -139,6 +139,8 @@ public:
 
     void TearDown() override {
         if (system_supported()) {
+            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+            distributed_context.barrier();
             tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
         }
     }

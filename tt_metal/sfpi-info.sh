@@ -72,26 +72,19 @@ sfpi_dist=unknown
 sfpi_pkg=
 if [[ -r /etc/os-release ]]; then
     source /etc/os-release
+    sfpi_dist=$ID
     # See if ID_LIKE indicates a debian or fedora clone
     for like in $ID_LIKE
     do
 	case $like in
-	    debian) ID=debian; break;;
-	    fedora) ID=fedora; break;;
+	    debian) sfpi_dist=debian; break;;
+	    fedora) sfpi_dist=fedora; break;;
 	esac
     done
 
-    if [[ ${1-} = RELEASE ]]; then
-	sfpi_releaser=$ID
-    fi
-
-    # debian and fedora are sufficiently close to treat as one, modulo
-    # packaging system. We endeavor to build on a common denominator
-    # system and translate package dependencies.
-    case $ID in
-	debian) sfpi_dist=linux sfpi_pkg=deb;;
-	fedora) sfpi_dist=linux sfpi_pkg=rpm;;
-	*) sfpi_dist=$ID;;
+    case $sfpi_dist in
+	debian) sfpi_pkg=deb;;
+	fedora) sfpi_pkg=rpm;;
     esac
 fi
 sfpi_arch=$(uname -m)
@@ -142,19 +135,24 @@ Working Directory: $src
 
 Install (or otherwise provide) the following components:
 Common names: autoconf automake bison expect flex gawk patchutils python3 texinfo
-Debian names: gcc g++ libgmp-dev libmpc-dev libmpfr-dev
-Fedora names: gcc gcc-c++ gmp-devel libmpc-devel mpfr-devel
+Debian names: gcc g++ libexpat1-dev libgmp-dev libmpc-dev libmpfr-dev
+Fedora names: gcc gcc-c++ expat-devel gmp-devel libmpc-devel mpfr-devel
 
 This script cannot install them as it knows neither your system's
 packaging system, nor how it might have named them. You will have to
 research that from the above clues. If required components are missing
 the build will fail, sometimes with a clueful message. Please report
-any additional packages you discover are necessary.
+any additional packages or issues you encounter by filing an issue at
+https://github.com/tenstorrent/tt-metal/issues
+
 EOF
 
 echo >&1 >&2
 echo "Fetching the repository ..." >&1 >&2
 if ! [[ -d .git ]]; then
+    if tty -s ; then
+	read -p "Confirm you have read and understood the above:" yes
+    fi
     (set -x; \
      git clone -b $sfpi_version --depth 1 $sfpi_repo .; \
      git submodule update --depth 1 --init --recursive; \

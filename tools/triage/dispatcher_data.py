@@ -19,7 +19,7 @@ from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.coordinate import OnChipCoordinate
-from ttexalens.firmware import ELF
+from ttexalens.elf import MemoryAccess
 from ttexalens.context import Context
 from triage import TTTriageError, triage_field, hex_serializer
 from run_checks import run as get_run_checks
@@ -180,7 +180,7 @@ class DispatcherData:
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
 
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
-        loc_mem_reader = ELF.get_mem_reader(location)
+        loc_mem_access = MemoryAccess.get(location.noc_block.get_risc_debug(risc_name))
         if location._device.get_block_type(location) == "functional_workers":
             # For tensix, use the brisc elf
             fw_elf = self._brisc_elf
@@ -205,7 +205,7 @@ class DispatcherData:
         build_env = self._get_build_env_for_device(device_id)
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
-        mailboxes = fw_elf.read_global("mailboxes", loc_mem_reader)
+        mailboxes = fw_elf.read_global("mailboxes", loc_mem_access)
 
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mailboxes.launch_msg_rd_ptr

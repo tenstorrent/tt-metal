@@ -35,6 +35,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "math.hpp"
 
 namespace tt::tt_metal {
 
@@ -379,6 +380,91 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
     tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
     EXPECT_EQ(random_vec[0], value_to_write);
+}
+
+// Test to verify that logical to virtual coordinate mapping is correct.
+// Reads mapping from L1 memory and compares it to the host mapping.
+TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
+    std::map<CoreCoord, CoreCoord> logical_to_virtual_map;
+
+    auto mesh_device = this->devices_.at(0);
+    auto device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt_metal::Program program = tt_metal::CreateProgram();
+    workload.add_program(device_range, std::move(program));
+    auto& program_ = workload.get_programs().at(device_range);
+
+    auto logical_grid_size = device->logical_grid_size();
+    for (int r = 0; r < logical_grid_size.y; r++) {
+        for (int c = 0; c < logical_grid_size.x; c++) {
+            CoreCoord logical_coord(c, r);
+            auto virtual_coord = device->virtual_core_from_logical_core(logical_coord, CoreType::WORKER);
+            logical_to_virtual_map[logical_coord] = virtual_coord;
+        }
+    }
+
+    CoreRange logical_core_range(CoreCoord(0, 0), CoreCoord(logical_grid_size.x - 1, logical_grid_size.y - 1));
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    std::array<std::vector<uint32_t>, 2> host_buffers;
+    uint32_t read_size = sizeof(uint32_t) * (logical_grid_size.x + logical_grid_size.y);
+
+    auto kernel0_l1_address = l1_unreserved_base;
+    tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+        logical_core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+    auto kernel1_l1_address = l1_unreserved_base + (tt::round_up(logical_grid_size.x, 4) * sizeof(uint32_t)) +
+                              (tt::round_up(logical_grid_size.y, 4) * sizeof(uint32_t));
+    tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
+        logical_core_range,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::NOC_1,
+            .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    for (size_t x = 0; x < logical_grid_size.x; x++) {
+        for (size_t y = 0; y < logical_grid_size.y; y++) {
+            CoreCoord logical_core(x, y);
+            tt_metal::detail::ReadFromDeviceL1(device, logical_core, kernel0_l1_address, read_size, host_buffers[0]);
+            tt_metal::detail::ReadFromDeviceL1(device, logical_core, kernel1_l1_address, read_size, host_buffers[1]);
+
+            for (size_t index = 0; index < host_buffers.size(); index++) {
+                std::vector<uint32_t> logical_col_to_virtual_col(logical_grid_size.x);
+                std::vector<uint32_t> logical_row_to_virtual_row(logical_grid_size.y);
+                size_t host_buffer_offset = 0;
+
+                for (size_t i = 0; i < logical_grid_size.x; i++) {
+                    logical_col_to_virtual_col[i] = host_buffers[index][host_buffer_offset++];
+                }
+                for (size_t i = 0; i < logical_grid_size.y; i++) {
+                    logical_row_to_virtual_row[i] = host_buffers[index][host_buffer_offset++];
+                }
+
+                for (auto test_coords : logical_to_virtual_map) {
+                    auto virtual_coord = tt_xy_pair{
+                        logical_col_to_virtual_col[test_coords.first.x],
+                        logical_row_to_virtual_row[test_coords.first.y]};
+                    EXPECT_EQ(test_coords.second, virtual_coord)
+                        << "At logical core X,Y " << x << "," << y << " on RISCV_" << index
+                        << " logical coord: " << test_coords.first.str()
+                        << " does not match expected virtual coord: " << test_coords.second.str()
+                        << " instead found virtual coord: " << virtual_coord.str();
+                }
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

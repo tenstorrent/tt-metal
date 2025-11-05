@@ -24,6 +24,7 @@ from models.experimental.panoptic_deeplab.tt.tt_semseg import TtPanopticDeepLabS
 from models.experimental.panoptic_deeplab.tt.tt_insemb import TtPanopticDeepLabInsEmbedHead
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
+from models.experimental.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
 
 
 class TtPanopticDeepLab:
@@ -60,6 +61,7 @@ class TtPanopticDeepLab:
         model_configs=None,
         # Data type configuration for ResNet layers
         resnet_layer_dtypes: Optional[Dict[str, ttnn.DataType]] = None,
+        model_category: str = PANOPTIC_DEEPLAB,
     ):
         """
         Initialize the Panoptic-DeepLab model with unified parameter loading.
@@ -79,6 +81,7 @@ class TtPanopticDeepLab:
             decoder_channels: Channels for decoder layers
             train_size: Training image size for ASPP pooling
         """
+        self.model_category = model_category
         self.device = device
         self.num_classes = num_classes
         self.common_stride = common_stride
@@ -188,9 +191,13 @@ class TtPanopticDeepLab:
         semantic_logits, _ = self.semantic_head(features)
         logger.debug(f"Semantic segmentation output shape: {semantic_logits.shape}")
 
-        # Get instance embedding predictions
-        center_heatmap, offset_map, _, _ = self.instance_head(features)
-        logger.debug(f"Instance embedding outputs - center: {center_heatmap.shape}, offset: {offset_map.shape}")
+        if self.model_category == DEEPLAB_V3_PLUS:
+            center_heatmap, offset_map = None, None
+            logger.debug("Instance embedding head skipped for DeeplabV3Plus model category")
+        else:
+            # Get instance embedding predictions
+            center_heatmap, offset_map, _, _ = self.instance_head(features)
+            logger.debug(f"Instance embedding outputs - center: {center_heatmap.shape}, offset: {offset_map.shape}")
 
         # Return predictions and optionally features
         if return_features:

@@ -414,14 +414,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     uint32_t intermed_output_tiles = (out0_t + 2 * PNHt) * (num_cores_per_head - 1);
 
-    uint32_t pos_tensor_tile_size = 0;
     uint32_t index_stick_size = 0;
     bool is_cur_pos_tensor_sharded = false;
     CBHandle cb_in8_id = 0;
     if (use_cur_pos_tensor) {
         auto pos_buffer = cur_pos_tensor.value().buffer();
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
-        pos_tensor_tile_size = tt::tile_size(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
 
         // cb pos

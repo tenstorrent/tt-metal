@@ -127,6 +127,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
     {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
+    {"neighbor_exchange", HighLevelTrafficPattern::NeighborExchange},
     {"sequential_all_to_all", HighLevelTrafficPattern::SequentialAllToAll},
 });
 // Optimized string concatenation utility to avoid multiple allocations
@@ -892,6 +893,8 @@ private:
                 expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
             } else if (pattern.type == "all_devices_uniform_pattern") {
                 expand_all_devices_uniform_pattern(test, defaults);
+            } else if (pattern.type == "neighbor_exchange") {
+                expand_neighbor_exchange(test, defaults);
             } else if (pattern.type == "sequential_all_to_all") {
                 expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
             } else {
@@ -1052,6 +1055,14 @@ private:
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
             }
+        }
+    }
+
+    void expand_neighbor_exchange(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_debug(LogTest, "Expanding neighbor_exchange pattern for test: {}", test.name);
+        auto neighbor_pairs = this->route_manager_.get_neighbor_exchange_pairs();
+        if (!neighbor_pairs.empty()) {
+            add_senders_from_pairs(test, neighbor_pairs, base_pattern);
         }
     }
 

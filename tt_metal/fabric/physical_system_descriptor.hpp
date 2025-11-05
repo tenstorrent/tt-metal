@@ -17,6 +17,10 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/reflection.hpp>
 
+namespace YAML {
+class Node;
+}
+
 namespace tt::umd {
 class Cluster;
 }
@@ -198,7 +202,7 @@ public:
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
     const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
-    bool is_using_mock_cluster() const;
+    tt::TargetDevice get_target_device_type() const { return target_device_type_; }
     LocalEthernetMetrics query_local_ethernet_metrics() const;
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
@@ -210,7 +214,8 @@ public:
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
 
     // Utility APIs to Print Physical System Descriptor
-    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt) const;
+    YAML::Node generate_yaml_node() const;
     void emit_to_text_proto(const std::optional<std::string>& path_to_text_proto = std::nullopt);
 
 private:

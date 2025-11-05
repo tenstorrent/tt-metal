@@ -149,7 +149,7 @@ class TestParametrized:
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1_SHARDED", 0.063),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.38),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-L1", 0.29),
-            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.059),
+            ("decode", 32, 32, 1, 1024, "BFLOAT16-L1_SHARDED", 0.065),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-DRAM", 0.70),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.55),
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.064),

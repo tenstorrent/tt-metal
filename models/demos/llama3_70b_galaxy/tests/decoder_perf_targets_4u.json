@@ -359,15 +359,6 @@
             "op_to_op_duration_relative_margin": 0.2,
             "dispatch_duration_relative_margin": 0.5
         },
-        "TypecastDeviceOperation_2": {
-            "op_name": "TypecastDeviceOperation_1",
-            "kernel_duration": 2234.7982954545455,
-            "op_to_op": 718.5909090909091,
-            "non-overlapped-dispatch-time": 4266.9,
-            "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
-            "dispatch_duration_relative_margin": 1.5
-        },
         "Untilize_0": {
             "op_name": "Untilize_0",
             "kernel_duration": 3792.0738636363635,

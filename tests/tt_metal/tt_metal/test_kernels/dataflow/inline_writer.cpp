@@ -13,22 +13,27 @@ void kernel_main() {
     uint32_t num_writes = get_arg_val<uint32_t>(4);
     uint32_t dst_addr_increment = get_arg_val<uint32_t>(5);
 
+    experimental::Noc noc(noc_index);
+    experimental::Noc other_noc(1 - noc_index);
+
+    experimental::Noc* noc_to_use = nullptr;
     for (uint32_t i = 0; i < num_writes; i++) {
-        uint32_t noc_to_use;
         if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            noc_to_use = (i % 2) == 0 ? noc_index : 1 - noc_index;
+            noc_to_use = (i % 2) == 0 ? &noc : &other_noc;
         } else {
-            noc_to_use = noc_index;
+            noc_to_use = &noc;
         }
 
-        uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_addr, noc_to_use);
-        noc_inline_dw_write(dst_noc_addr, value_to_write, 0xF, noc_to_use);
+        noc_to_use->inline_dw_write(
+            experimental::UnicastEndpoint(),
+            value_to_write,
+            {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = dst_addr});
         dst_addr += dst_addr_increment;
         value_to_write++;
     }
 
-    noc_async_write_barrier(noc_index);
+    noc.async_write_barrier();
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        noc_async_write_barrier(1 - noc_index);
+        other_noc.async_write_barrier();
     }
 }

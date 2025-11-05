@@ -117,6 +117,8 @@ def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_g
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     torch_input = torch.randn(batch_size, C, height, width, dtype=torch.bfloat16)
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
@@ -233,6 +235,8 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
     ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 

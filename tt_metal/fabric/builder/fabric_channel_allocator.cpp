@@ -42,13 +42,19 @@ ElasticChannelsAllocator::ElasticChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const tt::tt_fabric::FabricEriscDatamoverOptions& options,
     const std::vector<MemoryRegion>& memory_regions,
-    size_t buffer_slot_size_bytes,
-    size_t min_buffers_per_chunk,
-    size_t max_buffers_per_chunk) :
+    size_t /*buffer_slot_size_bytes*/,
+    size_t /*min_buffers_per_chunk*/,
+    size_t /*max_buffers_per_chunk*/) :
     FabricChannelAllocator(topology, options, memory_regions) {
     TT_THROW("Not implemented");
 }
 
-void ElasticChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args, size_t num_fwd_paths, size_t num_used_sender_channels, size_t num_used_receiver_channels) const { TT_THROW("Not implemented"); }
+void ElasticChannelsAllocator::emit_ct_args(
+    std::vector<uint32_t>& /*ct_args*/,
+    size_t /*num_fwd_paths*/,
+    size_t /*num_used_sender_channels*/,
+    size_t /*num_used_receiver_channels*/) const {
+    TT_THROW("Not implemented");
+}
 
 }  // namespace tt::tt_fabric
