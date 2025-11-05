@@ -28,13 +28,10 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        # pytest.param((1, 4), (1, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
-        # pytest.param((2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
-        # pytest.param((4, 8), (1, 0), (8, 1), (4, 0), (8, 1), (4, 1), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
+        # pytest.param((2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1", id="2x4cfg0sp0tp1"),
         pytest.param(
-            (2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1", id="2x4cfg0sp0tp1"
+            (2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg1sp0tp1", id="2x4cfg1sp0tp1"
         ),
-        # pytest.param((4, 8), (2, 0), (4, 1), (4, 0), (8, 1), (4, 1), ttnn.Topology.Linear, 4, "4x8cfg0sp1tp0", id="4x8cfg0sp1tp0"),
     ],
     indirect=["mesh_device"],
 )

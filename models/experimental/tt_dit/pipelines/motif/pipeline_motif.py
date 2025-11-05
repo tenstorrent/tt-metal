@@ -286,6 +286,7 @@ class MotifPipeline:
         self.run_single_prompt(
             prompt="", negative_prompt=None, num_inference_steps=2, cfg_scale=3.5, seed=0, traced=False
         )
+        self._sync_devices()
 
     def run_single_prompt(
         self, prompt, negative_prompt=None, num_inference_steps=40, cfg_scale=5.0, seed=None, traced=True
@@ -545,6 +546,10 @@ class MotifPipeline:
             timestep=timestep,
         )
 
+    def _sync_devices(self):
+        for device in self._submesh_devices:
+            ttnn.synchronize_device(device)
+
     def _step(
         self,
         *,
@@ -684,11 +689,19 @@ class MotifPipeline:
 
         with timer.time_section("text_encoding") if timer else nullcontext():
             pos_prompt_embeds, pos_pooled_prompt_embeds = self._text_encoder.encode(
-                prompt_1, prompt_2, prompt_3, num_images_per_prompt=num_images_per_prompt
+                prompt_1,
+                prompt_2,
+                prompt_3,
+                num_images_per_prompt=num_images_per_prompt,
+                timing_collector=timer,
             )
 
             neg_prompt_embeds, neg_pooled_prompt_embeds = self._text_encoder.encode(
-                negative_prompt_1, negative_prompt_2, negative_prompt_3, num_images_per_prompt=num_images_per_prompt
+                negative_prompt_1,
+                negative_prompt_2,
+                negative_prompt_3,
+                num_images_per_prompt=num_images_per_prompt,
+                timing_collector=timer,
             )
 
         if not cfg_enabled:
@@ -771,10 +784,13 @@ class TextEncoder:
         prompts_3: Iterable[str],
         *,
         num_images_per_prompt: int,
+        timing_collector: TimingCollector | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        clip_l, pooled_clip_l = self._clip_l.encode(prompts=prompts_1, num_images_per_prompt=num_images_per_prompt)
-        clip_g, pooled_clip_g = self._clip_g.encode(prompts=prompts_2, num_images_per_prompt=num_images_per_prompt)
-        t5 = self._t5.encode(prompts=prompts_3, num_images_per_prompt=num_images_per_prompt)
+        with timing_collector.time_section("clip_encoding") if timing_collector else nullcontext():
+            clip_l, pooled_clip_l = self._clip_l.encode(prompts=prompts_1, num_images_per_prompt=num_images_per_prompt)
+            clip_g, pooled_clip_g = self._clip_g.encode(prompts=prompts_2, num_images_per_prompt=num_images_per_prompt)
+        with timing_collector.time_section("t5_encoding") if timing_collector else nullcontext():
+            t5 = self._t5.encode(prompts=prompts_3, num_images_per_prompt=num_images_per_prompt)
 
         clip = torch.cat([clip_l, clip_g], dim=-1)
         clip = torch.nn.functional.pad(clip, (0, t5.shape[-1] - clip.shape[-1]))
