@@ -18,7 +18,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
             ${TEST_TARGET}
             PUBLIC
                 test_eager_common_libs
-                ttnn
+                TTNN::TTNN
                 Python3::Python
         )
         target_include_directories(
@@ -27,6 +27,7 @@ function(CREATE_EAGER_TEST_EXE TESTLIST)
                 ${PROJECT_SOURCE_DIR}
                 ${PROJECT_SOURCE_DIR}/tt_metal
                 ${PROJECT_SOURCE_DIR}/ttnn/cpp
+                ${PROJECT_SOURCE_DIR}/ttnn/api
                 ${PROJECT_SOURCE_DIR}/tt_metal/common
                 ${PROJECT_SOURCE_DIR}/tests
                 ${CMAKE_CURRENT_SOURCE_DIR}

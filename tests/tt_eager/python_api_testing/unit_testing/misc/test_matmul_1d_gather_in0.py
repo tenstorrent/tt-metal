@@ -5,7 +5,7 @@
 import pytest
 from loguru import logger
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, is_grayskull, skip_for_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import itertools
@@ -15,7 +15,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 import random
 import math
-from models.common.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
 from models.demos.llama3_70b_galaxy.tt.model_config import (
@@ -339,19 +338,14 @@ def run_multi_core_matmul_1d(
         untilize_out=untilize_out,
     )
 
-    if is_grayskull():
-        compute_kernel_config = ttnn.GrayskullComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-        )
-    else:
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=fidelity,
-            math_approx_mode=True,
-            fp32_dest_acc_en=fp32_acc_mode,
-            packer_l1_acc=packer_l1_acc,
-            dst_full_sync_en=True,
-        )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+        dst_full_sync_en=True,
+    )
 
     signpost("start")
     for _ in range(num_iters):
@@ -380,8 +374,7 @@ def run_multi_core_matmul_1d(
     assert device.num_program_cache_entries() == 1  # Only 1 op
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -459,8 +452,7 @@ def test_multi_core_matmul_1d_in1_dram_wh(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -531,8 +523,7 @@ def test_multi_core_matmul_1d_pad_wh(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",
@@ -626,8 +617,7 @@ def test_multi_core_matmul_1d_wh(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
-@pytest.mark.skipif(is_blackhole(), reason="Test suite for GS only")
+@pytest.mark.skipif(is_blackhole(), reason="Test suite for WH only")
 @pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
 @pytest.mark.parametrize(
     "B, M, K, N, in0_dtype, in1_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid",

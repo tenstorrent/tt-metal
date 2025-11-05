@@ -909,8 +909,4 @@ HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
     TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
 }
 
-bool PhysicalSystemDescriptor::is_using_mock_cluster() const {
-    return target_device_type_ == TargetDevice::Mock || target_device_type_ == TargetDevice::Simulator;
-}
-
 }  // namespace tt::tt_metal
