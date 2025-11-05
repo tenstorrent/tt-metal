@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 #include "debug/assert.h"
 #include <array>
-#include "tools/profiler/kernel_profiler.hpp"
 
 struct RingSDPAOpReceiver {
     constexpr static uint32_t num_directions = 2;
@@ -58,7 +57,6 @@ struct RingSDPAOpReceiver {
     }
 
     uint32_t get_next_ring_id_and_sync() {
-        DeviceZoneScopedN("get_next_ring_id_and_sync");
         ASSERT(this->initialized);
         // Behave differently for first iteration and subsequent iterations
 
