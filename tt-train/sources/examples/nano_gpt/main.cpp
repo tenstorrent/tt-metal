@@ -491,7 +491,7 @@ int main(int argc, char **argv) {
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
                 arg.vocab_size =
-                    round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
+                    round_up_to_tile(arg.vocab_size, (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));

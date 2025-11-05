@@ -70,14 +70,11 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
     std::string text;
-    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
-    text = read_file_to_str(config.data_path);
-    // check file extension:
-    if (config.data_path.ends_with(".txt")) {
-        text_or_tokens = read_file_to_str(config.data_path);
-    } else {
-        text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
-    }
+    // std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
+    // text = read_file_to_str(config.data_path);
+   
+    auto tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+
     auto sequence_length = std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.max_sequence_length; }) {
@@ -89,29 +86,15 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
         },
         config.transformer_config);
 
-    auto create_dataset_and_tokenizer =
-        [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
-            if (tokenizer_type == "char") {
-                return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<0>(text), sequence_length);
-            } else if (tokenizer_type == "bpe") {
-                return std::visit(
-                    [&](const auto &tokens) {
-                        return ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::BPETokenizer>(
-                            tokens, sequence_length, tokenizer_path);
-                    },
-                    text);
-            } else {
-                throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
-            }
-        };
-
-    auto [dataset, tokenizer] =
-        create_dataset_and_tokenizer(text_or_tokens, sequence_length, config.tokenizer_path, config.tokenizer_type);
+    auto dataset = ttml::datasets::InMemoryTokenDataset(tokens_vector, sequence_length);
 
     auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-    return {steps_per_dataset, tokenizer->get_vocab_size()};
+    return {steps_per_dataset, config.transformer_config.index() == 0
+                                         ? std::get<ttml::models::gpt2::TransformerConfig>(config.transformer_config)
+                                               .vocab_size
+                                         : std::get<ttml::models::llama::LlamaConfig>(config.transformer_config)
+                                               .vocab_size};
 }
 
 std::string read_file_to_str(const std::string &file_path) {
