@@ -58,15 +58,6 @@ class TTRunConfig(BaseModel):
 
         return bindings
 
-    @field_validator("mesh_graph_desc_path")
-    def validate_mesh_graph_exists(cls, path: str) -> str:
-        """Ensure mesh graph descriptor file exists"""
-        mesh_path = Path(path).expanduser().resolve()
-        if not mesh_path.is_file():
-            raise ValueError(f"Mesh graph descriptor not found: {mesh_path}")
-        return str(mesh_path)
-
-
 def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
     """Parse YAML configuration file with schema validation."""
     if not yaml_path.exists():
