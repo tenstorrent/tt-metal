@@ -569,6 +569,7 @@ class WanTransformer3DModel:
 
         # Concatenate spatial and y along the channel dimension
         if self.model_type == "i2v":
+            print(spatial.shape, y.shape)
             spatial = torch.cat([spatial, y], dim=1)
 
         spatial_1BNI, N = self.preprocess_spatial_input(spatial)

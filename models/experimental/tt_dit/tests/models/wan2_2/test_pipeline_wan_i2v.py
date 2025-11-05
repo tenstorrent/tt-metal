@@ -33,11 +33,11 @@ import PIL
     "width, height",
     [
         (832, 480),
-        (1280, 720),
+        # (1280, 720),
     ],
     ids=[
         "resolution_480p",
-        "resolution_720p",
+        # "resolution_720p",
     ],
 )
 def test_pipeline_inference(

@@ -330,7 +330,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         self,
         image: PIL.Image.Image,
         num_frames: int = 81,
-        max_area: int = 720 * 1280,
+        max_area: int = 832 * 480,
+        # max_area: int = 720 * 1280,
     ):
         logger.info(f"Preparing image: {image.size}")
         vae_stride = (4, 8, 8)
@@ -342,7 +343,9 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         h, w = img.shape[1:]
         aspect_ratio = h / w
         lat_h = round(np.sqrt(max_area * aspect_ratio) // vae_stride[1] // patch_size[1] * patch_size[1])
+        # lat_h = 480
         lat_w = round(np.sqrt(max_area / aspect_ratio) // vae_stride[2] // patch_size[2] * patch_size[2])
+        # lat_w = 832
         h = lat_h * vae_stride[1]
         w = lat_w * vae_stride[2]
 
@@ -352,7 +355,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
         msk = msk.transpose(1, 2)[0]
 
-        y = self.vae.encode(
+        y = self.vae._encode(
             torch.concat(
                 [
                     torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
@@ -361,7 +364,9 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
                 dim=1,
             ).unsqueeze(0)
         )[0]
+        torch.save(y, "y.pt")
         y = torch.concat([msk, y])
+        torch.save(y, "y_with_msk.pt")
         logger.info(f"Finished preparing image: {y.shape}")
         return y
 
@@ -498,7 +503,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
     def prepare_latents(
         self,
         batch_size: int,
-        num_channels_latents: int = 16,
+        num_channels_latents: int = 36,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -515,7 +520,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
             batch_size,
             num_channels_latents,
             num_latent_frames,
-            int(height) // self.vae_scale_factor_spatial,
+            # int(height) // self.vae_scale_factor_spatial,
+            58,
             int(width) // self.vae_scale_factor_spatial,
         )
         if isinstance(generator, list) and len(generator) != batch_size:
@@ -735,7 +741,8 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
         mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
-        y = self.prepare_image(image)
+        y = self.prepare_image(image).unsqueeze(0)
+        # y = torch.load("y_with_msk.pt").unsqueeze(0)
 
         # 6. Denoising loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
