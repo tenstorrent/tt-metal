@@ -2054,4 +2054,35 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush});
 }
 
+// Addrgen overload for _with_state variant
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint16_t wrap,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    // Call base _with_state with UpdateMask to update WriteDstAddr and PayloadSize only
+    // The route and send type should already be set for optimal performance
+    // Note: dst_dev_id/dst_mesh_id kept for API symmetry but not used by base _with_state
+    constexpr auto UpdateMask =
+        UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::PayloadSize;
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<UpdateMask>(
+        client_interface,
+        packet_header,
+        src_addr,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush},
+        page_size);
+}
+
 }  // namespace tt::tt_fabric::mesh::experimental

@@ -38,7 +38,29 @@ TEST_F(FusedAtomicIncAddrgenTest, FusedAtomicIncWrite) {
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
         .trace_iters = 1,
-        .api_variant = tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite  // Base variant
+        .api_variant = tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWrite  // Base variant
+    };
+
+    // Call benchmark function (reusing infrastructure)
+    auto result = tt::tt_fabric::bench::run_unicast_once(&fixture, p);
+
+    // Test passes if no assertion failures occurred
+    EXPECT_GT(result.bytes, 0u);
+}
+
+TEST_F(FusedAtomicIncAddrgenTest, FusedAtomicIncWriteWithState) {
+    // Hardcoded parameters - minimal test case
+    tt::tt_fabric::bench::PerfParams p{
+        .mesh_id = 0,
+        .src_chip = 0,
+        .dst_chip = 1,
+        .use_dram_dst = false,
+        .tensor_bytes = 16384,  // 4 pages
+        .page_size = 4096,
+        .sender_core = {0, 0},
+        .receiver_core = {1, 0},
+        .trace_iters = 1,
+        .api_variant = tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteWithState  // _with_state variant
     };
 
     // Call benchmark function (reusing infrastructure)
