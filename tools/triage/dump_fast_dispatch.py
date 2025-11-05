@@ -239,6 +239,7 @@ def read_wait_globals(
 def run(args, context: Context):
     """Entry point for triage framework."""
     from triage import set_verbose_level
+
     # Set verbose level from -v count (controls which columns are displayed)
     verbose_level = args["-v"]
     set_verbose_level(verbose_level)
