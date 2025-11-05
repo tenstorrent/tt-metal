@@ -320,6 +320,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         "Output shard width must be multiple of {} to satisfy alignment constraints (was {})",
         alignment_elements,
         output_shard_width);
+    TT_FATAL(
+        output_shard_height % 32 == 0, "Shard width must be multiple of tile width (32), was {}", output_shard_height);
 
     const auto create_circular_buffer = [&program, &l1_input_core_grid](
                                             uint32_t index,
@@ -485,8 +487,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id,
         cb_in_transpose_id0,
         cb_out_id,
-        output_shard_width,   // output channels
-        output_shard_height,  // output hw
+        output_shard_width,  // output channels
         total_tiles_writer0,
         output_stride_sticks,
         0,
@@ -504,8 +505,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id,
         cb_in_transpose_id1,
         cb_out_id,
-        output_shard_width,   // output channels
-        output_shard_height,  // output hw
+        output_shard_width,  // output channels
         total_tiles_writer1,
         output_stride_sticks,
         output_stride_sticks,

@@ -25,19 +25,15 @@ void kernel_main() {
     constexpr uint32_t cb_in_transpose = get_compile_time_arg_val(2);
     constexpr uint32_t cb_out = get_compile_time_arg_val(3);
     constexpr uint32_t channels = get_compile_time_arg_val(4);  // stick size
-    constexpr uint32_t hw = get_compile_time_arg_val(5);        // total number of sticks to copy into output
-    constexpr uint32_t num_full_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t output_stride_sticks = get_compile_time_arg_val(7);
-    constexpr uint32_t initial_l1_write_stick_offset = get_compile_time_arg_val(8);
-    constexpr uint32_t element_size_bytes = get_compile_time_arg_val(9);
-
-    static_assert(hw % TILE_SIZE == 0, "Shard width must be multiple of tile width");
-
-    constexpr bool is_input_in_dram = get_compile_time_arg_val(10);
-    constexpr bool is_reader = get_compile_time_arg_val(11);
-    constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t input_num_blocks = get_compile_time_arg_val(13);
-    constexpr uint32_t l1_write_output_addr_stride = get_compile_time_arg_val(14);
+    constexpr uint32_t num_full_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t output_stride_sticks = get_compile_time_arg_val(6);
+    constexpr uint32_t initial_l1_write_stick_offset = get_compile_time_arg_val(7);
+    constexpr uint32_t element_size_bytes = get_compile_time_arg_val(8);
+    constexpr bool is_input_in_dram = get_compile_time_arg_val(9);
+    constexpr bool is_reader = get_compile_time_arg_val(10);
+    constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(11);
+    constexpr uint32_t input_num_blocks = get_compile_time_arg_val(12);
+    constexpr uint32_t l1_write_output_addr_stride = get_compile_time_arg_val(13);
 
     constexpr uint32_t channel_size = channels * element_size_bytes;
 
