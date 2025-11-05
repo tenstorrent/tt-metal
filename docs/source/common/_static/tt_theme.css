@@ -470,9 +470,6 @@ https://github.com/readthedocs/sphinx_rtd_theme/issues/1301
   display: block !important;
 }
 
-/* ====================================================================
-   PyTorch-Style Documentation Enhancements
-   ==================================================================== */
 
 /* Style field lists (Args, Keyword Args, Returns) as full-width sections */
 .rst-content dl.field-list {
