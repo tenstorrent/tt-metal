@@ -446,6 +446,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     const char *tt_metal_home = std::getenv("TT_METAL_HOME");
+    TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
     std::string config_name = std::string(tt_metal_home) + "/tt-train/configs/training_shakespeare_nanogpt.yaml";
 
     std::string run_name = "";
