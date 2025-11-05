@@ -136,7 +136,7 @@ def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
+@pytest.mark.parametrize("value", [15.5, 0, -6.8])
 def test_addcmul(device, h, w, value):
     run_ternary_test_value(device, h, w, value, ttnn.addcmul)
 
