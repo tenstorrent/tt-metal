@@ -14,7 +14,7 @@ from loguru import logger
     ["google/gemma-3-4b-it", "google/gemma-3-27b-it"],
     ids=["gemma-3-4b-it", "gemma-3-27b-it"],
 )
-def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_generator):
+def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
     if not is_ci_env:
         pytest.skip("Skipping CI dispatch tests when running locally.")
 
@@ -24,7 +24,7 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
 
     logger.info(f"Running fast dispatch tests for {model_weights_path}")
 
-    functional_tests = [
+    tests = [
         "models/demos/gemma3/tests/test_mmp.py",
         "models/demos/siglip/tests/test_attention.py",
         "models/demos/gemma3/tests/test_patch_embedding.py",
@@ -45,14 +45,6 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
         "models/tt_transformers/tests/test_decoder.py",
         "models/tt_transformers/tests/test_decoder_prefill.py",
     ]
-    performance_tests = [
-        "models/demos/gemma3/tests/test_perf_vision_cross_attention_transformer.py",
-    ]
-
-    if is_ci_v2_env:
-        tests = functional_tests
-    else:
-        tests = performance_tests
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(tests + ["-x"])
