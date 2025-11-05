@@ -621,9 +621,13 @@ def clear_compile_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_default_device():
+def reset_default_device(request):
     import ttnn
 
+    # Skip applying the fixture logic for this test
+    if "no_reset_default_device" in request.keywords:
+        yield
+        return
     device = ttnn.GetDefaultDevice()
     yield
     ttnn.SetDefaultDevice(device)
