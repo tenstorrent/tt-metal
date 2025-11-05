@@ -21,6 +21,7 @@
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
 #include "tt-metalium/mesh_device.hpp"
+#include "tt_stl/caseless_comparison.hpp"
 #include "ttnn-nanobind/nanobind_helpers.hpp"
 #include "ttnn/config.hpp"
 #include "ttnn/core.hpp"
@@ -76,21 +77,66 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "set_printoptions",
-        &ttnn::set_printoptions,
+        [](const std::string& profile, const py::object& sci_mode, const nb::object& precision) {
+            ttnn::TensorPrintProfile profile_enum =
+                enchantum::cast<ttnn::TensorPrintProfile>(profile, ttsl::ascii_caseless_comp).value();
+
+            ttnn::SciMode sci_mode_enum = ttnn::SciMode::Default;
+            if (!sci_mode.is_none()) {
+                if (nb::isinstance<nb::bool_>(sci_mode)) {
+                    sci_mode_enum = sci_mode.cast<bool>() ? ttnn::SciMode::Enable : ttnn::SciMode::Disable;
+                } else if (nb::isinstance<nb::str>(sci_mode)) {
+                    auto cmp = [](const auto& a, const auto& b) -> bool {
+                        return ttsl::ascii_caseless_comp(std::string_view(a), std::string_view(b));
+                    };
+                    const std::string sci_mode_str = sci_mode.cast<std::string>();
+                    if (cmp(sci_mode_str, "true")) {
+                        sci_mode_enum = ttnn::SciMode::Enable;
+                    } else if (cmp(sci_mode_str, "false")) {
+                        sci_mode_enum = ttnn::SciMode::Disable;
+                    } else if (cmp(sci_mode_str, "none") || cmp(sci_mode_str, "default")) {
+                        sci_mode_enum = ttnn::SciMode::Default;
+                    } else {
+                        throw std::invalid_argument("sci_mode must be None, bool, or str (true, false, default)");
+                    }
+                } else {
+                    throw std::invalid_argument("sci_mode must be None, bool, or str (true, false, default)");
+                }
+            }
+
+            int precision_value = 4;
+            if (!precision.is_none()) {
+                if (nb::isinstance<nb::int_>(precision)) {
+                    precision_value = precision.cast<int>();
+                } else {
+                    throw std::invalid_argument("precision must be None or int");
+                }
+            }
+
+            ttnn::set_printoptions(profile_enum, sci_mode_enum, precision_value);
+        },
         nb::kw_only(),
         nb::arg("profile"),
+        nb::arg("sci_mode") = nb::none(),
+        nb::arg("precision") = nb::none(),
         R"doc(
 
         Set print options for tensor output.
 
         Keyword Args:
             profile (const std::string): the profile to use for print options.
+            sci_mode (Optional[str]): scientific notation mode. Can be None (auto-detect),
+                                      True/False (force enable/disable), or "default" (auto-detect).
+            precision (Optional[int]): number of digits after decimal point for floating point values.
 
         Returns:
             `None`: modifies print options.
 
         Examples:
             >>> ttnn.set_printoptions(profile="short")
+            >>> ttnn.set_printoptions(profile="short", sci_mode=True)
+            >>> ttnn.set_printoptions(profile="short", sci_mode=None)
+            >>> ttnn.set_printoptions(profile="short", precision=6)
         )doc");
 
     mod.def("dump_stack_trace_on_segfault", &ttnn::core::dump_stack_trace_on_segfault);

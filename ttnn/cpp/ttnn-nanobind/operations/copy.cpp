@@ -20,8 +20,7 @@ namespace {
 
 void bind_global_typecast(nb::module_& mod) {
     auto doc = fmt::format(
-        R"doc({0}(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor : Optional[ttnn.Tensor] = None) -> ttnn.Tensor
-
+        R"doc(
 Applies {0} to :attr:`input_tensor`.
 
 Args:

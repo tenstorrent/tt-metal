@@ -65,7 +65,7 @@ void tensor_mem_config_module_types(nb::module_& m_tensor) {
     export_enum<MathFidelity>(m_tensor);
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
-    export_enum<ShardMode>(m_tensor);
+    // export_enum<ShardMode>(m_tensor);
 
     nb::enum_<tt::tt_metal::BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
@@ -499,25 +499,10 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("grid"),
             nb::arg("shard_shape"),
-            nb::arg("shard_orientation"),
-            nb::arg("shard_mode") = ShardMode::PHYSICAL)
-        .def(
-            "__init__",
-            [](ShardSpec* t,
-               const CoreRangeSet& core_sets,
-               const std::array<uint32_t, 2>& shard_shape,
-               const std::array<uint32_t, 2>& physical_shard_shape,
-               const ShardOrientation& shard_orientation) {
-                new (t) ShardSpec(core_sets, shard_shape, physical_shard_shape, shard_orientation);
-            },
-            nb::arg("grid"),
-            nb::arg("shard_shape"),
-            nb::arg("physical_shard_shape"),
             nb::arg("shard_orientation"))
         .def_rw("shape", &ShardSpec::shape, "Shape of shard.")
         .def_rw("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_rw("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
-        .def_rw("mode", &ShardSpec::mode, "Treat shard shape as physical (default) or logical")
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);

@@ -173,12 +173,24 @@ void py_module_types(nb::module_& mod) {
             "Approximation mode for mathematical operations");
 
     export_enum<tt::tt_metal::KernelDescriptor::SourceType>(mod, "SourceType");
+
     nb::class_<tt::tt_metal::KernelDescriptor>(mod, "KernelDescriptor", R"pbdoc(
         Descriptor for a computational kernel.
 
         Contains all the information needed to compile and execute a kernel,
         including source code, compilation options, runtime arguments, and configuration.
+    )pbdoc");
+
+    // Bind SourceType as a nested enum within KernelDescriptor
+    py::enum_<tt::tt_metal::KernelDescriptor::SourceType>(kernel_descriptor_class, "SourceType", R"pbdoc(
+        Source type for kernel source code.
+
+        Defines whether the kernel source is provided as a file path or inline source code.
     )pbdoc")
+        .value("FILE_PATH", tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH, "Kernel source is a file path")
+        .value("SOURCE_CODE", tt::tt_metal::KernelDescriptor::SourceType::SOURCE_CODE, "Kernel source is inline code");
+
+    kernel_descriptor_class
         .def(nb::init<>(), R"pbdoc(
             Default constructor for KernelDescriptor.
         )pbdoc")
@@ -246,7 +258,7 @@ void py_module_types(nb::module_& mod) {
         .def(nb::init<>(), R"pbdoc(
         Default constructor for SemaphoreDescriptor.
     )pbdoc")
-        .def(  // TODO_NANOBIND
+        .def(  // TODO_NANOBIND: FIX. AFFECTS BEHAVIOR!
             nb::init<CoreType, CoreRangeSet, uint32_t>(),
             nb::arg("core_type"),  //= nb::cast(CoreType::WORKER), // TODO_NANOBIND causes segfault when import ttnn???
             nb::arg("core_ranges"),
@@ -287,7 +299,7 @@ void py_module_types(nb::module_& mod) {
         .def_rw("semaphores", &tt::tt_metal::ProgramDescriptor::semaphores, "Collection of semaphore descriptors")
         .def_rw("cbs", &tt::tt_metal::ProgramDescriptor::cbs, "Collection of command buffer descriptors");
 
-    // TODO_NANOBIND
+    // TODO_NANOBIND: AFFECTS BEHAVIOR
     [[maybe_unused]]
     auto e_CBIndex = export_enum<tt::CBIndex>(mod, "CBIndex");
     // e_CBIndex

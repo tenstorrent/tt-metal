@@ -483,6 +483,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
     }();
 
+    // TODO_NANOBIND: AFFECTS BEHAVIOR
     // TODO_NANOBIND: validate this comment
     // Important: `nb::object` copying and destruction must be done while holding GIL, which pybind ensures for a thread
     // that calls the C++ APIs. We wrap `nb::object` in `MemoryPin` so that multi-threaded C++ code only increments /
@@ -764,7 +765,7 @@ void pytensor_module_types(nb::module_& mod) {
     // https://nanobind.readthedocs.io/en/latest/functions.html#lifetime-annotations
     auto pyTensor = nb::class_<Tensor>(mod, "Tensor", R"doc(
 
-        Class constructor supports tensors of rank 4.
+        Class constructor supports tensors of any rank.
         The constructor takes following arguments:
 
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
@@ -772,7 +773,7 @@ void pytensor_module_types(nb::module_& mod) {
         +============+========================================================+===========================+====================================+==========+
         | data       | Data to store in TT tensor                             | List[float/int]           |                                    | Yes      |
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
-        | shape      | Shape of TT tensor                                     | List[int[4]]              |                                    | Yes      |
+        | shape      | Shape of TT tensor                                     | List[int]                 |                                    | Yes      |
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
         | data_type  | Data type of numbers in TT tensor                      | ttnn.DataType             | ttnn.DataType.BFLOAT16             | Yes      |
         |            |                                                        |                           |                                    |          |
@@ -830,18 +831,18 @@ void pytensor_module(nb::module_& mod) {
             +----------+----------------------+-----------+-------------+----------+
     )doc");
 
-    auto pyTensor = static_cast<nb::class_<Tensor>>(mod.attr("Tensor"));
-    pyTensor.def(nb::init<ttnn::Tensor&>())
-        .def(
-            "__init__",
-            [](Tensor* t,
-               std::vector<float>&& data,
-               const std::array<uint32_t, 4>& shape,
-               DataType data_type,
-               Layout layout,
-               const std::optional<Tile>& tile,
-               float pad_value) {
-                new (t) Tensor(Tensor::from_vector(
+    // TODO_NANOBIND: CONVERT
+    // Helper template to add tensor constructors for different data types
+    auto add_typed_constructors = []<typename T>(nb::class_<Tensor>& pyTensor, T default_pad_value) {
+        // Constructor 1: Host-only (no device, no mem_config)
+        pyTensor.def(
+            nb::init<>([](std::vector<T>&& data,
+                          const ttnn::SmallVector<uint32_t>& shape,
+                          DataType data_type,
+                          Layout layout,
+                          const std::optional<Tile>& tile,
+                          T pad_value) {
+                return Tensor::from_vector(
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     /*device=*/nullptr,
@@ -852,49 +853,50 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("shape"),
             nb::arg("data_type"),
             nb::arg("layout"),
-            nb::arg("tile") = nb::none(),
-            nb::arg("pad_value") = 0.0f,
-            nb::rv_policy::move,
+            py::arg("tile") = std::nullopt,
+            py::arg("pad_value") = default_pad_value,
+            py::return_value_policy::move,
             R"doc(
-                +---------------+----------------------+
-                | Argument      | Name                 |
-                +===============+======================+
-                | arg0          | data                 |
-                +---------------+----------------------+
-                | arg1          | shape                |
-                +---------------+----------------------+
-                | arg2          | data_type            |
-                +---------------+----------------------+
-                | arg3          | layout               |
-                +---------------+----------------------+
-                | arg4          | tile (optional)      |
-                +---------------+----------------------+
-                | arg5          | pad_value (optional) |
-                +---------------+----------------------+
+                Create a TT Tensor on host from data vector.
 
-                Example of creating a TT Tensor on host:
+                +---------------+----------------------+
+                | Argument      | Description          |
+                +===============+======================+
+                | data          | Data vector          |
+                +---------------+----------------------+
+                | shape         | Tensor shape         |
+                +---------------+----------------------+
+                | data_type     | Data type            |
+                +---------------+----------------------+
+                | layout        | Memory layout        |
+                +---------------+----------------------+
+                | tile          | Tile spec (optional) |
+                +---------------+----------------------+
+                | pad_value     | Pad value (optional) |
+                +---------------+----------------------+
 
                 .. code-block:: python
 
-                    py_tensor = torch.randn((1, 1, 32, 32))
-                    ttnn.Tensor(
-                        py_tensor.reshape(-1).tolist(),
-                        py_tensor.size(),
-                        ttnn.DataType.BFLOAT16,
-                        ttnn.Layout.ROW_MAJOR,
-                    )
-            )doc")
-        .def(
-            "__init__",
-            [](Tensor* t,
-               std::vector<float>&& data,
-               const std::array<uint32_t, 4>& shape,
-               DataType data_type,
-               Layout layout,
-               std::optional<MeshDevice*> device,
-               const std::optional<Tile>& tile,
-               float pad_value) {
-                new (t) Tensor(Tensor::from_vector(
+                    # Float tensor
+                    ttnn.Tensor([1.0, 2.0, 3.0, 4.0], [1, 1, 2, 2],
+                                ttnn.DataType.FLOAT32, ttnn.Layout.ROW_MAJOR)
+
+                    # Integer tensor
+                    ttnn.Tensor([1, 2, 3, 4], [1, 1, 2, 2],
+                                ttnn.DataType.INT32, ttnn.Layout.ROW_MAJOR)
+            )doc");
+
+        // TODO_NANOBIND: CONVERT
+        // Constructor 2: With optional device
+        pyTensor.def(
+            py::init<>([](std::vector<T>&& data,
+                          const ttnn::SmallVector<uint32_t>& shape,
+                          DataType data_type,
+                          Layout layout,
+                          std::optional<MeshDevice*> device,
+                          const std::optional<Tile>& tile,
+                          T pad_value) {
+                return Tensor::from_vector(
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), MemoryConfig{})),
                     device.value_or(nullptr),
@@ -906,60 +908,50 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("shape"),
             nb::arg("data_type"),
             nb::arg("layout"),
-            nb::arg("device") = nb::none(),
-            nb::arg("tile") = nb::none(),
-            nb::arg("pad_value") = 0.0f,
-            nb::rv_policy::move,
+            py::arg("device") = std::nullopt,
+            py::arg("tile") = std::nullopt,
+            py::arg("pad_value") = default_pad_value,
+            py::return_value_policy::move,
             R"doc(
-                +---------------+----------------------+
-                | Argument      | Name                 |
-                +===============+======================+
-                | arg0          | data                 |
-                +---------------+----------------------+
-                | arg1          | shape                |
-                +---------------+----------------------+
-                | arg2          | data_type            |
-                +---------------+----------------------+
-                | arg3          | layout               |
-                +---------------+----------------------+
-                | arg4          | device (optional)    |
-                +---------------+----------------------+
-                | arg5          | tile (optional)      |
-                +---------------+----------------------+
-                | arg6          | pad_value (optional) |
-                +---------------+----------------------+
+                Create a TT Tensor on device from data vector.
 
-                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
-
-                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.
-
-                Example of creating a TT Tensor on TT accelerator device:
+                +---------------+---------------------------+
+                | Argument      | Description               |
+                +===============+===========================+
+                | data          | Data vector               |
+                +---------------+---------------------------+
+                | shape         | Tensor shape              |
+                +---------------+---------------------------+
+                | data_type     | Data type                 |
+                +---------------+---------------------------+
+                | layout        | Memory layout             |
+                +---------------+---------------------------+
+                | device        | Device ptr (optional)     |
+                +---------------+---------------------------+
+                | tile          | Tile spec (optional)      |
+                +---------------+---------------------------+
+                | pad_value     | Pad value (optional)      |
+                +---------------+---------------------------+
 
                 .. code-block:: python
 
-                    py_tensor = torch.randn((1, 1, 32, 32))
-                    tt_device = ttnn.CreateDevice(0)
-                    // ...
-                    ttnn.Tensor(
-                        py_tensor.reshape(-1).tolist(),
-                        py_tensor.size(),
-                        ttnn.DataType.BFLOAT16,
-                        ttnn.Layout.ROW_MAJOR,
-                        tt_device
-                    )
-            )doc")
-        .def(
-            "__init__",
-            [](Tensor* t,
-               std::vector<float>&& data,
-               const std::array<uint32_t, 4>& shape,
-               DataType data_type,
-               Layout layout,
-               std::optional<MeshDevice*> device,
-               const MemoryConfig& memory_config,
-               const std::optional<Tile>& tile,
-               float pad_value) {
-                new (t) Tensor(Tensor::from_vector(
+                    device = ttnn.open_device(0)
+                    ttnn.Tensor([1, 2, 3, 4], [1, 1, 2, 2],
+                                ttnn.DataType.INT32, ttnn.Layout.ROW_MAJOR, device)
+            )doc");
+
+        // TODO_NANOBIND: CONVERT
+        // Constructor 3: With device and mem_config
+        pyTensor.def(
+            py::init<>([](std::vector<T>&& data,
+                          const ttnn::SmallVector<uint32_t>& shape,
+                          DataType data_type,
+                          Layout layout,
+                          std::optional<MeshDevice*> device,
+                          const MemoryConfig& memory_config,
+                          const std::optional<Tile>& tile,
+                          T pad_value) {
+                return Tensor::from_vector(
                     std::move(data),
                     TensorSpec(ttnn::Shape(shape), TensorLayout(data_type, PageConfig(layout, tile), memory_config)),
                     device.value_or(nullptr),
@@ -971,57 +963,57 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("shape"),
             nb::arg("data_type"),
             nb::arg("layout"),
-            nb::arg("device") = nb::none(),
+            py::arg("device") = std::nullopt,
             nb::arg("memory_config"),
-            nb::arg("tile") = nb::none(),
-            nb::arg("pad_value") = 0.0f,
-            nb::rv_policy::move,
+            py::arg("tile") = std::nullopt,
+            py::arg("pad_value") = default_pad_value,
+            py::return_value_policy::move,
             R"doc(
-                +---------------+----------------------+
-                | Argument      | Name                 |
-                +===============+======================+
-                | arg0          | data                 |
-                +---------------+----------------------+
-                | arg1          | shape                |
-                +---------------+----------------------+
-                | arg2          | data_type            |
-                +---------------+----------------------+
-                | arg3          | layout               |
-                +---------------+----------------------+
-                | arg4          | device               |
-                +---------------+----------------------+
-                | arg5          | mem_config           |
-                +---------------+----------------------+
-                | arg6          | tile (optional)      |
-                +---------------+----------------------+
-                | arg7          | pad_value (optional) |
-                +---------------+----------------------+
+                Create a TT Tensor on device with specified memory config.
 
-                Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
-
-                Note that TT Tensor in ROW_MAJOR layout on TT Accelerator device must have size of last dimension divisble by 2.
-
-                Example of creating a TT Tensor on TT accelerator device with specified mem_config:
+                +---------------+---------------------------+
+                | Argument      | Description               |
+                +===============+===========================+
+                | data          | Data vector               |
+                +---------------+---------------------------+
+                | shape         | Tensor shape              |
+                +---------------+---------------------------+
+                | data_type     | Data type                 |
+                +---------------+---------------------------+
+                | layout        | Memory layout             |
+                +---------------+---------------------------+
+                | device        | Device ptr (optional)     |
+                +---------------+---------------------------+
+                | mem_config    | Memory config             |
+                +---------------+---------------------------+
+                | tile          | Tile spec (optional)      |
+                +---------------+---------------------------+
+                | pad_value     | Pad value (optional)      |
+                +---------------+---------------------------+
 
                 .. code-block:: python
 
-                    py_tensor = torch.randn((1, 1, 32, 32))
-                    tt_device = ttnn.CreateDevice(0)
+                    device = ttnn.open_device(0)
                     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED)
-                    // ...
-                    ttnn.Tensor(
-                        py_tensor.reshape(-1).tolist(),
-                        py_tensor.size(),
-                        ttnn.DataType.BFLOAT16,
-                        ttnn.Layout.ROW_MAJOR,
-                        tt_device,
-                        mem_config
-                    )
-            )doc")
+                    ttnn.Tensor([1, 2, 3, 4], [1, 1, 2, 2],
+                                ttnn.DataType.INT32, ttnn.Layout.ROW_MAJOR,
+                                device, mem_config)
+            )doc");
+    };
+
+    // TODO_NANOBIND: CONVERT
+    auto pyTensor = static_cast<py::class_<Tensor>>(m_tensor.attr("Tensor"));
+    pyTensor.def(py::init<ttnn::Tensor&>());
+
+    // Register constructors for float and int32_t data types
+    add_typed_constructors.operator()<float>(pyTensor, 0.0f);
+    add_typed_constructors.operator()<int32_t>(pyTensor, 0);
+
+    pyTensor
         .def(
             "__init__",
             [](Tensor* t,
-               nb::ndarray<> python_tensor,
+               nb::ndarray<> python_tensor,  // TODO_NANOBIND: CONVERT
                std::optional<DataType> data_type,
                std::optional<MeshDevice*> device,
                std::optional<Layout> layout,
@@ -1090,7 +1082,7 @@ void pytensor_module(nb::module_& mod) {
         .def_prop_ro("tile", [](const Tensor& self) { return self.tensor_spec().tile(); })
         .def(
             "deallocate",
-            [](Tensor& self, bool force) { return self.deallocate(force); },
+            [](Tensor& self, bool force) { self.deallocate(force); },
             nb::arg("force") = false,
             R"doc(
                 Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
@@ -1244,8 +1236,8 @@ void pytensor_module(nb::module_& mod) {
         .def(
             "pad",
             [](const Tensor& self,
-               const std::array<uint32_t, 4>& output_tensor_shape,
-               const std::array<uint32_t, 4>& input_tensor_start,
+               const ttnn::SmallVector<uint32_t>& output_tensor_shape,
+               const ttnn::SmallVector<uint32_t>& input_tensor_start,
                float pad_value) {
                 return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },

@@ -270,6 +270,14 @@ void device_module(nb::module_& m_device) {
         Returns associated mmio device of give device id.
     )doc");
 
+    m_device.def("SetRootDir", &tt::tt_metal::SetRootDir, nb::arg("root_dir"), R"doc(
+        Sets the root directory for TT Metal operations.
+        Args:
+            root_dir (str): Path to the root directory to set.
+        Example:
+            >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
+    )doc");
+
     m_device.def(
         "SetDefaultDevice",
         [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
@@ -494,15 +502,6 @@ void device_module(nb::module_& m_device) {
                     >>> # Assume some operations are queued on the device
                     >>> ttnn.synchronize_device(device)
             )doc";
-    m_device.def(
-        "synchronize_device",
-        [](IDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
-            Synchronize(device, raw_optional(cq_id), sub_device_ids);
-        },
-        synchronize_device_doc.data(),
-        nb::arg("device"),
-        nb::arg("cq_id") = nb::none(),
-        nb::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
         "synchronize_device",
         [](MeshDevice* device, std::optional<QueueId> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
