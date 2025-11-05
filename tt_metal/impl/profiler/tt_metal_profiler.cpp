@@ -1087,8 +1087,6 @@ std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData() {
 #endif
 }
 
-// in gtest, preferably programming ex, add test that calls these functions dump results of getallopsperfdata
-
 std::map<ChipId, std::set<OpAnalysisData>> GetAllOpsPerfData() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
