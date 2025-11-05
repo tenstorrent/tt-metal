@@ -1,0 +1,13 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# 4x4 Blackhole mesh with Torus-XY topology spanning 2x2 hosts (P150 boards)
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 2, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
