@@ -490,6 +490,9 @@ class ModelArgs:
         self.embed_scale = None
         self.layernorm = False
 
+        self.parallel_model = ["phi-1", "phi-1_5"]
+        self.ffn2_model = ["phi-1", "phi-1_5"]
+
         assert not os.getenv(
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
@@ -619,6 +622,9 @@ class ModelArgs:
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
             self.prefill_len_cutoff = 512
+
+        self.is_parallel_model = self.base_model_name in self.parallel_model
+        self.is_ffn2_model = self.base_model_name in self.ffn2_model
 
         if callable(optimizations):
             self.optimizations = optimizations(self)

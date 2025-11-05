@@ -46,7 +46,7 @@ class TransformerBlock(LightweightModule):
         self.current = 0
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
-        self.parallel_model = ["phi-1", "phi-1_5"]
+        self.is_parallel_model = args.is_parallel_model
 
         self.layer_num = layer_num
 
@@ -223,7 +223,6 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
-        x_new = x
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -238,7 +237,7 @@ class TransformerBlock(LightweightModule):
             attn_mask=attn_mask,
         )
 
-        if self.args.base_model_name not in self.parallel_model:
+        if not self.is_parallel_model:
             if self.pre_ff_norm is None:
                 hidden_states = ttnn.add(
                     residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
@@ -314,6 +313,7 @@ class TransformerBlock(LightweightModule):
 
         # phi-1 uses MHA and MLP layers in a parallel configuration (see the phi-1 paper for details)
         else:
+            x_new = x
             input_mem_cfg = (
                 self.model_config["SHARDED_MLP_INPUT_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
             )

@@ -37,8 +37,7 @@ class MLP(LightweightModule):
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
-        self.base_model_name = self.args.base_model_name
-        self.ffn2_model = ["phi-1", "phi-1_5"]
+        self.is_ffn2_model = args.is_ffn2_model
 
         if args.dummy_weights:
             cache_name = lambda _: None
@@ -80,7 +79,7 @@ class MLP(LightweightModule):
             "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        if self.base_model_name not in self.ffn2_model:
+        if not self.is_ffn2_model:
             self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
@@ -135,7 +134,7 @@ class MLP(LightweightModule):
             memory_config=memory_config,
         )
 
-        if self.base_model_name not in self.ffn2_model:
+        if not self.is_ffn2_model:
             w3_out = ttnn.linear(
                 x,
                 self.w3,
@@ -171,7 +170,7 @@ class MLP(LightweightModule):
                     num_workers_per_link=2,
                     num_buffers_per_channel=2,
                 )
-                if self.base_model_name not in self.ffn2_model:
+                if not self.is_ffn2_model:
                     w3_out = ttnn.experimental.reduce_scatter_minimal_async(
                         w3_out,
                         persistent_output_buffers=None,
@@ -198,7 +197,7 @@ class MLP(LightweightModule):
                     topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
-                if self.base_model_name not in self.ffn2_model:
+                if not self.is_ffn2_model:
                     w3_out = tt_all_reduce(
                         w3_out,
                         self.mesh_device,
@@ -210,7 +209,7 @@ class MLP(LightweightModule):
                         memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                     )
 
-        if self.base_model_name not in self.ffn2_model:
+        if not self.is_ffn2_model:
             w2_in = ttnn.mul(
                 w1_out,
                 w3_out,
