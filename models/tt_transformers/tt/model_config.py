@@ -1826,6 +1826,28 @@ class ModelArgs:
     def is_llama_vision(self):
         return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
+    def can_enable_trace(self, prefill_seq_len):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
+        There is no support to pass them as a tensor, and then inside the trace read it as a number.
+        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
+        """
+        # Trace in prefill is currently supported only for Llama-3.1-8B
+        # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
+        if self.base_model_name != "Llama-3.1-8B":
+            return False
+        if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
+            return False
+
+        if self.device_name == "N150":
+            allowed_seq_lens = [128, 256, 512, 1024]
+        else:
+            allowed_seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+
+        return prefill_seq_len in allowed_seq_lens and prefill_seq_len <= self.max_prefill_chunk_size
+
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
         vision_prefix = self.state_dict_vision_prefix
@@ -3056,6 +3078,7 @@ def determine_device_name(mesh_device):
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            32: "BHGLX",
         }
     elif is_wormhole_b0():
         dict_device_names = {

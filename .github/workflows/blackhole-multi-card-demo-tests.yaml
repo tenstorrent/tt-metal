@@ -22,6 +22,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      tracy: true
       build-wheel: true
       version: 22.04
   blackhole-multi-card-demo-tests:
@@ -38,7 +39,7 @@ jobs:
             num_devices: 4
           - name: DeskBox Demo tests
             runner-label: BH-DeskBox
-            extra-tag: pipeline-perf
+            extra-tag: pipeline-functional
             num_devices: 2
           - name: LoudBox Demo tests
             runner-label: BH-LoudBox

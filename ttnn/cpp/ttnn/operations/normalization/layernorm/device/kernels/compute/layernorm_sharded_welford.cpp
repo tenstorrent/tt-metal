@@ -130,7 +130,6 @@ void MAIN {
     // ---------------------------------------------------------------------------
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;          // x minus mean
@@ -322,7 +321,7 @@ void MAIN {
     // ---------------------------------------------------------------------------
     cb_wait_front(cb_ex_global, num_block_ht_result_tiles);
     cb_reserve_back(cb_transpose, num_block_ht_result_tiles);
-    transpose_wh_init(cb_ex_global, cb_transpose);
+    transpose_wh_init_short(cb_ex_global);
     uint32_t processed_tiles = 0;
     while (processed_tiles < num_block_ht_result_tiles) {
         uint32_t tiles_to_load = std::min(num_block_ht_result_tiles - processed_tiles, num_dest_regs);

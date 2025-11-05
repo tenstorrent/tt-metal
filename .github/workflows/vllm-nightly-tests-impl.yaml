@@ -83,7 +83,7 @@ jobs:
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 35,
             benchmark-timeout: 10,
-            runner-label: bh-rackbox,
+            runner-label: bh-loudbox,
             arch: arch-blackhole,
             mesh-device: P150x8,
             tt-llama-text-ver: tt_transformers,
@@ -134,6 +134,68 @@ jobs:
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
           },
+          # structured output tests
+          {
+            name: "[WH-GLX] Llama-3.3-70B-Instruct v0 structured-output",
+            model: "meta-llama/Llama-3.3-70B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: topology-6u,
+            arch: arch-wormhole_b0,
+            mesh-device: TG,
+            tt-llama-text-ver: llama3_70b_galaxy,
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            multimodal: false,
+            structured-output: true,
+            additional-args: "--num_scheduler_steps 1",
+            owner_id: U091SNDA4TS, # Tomasz Cheda
+          },
+          {
+            name: "[BH-LB] Llama-3.1-8B-Instruct v0 structured-output",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: bh-loudbox,
+            arch: arch-blackhole,
+            mesh-device: P150x8,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 8}",
+            multimodal: false,
+            structured-output: true,
+            additional-args: "--num_scheduler_steps 1",
+            owner_id: U091SNDA4TS, # Tomasz Cheda
+          },
+          # device sampling + structured output tests
+          {
+            name: "[WH-GLX] Llama-3.3-70B-Instruct v0 fallback structured-output",
+            model: "meta-llama/Llama-3.3-70B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: topology-6u,
+            arch: arch-wormhole_b0,
+            mesh-device: TG,
+            tt-llama-text-ver: llama3_70b_galaxy,
+            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+            multimodal: false,
+            structured-output: true,
+            additional-args: "--num_scheduler_steps 1",
+            owner_id: U091SNDA4TS, # Tomasz Cheda
+          },
+          {
+            name: "[BH-LB] Llama-3.1-8B-Instruct v0 fallback structured-output",
+            model: "meta-llama/Llama-3.1-8B-Instruct",
+            server-timeout: 35,
+            benchmark-timeout: 10,
+            runner-label: bh-loudbox,
+            arch: arch-blackhole,
+            mesh-device: P150x8,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"data_parallel\": 8, \"sample_on_device_mode\": \"decode_only\"}",
+            multimodal: false,
+            structured-output: true,
+            additional-args: "--num_scheduler_steps 1",
+            owner_id: U091SNDA4TS, # Tomasz Cheda
+          },
         ]
     runs-on:
       - ${{ matrix.test-group.runner-label }}
@@ -155,6 +217,7 @@ jobs:
         FILE_SERVER_PID: "./server.pid"
         FILE_SERVER_LOG: "./output/vllm_server.log"
         FILE_BENCHMARK_LOG: "./output/vllm_benchmark.log"
+        FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG: "./output/vllm_benchmark_structured_output.log"
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -286,6 +349,28 @@ jobs:
             echo "Check out the server log in a step below."
             exit 1
           fi
+      - name: 📐 Run structured output benchmark
+        if: ${{ matrix.test-group.structured-output }}
+        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        run: |
+          python3 vllm/benchmarks/benchmark_serving_structured_output.py \
+            --backend vllm \
+            --model ${{ matrix.test-group.model }} \
+            --num-prompts 32 \
+            --percentile-metrics ttft,tpot,itl,e2el \
+            --save-result \
+            --result-filename output/vllm_result_structured.json \
+            2>&1 | tee ${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}
+
+          # The benchmark returns zero even if responses are not correct.
+          success_message="correct_rate(%) 100.0"
+          if grep -q "$success_message" "${FILE_BENCHMARK_STRUCTURED_OUTPUT_LOG}"; then
+            echo "✅ Structured output benchmark completed successfully"
+          else
+            echo "❌ Structured output benchmark failed"
+            echo "Check out the server log in a step below."
+            exit 1
+          fi
 
       - name: 🖼️ Run multimodal test
         if: ${{ matrix.test-group.multimodal }}
@@ -360,6 +445,12 @@ jobs:
         continue-on-error: true
         run: |
           cat output/vllm_result.json
+
+      - name: Show structured output report
+        if: ${{ matrix.test-group.structured-output }}
+        continue-on-error: true
+        run: |
+          cat output/vllm_result_structured.json
 
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}

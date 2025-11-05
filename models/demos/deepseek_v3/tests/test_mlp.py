@@ -153,10 +153,6 @@ def test_forward_pass(
             mode, module_path, seq_len, num_module_layers
         )
 
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
-
     # Generate module configs and state
     weight_config = get_test_weight_config(
         MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config

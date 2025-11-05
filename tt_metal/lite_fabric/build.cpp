@@ -131,7 +131,6 @@ std::optional<std::filesystem::path> LinkFabricLite(
     const std::shared_ptr<LiteFabricHal>& lite_fabric_hal,
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir) {
-    const std::filesystem::path tunneling_dir = root_dir / "tt_metal/lite_fabric/hw/inc";
     const std::filesystem::path input_ld = root_dir / "tt_metal/lite_fabric/toolchain/lite_fabric.ld";
     const std::filesystem::path output_ld =
         out_dir / fmt::format("lite_fabric_preprocessed.{}.ld", lite_fabric_hal->build_target_name());
@@ -140,7 +139,11 @@ std::optional<std::filesystem::path> LinkFabricLite(
 
     std::ostringstream preprocess_oss;
     preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
-    preprocess_oss << fmt::format("-I{} ", tunneling_dir.string());  // Include path for the memory defs header
+
+    auto hal_includes = lite_fabric_hal->build_includes(root_dir);
+    for (const auto& include : hal_includes) {
+        preprocess_oss << fmt::format("-I{} ", include.string());
+    }
     preprocess_oss << "-E -P -x c ";                                 // Preprocess only, no line markers, treat as C
     preprocess_oss << fmt::format("-o {} ", output_ld.string());
     preprocess_oss << input_ld;
