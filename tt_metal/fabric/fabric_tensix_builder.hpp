@@ -191,6 +191,20 @@ private:
         uint32_t noc_y,
         eth_chan_directions direction);
 
+    // Helper function to create builders based on core type
+    template <typename BuilderType, typename ConfigType>
+    static std::unique_ptr<BuilderType> create_builder(
+        FabricTensixCoreType core_type,
+        const FabricTensixDatamoverConfig& tensix_config,
+        const CoreCoord& my_core_logical,
+        tt::tt_fabric::FabricNodeId local_fabric_node_id,
+        tt::tt_fabric::FabricNodeId remote_fabric_node_id,
+        uint32_t ethernet_channel_id,
+        uint32_t link_idx,
+        uint32_t noc_x,
+        uint32_t noc_y,
+        eth_chan_directions direction);
+
     // Sub-builders based on mode
     std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder_;      // Always created
     std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder_;  // Only in UDM mode

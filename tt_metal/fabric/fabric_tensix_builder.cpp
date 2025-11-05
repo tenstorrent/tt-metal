@@ -407,6 +407,42 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_addre
 
 // FabricTensixDatamoverBuilder implementation
 
+template <typename BuilderType, typename ConfigType>
+std::unique_ptr<BuilderType> FabricTensixDatamoverBuilder::create_builder(
+    FabricTensixCoreType core_type,
+    const FabricTensixDatamoverConfig& tensix_config,
+    const CoreCoord& my_core_logical,
+    tt::tt_fabric::FabricNodeId local_fabric_node_id,
+    tt::tt_fabric::FabricNodeId remote_fabric_node_id,
+    uint32_t ethernet_channel_id,
+    uint32_t link_idx,
+    uint32_t noc_x,
+    uint32_t noc_y,
+    eth_chan_directions direction) {
+    // Check if the core type is active (for relay, may return nullptr)
+    if (!tensix_config.is_core_id_active(core_type)) {
+        return nullptr;
+    }
+
+    // Get and cast the config to the appropriate type
+    auto config_base = tensix_config.get_config(core_type);
+    auto config = std::dynamic_pointer_cast<ConfigType>(config_base);
+    TT_FATAL(config != nullptr, "Expected config for core type {}", static_cast<int>(core_type));
+
+    // Create and return the builder
+    return std::make_unique<BuilderType>(
+        my_core_logical,
+        local_fabric_node_id,
+        remote_fabric_node_id,
+        ethernet_channel_id,
+        link_idx,
+        core_type,
+        noc_x,
+        noc_y,
+        config,
+        direction);
+}
+
 FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder,
     std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder,
@@ -450,70 +486,33 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     // Get link index (routing plane ID) from control plane using channel ID
     uint32_t link_idx = control_plane.get_routing_plane_id(local_fabric_node_id, ethernet_channel_id);
 
-    std::unique_ptr<FabricTensixDatamoverMuxBuilder> mux_builder = nullptr;
+    // Create mux builder (always needed in both MUX and UDM modes)
+    auto mux_builder = create_builder<FabricTensixDatamoverMuxBuilder, FabricTensixDatamoverMuxConfig>(
+        FabricTensixCoreType::MUX,
+        tensix_config,
+        my_core_logical,
+        local_fabric_node_id,
+        remote_fabric_node_id,
+        ethernet_channel_id,
+        link_idx,
+        noc_x,
+        noc_y,
+        direction);
+
+    // Create relay builder (only in UDM mode if relay core is active)
     std::unique_ptr<FabricTensixDatamoverRelayBuilder> relay_builder = nullptr;
-
-    switch (fabric_tensix_config) {
-        case tt::tt_fabric::FabricTensixConfig::MUX: {
-            // MUX mode: only create mux builder for MUX core type
-            auto mux_config_base = tensix_config.get_config(FabricTensixCoreType::MUX);
-            auto mux_config = std::dynamic_pointer_cast<FabricTensixDatamoverMuxConfig>(mux_config_base);
-            TT_FATAL(mux_config != nullptr, "Expected mux config for MUX core type");
-
-            mux_builder = std::make_unique<FabricTensixDatamoverMuxBuilder>(
-                my_core_logical,
-                local_fabric_node_id,
-                remote_fabric_node_id,
-                ethernet_channel_id,
-                link_idx,
-                FabricTensixCoreType::MUX,
-                noc_x,
-                noc_y,
-                mux_config,
-                direction);
-            break;
-        }
-        case tt::tt_fabric::FabricTensixConfig::UDM: {
-            // UDM mode: create both mux builder (MUX core type) and relay builder (RELAY core type)
-
-            // Create mux builder for MUX core type
-            auto mux_config_base = tensix_config.get_config(FabricTensixCoreType::MUX);
-            auto mux_config = std::dynamic_pointer_cast<FabricTensixDatamoverMuxConfig>(mux_config_base);
-            TT_FATAL(mux_config != nullptr, "Expected mux config for MUX core type");
-
-            mux_builder = std::make_unique<FabricTensixDatamoverMuxBuilder>(
-                my_core_logical,
-                local_fabric_node_id,
-                remote_fabric_node_id,
-                ethernet_channel_id,
-                link_idx,
-                FabricTensixCoreType::MUX,
-                noc_x,
-                noc_y,
-                mux_config,
-                direction);
-
-            // Create relay builder for RELAY core type
-            if (tensix_config.is_core_id_active(FabricTensixCoreType::RELAY)) {
-                auto relay_config_base = tensix_config.get_config(FabricTensixCoreType::RELAY);
-                auto relay_config = std::dynamic_pointer_cast<FabricTensixDatamoverRelayConfig>(relay_config_base);
-                TT_FATAL(relay_config != nullptr, "Expected relay config for RELAY core type");
-
-                relay_builder = std::make_unique<FabricTensixDatamoverRelayBuilder>(
-                    my_core_logical,
-                    local_fabric_node_id,
-                    remote_fabric_node_id,
-                    ethernet_channel_id,
-                    link_idx,
-                    FabricTensixCoreType::RELAY,
-                    noc_x,
-                    noc_y,
-                    relay_config,
-                    direction);
-            }
-            break;
-        }
-        default: TT_THROW("Unsupported FabricTensixConfig mode: {}", static_cast<int>(fabric_tensix_config));
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        relay_builder = create_builder<FabricTensixDatamoverRelayBuilder, FabricTensixDatamoverRelayConfig>(
+            FabricTensixCoreType::RELAY,
+            tensix_config,
+            my_core_logical,
+            local_fabric_node_id,
+            remote_fabric_node_id,
+            ethernet_channel_id,
+            link_idx,
+            noc_x,
+            noc_y,
+            direction);
     }
 
     return FabricTensixDatamoverBuilder(
