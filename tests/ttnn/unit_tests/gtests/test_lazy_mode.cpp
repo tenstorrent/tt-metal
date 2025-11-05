@@ -33,6 +33,10 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
+#include "ttnn/operations/data_movement/fill_rm/fill_rm.hpp"
+#include "ttnn/operations/data_movement/gather/gather.hpp"
+#include "ttnn/operations/data_movement/sort/sort.hpp"
 
 namespace ttnn {
 namespace test {
@@ -1163,6 +1167,232 @@ TEST_F(LazyModeFixture, NonzeroOperationLazy) {
 
     log_info(tt::LogTest, "✓ Lazy and eager results match!");
     log_info(tt::LogTest, "==== Finished NonzeroOperationLazy test ====");
+}
+
+// Test: Untilize operation in lazy mode
+TEST_F(LazyModeFixture, UntilizeOperationLazy) {
+    log_info(tt::LogTest, "==== Starting UntilizeOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running untilize operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 64});
+    const auto input_eager = ttnn::full(shape, 3.5f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto untilize_result_eager = ttnn::untilize(input_eager, std::nullopt, true, true, std::nullopt);
+    auto eager_result = untilize_result_eager.cpu();
+
+    ASSERT_EQ(untilize_result_eager.layout(), Layout::ROW_MAJOR) << "Untilize should produce ROW_MAJOR layout";
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running untilize operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = ttnn::full(shape, 3.5f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto untilize_result_lazy = ttnn::untilize(input_lazy, std::nullopt, true, true, std::nullopt);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(untilize_result_lazy.lazy()->is_materialized()) << "Untilize result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    untilize_result_lazy.evaluate();
+
+    ASSERT_TRUE(untilize_result_lazy.lazy()->is_materialized()) << "Untilize result should be materialized";
+
+    auto lazy_result = untilize_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished UntilizeOperationLazy test ====");
+}
+
+// Test: Fill RM operation in lazy mode
+TEST_F(LazyModeFixture, FillRMOperationLazy) {
+    log_info(tt::LogTest, "==== Starting FillRMOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running fill_rm operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    // Create a reference tensor for fill_rm
+    ttnn::Shape ref_shape({1, 1, 32, 32});
+    const auto ref_tensor_eager = ttnn::ones(ref_shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto fill_result_eager = ttnn::fill_rm(1, 1, 32, 64, 32, 32, ref_tensor_eager, 5.0f, 2.0f, std::nullopt);
+    auto eager_result = fill_result_eager.cpu();
+
+    ASSERT_EQ(fill_result_eager.logical_shape(), ttnn::Shape({1, 1, 32, 64}))
+        << "Fill_rm should produce shape [1, 1, 32, 64]";
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running fill_rm operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto ref_tensor_lazy = ttnn::ones(ref_shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto fill_result_lazy = ttnn::fill_rm(1, 1, 32, 64, 32, 32, ref_tensor_lazy, 5.0f, 2.0f, std::nullopt);
+
+    ASSERT_TRUE(ref_tensor_lazy.lazy()->is_materialized()) << "Reference tensor should be materialized";
+    ASSERT_FALSE(fill_result_lazy.lazy()->is_materialized()) << "Fill_rm result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    fill_result_lazy.evaluate();
+
+    ASSERT_TRUE(fill_result_lazy.lazy()->is_materialized()) << "Fill_rm result should be materialized";
+
+    auto lazy_result = fill_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished FillRMOperationLazy test ====");
+}
+
+// Test: Gather operation in lazy mode
+TEST_F(LazyModeFixture, GatherOperationLazy) {
+    log_info(tt::LogTest, "==== Starting GatherOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running gather operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape input_shape({32, 64});
+    ttnn::Shape index_shape({32, 32});
+    const auto input_eager = ttnn::full(input_shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+
+    // Create index tensor with valid indices (0 to 63)
+    auto index_spec = TensorSpec(
+        index_shape,
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(ttnn::TILE_LAYOUT),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+    std::vector<uint32_t> index_data(index_shape.volume());
+    for (size_t i = 0; i < index_data.size(); i++) {
+        index_data[i] = i % 64;  // Valid indices for dim 1
+    }
+    const auto index_eager = Tensor::from_vector(index_data, index_spec, device_);
+
+    auto gather_result_eager = ttnn::gather(input_eager, 1, index_eager, false, std::nullopt, std::nullopt);
+    auto relu_result_eager = ttnn::relu(gather_result_eager);
+    auto eager_result = relu_result_eager.cpu();
+
+    ASSERT_EQ(gather_result_eager.logical_shape(), ttnn::Shape({32, 32})) << "Gather should produce shape [32, 32]";
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running gather operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = ttnn::full(input_shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    const auto index_lazy = Tensor::from_vector(index_data, index_spec, device_);
+    auto gather_result_lazy = ttnn::gather(input_lazy, 1, index_lazy, false, std::nullopt, std::nullopt);
+    auto relu_result_lazy = ttnn::relu(gather_result_lazy);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_TRUE(index_lazy.lazy()->is_materialized()) << "Index tensor should be materialized";
+    ASSERT_FALSE(gather_result_lazy.lazy()->is_materialized()) << "Gather result should not be materialized";
+    ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    relu_result_lazy.evaluate();
+
+    ASSERT_TRUE(gather_result_lazy.lazy()->is_materialized()) << "Gather result should be materialized";
+    ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
+
+    auto lazy_result = relu_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished GatherOperationLazy test ====");
+}
+
+// Test: Sort operation in lazy mode
+TEST_F(LazyModeFixture, SortOperationLazy) {
+    log_info(tt::LogTest, "==== Starting SortOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running sort operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 64});
+    // Create tensor with varied values for sorting
+    auto spec = TensorSpec(
+        shape,
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(ttnn::TILE_LAYOUT),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+    std::vector<bfloat16> data(shape.volume());
+    for (size_t i = 0; i < data.size(); i++) {
+        data[i] = static_cast<float>((data.size() - i) % 100) / 10.0f;  // Descending pattern
+    }
+    const auto input_eager = Tensor::from_vector(data, spec, device_);
+    auto sort_results_eager = ttnn::sort(input_eager, 1, false, true, std::nullopt, std::nullopt);
+
+    log_info(tt::LogTest, "Sort returned {} tensors", sort_results_eager.size());
+    ASSERT_EQ(sort_results_eager.size(), 2) << "Sort should return 2 tensors (values and indices)";
+
+    auto sorted_values_eager = sort_results_eager[0];
+    auto sorted_indices_eager = sort_results_eager[1];
+    auto relu_result_eager = ttnn::relu(sorted_values_eager);
+    auto eager_values_result = relu_result_eager.cpu();
+    auto eager_indices_result = sorted_indices_eager.cpu();
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running sort operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = Tensor::from_vector(data, spec, device_);
+    auto sort_results_lazy = ttnn::sort(input_lazy, 1, false, true, std::nullopt, std::nullopt);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_EQ(sort_results_lazy.size(), 2) << "Sort should return 2 tensors in lazy mode";
+    ASSERT_FALSE(sort_results_lazy[0].lazy()->is_materialized()) << "Sorted values should not be materialized";
+    ASSERT_FALSE(sort_results_lazy[1].lazy()->is_materialized()) << "Sorted indices should not be materialized";
+
+    auto sorted_values_lazy = sort_results_lazy[0];
+    auto sorted_indices_lazy = sort_results_lazy[1];
+    auto relu_result_lazy = ttnn::relu(sorted_values_lazy);
+
+    ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    relu_result_lazy.evaluate();
+    sorted_indices_lazy.evaluate();
+
+    ASSERT_TRUE(sorted_values_lazy.lazy()->is_materialized()) << "Sorted values should be materialized";
+    ASSERT_TRUE(sorted_indices_lazy.lazy()->is_materialized()) << "Sorted indices should be materialized";
+    ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
+
+    auto lazy_values_result = relu_result_lazy.cpu();
+    auto lazy_indices_result = sorted_indices_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_values_result, eager_values_result))
+        << "Lazy and eager sorted values should match";
+    ASSERT_TRUE(ttnn::allclose<::uint16_t>(lazy_indices_result, eager_indices_result))
+        << "Lazy and eager sorted indices should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished SortOperationLazy test ====");
 }
 
 }  // namespace test
