@@ -12,6 +12,7 @@
 #include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
+#include "ops/examples/mean_all_cores/mean_all_cores.hpp"
 
 namespace ttml::metal {
 
@@ -40,5 +41,9 @@ constexpr auto silu_bw =
 
 constexpr auto sdpa_fw =
     ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
+
+constexpr auto mean_all_cores = ttnn::register_operation<
+    "ttml::metal::mean_all_cores",
+    ttml::metal::ops::examples::mean_all_cores::MeanAllCoresOperation>();
 
 }  // namespace ttml::metal
