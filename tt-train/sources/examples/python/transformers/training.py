@@ -47,17 +47,21 @@ def main(config: str):
 
     # Create model, optimizer, and training configuration
     model_factory = TransformerModelFactory(yaml_config)
+    print('Model creating...')
     model = model_factory.create_model()
+    print('Model created')
     optimizer = create_optimizer(model, yaml_config)
+    print('Optimizer created')
 
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
 
     # Execute training
+    print('Training...')
     train_losses, val_losses = train(
         training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
     )
-
+    print('Training completed')
     # Cleanup
     ttml.autograd.AutoContext.get_instance().close_device()
 

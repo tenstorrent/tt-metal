@@ -128,17 +128,9 @@ tt::tt_metal::Tensor from_vector<float, ttnn::DataType::BFLOAT16>(
                                                  ttsl::make_const_span(buffer), shape, tensor_layout, *mesh_mapper)
                                            : ttnn::Tensor::from_vector(buffer, ttnn::TensorSpec(shape, tensor_layout));
 
-    const size_t MAX_TILE_DIMENSION = 16384;
-    // Temporary workaround for the issue with tilize for large size
-    // https://github.com/tenstorrent/tt-metal/issues/15950
-    if (shape[-1] >= MAX_TILE_DIMENSION && layout == ttnn::Layout::TILE) {
-        output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, output_mem_config);
-        output = ttnn::to_device(output, device, output_mem_config);
-    } else {
-        output = ttnn::to_device(output, device, output_mem_config);
-        if (layout == ttnn::Layout::TILE) {
-            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-        }
+    output = ttnn::to_device(output, device, output_mem_config);
+    if (layout == ttnn::Layout::TILE) {
+        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
     }
 
     return output;
