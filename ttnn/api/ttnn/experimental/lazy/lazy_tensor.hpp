@@ -33,45 +33,6 @@ class LazyTensor {
     using MaterializedTensor = tt::tt_metal::metal_tensor::Tensor;
 
 public:
-    // Buffer metadata that can be calculated without materializing the buffer
-    // TODO: This is error-prone. We have to duplicate changes in logic in an actual buffer to make sure those are
-    // aligned. I think we should make metadata calculation logic inside a buffer implementation, and reuse it here.
-    struct BufferMetadata {
-        // Core properties (from MemoryConfig)
-        tt::tt_metal::BufferType buffer_type_ = tt::tt_metal::BufferType::DRAM;
-        tt::tt_metal::TensorMemoryLayout buffer_layout_ = tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
-        std::optional<tt::tt_metal::ShardSpec> shard_spec_ = std::nullopt;
-
-        // Size properties (calculated from TensorSpec) (sizes in bytes)
-        tt::tt_metal::DeviceAddr size_ = 0;
-        tt::tt_metal::DeviceAddr page_size_ = 0;
-        uint32_t element_size_ = 0;
-
-        // Alignment properties (calculated from buffer_type via HAL)
-        uint32_t alignment_ = 0;
-        tt::tt_metal::DeviceAddr aligned_page_size_ = 0;
-        tt::tt_metal::DeviceAddr aligned_size_ = 0;
-
-        // Additional properties
-        bool bottom_up_ = true;  // Allocation direction (default: true for DRAM, false for L1)
-
-        BufferMetadata() = default;
-
-        BufferMetadata(const tt::tt_metal::TensorSpec& tensor_spec, const tt::tt_metal::MemoryConfig& memory_config);
-
-        explicit BufferMetadata(const tt::tt_metal::Buffer* buffer);
-
-        // Getters matching Buffer API
-        uint32_t alignment() const { return alignment_; }
-        tt::tt_metal::DeviceAddr aligned_page_size() const { return aligned_page_size_; }
-        tt::tt_metal::DeviceAddr aligned_size() const { return aligned_size_; }
-        tt::tt_metal::DeviceAddr size() const { return size_; }
-        tt::tt_metal::DeviceAddr page_size() const { return page_size_; }
-        tt::tt_metal::BufferType buffer_type() const { return buffer_type_; }
-        tt::tt_metal::TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
-        bool bottom_up() const { return bottom_up_; }
-    };
-
     LazyTensor() = default;
     LazyTensor(
         const std::vector<std::shared_ptr<LazyTensor>>& op_inputs,
@@ -93,25 +54,37 @@ public:
 
     static std::shared_ptr<LazyTensor> make_materialized_tensor(const MaterializedTensor& metal_tensor);
 
-    // Getters
+    // Inputs and outputs getters
     const std::vector<std::shared_ptr<LazyTensor>>& op_inputs() const;
     const std::vector<std::shared_ptr<LazyTensor>>& siblings() const;
     const std::vector<MaterializedTensor>& materialized_tensors() const;
     const MaterializedTensor& materialized_tensor() const;
     MaterializedTensor& materialized_tensor();
+
+    // Tensor metadata getters
     const TensorSpec& tensor_spec() const;
+    tt::tt_metal::StorageType storage_type() const;
+    tt::tt_metal::distributed::MeshDevice* device() const;
+    uint32_t buffer_alignment() const;
+    tt::tt_metal::DeviceAddr buffer_page_size() const;
+    tt::tt_metal::DeviceAddr buffer_aligned_page_size() const;
+    tt::tt_metal::DeviceAddr buffer_size() const;
+    tt::tt_metal::DeviceAddr buffer_aligned_size() const;
+    tt::tt_metal::BufferType buffer_type() const;
+    tt::tt_metal::TensorMemoryLayout buffer_layout() const;
+    bool buffer_bottom_up() const;
+
+    // Other lazy tensor properties getters
+    const LazyOperationPtr& op() const;
     LazyTensorState state() const;
     LazyTensorId id() const;
     bool is_materialized() const;
-    const LazyOperationPtr& op() const;
-    tt::tt_metal::distributed::MeshDevice* device() const;
-    tt::tt_metal::StorageType storage_type() const;
-    const BufferMetadata& buffer_metadata() const;
 
     void evaluate();
 
     // Allow optimization passes to modify the graph structure
-    // TODO: Maybe we should switch to immutable graph structure?
+    // TODO: Maybe we should switch to immutable graph structure? (#31772)
+    // TODO: I think we should probably make Pass class friend and make those private
     void set_op_inputs(const std::vector<std::shared_ptr<LazyTensor>>& new_inputs);
     void set_op(const LazyOperationPtr& new_op);
 
@@ -122,10 +95,29 @@ private:
 
     // Extended tensor spec. Grouped for convenience.
     struct TensorMetadata {
+        // Buffer metadata that can be calculated without materializing the buffer
+        // TODO: This is error-prone. We have to duplicate changes in logic in an actual buffer to make sure those are
+        // aligned. I think we should make metadata calculation logic inside a buffer implementation, and reuse it here.
+        struct Buffer {
+            tt::tt_metal::BufferType buffer_type_ = tt::tt_metal::BufferType::DRAM;
+            tt::tt_metal::TensorMemoryLayout buffer_layout_ = tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+            std::optional<tt::tt_metal::ShardSpec> shard_spec_ = std::nullopt;
+            tt::tt_metal::DeviceAddr size_ = 0;       // In bytes
+            tt::tt_metal::DeviceAddr page_size_ = 0;  // In bytes
+            uint32_t element_size_ = 0;
+            uint32_t alignment_ = 0;
+            tt::tt_metal::DeviceAddr aligned_page_size_ = 0;
+            tt::tt_metal::DeviceAddr aligned_size_ = 0;
+            bool bottom_up_ = true;  // Allocation direction (default: true for DRAM, false for L1)
+
+            Buffer() = default;
+            Buffer(const tt::tt_metal::TensorSpec& tensor_spec, const tt::tt_metal::MemoryConfig& memory_config);
+        };
+
         std::optional<TensorSpec> tensor_spec_;  // <- Note really optional, but I need that for default ctor
         tt::tt_metal::distributed::MeshDevice* device_ = nullptr;
         tt::tt_metal::StorageType storage_type_ = tt::tt_metal::StorageType::DEVICE;
-        BufferMetadata buffer_metadata_;
+        Buffer buffer_metadata_;
 
         TensorMetadata() = default;
         TensorMetadata(

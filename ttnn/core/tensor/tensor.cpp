@@ -233,7 +233,7 @@ bool Tensor::is_allocated() const {
 }
 
 tt::tt_metal::Buffer* Tensor::buffer() const { return get_materialized_tensor().buffer(); }
-uint32_t Tensor::buffer_alignment() const { return lazy_tensor_->buffer_metadata().alignment(); }
+uint32_t Tensor::buffer_alignment() const { return lazy_tensor_->buffer_alignment(); }
 
 const tt::tt_metal::DeviceStorage& Tensor::device_storage() const& {
     return get_materialized_tensor().device_storage();
