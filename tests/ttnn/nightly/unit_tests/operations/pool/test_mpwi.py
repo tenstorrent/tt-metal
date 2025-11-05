@@ -18,7 +18,7 @@ def test_mpwi_20_core_C_dims(device, in_c):
     in_w = 3
     kernel_size = [3, 3]
     stride = [1, 1]
-    padding = [0, 0]
+    padding = [1, 1]
     dilation = [1, 1]
     shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     ceil_mode = False
@@ -36,8 +36,8 @@ def test_mpwi_20_core_C_dims(device, in_c):
         memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         buffer_type=ttnn.BufferType.L1,
         shard_spec=ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
-            [1, shard_width],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            [in_n * in_h * in_w, shard_width],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )

@@ -112,7 +112,7 @@ void MAIN {
             in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tilize_untilize_cb, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(tilize_untilize_cb, num_out_sticks, num_faces_in_output_tile);
     } else {
-        unary_op_init_common(in_cb_id_0, out_cb_id);
+        unary_op_init_common(in_cb_id_0, in_cb_id_0);
         copy_tile_to_dst_init_short(in_cb_id_0);
         // PACK(llk_pack_init(out_cb_id));
     }
@@ -183,7 +183,9 @@ void MAIN {
                         cb_wait_front(in_idx_cb_id, 1);
                     }
                     reconfig_data_format_srca(in_idx_cb_id);
+                    UNPACK(tt::compute::common::print_tile_rows(in_idx_cb_id, 9));
                     copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
+                    // dprint_tensix_dest_reg(index_dst_idx);
                     copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_scratch_in_dst_idx);
                     if (last_c_block) {
                         cb_pop_front(in_idx_cb_id, 1);
@@ -239,9 +241,9 @@ void MAIN {
                 cb_pop_front(curr_in_cb_id, 1);
             }
 
-            reconfig_data_format_srca(out_cb_id);
-            pack_reconfig_data_format(out_cb_id);
-            dprint_tensix_dest_reg(0);
+            // reconfig_data_format_srca(out_idx_cb_id);
+            // pack_reconfig_data_format(out_idx_cb_id);
+            // dprint_tensix_dest_reg(2);
 
             tile_regs_commit();
             tile_regs_wait();
@@ -326,6 +328,7 @@ void MAIN {
 
                 if (last_c_block) {
                     cb_reserve_back(in_idx_cb_id, 1);
+                    pack_reconfig_data_format(in_idx_cb_id);
                     // this call should not be changed
                     pack_tile<true>(index_scratch_out_dst_idx, in_idx_cb_id, mpwi_cb_tile_idx);
                     cb_push_back(in_idx_cb_id, 1);
