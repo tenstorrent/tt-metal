@@ -162,7 +162,7 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
         this->reduce_scatter_minimal_async_struct.num_links,
         this->reduce_scatter_minimal_async_struct.ring_size,
         this->reduce_scatter_minimal_async_struct.output_mem_config,
-        this->reduce_scatter_minimal_async_struct.intermediate_mem_config,
+        this->reduce_scatter_minimal_async_struct.optional_intermediate_mem_config.value(),
         this->reduce_scatter_minimal_async_struct.topology,
         this->reduce_scatter_minimal_async_struct.sub_device_id.has_value(),
         this->reduce_scatter_minimal_async_struct.sub_device_id.has_value()
@@ -210,10 +210,6 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const std::string>& activation,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "MatmulReduceScatterAsync is only supported for Fast Dispatch");
-
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     std::vector<Tensor> output_tensors;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);

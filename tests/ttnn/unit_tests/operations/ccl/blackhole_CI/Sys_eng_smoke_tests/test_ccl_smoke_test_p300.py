@@ -7,7 +7,7 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
 from models.common.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
-from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
 
 # Test utilizes/transfers up to 3.93GB of space per device to nearly fill the dram
@@ -24,12 +24,12 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
     [
         ttnn.bfloat16,
         ttnn.uint32,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b, #issue #30353
     ],
     ids=[
         "float_16",
         "uint_32",
-        "bfloat_8",
+        # "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
@@ -134,11 +134,7 @@ def test_ccl_ddr_smoke_test(
         ttnn.uint32,
         ttnn.bfloat8_b,
     ],
-    ids=[
-        "float_16",
-        "uint_32",
-        "bfloat_8",
-    ],
+    ids=["float_16", "uint_32", "bfloat8"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",

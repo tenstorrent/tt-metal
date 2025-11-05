@@ -27,7 +27,6 @@ class ResnetBlock:
         out_channels=None,
         num_groups=None,
         eps=None,
-        norm_out_blocks=-1,
         mesh_device=None,
         norm_core_grid=None,
         parallel_config=None,
@@ -41,7 +40,6 @@ class ResnetBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             core_grid=norm_core_grid,
-            num_out_blocks=norm_out_blocks,
             torch_ref=torch_ref.norm1 if torch_ref is not None else None,
         )
         self.norm2 = GroupNorm(
@@ -51,7 +49,6 @@ class ResnetBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             core_grid=norm_core_grid,
-            num_out_blocks=norm_out_blocks,
             torch_ref=torch_ref.norm2 if torch_ref is not None else None,
         )
         self.conv1 = Conv2d(
@@ -59,7 +56,7 @@ class ResnetBlock:
             out_channels,
             kernel_size=(3, 3),
             mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv1 if torch_ref is not None else None,
         )
@@ -68,7 +65,7 @@ class ResnetBlock:
             out_channels,
             kernel_size=(3, 3),
             mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv2 if torch_ref is not None else None,
         )
@@ -80,28 +77,27 @@ class ResnetBlock:
                 kernel_size=(1, 1),
                 padding=(0, 0),
                 mesh_device=mesh_device,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 torch_ref=torch_ref.conv_shortcut,
             )
         else:
             self.conv_shortcut = None
 
-    def load_state_dict(self, state_dict):
-        self.norm1.load_state_dict(state_dict["norm1"])
-        self.norm2.load_state_dict(state_dict["norm2"])
-        self.conv1.load_state_dict(state_dict["conv1"])
-        self.conv2.load_state_dict(state_dict["conv2"])
+    def load_torch_state_dict(self, state_dict):
+        self.norm1.load_torch_state_dict(state_dict["norm1"])
+        self.norm2.load_torch_state_dict(state_dict["norm2"])
+        self.conv1.load_torch_state_dict(state_dict["conv1"])
+        self.conv2.load_torch_state_dict(state_dict["conv2"])
 
         if "conv_shortcut" in state_dict:
-            self.conv_shortcut.load_state_dict(state_dict["conv_shortcut"])
+            self.conv_shortcut.load_torch_state_dict(state_dict["conv_shortcut"])
 
     # TODO: Update to use defined members within the class for portability
     @classmethod
     def from_torch(
         cls,
         torch_ref,
-        norm_out_blocks=-1,
         mesh_device=None,
         norm_core_grid=None,
         parallel_config=None,
@@ -109,7 +105,6 @@ class ResnetBlock:
     ):
         resnet_block = cls(
             torch_ref=torch_ref,
-            norm_out_blocks=norm_out_blocks,
             mesh_device=mesh_device,
             norm_core_grid=norm_core_grid,
             parallel_config=parallel_config,
@@ -147,11 +142,12 @@ class Upsample2D:
             out_channels,
             kernel_size=(3, 3),
             mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             torch_ref=torch_ref.conv if torch_ref is not None else None,
         )
 
+    # Fix to align with constructor
     @classmethod
     def from_torch(cls, torch_ref, mesh_device=None, mesh_axis=None, parallel_manager=None):
         layer = cls(
@@ -162,8 +158,8 @@ class Upsample2D:
         )
         return layer
 
-    def load_state_dict(self, state_dict):
-        self.conv.load_state_dict(state_dict["conv"])
+    def load_torch_state_dict(self, state_dict):
+        self.conv.load_torch_state_dict(state_dict["conv"])
 
     def __call__(self, x):
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)  # Upsample requires row major.
@@ -238,12 +234,12 @@ class UpDecoderBlock2D:
         return layer
 
     # TODO: Fix state dict
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         for i, state in enumerate(indexed_substates(state_dict, "resnets")):
-            self.resnets[i].load_state_dict(state)
+            self.resnets[i].load_torch_state_dict(state)
 
         for i, state in enumerate(indexed_substates(state_dict, "upsamplers")):
-            self.upsamplers[i].load_state_dict(state)
+            self.upsamplers[i].load_torch_state_dict(state)
 
     def __call__(self, x):
         for resnet in self.resnets:
@@ -293,7 +289,7 @@ class Attention:
         )
 
         if torch_ref is not None:
-            self.load_state_dict(torch_ref.state_dict())
+            self.load_torch_state_dict(torch_ref.state_dict())
 
     @classmethod
     def from_torch(cls, torch_ref, mesh_device=None, parallel_config=None, ccl_manager=None):
@@ -306,18 +302,18 @@ class Attention:
     def reorder_for_attention(x, batch_size, n_heads, head_dim):
         return ttnn.permute(ttnn.reshape(x, (batch_size, -1, n_heads, head_dim)), (0, 2, 1, 3))
 
-    def load_state_dict(self, state_dict):
-        self.to_q.load_state_dict(substate(state_dict, "to_q"))
-        self.to_k.load_state_dict(substate(state_dict, "to_k"))
-        self.to_v.load_state_dict(substate(state_dict, "to_v"))
+    def load_torch_state_dict(self, state_dict):
+        self.to_q.load_torch_state_dict(substate(state_dict, "to_q"))
+        self.to_k.load_torch_state_dict(substate(state_dict, "to_k"))
+        self.to_v.load_torch_state_dict(substate(state_dict, "to_v"))
         for i, state in enumerate(indexed_substates(state_dict, "to_out")):
-            self.to_out[i].load_state_dict(state)
-        self.group_norm.load_state_dict(substate(state_dict, "group_norm"))
+            self.to_out[i].load_torch_state_dict(state)
+        self.group_norm.load_torch_state_dict(substate(state_dict, "group_norm"))
 
     # TODO: Standardize this usage
     def gather_if_sharded(self, x):
         if x.shape[3] < self.to_q.in_features:
-            x = vae_all_gather(self.ccl_manager, x)
+            x = vae_all_gather(self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis)
         return x
 
     def __call__(self, x):
@@ -334,9 +330,9 @@ class Attention:
         x = self.gather_if_sharded(x)
 
         # output will be bxhxwx(num_heads*head_dims)
-        q = self.to_q(x, core_grid=self.mesh_device.core_grid)
-        k = self.to_k(x, core_grid=self.mesh_device.core_grid)
-        v = self.to_v(x, core_grid=self.mesh_device.core_grid)
+        q = self.to_q(x)
+        k = self.to_k(x)
+        v = self.to_v(x)
         inner_dim = k.shape[-1]
         head_dim = inner_dim // self.num_heads
 
@@ -348,7 +344,7 @@ class Attention:
         x = ttnn.reshape(ttnn.permute(x, (0, 2, 1, 3)), (b, h, w, inner_dim))
 
         for to_out in self.to_out:
-            x = to_out(x, core_grid=self.mesh_device.core_grid)
+            x = to_out(x)
 
         x = x + residual
 
@@ -414,11 +410,11 @@ class UnetMidBlock2D:
         )
         return layer
 
-    def load_state_dict(self, state_dict):
+    def load_torch_state_dict(self, state_dict):
         for i, state in enumerate(indexed_substates(state_dict, "attentions")):
-            self.attentions[i].load_state_dict(state)
+            self.attentions[i].load_torch_state_dict(state)
         for i, state in enumerate(indexed_substates(state_dict, "resnets")):
-            self.resnets[i].load_state_dict(state)
+            self.resnets[i].load_torch_state_dict(state)
 
     def __call__(self, x):
         x = self.resnets[0](x)
@@ -461,7 +457,7 @@ class VAEDecoder:
                 kernel_size=(3, 3),
                 padding=(1, 1),
                 mesh_device=mesh_device,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
             self.mid_block = UnetMidBlock2D(
@@ -503,7 +499,6 @@ class VAEDecoder:
                 kernel_size=(3, 3),
                 padding=(1, 1),
                 mesh_device=mesh_device,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
 
@@ -511,7 +506,7 @@ class VAEDecoder:
             self.conv_in = Conv2d.from_torch(
                 torch_ref.conv_in,
                 mesh_device=mesh_device,
-                mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
             )
             self.mid_block = UnetMidBlock2D.from_torch(
@@ -538,8 +533,13 @@ class VAEDecoder:
             )
 
             self.conv_out = Conv2d.from_torch(
-                torch_ref.conv_out, mesh_device=mesh_device, mesh_axis=None, ccl_manager=ccl_manager
+                torch_ref.conv_out,
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
             )
+
+        self._tp_axis = parallel_config.tensor_parallel.mesh_axis
+        self._ccl_manager = ccl_manager
 
     @classmethod
     def from_torch(cls, torch_ref, mesh_device=None, parallel_config=None, ccl_manager=None):
@@ -548,13 +548,13 @@ class VAEDecoder:
         )
         return vae_model
 
-    def load_state_dict(self, state_dict):
-        self.conv_in.load_state_dict(substate(state_dict, "conv_in"))
-        self.mid_block.load_state_dict(substate(state_dict, "mid_block"))
+    def load_torch_state_dict(self, state_dict):
+        self.conv_in.load_torch_state_dict(substate(state_dict, "conv_in"))
+        self.mid_block.load_torch_state_dict(substate(state_dict, "mid_block"))
         for i, state in enumerate(indexed_substates(state_dict, "up_blocks")):
-            self.up_blocks[i].load_state_dict(state)
-        self.conv_norm_out.load_state_dict(substate(state_dict, "conv_norm_out"))
-        self.conv_out.load_state_dict(substate(state_dict, "conv_out"))
+            self.up_blocks[i].load_torch_state_dict(state)
+        self.conv_norm_out.load_torch_state_dict(substate(state_dict, "conv_norm_out"))
+        self.conv_out.load_torch_state_dict(substate(state_dict, "conv_out"))
 
     def __call__(self, x):
         x = self.conv_in(x)
@@ -563,5 +563,6 @@ class VAEDecoder:
             x = up_block(x)
         x = self.conv_norm_out(x)
         x = ttnn.silu(x)
+        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis)
         x = self.conv_out(x)
         return x

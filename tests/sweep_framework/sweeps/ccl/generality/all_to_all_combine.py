@@ -9,7 +9,7 @@ import ttnn
 
 from loguru import logger
 from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
-from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import run_all_to_all_combine_test
+from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
 
 
 # Override the default timeout in seconds for hang detection.
@@ -17,37 +17,63 @@ TIMEOUT = 45
 
 NUM_DEVICES = ttnn.get_num_devices()
 
-FABRIC_CONFIGS = [
+FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
+]
+
+FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
     ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
+
+FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
 
 
 def _pd(val: int):
     return val * NUM_DEVICES
 
 
+GENERALITY_PARAMETERS = {
+    "mesh_shape": list(mesh_shape_iterator(NUM_DEVICES)),
+    "fabric_config": FABRIC_CONFIGS,
+    "input_shape": [
+        [_pd(1), 1, 8, 32],
+        [_pd(1), 1, 2, 2880],  # GPT-OSS
+        [_pd(1), 1, 8, 31],
+        [_pd(8), 1, 2, 7168],
+        [_pd(16), 1, 2, 7168],
+        [_pd(1), 1, 2, 16384],
+    ],
+    "experts": [_pd(i) for i in [2, 4, 8]],
+    "select_experts_k": [2, 4, 8],
+    "local_reduce": [False, True],
+    "cluster_axis": [0, 1, None],
+    "num_links": [1, 2, 3],
+    "input_dtype": [ttnn.bfloat16],
+    "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+    "num_iters": [1],
+}
+
 parameters = {
-    "generality_suite": {
+    "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
+    "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
+    "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
+    "lead_model_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": FABRIC_CONFIGS,
-        "input_shape": [
-            [_pd(1), 1, 8, 32],
-            [_pd(1), 1, 2, 2880],  # GPT-OSS
-            [_pd(1), 1, 8, 31],
-            [_pd(8), 1, 2, 7168],
-            [_pd(16), 1, 2, 7168],
-            [_pd(1), 1, 2, 16384],
-        ],
+        "input_shape": [[_pd(1), 1, 2, 2880], [_pd(1), 128, 1, 7168]],  # GPT-OSS  # deepseek cluster_axis=0
         "experts": [_pd(i) for i in [2, 4, 8]],
         "select_experts_k": [2, 4, 8],
         "local_reduce": [False, True],
-        "cluster_axis": [0, 1, None],
-        "num_links": [1, 2, 3],
+        "cluster_axis": [0, 1],
+        "num_links": [1],
         "input_dtype": [ttnn.bfloat16],
-        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },

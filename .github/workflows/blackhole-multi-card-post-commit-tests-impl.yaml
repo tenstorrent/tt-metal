@@ -32,7 +32,7 @@ jobs:
       matrix:
         test-group:
           - name: CCL APC test
-            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit
+            cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
     runs-on:
       - in-service
@@ -58,7 +58,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}

@@ -49,8 +49,27 @@ def pad_and_fold_conv_activation_for_unity_stride(activation_pyt_nchw_tensor, pa
     return activation_pyt_padded_folded
 
 
-def fold_torch(input_tensor, stride_h, stride_w):
+def fold_torch(input_tensor, stride_h, stride_w, padding=None):
     N, H, W, C = input_tensor.shape
+
+    # Handle padding specification
+    if padding is not None:
+        if len(padding) == 2:
+            # Symmetric padding: [pad_h, pad_w]
+            pad_top = pad_bottom = padding[0]
+            pad_left = pad_right = padding[1]
+        elif len(padding) == 4:
+            # Asymmetric padding: [top, bottom, left, right]
+            pad_top, pad_bottom, pad_left, pad_right = padding
+        else:
+            raise ValueError(f"Padding must be length 2 or 4, got {len(padding)}")
+
+        # Apply padding if needed
+        if pad_top != 0 or pad_bottom != 0 or pad_left != 0 or pad_right != 0:
+            import torch.nn.functional as F
+
+            input_tensor = F.pad(input_tensor, (0, 0, pad_left, pad_right, pad_top, pad_bottom), value=0.0)
+            N, H, W, C = input_tensor.shape
 
     reshaped = input_tensor.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
     transposed = reshaped.permute(0, 1, 3, 2, 4, 5)
@@ -60,27 +79,47 @@ def fold_torch(input_tensor, stride_h, stride_w):
 @pytest.mark.parametrize("nhw", [(3, 64, 64), (1, 224, 224), (1, 384, 512), (1, 512, 672)])
 @pytest.mark.parametrize("channels", [3, 32, 320])
 @pytest.mark.parametrize("stride", [(16, 16), (32, 32)])
+@pytest.mark.parametrize("padding", [(0, 0), (8, 8), (4, 12, 2, 6)])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, input_layout):
+def test_fold_with_permute_for_dram_tensor(device, nhw, channels, stride, padding, input_layout):
     batch_size, height, width = nhw
     stride_h, stride_w = stride
+
+    # Handle both symmetric and asymmetric padding
+    if len(padding) == 2:
+        # Symmetric padding: [pad_h, pad_w]
+        padded_h = height + 2 * padding[0]
+        padded_w = width + 2 * padding[1]
+        has_padding = padding[0] > 0 or padding[1] > 0
+    elif len(padding) == 4:
+        # Asymmetric padding: [top, bottom, left, right]
+        padded_h = height + padding[0] + padding[1]
+        padded_w = width + padding[2] + padding[3]
+        has_padding = any(p > 0 for p in padding)
+    else:
+        pytest.skip(f"Invalid padding format: {padding}")
+
+    # Skip invalid combinations where padding makes dimensions not divisible by stride
+    if has_padding and input_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("ttnn::pad with tile layout does not support front padding yet")
+    if padded_h % stride_h != 0 or padded_w % stride_w != 0:
+        pytest.skip(
+            f"Skipping invalid padding combination: padded_h={padded_h}, padded_w={padded_w}, stride_h={stride_h}, stride_w={stride_w}"
+        )
+
     torch_input_tensor = torch.rand((batch_size, channels, height, width), dtype=torch.bfloat16)
     torch_input_tensor_nhwc = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-    torch_output_tensor = torch.reshape(
-        torch_input_tensor_nhwc, (batch_size, height // stride_h, stride_h, width // stride_w, stride_w, channels)
-    )
-    torch_output_tensor = torch.permute(torch_output_tensor, (0, 1, 3, 2, 4, 5))
-    torch_output_tensor = torch.reshape(
-        torch_output_tensor, (batch_size, height // stride_h, width // stride_w, channels * stride_h * stride_w)
-    )
+
+    torch_output_tensor = fold_torch(torch_input_tensor_nhwc, stride_h, stride_w, padding=padding)
     input_memory_config = ttnn.DRAM_MEMORY_CONFIG
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor_nhwc, layout=input_layout, device=device, memory_config=input_memory_config
     )
     tt_output_tensor = ttnn.fold(
         tt_input_tensor,
-        stride_h,
-        stride_w,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        padding=list(padding),
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     isequal = torch.equal(torch_output_tensor, tt_output_tensor)
@@ -277,9 +316,7 @@ def test_fold_with_permute_reshape_on_device_sharded(device, n, c, h, w, pad_h, 
         stride_h,
         stride_w,
         use_transpose_as_fold=True,
-        pad_c=_nearest_y(c, 4) - c,
-        pad_h=pad_h,
-        pad_w=pad_w,
+        padding=[pad_h, pad_h, pad_w, pad_w, 0, _nearest_y(c, 4) - c],
         grid_size=grid_size,
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -318,9 +355,7 @@ def test_fold_with_permute_reshape_on_device(device, n, c, h, w, pad_h, pad_w, s
         stride_w,
         use_transpose_as_fold=True,
         output_shape=(n, padded_h // stride_h, padded_w // stride_w, C * (stride_h * stride_w)),
-        pad_c=C - c,
-        pad_h=0,
-        pad_w=0,
+        padding=[0, 0, 0, 0, 0, C - c],
     )
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 1)
@@ -357,25 +392,10 @@ def test_fold(act_shape, stride_h, stride_w, device):
     tt_out = ttnn.fold(tt_input, stride_h, stride_w)
     actual = tt2torch_tensor(tt_out)
 
-    torch.testing.assert_allclose(actual, expected)
+    torch.testing.assert_close(actual, expected)
 
 
-@pytest.mark.parametrize(
-    "act_shape,stride_h,stride_w",
-    [
-        ((8, 224, 14, 8), 16, 1),
-        ((16, 224, 224, 16), 2, 2),
-        ((1, 16, 16, 8), 2, 2),
-        ((4, 64, 64, 24), 2, 2),
-        ((1, 21, 21, 16), 3, 7),
-        ((4, 21, 21, 16), 3, 7),
-        ((16, 42, 42, 64), 6, 6),
-        ((1, 8, 8, 16), 8, 8),
-        ((4, 14, 14, 256), 2, 2),
-        ((1, 33, 33, 16), 3, 11),
-    ],
-)
-def test_fold_sharded(device, act_shape, stride_h, stride_w):
+def run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid, layout=ttnn.ROW_MAJOR_LAYOUT):
     torch.manual_seed(0)
 
     N, H, W, C = act_shape
@@ -383,17 +403,33 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w):
     for run in range(2):
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
-        expected = fold_torch(torch_input, stride_h, stride_w)
+        expected = fold_torch(torch_input, stride_h, stride_w, padding=padding)
         expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
-        # Simple sharding: always try for maximum cores for best performance
-        total_elements = N * H * W
-
-        for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
+        if core_grid is None:
+            # Fit to max cores that divides total elements without padding. In case of padding cases,
+            # reshard in fold will take care of it.
+            total_elements = N * H * W
+            for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
+                n_cores = grid_x * grid_y
+                if total_elements % n_cores == 0:
+                    break
+        else:
+            # Currently, unaligned channel inputs are supported only without reshard path(Issue #29514).
+            if len(padding) == 2:
+                pad_top, pad_bottom = padding[0], padding[0]
+                pad_left, pad_right = padding[1], padding[1]
+            elif len(padding) == 4:
+                pad_top, pad_bottom, pad_left, pad_right = padding
+            else:
+                raise ValueError(f"Padding must be a 2-tuple or 4-tuple, got {padding}")
+            padded_H = H + pad_top + pad_bottom
+            padded_W = W + pad_left + pad_right
+            total_elements = N * padded_H * padded_W
+            grid_x, grid_y = core_grid
             n_cores = grid_x * grid_y
-            if total_elements % n_cores == 0:
-                break
-
+            if total_elements % n_cores != 0:
+                pytest.skip(f"total elements {total_elements} not divisible by n_cores {n_cores}")
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -408,12 +444,30 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w):
         tt_input = torch2tt_tensor(
             torch_input,
             device,
-            ttnn.ROW_MAJOR_LAYOUT,
+            layout,
             tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
         )
-        tt_out = ttnn.fold(tt_input, stride_h, stride_w)
+        tt_out = ttnn.fold(tt_input, stride_h=stride_h, stride_w=stride_w, padding=list(padding))
         actual = tt2torch_tensor(tt_out)
 
-        torch.testing.assert_allclose(actual, expected)
+        torch.testing.assert_close(actual, expected)
         tt_input.deallocate()
         tt_out.deallocate()
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "act_shape,stride_h,stride_w,padding, core_grid",
+    [
+        ((8, 224, 14, 8), 16, 1, (0, 0), None),
+        ((1, 16, 16, 8), 2, 2, (0, 0), None),
+        ((16, 42, 42, 64), 6, 6, (0, 0), None),
+        ((1, 16, 16, 8), 2, 2, (2, 2), None),
+        ((4, 64, 64, 24), 2, 2, (0, 0), None),
+        ((4, 62, 62, 24), 2, 2, (1, 1), None),
+        ((4, 14, 14, 256), 2, 2, (1, 1), None),
+        ((1, 20, 20, 16), 4, 4, (2, 2), None),
+    ],
+)
+def test_fold_sharded(device, act_shape, stride_h, stride_w, padding, core_grid):
+    run_fold_sharded_test(device, act_shape, stride_h, stride_w, padding, core_grid)

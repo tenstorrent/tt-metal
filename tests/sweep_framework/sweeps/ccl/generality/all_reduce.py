@@ -67,11 +67,29 @@ def _model_shape_iterator(model_shapes, batch_params):
 
 LEAD_MODEL_SHARD_SPECS = [
     get_serializable_shard_specs(
+        input_shape=(32, 256),
+        input_cores=(4, 4),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(4, 4),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 4096]],
+    ),
+    get_serializable_shard_specs(
+        input_shape=(32, 128),
+        input_cores=(4, 4),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(4, 4),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 2048]],
+    ),
+    get_serializable_shard_specs(
         input_shape=(32, 64),
         input_cores=(4, 6),
         input_strategy="w",
         output_shape=None,
-        output_cores=(1, 10),
+        output_cores=(2, 5),
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 1280]],
     ),
@@ -80,50 +98,62 @@ LEAD_MODEL_SHARD_SPECS = [
         input_cores=(4, 6),
         input_strategy="w",
         output_shape=None,
-        output_cores=(1, 10),
+        output_cores=(2, 5),
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 2560]],
     ),
 ]
 
 
-FABRIC_CONFIGS = [
+FABRIC_CONFIGS_1D = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
+]
+
+
+FABRIC_CONFIGS_2D = [
     ttnn.FabricConfig.FABRIC_2D,
     ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
+FABRIC_CONFIGS = FABRIC_CONFIGS_1D + FABRIC_CONFIGS_2D
+
+GENERALITY_PARAMETERS = {
+    "mesh_shape": list(mesh_shape_iterator(NUM_DEVICES)),
+    "fabric_config": FABRIC_CONFIGS,
+    "num_links": [1],
+    "input_shape": [
+        [1, 1, 32, 32],
+        [1, 1, 32, 1280],
+        [1, 1, 32, 31 * NUM_DEVICES],
+        [1, 1, 1, 32, 32],
+        [2, 32, 32],
+        [1, 1, 32, 16384],
+        [1, 1, 1, 2048],
+    ],
+    "cluster_axis": [0, 1, None],
+    "math_op": [ttnn.ReduceType.Sum],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "input_dtype": [ttnn.bfloat16],
+    "buffer_type": [ttnn.BufferType.DRAM],
+    "shard_specs": [None],
+    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+    "num_iters": [1],
+}
+
 
 # Define the parameter space for the sweep test
 parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
-        "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 1280],
-            [1, 1, 32, 31 * NUM_DEVICES],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
-            [1, 1, 32, 16384],
-            [1, 1, 1, 2048],
-        ],
-        "cluster_axis": [0, 1, None],
-        "math_op": [ttnn.ReduceType.Sum],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "buffer_type": [ttnn.BufferType.DRAM],
-        "shard_specs": [None],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
+    "generality_suite": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS},
+    "generality_suite_fabric_1d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_1D},
+    "generality_suite_fabric_2d": GENERALITY_PARAMETERS | {"fabric_config": FABRIC_CONFIGS_2D},
     "lead_model_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
         "input_shape": [
+            [1, 1, 32, 2048],  # Llama Galaxy. cluster_axis: 0
+            [1, 1, 32, 4096],  # Llama 8x2. cluster_axis: 0
             [1, 1, 32, 1280],  # Qwen3 Galaxy. cluster_axis: 0
             [1, 1, 32, 2560],  # Qwen3 2x8. Cluster axis 0
         ],
@@ -151,11 +181,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["shard_specs"] is not None and test_vector["buffer_type"] == ttnn.BufferType.DRAM:
         return True, "L1 Sharding only"
 
-    if not validate_serializable_shard_spec(test_vector["input_shape"], test_vector["shard_specs"]):
+    mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
+    cluster_size = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
+
+    if not validate_serializable_shard_spec(test_vector["input_shape"], test_vector["shard_specs"], None, cluster_size):
         return True, "Invalid shard spec"
 
-    mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
-    if cluster_axis and mesh_shape[cluster_axis] == 1:
+    if cluster_axis is not None and mesh_shape[cluster_axis] == 1:
         return True, "Unit cluster axis"
 
     if (
@@ -199,7 +231,7 @@ def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, 
     # The final result is then replicated back to all devices.
     torch_reference = _reference_map_op(math_op)(torch.stack([torch_input] * num_devices_in_cluster), dim=0)
 
-    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, layout, torch_reference.shape)
 
     tt_input = ttnn.from_torch(
         torch_input,

@@ -113,7 +113,32 @@ HalCoreInfoType create_tensix_mem_map() {
         //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC2_RESET_PC,
         //      .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
         //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        //     // TRISC3
+        //     {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
+        //      .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC3_RESET_PC,
+        //      .fw_launch_addr_value = MEM_TRISC3_FIRMWARE_BASE,
+        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
         // },
+    };
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
+        // DM
+        {
+            {"DM0", "DM0"},
+            {"DM1", "DM1"},
+            {"DM2", "DM2"},
+            {"DM3", "DM3"},
+            {"DM4", "DM4"},
+            {"DM5", "DM5"},
+            {"DM6", "DM6"},
+            {"DM7", "DM7"},
+        },
+        // COMPUTE
+        {
+            {"TR0", "TRISC0"},
+            {"TR1", "TRISC1"},
+            {"TR2", "TRISC2"},
+        },
     };
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
@@ -123,6 +148,7 @@ HalCoreInfoType create_tensix_mem_map() {
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
+        std::move(processor_classes_names),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory()};

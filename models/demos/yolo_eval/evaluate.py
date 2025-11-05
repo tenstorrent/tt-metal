@@ -687,7 +687,7 @@ def test_yolov7(device, model_type, res, reset_seeds, model_location_generator):
     ],
 )
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 def test_yolov12x(model_location_generator, device, model_type, reset_seeds):
     from models.demos.yolov12x.runner.performant_runner import YOLOv12xPerformantRunner

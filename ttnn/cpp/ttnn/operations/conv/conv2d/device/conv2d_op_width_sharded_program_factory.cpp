@@ -137,8 +137,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] = compute_opt_conv_activation_as_mm_shape(
         ashape_with_channels_padded, sliding_window_config, parallelization_config.num_cores_nhw, out_block_h_ntiles);
-    TT_FATAL(act_matrix_shape.size() == 3, "Error");
-    TT_FATAL(act_matrix_shape[0] == 1, "Error");
+    TT_FATAL(
+        act_matrix_shape.size() == 3,
+        "Activation matrix shape must have 3 dimensions but got {}",
+        act_matrix_shape.size());
+    TT_FATAL(act_matrix_shape[0] == 1, "Activation matrix first dimension must be 1 but got {}", act_matrix_shape[0]);
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
 
@@ -146,8 +149,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
 
     if (has_bias) {
         // Tensor bias is of shape {output_channels}
-        TT_FATAL(bias.has_value(), "Error");
-        TT_FATAL(bias.value().buffer() != nullptr, "Error");
+        TT_FATAL(bias.has_value(), "Bias tensor must be provided when has_bias is true");
+        TT_FATAL(bias.value().buffer() != nullptr, "Bias tensor buffer must not be null");
         auto bias_shape_without_padding = bias.value().logical_shape();
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
@@ -288,13 +291,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
 
     // bias
-    tt::tt_metal::Buffer* bias_buffer = nullptr;
     uint32_t bias_ntiles = 0;
-    bool bias_in_dram = true;
     if (has_bias) {
-        bias_buffer = bias.value().buffer();
         bias_ntiles = weight_block_w_ntiles;
-        bias_in_dram = bias_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     }
 
     uint32_t num_blocks_act_h_per_core =
@@ -305,8 +304,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
-    std::string compute_kernel_path =
-        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
+    std::string compute_kernel_path = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp";
     std::string activation_kernel_path =
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp";
     std::string weights_kernel_path =
@@ -336,27 +334,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
     if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
-    if (has_bias) {
-        writer_defines["FUSE_BIAS"] = "1";
-        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
-        compute_defines["FUSE_BIAS"] = "1";
+
+    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
+    if (fused_activation.has_value() && !pack_relu) {
+        compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
     }
 
-    if (fused_activation.has_value()) {
-        if (fused_activation.value().op_type == unary::UnaryOpType::RELU) {
-            compute_defines["PACK_RELU"] = "1";
-        } else {
-            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
-                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
-        }
-    }
-
-    if (packer_l1_acc) {
-        compute_defines["PACKER_L1_ACC"] = "1";
-    }
-    if (weight_block_w_ntiles <= 8) {
-        compute_defines["PACKER_UNTILIZE"] = "1";
-    }
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), all_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
@@ -458,7 +442,18 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         0,
         partials_cb_uses_output,
         input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
-        false};
+        false,            // check_skip_compute; not used in width sharded
+        pack_relu,
+        weight_block_w_ntiles <= 8,  // packer_untilize
+        packer_l1_acc,
+        has_bias,
+        false,  // enable_split_reader (not used in width sharded)
+        false,  // enable_activation_reuse (not used in width sharded)
+        0,
+        0,
+        0,
+        0,                              // activation reuse related arguments
+        static_cast<uint32_t>(false)};  // split_reader_cb_shared (not used in width sharded)
 
     std::vector<uint32_t> activation_kernel_compile_args = {
         (uint32_t)stride_w,
@@ -503,7 +498,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_width_sharded(
         input_num_cores,            // other_core_weight_height_blocks
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
         num_blocks_act_h_per_core,
-        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index};
+        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
+        (uint32_t)has_bias};
 
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";

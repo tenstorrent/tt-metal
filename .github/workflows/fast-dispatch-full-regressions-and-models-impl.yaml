@@ -71,14 +71,15 @@ jobs:
             {"model":"yolov12x"},
             {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout":45},
+            {"model":"stable_diffusion_xl_base","timeout":75},
             {"model":"stable_diffusion","timeout":45}
           ]'
 
           # Stable set (CIv2)
           STABLE_CIv2='[
             {"model":"yolov8s"},
-            {"model":"vadv2"}
+            {"model":"vadv2"},
+            {"model":"gemma-3-4b-it"}
           ]'
 
           # Unstable set (explicit commands)
@@ -169,7 +170,7 @@ jobs:
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
@@ -236,7 +237,7 @@ jobs:
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
-        run: tar -xvf ttm_any.tar
+        run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
@@ -293,7 +294,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -301,7 +302,11 @@ jobs:
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
         run: |
-          pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+          if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
+            pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+          else
+            pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

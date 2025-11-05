@@ -13,6 +13,7 @@
 #include "compute_kernel_api/eltwise_unary/recip.h"
 #include "compute_kernel_api/eltwise_unary/softplus.h"
 #include "compute_kernel_api/eltwise_unary/negative.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
@@ -22,8 +23,8 @@ template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
+    copy_tile_to_dst_init_short(in1);
     max_tile_init();
-
     constexpr uint32_t dst_reg_0 = 0;
     constexpr uint32_t dst_reg_1 = 1;
     cb_wait_front(in0, num_tiles);
@@ -100,7 +101,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_push_back(in_cb, num_tiles);
 }
 
-template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, bool write_result_inplace>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -113,8 +114,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_wait_front(in1_cb, rows);
     cb_reserve_back(reduce_cb, rows);
 
-    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+    constexpr uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
     uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
@@ -127,8 +128,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             tile_regs_commit();
             tile_regs_wait();
 
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile(j, in0_cb);
+            if constexpr (write_result_inplace) {
+                for (uint32_t j = 0; j < dst_tiles; ++j) {
+                    pack_tile(j, in0_cb);
+                }
             }
 
             // While we have results in DST, take advantage of L1 accumulation
@@ -148,9 +151,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             PACK((llk_pack_reconfig_l1_acc(0)));
         }
     }
-    cb_pop_front(in0_cb, rows * cols);
-    cb_reserve_back(in0_cb, rows * cols);
-    cb_push_back(in0_cb, rows * cols);
+    if constexpr (write_result_inplace) {
+        cb_pop_front(in0_cb, rows * cols);
+        cb_reserve_back(in0_cb, rows * cols);
+        cb_push_back(in0_cb, rows * cols);
+    }
     cb_push_back(reduce_cb, rows);
 }
 
@@ -374,17 +379,27 @@ void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 
 void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = sigmoid(in0_cb - in1_cb)
+    /**
+     * sigmoid(x) is accurately implemented as 1 / (1 + exp(-x))
+     * This function manually implements the composite, accurate sigmoid.
+     *
+     * Each input tile has only the first column containing valid data, so VectorMode::C is a useful optimization.
+     */
 
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
-    sigmoid_tile_init();
+    exp_tile_init<false, false>();
+    // recip_tile_init<false>(); // Can omit this because accurate exp_tile_init performs reduce_tile_init
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
-        sigmoid_tile(0);
+        exp_tile<false, false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
+        // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
+        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, (int)VectorMode::C)));
+        recip_tile<false>(0, (int)VectorMode::C);
         pack_tile(0, out_cb);
         release_dst();
     }
@@ -393,28 +408,29 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 
 void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // out_cb = logsigmoid(in0_cb - in1_cb)
-
-    // Implemented as softplus. logsigmoid(x) = -softplus(-x)
+    // Implemented as softplus for numerical stability. logsigmoid(x) = -softplus(-x)
 
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
+    softplus_tile_init();
+    constexpr uint32_t const_1_fp32 = 0x3F800000;
+    constexpr uint32_t const_20_fp32 = 0x41A00000;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
-        // Remove negate by swapping inputs
+        // Negate input to softplus by swapping inputs to sub
         sub_tiles(in1_cb, in0_cb, i, i, 0);
-        // negative_tile_init();
-        // negative_tile(0);
-        softplus_tile_init();
-        softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
-        negative_tile_init();
+        // softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
+        MATH((llk_math_eltwise_unary_sfpu_softplus<APPROX>(
+            0,
+            const_1_fp32 /*beta*/,
+            const_1_fp32 /*beta_reciprocal*/,
+            const_20_fp32 /*threshold*/,
+            (int)VectorMode::C)));
+        // Negate the output of softplus
         negative_tile(0);
-        // sigmoid_tile_init();
-        // sigmoid_tile(0);
-        // log_tile_init();
-        // log_tile(0);
         pack_tile(0, out_cb);
         release_dst();
     }

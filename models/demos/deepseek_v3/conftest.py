@@ -11,6 +11,7 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
@@ -44,7 +45,13 @@ def mesh_device(request, device_params):
     device_ids = ttnn.get_device_ids()
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
 
-    if len(device_ids) == 32:  # If running on Galaxy system
+    # Override mesh shape based on MESH_DEVICE environment variable
+    mesh_device_env = os.getenv("MESH_DEVICE")
+    if mesh_device_env == "DUAL":
+        default_mesh_shape = ttnn.MeshShape(8, 8)  # If running on DUAL system
+    elif mesh_device_env == "QUAD":
+        default_mesh_shape = ttnn.MeshShape(16, 8)  # If running on QUAD system
+    elif mesh_device_env == "TG" or len(device_ids) == 32:  # If running on Galaxy system
         default_mesh_shape = ttnn.MeshShape(4, 8)
     else:
         default_mesh_shape = ttnn.MeshShape(1, len(device_ids))
@@ -80,6 +87,11 @@ def hf_config(model_path):
     """Load DeepSeek config for testing"""
     config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     return config
+
+
+@pytest.fixture(scope="session")
+def state_dict(model_path):
+    return load_state_dict(model_path, "")
 
 
 @pytest.fixture(scope="session")

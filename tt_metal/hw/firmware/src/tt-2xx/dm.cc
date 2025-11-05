@@ -120,11 +120,15 @@ int main() {
                 // While the go signal for kernel execution is not sent, check if the worker was signalled
                 // to reset its launch message read pointer.
                 if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST)) {
+                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                    (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
                     // Set the rd_ptr on workers to specified value
                     mailboxes->launch_msg_rd_ptr = 0;
-                    if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
-                        DeviceTraceProfilerInit();
+                    if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                            DeviceIncrementTraceCount();
+                            DeviceTraceOnlyProfilerInit();
+                        }
                         uint32_t go_message_index = mailboxes->go_message_index;
                         // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
                         // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
@@ -164,7 +168,7 @@ int main() {
                 // cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
                 //     RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-                run_triscs(enables);
+                // run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
                 // noc_mode = launch_msg_address->kernel_config.brisc_noc_mode;

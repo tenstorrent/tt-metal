@@ -1,0 +1,2 @@
+metal-wh-01 slots=1
+metal-wh-04 slots=1

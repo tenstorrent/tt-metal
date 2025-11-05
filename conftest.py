@@ -236,7 +236,14 @@ def model_location_generator(is_ci_v2_env):
     directory structure
     """
 
-    def model_location_generator_(model_version, model_subdir="", download_if_ci_v2=False, ci_v2_timeout_in_s=300):
+    def model_location_generator_(
+        model_version,
+        model_subdir="",
+        download_if_ci_v2=False,
+        ci_v2_timeout_in_s=300,
+        endpoint_prefix="http://large-file-cache.large-file-cache.svc.cluster.local//mldata/model_checkpoints/pytorch/huggingface",
+        download_dir_suffix="model_weights",
+    ):
         model_folder = Path("tt_dnn-models") / model_subdir
         internal_weka_path = Path("/mnt/MLPerf") / model_folder / model_version
         has_internal_weka = internal_weka_path.exists()
@@ -251,7 +258,10 @@ def model_location_generator(is_ci_v2_env):
                 not model_subdir
             ), f"model_subdir is set to {model_subdir}, but we don't support further levels of directories in the large file cache in CIv2"
             civ2_download_path = CIv2ModelDownloadUtils_.download_from_ci_v2_cache(
-                model_version, download_dir_suffix="model_weights", timeout_in_s=ci_v2_timeout_in_s
+                model_version,
+                download_dir_suffix=download_dir_suffix,
+                timeout_in_s=ci_v2_timeout_in_s,
+                endpoint_prefix=endpoint_prefix,
             )
             logger.info(f"For model location, using CIv2 large file cache: {civ2_download_path}")
             return civ2_download_path
@@ -329,23 +339,6 @@ def pcie_devices(request, device_params):
     ttnn.CloseDevices(devices)
 
 
-@pytest.fixture(scope="function")
-def all_devices(request, device_params):
-    import ttnn
-
-    num_devices = ttnn.GetNumAvailableDevices()
-    device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
-
-    # Get only physical devices
-    updated_device_params = get_updated_device_params(device_params)
-    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
-
-    yield [devices[i] for i in range(num_devices)]
-
-    ttnn.CloseDevices(devices)
-
-
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
@@ -406,25 +399,25 @@ def mesh_device(request, silicon_arch_name, device_params):
     """
     import ttnn
 
-    device_ids = ttnn.get_device_ids()
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
 
     try:
         param = request.param
     except (ValueError, AttributeError):
-        param = len(device_ids)  # Default to using all available devices
+        # Get number of devices from the system mesh descriptor.
+        param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
 
     if isinstance(param, tuple):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        if not ttnn.using_distributed_env() and num_devices_requested > len(device_ids):
+        if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
-        num_devices_requested = min(param, len(device_ids))
-        mesh_shape = ttnn.MeshShape(1, num_devices_requested)
-
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
+        if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
+            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        mesh_shape = ttnn.MeshShape(1, param)
 
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
@@ -498,34 +491,6 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         offset=ttnn.MeshCoordinate(0, 1),
     )
     mesh_device.reshape(ttnn.MeshShape(1, 4))
-
-    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
-
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
-
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
-
-
-@pytest.fixture(scope="function")
-def n300_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
-    import ttnn
-
-    if ttnn.get_num_devices() < 2:
-        pytest.skip()
-
-    updated_device_params = get_updated_device_params(device_params)
-    fabric_config = updated_device_params.pop("fabric_config", None)
-    fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
-    reliability_mode = updated_device_params.pop("reliability_mode", None)
-    set_fabric(fabric_config, reliability_mode, fabric_tensix_config)
-    mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(1, 2),
-        **updated_device_params,
-    )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -667,14 +632,10 @@ def reset_default_device():
 def get_devices(request):
     if "device" in request.fixturenames:
         devices = [request.getfixturevalue("device")]
-    elif "all_devices" in request.fixturenames:
-        devices = request.getfixturevalue("all_devices")
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("mesh_device")]
-    elif "n300_mesh_device" in request.fixturenames:
-        devices = [request.getfixturevalue("n300_mesh_device")]
     elif "t3k_mesh_device" in request.fixturenames:
         devices = [request.getfixturevalue("t3k_mesh_device")]
     elif "pcie_mesh_device" in request.fixturenames:
@@ -1033,7 +994,7 @@ def run_debug_script():
         extra_env = {
             "LD_LIBRARY_PATH": None,
         }
-        debug_result = run_process_and_get_result(f"python {debug_script_path} --active-cores", extra_env)
+        debug_result = run_process_and_get_result(f"python {debug_script_path}", extra_env)
 
         logger.info(f"Debug script status: {debug_result.returncode}")
         if debug_result.stdout:

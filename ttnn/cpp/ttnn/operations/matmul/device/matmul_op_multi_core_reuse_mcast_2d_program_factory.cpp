@@ -297,10 +297,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     auto in1_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in3_is_dram = true;
-    if (bias_buffer != nullptr) {
-        in3_is_dram = bias_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    }
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -1191,9 +1187,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                             num_iter++;
 
                             uint32_t stride = worker_core_stride + per_core_N_storage;
-                            if (stride >= per_core_N) {
-                                stride = per_core_N;
-                            }
+                            stride = std::min(stride, per_core_N);
 
                             mm_in1_sender_writer_args.push_back(
                                 (stride - worker_core_stride) * in1_single_tile_size);  // per_core_N_dram_bytes

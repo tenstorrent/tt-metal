@@ -10,14 +10,15 @@ from loguru import logger
 from torch.nn import Embedding as EmbeddingReference
 
 import ttnn
-from models.demos.deepseek_v3.tt.embedding import Embedding
+from models.demos.deepseek_v3.tt.embedding.embedding1d import Embedding1D
+from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
     load_reference_io_tensors_for_module,
-    load_state_dict,
     run_module_forward,
 )
 
@@ -30,12 +31,15 @@ from models.demos.deepseek_v3.utils.test_utils import (
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "mode,seq_len",
+    "EmbeddingClass,mode,batch_size_or_seq_len",
     [
-        ("decode", 32),  # Batch decode
-        ("prefill", 128),  # Short prefill
-        ("prefill", 512),  # Medium prefill
-        ("prefill", 2048),  # Long prefill
+        (Embedding1D, "decode", 32),
+        (Embedding2D, "decode", 128),
+    ]
+    + [
+        (EmbeddingClass, "prefill", seq_len)
+        for seq_len in (128, 512, 2048)
+        for EmbeddingClass in (Embedding1D, Embedding2D)
     ],
 )
 @pytest.mark.parametrize(
@@ -43,17 +47,18 @@ from models.demos.deepseek_v3.utils.test_utils import (
     [True, False],
 )
 def test_embedding_forward_pass(
+    EmbeddingClass,
     hf_config,
     mode,
-    seq_len,
+    batch_size_or_seq_len,
     generate_reference_io,
     mesh_device,
     ccl,
     model_path,
-    tmp_path,
     cache_path,
     force_recalculate_weight_config,
     set_deterministic_env,
+    state_dict,
 ):
     logger.info("Setting up reference IO")
     module_path = "model.embed_tokens"
@@ -66,23 +71,22 @@ def test_embedding_forward_pass(
         ).eval()
         state_dict = reference_model.state_dict()
 
-        torch_input = torch.randint(0, hf_config.vocab_size, (1, 1, seq_len))
+        torch_input = torch.randint(0, hf_config.vocab_size, (1, 1, batch_size_or_seq_len))
         reference_output = reference_model(torch_input)
 
-        # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
     else:
-        state_dict = load_state_dict(model_path, module_path)
-        torch_input, reference_output = load_reference_io_tensors_for_module(mode, module_path, seq_len, 1)
+        state_dict = sub_state_dict(state_dict, module_path + ".")
+        torch_input, reference_output = load_reference_io_tensors_for_module(
+            mode, module_path, batch_size_or_seq_len, 1
+        )
 
     # Generate module configs and state
     logger.info("Setting up TTNN configs")
     weight_config = get_test_weight_config(
-        Embedding, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        EmbeddingClass, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
     )
-    model_config = get_model_config(Embedding, mode, hf_config, mesh_device)
-    model_state = Embedding.create_state(hf_config, mesh_device, ccl)
+    model_config = get_model_config(EmbeddingClass, mode, hf_config, mesh_device)
+    model_state = EmbeddingClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN
@@ -98,7 +102,7 @@ def test_embedding_forward_pass(
 
     # TTNN forward pass
     logger.info("Running TTNN forward pass")
-    tt_output = run_module_forward(Embedding, mode, tt_input_ids, run_config)
+    tt_output = run_module_forward(EmbeddingClass, mode, tt_input_ids, run_config)
 
     # Convert output back to torch
     logger.info("Validating output")
@@ -109,7 +113,11 @@ def test_embedding_forward_pass(
             dims=(0, -1),
             mesh_shape=tuple(mesh_device.shape),
         ),
-    )[:1]
+    )
+    if EmbeddingClass is Embedding1D:
+        tt_output_torch = tt_output_torch[:1]
+    else:
+        tt_output_torch = tt_output_torch.reshape(1, batch_size_or_seq_len, hf_config.hidden_size)
 
     # Cleanup
     ttnn.deallocate(tt_input_ids)
