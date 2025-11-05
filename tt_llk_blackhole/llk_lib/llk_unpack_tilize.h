@@ -251,11 +251,11 @@ inline void _llk_unpack_tilizeA_B_init_(
     // Sets the block_c_dim for unpack to use to increment the L1 address
     const std::uint32_t c_dim_size = SCALE_DATUM_SIZE(unpack_src_format, ct_dim * ((num_faces == 1) ? FACE_C_DIM : TILE_C_DIM)) >> 4;
 
-    // This sets the scartch register that CFGSHIFTMASK instruction uses to increment the L1 address
-    TT_SETDMAREG(0, LOWER_HALFWORD(c_dim_size), 0, LO_16(p_gpr_unpack::TILE_OFFSET));
-    TT_SETDMAREG(0, UPPER_HALFWORD(c_dim_size), 0, HI_16(p_gpr_unpack::TILE_OFFSET));
+    // This sets the scratch register that CFGSHIFTMASK instruction uses to increment the L1 address
+    TT_SETDMAREG(0, LOWER_HALFWORD(c_dim_size), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(c_dim_size), 0, HI_16(p_gpr_unpack::TMP0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_unpack::TILE_OFFSET, 0, SCRATCH_SEC0_val_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP0, 0, SCRATCH_SEC0_val_ADDR32);
     TTI_NOP;
 
     // Unpack 1 row of 1x16 at a time for SrcA

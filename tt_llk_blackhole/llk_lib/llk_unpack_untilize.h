@@ -108,6 +108,9 @@ inline void _llk_unpack_untilize_init_(
     // Set tile size in DMA registers
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE));
     TT_SETDMAREG(0, UPPER_HALFWORD(tile_size), 0, HI_16(p_gpr_unpack::TILE_SIZE));
+    // Reset TILE_OFFSET reg if some other API used it, it was used by tilize (not anymore) but better to clear it just in case
+    TTI_SETDMAREG(0, LOWER_HALFWORD(0), 0, LO_16(p_gpr_unpack::TILE_OFFSET));
+    TTI_SETDMAREG(0, UPPER_HALFWORD(0), 0, HI_16(p_gpr_unpack::TILE_OFFSET));
 
     // Configure MOP (Memory Operation Program) for untilize
     _llk_unpack_untilize_mop_config_();
