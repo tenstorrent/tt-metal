@@ -330,6 +330,7 @@ def run_test_FalconCausalLM_end_to_end(
     ids=["falcon_40b"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -394,6 +395,7 @@ def test_perf_bare_metal(
     ids=["falcon_40b"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_device_perf_bare_metal(
     num_devices,
     model_version,

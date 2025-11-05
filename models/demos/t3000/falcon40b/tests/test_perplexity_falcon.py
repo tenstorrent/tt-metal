@@ -269,6 +269,7 @@ def test_perplexity_huggingface(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_perplexity(
     llm_mode,
     batch_size,
