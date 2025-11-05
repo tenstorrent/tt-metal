@@ -144,7 +144,7 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
 
 
 # @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
-@pytest.mark.parametrize("C", [1])
+@pytest.mark.parametrize("C", [1, 2])
 @pytest.mark.parametrize(
     "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
     (
@@ -163,21 +163,21 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
             32,
             32,
         ),
-        # (
-        # 64,
-        # ttnn.CoreRangeSet(
-        # {
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-        # }
-        # ),
-        # ttnn.CoreRangeSet(
-        # {
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
-        # }
-        # ),
-        # 64,
-        # 64,
-        # ),
+        (
+            64,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                }
+            ),
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                }
+            ),
+            64,
+            64,
+        ),
         # (
         # 84480,
         # ttnn.CoreRangeSet(

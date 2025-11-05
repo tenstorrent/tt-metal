@@ -655,28 +655,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                     runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
                 }
             }
-
-            /*
-        const auto& args_for_all_segments = runtime_args_for_each_core[core_idx];
-        std::vector<uint32_t> runtime_args_0 = {remote_address, args_for_all_segments.size()};
-        std::vector<uint32_t> runtime_args_1 = {remote_address, args_for_all_segments.size()};
-        for (const auto& args : args_for_all_segments) {
-            const std::vector<uint32_t> segment_kernel_0 = {
-                args.write_size, args.read_offset, args.bank_id, args.write_offset};
-            runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
-
-            // Adjust read and write offsets to the correct stick address because we are splitting work across 2
-            // kernels
-            const uint32_t adjusted_read_offset =
-                args.read_offset + (total_num_sticks_kernel_0 * dram_write_stride_bytes);
-            const uint32_t adjusted_write_offset =
-                args.write_offset + (total_num_sticks_kernel_0 * dram_read_stride_bytes);
-
-            const std::vector<uint32_t> segment_kernel_1 = {
-                args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};
-            runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
-        }
-            */
             log_info(
                 tt::LogType::LogAlways,
                 "convert_to_hwc: Core {} runtime args - writer0_size={}, writer1_size={}",
