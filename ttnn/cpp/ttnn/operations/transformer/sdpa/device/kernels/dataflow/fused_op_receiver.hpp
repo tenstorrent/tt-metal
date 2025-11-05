@@ -66,9 +66,9 @@ struct RingSDPAOpReceiver {
         uint32_t sender_ring_id;
         uint32_t sem_wait_val;
         if (this->curr_transfer_idx == 0) {
-            // First iteration, waiting on local slice
+            // First iteration reads from local slice, so no synchronization is needed.
             sender_ring_id = this->ring_index;
-            sem_wait_val = 1;
+            sem_wait_val = 0;
         } else {
             this->received_inputs[this->curr_dir] += 1;
             if (this->curr_dir == 1) {
