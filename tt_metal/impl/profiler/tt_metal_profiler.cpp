@@ -1063,6 +1063,7 @@ void ReadMeshDeviceProfilerResults(
 }
 
 std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData() {
+    std::map<ChipId, std::set<OpAnalysisData>> latest_ops_perf_data;
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -1072,8 +1073,6 @@ std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData() {
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         tt::tt_metal::MetalContext::instance().profiler_state_manager();
-
-    std::map<ChipId, std::set<OpAnalysisData>> latest_ops_perf_data;
 
     for (const auto& [device_id, device_ops_perf_analyses] : profiler_state_manager->device_ops_perf_analyses_map) {
         if (device_ops_perf_analyses.empty()) {
@@ -1083,11 +1082,12 @@ std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData() {
         }
     }
 
-    return latest_ops_perf_data;
 #endif
+    return latest_ops_perf_data;
 }
 
 std::map<ChipId, std::set<OpAnalysisData>> GetAllOpsPerfData() {
+    std::map<ChipId, std::set<OpAnalysisData>> all_ops_perf_data;
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -1098,8 +1098,6 @@ std::map<ChipId, std::set<OpAnalysisData>> GetAllOpsPerfData() {
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         tt::tt_metal::MetalContext::instance().profiler_state_manager();
 
-    std::map<ChipId, std::set<OpAnalysisData>> all_ops_perf_data;
-
     for (const auto& [device_id, device_ops_perf_analyses] : profiler_state_manager->device_ops_perf_analyses_map) {
         std::set<OpAnalysisData>& device_all_ops_perf_data = all_ops_perf_data[device_id];
         for (const auto& ops_perf_analysis : device_ops_perf_analyses) {
@@ -1107,8 +1105,8 @@ std::map<ChipId, std::set<OpAnalysisData>> GetAllOpsPerfData() {
         }
     }
 
-    return all_ops_perf_data;
 #endif
+    return all_ops_perf_data;
 }
 
 }  // namespace tt_metal
