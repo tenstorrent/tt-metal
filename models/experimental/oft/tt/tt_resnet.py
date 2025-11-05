@@ -252,7 +252,9 @@ class TTResNetFeatures:
 
         host_gn = ttnn.to_torch(conv1).permute(0, 3, 1, 2)
         host_relu = ttnn.to_torch(conv1).permute(0, 3, 1, 2).reshape(1, 64, 192, 640)
-        logger.warning(f"{conv1.shape=} {conv1.dtype=} {conv1.layout=} {conv1.memory_config()=}")
+
+        # typecast to bfloat8_b for maxpool to stay in L1
+        # cannot change previous op output, as groupnorm uses bfloat16-only
         conv1 = ttnn.typecast(conv1, ttnn.bfloat8_b)
         conv_1 = self.maxpool(conv1)
 
