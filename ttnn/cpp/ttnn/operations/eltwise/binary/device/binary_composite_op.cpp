@@ -244,12 +244,11 @@ Tensor ExecuteDiv::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
-    const auto has_legacy_only_args = round_mode.has_value() or accurate_mode;
+    const auto has_legacy_only_args = round_mode.has_value() or output_dtype.has_value() or accurate_mode;
 
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     const bool is_int32 = input_dtype == DataType::INT32 && input_b.dtype() == DataType::INT32;
-
     if (not(use_legacy
                 ? *use_legacy
                 : has_legacy_only_args or
@@ -257,7 +256,8 @@ Tensor ExecuteDiv::invoke(
                           input_a, input_b, output_mem_config, output_tensor, lhs_activations, rhs_activations))) {
         TT_FATAL(
             not has_legacy_only_args,
-            "round_mode, accurate_mode are not valid when passing use_legacy parameter in div");
+            "round_mode, accurate_mode, optional output_dtype are not valid when passing use_legacy parameter as false "
+            "in div");
         Tensor a = is_int32 ? typecast(input_a, DataType::FLOAT32) : input_a;
         Tensor b = is_int32 ? typecast(input_b, DataType::FLOAT32) : input_b;
         return BinaryOperation<BinaryOpType::DIV>::invoke(
@@ -275,6 +275,11 @@ Tensor ExecuteDiv::invoke(
     TT_FATAL(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
+    if (is_int32) {
+        TT_FATAL(
+            (output_dtype == std::nullopt || output_dtype == DataType::INT32),
+            "Incorrect optional output dtype (expected None or 'ttnn.int32')");
+    }
 
     Tensor result;
 
@@ -284,8 +289,12 @@ Tensor ExecuteDiv::invoke(
     } else {
         Tensor a = typecast(input_a, DataType::FLOAT32);
         Tensor b = typecast(input_b, DataType::FLOAT32);
-        result =
-            ttnn::multiply(a, ttnn::reciprocal(b, output_mem_config), std::nullopt, output_mem_config, output_tensor);
+        if (is_int32) {
+            result = ttnn::divide(a, b, std::nullopt, output_mem_config, output_tensor);
+        } else {
+            result = ttnn::multiply(
+                a, ttnn::reciprocal(b, output_mem_config), std::nullopt, output_mem_config, output_tensor);
+        }
     }
 
     if (round_mode == "trunc") {
@@ -293,7 +302,7 @@ Tensor ExecuteDiv::invoke(
     } else if (round_mode == "floor") {
         result = ttnn::floor(result, output_mem_config, output_tensor);
     }
-    if (is_fp32 || (is_int32 && round_mode == std::nullopt)) {
+    if (is_fp32 || (is_int32 && round_mode == std::nullopt && output_dtype == std::nullopt)) {
         return result;
     }
     return typecast(result, input_dtype, std::nullopt, output_tensor);
