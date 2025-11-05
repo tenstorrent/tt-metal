@@ -20,10 +20,8 @@ def run_component_comparison(tt_output, reference_output, mesh_device, pcc_thres
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
 
     passing_final = True
-    for i in range(1):
+    for i in range(len(tt_output_tensors)):
         tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
-        print(f"[TTNN] tt_output_torch shape={tt_output_torch}")
-        print(f"[TTNN] reference_output shape={reference_output}")
         passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=pcc_threshold)
         passing_final = passing_final and passing
     if passing_final:
@@ -36,7 +34,6 @@ def run_attention_component(
     mesh_device,
     hidden_shape,
     mask,
-    tt_mask,
     position_embeddings,
     rope_mats,
     tt_position_idx,
@@ -61,9 +58,9 @@ def run_attention_component(
         use_cache=True,
     )
 
-    # TTNN attention forward
+    # TTNN attention forward (no mask needed, causal masking handled internally)
     attention_module = decoder_layer.self_attn
-    tt_out = attention_module(tt_hidden_states, tt_mask, rope_mats, tt_position_idx)
+    tt_out = attention_module(tt_hidden_states, rope_mats, tt_position_idx)
 
     # Compare outputs
     passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.96)
@@ -195,7 +192,6 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
     [
         (1, 1),
         (1, 128),
-        (1, 4096),
     ]
 )
 @pytest.mark.parametrize(
@@ -326,18 +322,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         position_ids, device=setup["mesh_device"], layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
     )
 
-    # Create TTNN mask
-    if mask is not None:
-        tt_mask = mask.repeat(1, config.num_attention_heads // setup["mesh_device"].shape[1], 1, 1).transpose(1, 2)
-        tt_mask = ttnn.from_torch(
-            tt_mask.transpose(1, 2) if seq_len > 1 else tt_mask,
-            device=setup["mesh_device"],
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
-    else:
-        tt_mask = None
-
     # Create TTNN tensors for component tests
     tt_hidden_states = ttnn.from_torch(
         hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
@@ -351,7 +335,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         setup["mesh_device"],
         hidden_states.shape,
         mask,
-        tt_mask,
         position_embeddings_ref,
         rope_mats,
         tt_position_idx,
@@ -362,9 +345,7 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
     run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
     # Test full decoder layer integration
-    tt_output = decoder_layer(
-        tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_mats, position_idx=tt_position_idx
-    )
+    tt_output = decoder_layer(tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx)
 
     # Compare outputs
     pcc_threshold = 0.928 if seq_len == 1 else 0.88

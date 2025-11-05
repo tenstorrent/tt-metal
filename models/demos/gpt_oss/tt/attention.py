@@ -9,8 +9,6 @@ from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from ..utils.general_utils import MAX_SEQ_LEN
-
 
 class Attention:
     def __init__(
@@ -36,6 +34,7 @@ class Attention:
         self.head_dim = hf_config.head_dim
         self.num_heads = hf_config.num_attention_heads
         self.num_kv_heads = hf_config.num_key_value_heads
+        self.max_seq_len = hf_config.max_position_embeddings
 
         # Use mode-aware MeshConfig for clean parallelization
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
@@ -219,7 +218,7 @@ class Attention:
             ]
         else:
             # Standard cache shape: [batch_size, num_kv_heads, max_seq_len, head_dim]
-            cache_shape = [1, self.num_kv_heads, MAX_SEQ_LEN, self.head_dim]
+            cache_shape = [1, self.num_kv_heads, self.max_seq_len, self.head_dim]
 
         k_cache = ttnn.as_tensor(
             torch.zeros(cache_shape),
@@ -244,7 +243,7 @@ class Attention:
         # Set layer_past to reference the actual KV cache for tt_transformers compatibility
         self.layer_past = self.kv_cache
 
-    def __call__(self, x: ttnn.Tensor, mask, rope_mats, position_idx=None, page_table=None, kv_cache=None):
+    def __call__(self, x: ttnn.Tensor, rope_mats, position_idx=None, page_table=None, kv_cache=None):
         batch_size, seq_len, hidden_size = x.shape
 
         # Determine if we're in decode or prefill mode

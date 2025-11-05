@@ -173,9 +173,7 @@ class Model:
 
         return instance
 
-    def _forward_layers_and_head(
-        self, hidden_states, rope_mats, current_pos, attention_masks, page_table, kv_cache, get_last_token=-1
-    ):
+    def _forward_layers_and_head(self, hidden_states, rope_mats, current_pos, page_table, kv_cache, get_last_token=-1):
         """
         Shared forward pass through decoder layers and final projection.
 
@@ -183,25 +181,21 @@ class Model:
             hidden_states: Input tensor
             rope_mats: RoPE rotation matrices [cos, sin]
             current_pos: Current position (for decode) or None (for prefill)
-            attention_masks: Dict of attention masks by layer type (or None for decode)
             page_table: Page table for paged attention
             kv_cache: KV cache list per layer
 
         Returns:
             logits: Output logits
         """
-        # Determine mode based on attention_masks presence
-        mode = Mode.DECODE if attention_masks is None else Mode.PREFILL
+        # Determine mode based on current_pos presence
+        mode = Mode.DECODE if current_pos is not None else Mode.PREFILL
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
-            # Get layer-specific mask for prefill, None for decode
-            layer_mask = attention_masks.get(decoder_layer.attention_type) if attention_masks else None
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
 
             hidden_states = decoder_layer(
                 hidden_states,
-                attention_mask=layer_mask,
                 position_embeddings=rope_mats,
                 position_idx=current_pos,
                 page_table=page_table,
@@ -256,7 +250,6 @@ class Model:
             hidden_states=hidden_states,
             rope_mats=rope_mats,
             current_pos=current_pos,
-            attention_masks=None,  # No masks in decode mode
             page_table=page_table,
             kv_cache=kv_cache,
         )
@@ -290,25 +283,12 @@ class Model:
                 self.rope_setup.cos_matrix[:, :, :seq_len, :],
                 self.rope_setup.sin_matrix[:, :, :seq_len, :],
             ]
-        # Create attention masks
-        mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
-        sliding_mask = mask + torch.tril(
-            torch.full((1, 1, seq_len, seq_len), -float("inf")),
-            diagonal=-self.hf_config.sliding_window,
-        )
-
-        tt_mask = ttnn.from_torch(mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sliding_mask = ttnn.from_torch(
-            sliding_mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat4_b
-        )
-        attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_sliding_mask}
 
         # Forward through layers and head (shared with decode)
         logits = self._forward_layers_and_head(
             hidden_states=hidden_states,
             rope_mats=rope_mats,
             current_pos=None,  # No current_pos for prefill
-            attention_masks=attention_masks,
             page_table=page_table,
             kv_cache=kv_cache,
             get_last_token=get_last_token,
