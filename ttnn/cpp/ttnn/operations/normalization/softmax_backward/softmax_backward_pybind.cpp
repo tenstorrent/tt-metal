@@ -66,28 +66,12 @@ void bind_normalization_softmax_backward_operation(py::module& module) {
                     grad_input = ttnn.softmax_backward(softmax_output, grad_output, dim=-1)
     )doc";
 
-    using OperationType = decltype(ttnn::softmax_backward);
-
     ttnn::bind_registered_operation(
         module,
         ttnn::softmax_backward,
         doc,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& softmax_output_tensor,
-               const ttnn::Tensor& grad_tensor,
-               int32_t dim) -> ttnn::Tensor {
-                // Convert negative dimension to positive (Python convention: -1 means last dimension)
-                const auto rank = softmax_output_tensor.logical_shape().rank();
-                uint32_t normalized_dim = dim < 0 ? static_cast<uint32_t>(dim + rank) : static_cast<uint32_t>(dim);
-                return self(
-                    softmax_output_tensor,
-                    grad_tensor,
-                    normalized_dim /*, memory_config, compute_kernel_config, numeric_stable*/);
-            },
-            py::arg("softmax_output_tensor").noconvert(),
-            py::arg("grad_tensor").noconvert(),
-            py::arg("dim") = -1});
+        ttnn::pybind_arguments_t{
+            py::arg("softmax_output_tensor").noconvert(), py::arg("grad_tensor").noconvert(), py::arg("dim") = -1});
 }
 
 void bind_normalization_softmax_backward(py::module& module) { bind_normalization_softmax_backward_operation(module); }

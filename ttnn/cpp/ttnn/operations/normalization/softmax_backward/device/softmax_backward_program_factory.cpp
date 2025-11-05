@@ -56,7 +56,7 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
 
     // For simplicity, we'll implement for the last dimension (most common case)
     // This can be extended to support other dimensions
-    TT_ASSERT(
+    TT_FATAL(
         dim == rank - 1 || dim == static_cast<uint32_t>(-1),
         "Currently only supporting softmax_backward on last dimension");
 
@@ -92,8 +92,8 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     const uint32_t output_tile_size = tile_size(output_data_format);
     const uint32_t intermed_tile_size = tile_size(intermed_data_format);
 
-    // Adjustable batch size - must match all kernels (reader, compute, writer)
-    constexpr uint32_t tiles_per_batch = 4;
+    // Adjustable block size - must match all kernels (reader, compute, writer)
+    constexpr uint32_t tiles_per_block = 4;
 
     // Create circular buffers
     const uint32_t src0_cb_index = tt::CBIndex::c_0;        // softmax_output
@@ -102,17 +102,17 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     const uint32_t out_cb_index = tt::CBIndex::c_7;         // output
     const uint32_t intermed0_cb_index = tt::CBIndex::c_13;  // y * grad
     const uint32_t intermed1_cb_index = tt::CBIndex::c_14;  // sum(y * grad) - accumulated
-    const uint32_t intermed2_cb_index = tt::CBIndex::c_15;  // batch sum temporary
+    const uint32_t intermed2_cb_index = tt::CBIndex::c_15;  // block sum temporary
 
-    // Create circular buffers - ALL batch-sized for minimal L1 footprint!
+    // Create circular buffers - ALL block-sized for minimal L1 footprint!
     // Two-pass streaming algorithm: Pass 1 computes sum, Pass 2 computes output
     // Input data is read twice (once per pass), but eliminates L1 overflow
 
-    auto c_in0_config = CircularBufferConfig(tiles_per_batch * input_tile_size, {{src0_cb_index, input_data_format}})
+    auto c_in0_config = CircularBufferConfig(tiles_per_block * input_tile_size, {{src0_cb_index, input_data_format}})
                             .set_page_size(src0_cb_index, input_tile_size);
     CreateCircularBuffer(program, all_cores, c_in0_config);
 
-    auto c_in1_config = CircularBufferConfig(tiles_per_batch * input_tile_size, {{src1_cb_index, input_data_format}})
+    auto c_in1_config = CircularBufferConfig(tiles_per_block * input_tile_size, {{src1_cb_index, input_data_format}})
                             .set_page_size(src1_cb_index, input_tile_size);
     CreateCircularBuffer(program, all_cores, c_in1_config);
 
@@ -120,22 +120,22 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
                                .set_page_size(ones_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_scaler_config);
 
-    auto c_out_config = CircularBufferConfig(tiles_per_batch * output_tile_size, {{out_cb_index, output_data_format}})
+    auto c_out_config = CircularBufferConfig(tiles_per_block * output_tile_size, {{out_cb_index, output_data_format}})
                             .set_page_size(out_cb_index, output_tile_size);
     CreateCircularBuffer(program, all_cores, c_out_config);
 
-    // intermed0: batch-sized temporary buffer for y * grad products
+    // intermed0: block-sized temporary buffer for y * grad products
     auto c_intermed0_config =
-        CircularBufferConfig(tiles_per_batch * intermed_tile_size, {{intermed0_cb_index, intermed_data_format}})
+        CircularBufferConfig(tiles_per_block * intermed_tile_size, {{intermed0_cb_index, intermed_data_format}})
             .set_page_size(intermed0_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed0_config);
 
-    // intermed1: accumulated sum (single tile reused every batch)
+    // intermed1: accumulated sum (single tile reused every block)
     auto c_intermed1_config = CircularBufferConfig(1 * intermed_tile_size, {{intermed1_cb_index, intermed_data_format}})
                                   .set_page_size(intermed1_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed1_config);
 
-    // intermed2: batch sum temporary (single tile)
+    // intermed2: block sum temporary (single tile)
     auto c_intermed2_config = CircularBufferConfig(1 * intermed_tile_size, {{intermed2_cb_index, intermed_data_format}})
                                   .set_page_size(intermed2_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed2_config);
@@ -160,7 +160,7 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         intermed0_cb_index,  // 3: y * grad
         intermed1_cb_index,  // 4: sum(y * grad) - accumulated
         ones_cb_index,       // 5: ones vector for matmul reduction
-        intermed2_cb_index,  // 6: batch sum temporary
+        intermed2_cb_index,  // 6: block sum temporary
         width_tiles,         // 7: num_tiles_per_row
         mask_w               // 8: padding mask position in last tile (0 if no padding)
     };
@@ -189,7 +189,13 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         all_cores,
         wconf);
 
-    // Set runtime arguments
+    // Set common runtime arguments (shared across all cores)
+    SetCommonRuntimeArgs(
+        program, reader_kernel_id, {softmax_output.buffer()->address(), upstream_grad.buffer()->address()});
+
+    SetCommonRuntimeArgs(program, writer_kernel_id, {tensor_return_value.buffer()->address()});
+
+    // Set per-core runtime arguments
     for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
         CoreCoord core = {core_idx / num_cores_y, core_idx % num_cores_y};
 
@@ -200,19 +206,11 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
         uint32_t end_tile = std::min(start_tile + tiles_per_core, num_rows);
         uint32_t num_tiles_this_core = end_tile - start_tile;
 
-        // Reader runtime args
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
-            core,
-            {softmax_output.buffer()->address(), upstream_grad.buffer()->address(), start_tile, num_tiles_this_core});
+        // Reader runtime args (per-core: start_tile, num_tiles)
+        SetRuntimeArgs(program, reader_kernel_id, core, {start_tile, num_tiles_this_core});
 
-        // Writer runtime args
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {tensor_return_value.buffer()->address(), start_tile, num_tiles_this_core});
+        // Writer runtime args (per-core: start_tile, num_tiles)
+        SetRuntimeArgs(program, writer_kernel_id, core, {start_tile, num_tiles_this_core});
 
         // Compute runtime args
         SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_this_core, width_tiles});
@@ -235,26 +233,17 @@ void SoftmaxBackwardProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& num_cores = cached_program.shared_variables.num_cores;
-    auto& num_cores_y = cached_program.shared_variables.num_cores_y;
 
     const Tensor& softmax_output = tensor_args.softmax_output;
     const Tensor& upstream_grad = tensor_args.upstream_grad;
 
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-    for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {
-        const CoreCoord core = {core_idx / num_cores_y, core_idx % num_cores_y};
+    // Update common runtime args (shared across all cores)
+    auto& reader_common_args = GetCommonRuntimeArgs(program, reader_kernel_id);
+    reader_common_args[0] = softmax_output.buffer()->address();
+    reader_common_args[1] = upstream_grad.buffer()->address();
 
-        // Update reader runtime args
-        RuntimeArgsData& reader_runtime_args_per_core = reader_runtime_args[core.x][core.y];
-        reader_runtime_args_per_core[0] = softmax_output.buffer()->address();
-        reader_runtime_args_per_core[1] = upstream_grad.buffer()->address();
-
-        // Update writer runtime args
-        RuntimeArgsData& writer_runtime_args_per_core = writer_runtime_args[core.x][core.y];
-        writer_runtime_args_per_core[0] = tensor_return_value.buffer()->address();
-    }
+    auto& writer_common_args = GetCommonRuntimeArgs(program, writer_kernel_id);
+    writer_common_args[0] = tensor_return_value.buffer()->address();
 }
 
 }  // namespace ttnn::operations::normalization::softmax_backward

@@ -49,7 +49,7 @@ void MAIN {
     constexpr uint32_t mul_cb_id = get_compile_time_arg_val(3);          // y * grad
     constexpr uint32_t sum_reduce_cb_id = get_compile_time_arg_val(4);   // sum(y * grad) - accumulated
     constexpr uint32_t ones_cb_id = get_compile_time_arg_val(5);         // ones vector for matmul reduction
-    constexpr uint32_t batch_sum_cb_id = get_compile_time_arg_val(6);    // batch sum temporary
+    constexpr uint32_t block_sum_cb_id = get_compile_time_arg_val(6);    // block sum temporary
     constexpr uint32_t num_tiles_per_row = get_compile_time_arg_val(7);  // width in tiles
     constexpr uint32_t mask_w = get_compile_time_arg_val(8);             // padding mask position (0 = no padding)
 
@@ -67,8 +67,8 @@ void MAIN {
         constexpr uint32_t dst_accum = 1;
         constexpr uint32_t one_tile = 1;
 
-        // Adjustable batch size - must match reader kernel
-        constexpr uint32_t tiles_per_batch = 4;
+        // Adjustable block size - must match reader kernel
+        constexpr uint32_t tiles_per_block = 4;
 
         cb_wait_front(ones_cb_id, one_tile);
         cb_reserve_back(sum_reduce_cb_id, one_tile);
@@ -83,20 +83,20 @@ void MAIN {
         tile_regs_release();
         cb_push_back(sum_reduce_cb_id, one_tile);
 
-        // Process in batches: compute products, then accumulate each batch
-        for (uint32_t batch_start = 0; batch_start < width_in_tiles; batch_start += tiles_per_batch) {
-            const uint32_t current_batch_size =
-                (batch_start + tiles_per_batch <= width_in_tiles) ? tiles_per_batch : (width_in_tiles - batch_start);
+        // Process in blockes: compute products, then accumulate each block
+        for (uint32_t block_start = 0; block_start < width_in_tiles; block_start += tiles_per_block) {
+            const uint32_t current_block_size =
+                (block_start + tiles_per_block <= width_in_tiles) ? tiles_per_block : (width_in_tiles - block_start);
 
-            // Wait for this batch from reader
-            cb_wait_front(y_cb_id, current_batch_size);
-            cb_wait_front(grad_cb_id, current_batch_size);
+            // Wait for this block from reader
+            cb_wait_front(y_cb_id, current_block_size);
+            cb_wait_front(grad_cb_id, current_block_size);
 
-            // Step 1a: Compute y * grad for all tiles in this batch (elementwise multiplication)
+            // Step 1a: Compute y * grad for all tiles in this block (elementwise multiplication)
             mul_tiles_init(y_cb_id, grad_cb_id);
 
-            for (uint32_t i = 0; i < current_batch_size; ++i) {
-                const uint32_t global_tile_idx = batch_start + i;
+            for (uint32_t i = 0; i < current_block_size; ++i) {
+                const uint32_t global_tile_idx = block_start + i;
                 const bool is_last_tile = (global_tile_idx == width_in_tiles - 1);
 
                 cb_reserve_back(mul_cb_id, one_tile);
@@ -118,73 +118,73 @@ void MAIN {
                 cb_push_back(mul_cb_id, one_tile);
             }
 
-            // Step 1b: Reduce this batch to a single sum tile using matmul with ones
-            // Write batch sum to temporary CB
-            mm_init(mul_cb_id, ones_cb_id, batch_sum_cb_id, /*transpose*/ 0);
+            // Step 1b: Reduce this block to a single sum tile using matmul with ones
+            // Write block sum to temporary CB
+            mm_init(mul_cb_id, ones_cb_id, block_sum_cb_id, /*transpose*/ 0);
 
-            cb_reserve_back(batch_sum_cb_id, one_tile);
+            cb_reserve_back(block_sum_cb_id, one_tile);
             tile_regs_acquire();
-            for (uint32_t i = 0; i < current_batch_size; ++i) {
+            for (uint32_t i = 0; i < current_block_size; ++i) {
                 cb_wait_front(mul_cb_id, i + 1);  // Ensure tile is ready
                 matmul_tiles(mul_cb_id, ones_cb_id, i, 0, dst_accum, false);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst_accum, batch_sum_cb_id);
+            pack_tile(dst_accum, block_sum_cb_id);
             tile_regs_release();
-            cb_push_back(batch_sum_cb_id, one_tile);
+            cb_push_back(block_sum_cb_id, one_tile);
 
-            // Step 1c: Add batch sum to running total
-            // accumulated_sum = accumulated_sum + batch_sum
+            // Step 1c: Add block sum to running total
+            // accumulated_sum = accumulated_sum + block_sum
             cb_wait_front(sum_reduce_cb_id, one_tile);  // Current accumulated sum
-            cb_wait_front(batch_sum_cb_id, one_tile);   // Batch sum we just computed
+            cb_wait_front(block_sum_cb_id, one_tile);   // block sum we just computed
 
-            add_tiles_init(sum_reduce_cb_id, batch_sum_cb_id);
+            add_tiles_init(sum_reduce_cb_id, block_sum_cb_id);
 
             tile_regs_acquire();
-            add_tiles(sum_reduce_cb_id, batch_sum_cb_id, 0, 0, dst_product);
+            add_tiles(sum_reduce_cb_id, block_sum_cb_id, 0, 0, dst_product);
             tile_regs_commit();
             tile_regs_wait();
 
             cb_pop_front(sum_reduce_cb_id, one_tile);  // Pop old accumulated sum (CB now empty)
-            cb_pop_front(batch_sum_cb_id, one_tile);   // Pop batch sum
+            cb_pop_front(block_sum_cb_id, one_tile);   // Pop block sum
 
             cb_reserve_back(sum_reduce_cb_id, one_tile);  // Reserve slot for new sum
             pack_tile(dst_product, sum_reduce_cb_id);     // Write updated accumulated sum
             tile_regs_release();
             cb_push_back(sum_reduce_cb_id, one_tile);
 
-            // Pop this batch
-            cb_pop_front(mul_cb_id, current_batch_size);
-            cb_pop_front(y_cb_id, current_batch_size);
-            cb_pop_front(grad_cb_id, current_batch_size);
+            // Pop this block
+            cb_pop_front(mul_cb_id, current_block_size);
+            cb_pop_front(y_cb_id, current_block_size);
+            cb_pop_front(grad_cb_id, current_block_size);
         }
 
         // === PASS 2: Compute final output with fresh data ===
         cb_wait_front(sum_reduce_cb_id, one_tile);
 
-        for (uint32_t batch_start = 0; batch_start < width_in_tiles; batch_start += tiles_per_batch) {
-            const uint32_t current_batch_size =
-                (batch_start + tiles_per_batch <= width_in_tiles) ? tiles_per_batch : (width_in_tiles - batch_start);
+        for (uint32_t block_start = 0; block_start < width_in_tiles; block_start += tiles_per_block) {
+            const uint32_t current_block_size =
+                (block_start + tiles_per_block <= width_in_tiles) ? tiles_per_block : (width_in_tiles - block_start);
 
-            // Wait for fresh batch from reader (pass 2 read)
-            cb_wait_front(y_cb_id, current_batch_size);
-            cb_wait_front(grad_cb_id, current_batch_size);
+            // Wait for fresh block from reader (pass 2 read)
+            cb_wait_front(y_cb_id, current_block_size);
+            cb_wait_front(grad_cb_id, current_block_size);
 
             // Process each tile: compute y * (grad - sum)
-            for (uint32_t i = 0; i < current_batch_size; ++i) {
+            for (uint32_t i = 0; i < current_block_size; ++i) {
                 fused_sub_mul(
                     y_cb_id,           // y
                     grad_cb_id,        // grad
                     sum_reduce_cb_id,  // sum(y * grad)
                     out_cb_id,         // output
-                    i,                 // y tile index (relative to batch)
-                    i);                // grad tile index (relative to batch)
+                    i,                 // y tile index (relative to block)
+                    i);                // grad tile index (relative to block)
             }
 
-            // Pop this batch
-            cb_pop_front(y_cb_id, current_batch_size);
-            cb_pop_front(grad_cb_id, current_batch_size);
+            // Pop this block
+            cb_pop_front(y_cb_id, current_block_size);
+            cb_pop_front(grad_cb_id, current_block_size);
         }
 
         // Pop sum for this row
