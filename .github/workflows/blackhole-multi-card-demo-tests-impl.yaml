@@ -157,11 +157,11 @@ jobs:
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
             owner_id: U03PUAKE719 # Miguel Tairum
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode"
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-1024-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
