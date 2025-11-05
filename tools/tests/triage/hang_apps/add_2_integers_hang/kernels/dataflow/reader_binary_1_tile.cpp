@@ -23,16 +23,11 @@ void kernel_main() {
     // Setting the page size to be tile_size_bytes works because we set it up
     // explicitly in host code. This is usually a good idea as it makes coding
     // easy.
-    const InterleavedAddrGenFast<true> in0 = {
-        .bank_base_address = in0_addr,         // The base address of the buffer
-        .page_size = tile_size_bytes,          // The size of a buffer page
-        .data_format = DataFormat::Float16_b,  // The data format of the buffer
-    };
-    const InterleavedAddrGenFast<true> in1 = {
-        .bank_base_address = in1_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b,
-    };
+    constexpr auto args_in0 = TensorAccessorArgs<0>();
+    const auto in0 = TensorAccessor(args_in0, in0_addr, tile_size_bytes);
+
+    constexpr auto args_in1 = TensorAccessorArgs<args_in0.next_compile_time_args_offset()>();
+    const auto in1 = TensorAccessor(args_in1, in1_addr, tile_size_bytes);
 
     // read the tiles from DRAM into the circular buffers
     cb_reserve_back(cb_in0, 1);

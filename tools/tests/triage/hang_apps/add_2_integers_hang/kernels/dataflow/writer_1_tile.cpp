@@ -12,11 +12,8 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
     // Address of the output buffer
-    const InterleavedAddrGenFast<true> dst = {
-        .bank_base_address = dst_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b,
-    };
+    constexpr auto args_a = TensorAccessorArgs<0>();
+    const auto dst = TensorAccessor(args_a, dst_addr, tile_size_bytes);
 
     // Make sure there is a tile in the circular buffer
     cb_wait_front(cb_out0, 1);
