@@ -534,7 +534,7 @@ void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* dev
 
     // In UDM mode, also create and compile relay builder
     if (relay_builder_ != nullptr) {
-        relay_builder_->create_and_compile(device, program);
+        // relay_builder_->create_and_compile(device, program);
     }
 }
 
