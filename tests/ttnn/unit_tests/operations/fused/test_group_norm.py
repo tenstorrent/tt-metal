@@ -142,8 +142,8 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
-    torch_bias = torch.zeros((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -247,8 +247,8 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
-    torch_bias = torch.zeros((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
     )
@@ -342,7 +342,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.ones((C,), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
         torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
