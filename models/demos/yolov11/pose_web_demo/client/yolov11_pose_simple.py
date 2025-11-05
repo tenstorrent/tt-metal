@@ -110,7 +110,7 @@ class VideoProcessor(VideoProcessorBase):
             args = parser.parse_args()
             self.api_url = args.api_url
 
-        url = f"{self.api_url}/pose_detection"
+        url = f"{self.api_url}/pose_estimation_v2"
 
         try:
             # Use a persistent session for multiple requests
@@ -120,8 +120,10 @@ class VideoProcessor(VideoProcessorBase):
 
                 # Check if response is successful
                 if response.status_code == 200:
-                    # Parse JSON response
+                    # Parse JSON response - server returns list directly
                     output = response.json()
+                    # Wrap in expected format for processing
+                    output = {"detections": output}
                 else:
                     print(f"Request failed with status code {response.status_code}")
                     return None
