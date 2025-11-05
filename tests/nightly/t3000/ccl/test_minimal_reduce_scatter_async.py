@@ -1277,7 +1277,7 @@ def _get_tensors(
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize(
-    "input_shape", [[128, 128], [8, 8, 128, 128], [8, 128, 128], [8, 8, 8, 8, 128, 128], [8, 8, 8, 16, 16]]
+    "input_shape", [[256, 256], [8, 8, 256, 256], [8, 256, 256], [8, 8, 8, 8, 256, 256], [8, 8, 8, 16, 16]]
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
@@ -1286,7 +1286,7 @@ def _get_tensors(
 @pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear])
 def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
     if dim >= len(input_shape):
-        pytest.skip("Invalid gather dim")
+        pytest.skip("Invalid scatter dim")
 
     tt_input, torch_reference = _get_tensors(
         input_shape,

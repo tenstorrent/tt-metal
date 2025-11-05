@@ -722,36 +722,28 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+
     std::vector<CoreRange> sender_worker_core_ranges;
-    std::set<CoreRange> sender_forward_core_ranges;
-    std::set<CoreRange> sender_backward_core_ranges;
-    std::set<CoreRange> mux_forward_core_ranges;
-    std::set<CoreRange> mux_backward_core_ranges;
+    std::vector<CoreRange> mux_core_ranges;
+    std::vector<CoreRange> termination_master_core_ranges;
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             const auto& mux_core = all_cores[core_id++];
-            if (dir) {
-                mux_forward_core_ranges.insert(CoreRange(mux_core));
-            } else {
-                mux_backward_core_ranges.insert(CoreRange(mux_core));
-            }
+            mux_core_ranges.emplace_back(mux_core);
+
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 const auto& worker_core = all_cores[core_id++];
-                if (dir) {
-                    sender_forward_core_ranges.insert(CoreRange(worker_core));
-                } else {
-                    sender_backward_core_ranges.insert(CoreRange(worker_core));
-                }
                 sender_worker_core_ranges.emplace_back(worker_core);
+
+                if (worker == 0) {
+                    termination_master_core_ranges.emplace_back(worker_core);
+                }
             }
         }
     }
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
-    CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
-    CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
-    CoreRangeSet mux_forward_core_range_set = CoreRangeSet(mux_forward_core_ranges);
-    CoreRangeSet mux_backward_core_range_set = CoreRangeSet(mux_backward_core_ranges);
+    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // Tensor Info
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -853,7 +845,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     }
 
     // KERNEL CREATION
-    std::vector<KernelHandle> mux_kernel_ids;
     std::vector<size_t> mux_termination_signal_addresses;
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
@@ -873,6 +864,17 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         0,
         buffer_size_bytes_full_size_channel,
         mux_base_l1_address);
+
+    // Fabric mux kernel
+    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        mux_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     std::vector<uint32_t> sender_reader_compile_args =
         operations::experimental::ccl::detail::get_ring_reader_compile_args(
@@ -1002,24 +1004,12 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
+    auto mux_core_iter = mux_core_range_set.ranges().cbegin();
+    auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            // Fabrix mux kernel
-            uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                       (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-            CoreCoord mux_logical_core = all_cores[mux_core_offset];
+            auto mux_logical_core = *((mux_core_iter++)->begin());
             CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
-
-            auto mux_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                {mux_logical_core},
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt::tt_metal::NOC::RISCV_0_default,
-                    .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-                    .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-            mux_kernel_ids.push_back(mux_kernel_id);
 
             std::vector<uint32_t> mux_rt_args = {};
             const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
@@ -1034,6 +1024,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
             }
             tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
 
+            auto termination_master_logical_core = *((termination_master_core_iter++)->begin());
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 auto core = *((worker_core_iter++)->begin());
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
@@ -1086,8 +1077,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
-                CoreCoord termination_master_logical_core =
-                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + 0];
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
@@ -1397,36 +1386,32 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
+
+    const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
+        return (!dir && backward_coord.has_value()) || (dir && forward_coord.has_value());
+    };
+
     std::vector<CoreRange> sender_worker_core_ranges;
-    std::set<CoreRange> sender_forward_core_ranges;
-    std::set<CoreRange> sender_backward_core_ranges;
-    std::set<CoreRange> mux_forward_core_ranges;
-    std::set<CoreRange> mux_backward_core_ranges;
+    std::vector<CoreRange> mux_core_ranges;
+    std::vector<CoreRange> termination_master_core_ranges;
     uint32_t core_id = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             const auto& mux_core = all_cores[core_id++];
-            if (dir) {
-                mux_forward_core_ranges.insert(CoreRange(mux_core));
-            } else {
-                mux_backward_core_ranges.insert(CoreRange(mux_core));
+            if (mux_connection_valid(dir)) {
+                mux_core_ranges.emplace_back(mux_core);
             }
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 const auto& worker_core = all_cores[core_id++];
-                if (dir) {
-                    sender_forward_core_ranges.insert(CoreRange(worker_core));
-                } else {
-                    sender_backward_core_ranges.insert(CoreRange(worker_core));
-                }
                 sender_worker_core_ranges.emplace_back(worker_core);
+                if (worker == 0) {
+                    termination_master_core_ranges.emplace_back(worker_core);
+                }
             }
         }
     }
     CoreRangeSet sender_worker_core_range_set = CoreRangeSet(sender_worker_core_ranges);
-    CoreRangeSet sender_forward_core_range_set = CoreRangeSet(sender_forward_core_ranges);
-    CoreRangeSet sender_backward_core_range_set = CoreRangeSet(sender_backward_core_ranges);
-    CoreRangeSet mux_forward_core_range_set = CoreRangeSet(mux_forward_core_ranges);
-    CoreRangeSet mux_backward_core_range_set = CoreRangeSet(mux_backward_core_ranges);
+    CoreRangeSet mux_core_range_set = CoreRangeSet(mux_core_ranges);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -1528,7 +1513,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     }
 
     // KERNEL CREATION
-    std::vector<KernelHandle> mux_kernel_ids;
     if (fuse_op) {
         fused_op_signaler->init_reduce_scatter(program, mesh_device, sender_worker_core_range_set);
     }
@@ -1544,6 +1528,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     const auto num_header_only_channels = 0;
     const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
+    // Fabric mux kernel
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
@@ -1551,6 +1536,17 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         0,
         buffer_size_bytes_full_size_channel,
         mux_base_l1_address);
+
+    // mux kernel
+    auto mux_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+        mux_core_range_set,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+            .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
 
     // Reader
     std::vector<uint32_t> sender_reader_compile_args =
@@ -1690,29 +1686,15 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         program, sender_reduce_kernel_path, sender_worker_core_range_set, sender_reduce_kernel_config);
 
     auto worker_core_iter = sender_worker_core_range_set.ranges().cbegin();
+    auto mux_core_iter = mux_core_range_set.ranges().cbegin();
+    auto termination_master_core_iter = termination_master_core_ranges.cbegin();
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             const bool is_forward = dir;
-
-            // Fabrix mux kernel
-            uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                       (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-            CoreCoord mux_logical_core = all_cores[mux_core_offset];
-            CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
-
-            const bool mux_connection_valid =
-                (dir && forward_coord.has_value()) || (!dir && backward_coord.has_value());
-            if (mux_connection_valid) {
-                auto mux_kernel_id = tt::tt_metal::CreateKernel(
-                    program,
-                    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                    {mux_logical_core},
-                    tt::tt_metal::DataMovementConfig{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt::tt_metal::NOC::RISCV_0_default,
-                        .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
-                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-                mux_kernel_ids.push_back(mux_kernel_id);
+            CoreCoord mux_virtual_core = {0, 0};
+            if (mux_connection_valid(dir)) {
+                auto mux_logical_core = *((mux_core_iter++)->begin());
+                mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
                 std::vector<uint32_t> mux_rt_args = {};
                 const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                 if (dir) {  // forward
@@ -1727,9 +1709,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 tt::tt_metal::SetRuntimeArgs(program, mux_kernel_id, {mux_logical_core}, mux_rt_args);
             }
 
+            auto termination_master_logical_core = *((termination_master_core_iter++)->begin());
             for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                 auto core = *((worker_core_iter++)->begin());
-                // CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
                 // FWD core needs BWD core coordinate for fwd/bwd final reduction sync.
@@ -1812,8 +1794,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
-                CoreCoord termination_master_logical_core =
-                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + 0];
+
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
@@ -1841,7 +1822,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     start_tiles_to_read,           // start_tiles_to_read
                 };
                 append_fabric_mux_connection_rt_args(
-                    mux_connection_valid,
+                    mux_connection_valid(dir),
                     mux_virtual_core,
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_kernel_config,
