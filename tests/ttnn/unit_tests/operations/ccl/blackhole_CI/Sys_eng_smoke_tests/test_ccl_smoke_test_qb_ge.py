@@ -27,7 +27,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
         ttnn.bfloat8_b,
     ],
     ids=[
-        "float_16",
+        "bfloat_16",
         "uint_32",
         "bfloat_8",
     ],
@@ -122,7 +122,7 @@ def test_ccl_ddr_smoke_test(
         ttnn.bfloat8_b,
     ],
     ids=[
-        "float_16",
+        "bfloat_16",
         "uint_32",
         "bfloat_8",
     ],
