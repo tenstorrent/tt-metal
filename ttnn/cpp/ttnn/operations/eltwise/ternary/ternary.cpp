@@ -12,6 +12,7 @@
 #include "device/ternary_device_operation.hpp"
 #include "device/ternary_op_utils.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ternary_composite_op.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -239,6 +240,42 @@ template Tensor WhereOperation::invoke<int32_t>(
     const Tensor&, const int32_t&, const int32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
 template Tensor WhereOperation::invoke<uint32_t>(
     const Tensor&, const uint32_t&, const uint32_t&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
+
+Tensor AddcmulOperation::invoke(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const Tensor& input_c,
+    float value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    log_debug(tt::LogOp, "Addcmul LLK - TTT");
+
+    TT_FATAL(
+        input_a.storage_type() == StorageType::DEVICE && input_b.storage_type() == StorageType::DEVICE &&
+            input_c.storage_type() == StorageType::DEVICE,
+        "Addcmul operation requires all input tensors to be on Device.");
+
+    // Only TTT variant is supported for addcmul
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        input_a.logical_shape(), input_b.logical_shape(), input_c.logical_shape());
+
+    if (is_sharded(input_a) || is_sharded(input_b) || is_sharded(input_c) || is_sharded(memory_config) ||
+        is_sharded(output) || broadcast_type != ttnn::operations::ternary::TernaryBroadcastType::NONE) {
+        // Fall back to composite implementation for all broadcast cases
+        return _addcmul(input_a, input_b, input_c, value, memory_config);
+    }
+
+    // Use LLK implementation - pass value as scalar parameter
+    return ttnn::prim::ternary(
+        TernaryOpType::ADDCMUL,
+        input_a,
+        input_b,
+        input_c,
+        value,
+        ternary_utils::determine_output_dtype(output, input_a.dtype()),
+        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        output);
+}
 
 }  // namespace ternary
 }  // namespace operations
