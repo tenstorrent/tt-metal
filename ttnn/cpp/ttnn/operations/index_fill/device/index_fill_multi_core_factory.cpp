@@ -22,11 +22,11 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     const tt::tt_metal::Tensor& input = tensor_args.input;
     uint32_t dim = operation_attributes.dim;
 
-    const auto input_shape = input.logical_shape();
+    const auto input_shape = input.padded_shape();
     const auto n = input_shape.rank();
-    uint32_t num_rows_to_fill_per_index = 1;
-    for (int i = n - 2; i > dim; i--) {
-        num_rows_to_fill_per_index *= input_shape[i];
+    uint32_t num_rows_in_dim = 1;
+    for (int i = n - 2; i > dim; --i) {
+        num_rows_in_dim *= input_shape[i];
     }
 
     // Prepare fill_value to send as a uint32_t kernel arg
@@ -60,28 +60,39 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     uint32_t index_page_size = index.buffer()->aligned_page_size();
     uint32_t output_page_size = output.buffer()->aligned_page_size();
 
-    auto src_cb_index = tt::CBIndex::c_0;
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        tt::tt_metal::CircularBufferConfig(input_page_size, {{src_cb_index, input_dataformat}})
-            .set_page_size(src_cb_index, input_page_size));
+    uint32_t input_cb_depth = 2;
 
-    auto index_cb_index = tt::CBIndex::c_1;
+    // CB to store pages from input tensor
+    auto cb_index = tt::CBIndex::c_0;
     CreateCircularBuffer(
         program,
         all_cores,
-        tt::tt_metal::CircularBufferConfig(index_page_size, {{index_cb_index, index_dataformat}})
-            .set_page_size(index_cb_index, index_page_size));
+        tt::tt_metal::CircularBufferConfig(input_cb_depth * input_page_size, {{cb_index, input_dataformat}})
+            .set_page_size(cb_index, input_page_size));
+
+    // CB to store entire index tensor
+    cb_index = tt::CBIndex::c_1;
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        tt::tt_metal::CircularBufferConfig(index_page_size, {{cb_index, index_dataformat}})
+            .set_page_size(cb_index, index_page_size));
+
+    // CB to store an input page filled with fill_value
+    cb_index = tt::CBIndex::c_2;
+    CreateCircularBuffer(
+        program,
+        all_cores,
+        tt::tt_metal::CircularBufferConfig(input_page_size, {{cb_index, input_dataformat}})
+            .set_page_size(cb_index, input_page_size));
 
     // Create reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)(dim == n - 1),
-        (std::uint32_t)index.physical_volume(),
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)index_page_size,
-        (std::uint32_t)input.element_size(),
-        (std::uint32_t)input.padded_shape()[-1]};
+        (std::uint32_t)input_page_size,          // input page size
+        (std::uint32_t)index_page_size,          // index page size
+        (std::uint32_t)index.physical_volume(),  // num elements in index array
+        (std::uint32_t)(dim == n - 1)            // is last dim
+    };
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
 
@@ -92,7 +103,12 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Create writer kernel
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_page_size};
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)output_page_size,         // output page size
+        (std::uint32_t)index.physical_volume(),  // num elements in index array
+        (std::uint32_t)input.element_size(),     // element size in bytes
+        (std::uint32_t)(dim == n - 1)            // is last dim
+    };
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
@@ -102,7 +118,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // Set runtime args for each core
-    uint32_t unit_offset = 0;
+    uint32_t start_row_id = 0;
     auto cores = corerange_to_cores(all_cores);
     for (const auto& core : cores) {
         uint32_t num_rows_per_core{};
@@ -113,20 +129,34 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         } else {
             TT_FATAL(false, "Core not in specified core ranges");
         }
+
         SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            {input.buffer()->address(),
-             index.buffer()->address(),
-             fill_value,
-             unit_offset,
-             num_rows_per_core,
-             num_rows_to_fill_per_index,
-             input_shape[dim]});
-        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_rows_per_core, unit_offset});
+            {
+                input.buffer()->address(),         // input tensor address
+                index.buffer()->address(),         // index tensor address
+                start_row_id,                      // start row
+                start_row_id + num_rows_per_core,  // end row
+                num_rows_in_dim,                   // num rows in dim
+                input_shape[dim]                   // dim size
+            });
 
-        unit_offset += num_rows_per_core;
+        SetRuntimeArgs(
+            program,
+            writer_kernel_id,
+            core,
+            {
+                output.buffer()->address(),        // output tensor address
+                start_row_id,                      // start row
+                start_row_id + num_rows_per_core,  // end row
+                num_rows_in_dim,                   // num rows in dim
+                input_shape[dim],                  // dim size
+                fill_value                         // fill value
+            });
+
+        start_row_id += num_rows_per_core;
     }
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
