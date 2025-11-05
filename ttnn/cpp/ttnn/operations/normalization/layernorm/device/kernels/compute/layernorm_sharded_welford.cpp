@@ -261,13 +261,13 @@ void MAIN {
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
             transpose_wh_tile(cb_in, w + index_h_offset, welford_input_dst);
             auto num_cols_in_tile = std::min(tile_width, partial_reduce_W - num_cols_processed);
-            welford_tile<per_core_recip_lut_size>(
+            welford_partial_tile<per_core_recip_lut_size>(
                 welford_input_dst, num_cols_processed, 0, num_cols_in_tile, *p_reciprocals);
             num_cols_processed += num_cols_in_tile;
             // welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, per_core_recip_lut_size>(
             //     w * tile_width, partial_reduce_W, 0, *p_reciprocals);
         }
-        welford_store_mean_var_to_dst_col<per_core_recip_lut_size>(
+        welford_store_mean_var_to_dst_row<per_core_recip_lut_size>(
             welford_mean_dst, partial_reduce_W - 1, *p_reciprocals);
         // We should transpose back to columns here
         // However, transpose_wh_dest() is currently buggy.

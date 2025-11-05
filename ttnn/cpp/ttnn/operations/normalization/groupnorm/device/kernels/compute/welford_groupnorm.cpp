@@ -224,7 +224,7 @@ void MAIN {
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                         welford_load_mean_m2_from_dst(mean_dst, g);
-                        welford_tile<reciprocal_size>(
+                        welford_partial_tile<reciprocal_size>(
                             input_dst, curr_xy_coord, group_offset, cols_consumed, *p_reciprocal);
                         welford_store_mean_m2_to_dst(mean_dst, g);
 

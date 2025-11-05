@@ -15,9 +15,13 @@ namespace ckernel {
 /**
  * @brief Initializes the Welford's algorithm.
  * Programs the address mod and replay buffers for the Welford's algorithm.
+ * Clears the previous mean and m2 values stored in the registers.
  * This call is blocking and is only available on the compute engine.
  */
-ALWI void welford_init() { MATH((llk_math_welfords_sfpu_init())); }
+ALWI void welford_init() {
+    MATH((llk_math_welfords_sfpu_init()));
+    MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
+}
 
 /**
  * @brief Clears stale mean and m2 values stored in the registers.
@@ -54,22 +58,22 @@ ALWI void welford_tile(
     MATH((llk_math_welfords_sfpu_calculate_welfords_tile_<reciprocal_size>(input_dst_idx, start_idx, reciprocal_lut)));
 }
 
-// ----------------------------------------------------------------------------
-// The below function is a flavor of above to use with row_offset argument. Refer to the docstring
-// of the above 3 functions for more details.
-//
-// @param row_offset The offset of the row to start from. Only rows starting from this offset are
-//                   processed in the tile. Should be 0 <= row_offset <= 31. row_offset should be a
-//                   multiple of 4.
-// ----------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------
+ *  The below function is a flavor of *welford_tile* to use with row_offset argument. Refer to the
+ *  docstring of *welford_tile* for more details.
+ *  @param row_offset The offset of the row to start from. Only rows starting from this offset are
+ *                    processed in the tile. Should be 0 <= row_offset <= 31. row_offset should be a
+ *                    multiple of 4. *num_rows* should be a multiple of 4.
+ * -----------------------------------------------------------------------------
+ */
 template <uint32_t reciprocal_size>
-ALWI void welford_tile(
+ALWI void welford_partial_tile(
     uint32_t input_dst_idx,
     uint32_t start_idx,
     uint32_t start_row,
     uint32_t num_rows,
     const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
-    MATH((llk_math_welfords_sfpu_calculate_welfords_tile_<reciprocal_size>(
+    MATH((llk_math_welfords_sfpu_calculate_welfords_partial_tile_<reciprocal_size>(
         input_dst_idx, start_idx, start_row, num_rows, reciprocal_lut)));
 }
 
@@ -102,7 +106,7 @@ ALWI void welford_load_mean_m2_from_dst(uint32_t mean_dst_idx) {
 }
 /**
  * @brief Converts the accumulated M2 (sum of squares of differences from the mean) to variance and
- * stores the final mean and variance in the first column of the tiles in the dst reg.
+ * stores the final mean and variance in the first row of the tiles in the dst reg.
  *
  * This function should be called after all elements of the input tile have been processed by
  * `welford_tile`. It can also be called after a call to `welford_load_mean_m2_from_dst` to load
@@ -121,12 +125,12 @@ ALWI void welford_load_mean_m2_from_dst(uint32_t mean_dst_idx) {
  *                         passed (reciprocal_size is 0), the reciprocal will be computed using
  *                         float division.
  * @return                 None. The mean and variance tiles are updated in place. The first
- *                         column of each tile will hold the respective values.
+ *                         row of each tile will hold the respective values.
  */
 template <std::size_t reciprocal_size>
-ALWI void welford_store_mean_var_to_dst_col(
+ALWI void welford_store_mean_var_to_dst_row(
     uint32_t mean_dst_idx, uint32_t scale_idx, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
-    MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_col<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
+    MATH((llk_math_welfords_sfpu_store_mean_var_to_dst_row<reciprocal_size>(mean_dst_idx, scale_idx, reciprocal_lut)));
 }
 
 /**

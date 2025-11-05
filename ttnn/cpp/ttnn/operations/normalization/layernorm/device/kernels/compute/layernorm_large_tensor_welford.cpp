@@ -150,7 +150,7 @@ void MAIN {
                 cb_wait_front(cb_result_or_input, j + 1);
                 transpose_wh_tile(cb_result_or_input, j, dst0);
                 auto num_cols_in_tile = std::min(tile_width, W - num_cols_processed);
-                welford_tile<W>(dst0, num_cols_processed, 0, num_cols_in_tile, *p_reciprocals);
+                welford_partial_tile<W>(dst0, num_cols_processed, 0, num_cols_in_tile, *p_reciprocals);
                 num_cols_processed += num_cols_in_tile;
             }
             welford_store_mean_m2_to_dst(dst1);
@@ -187,7 +187,7 @@ void MAIN {
         transpose_wh_tile(cb_welford.read(), 1, dst2);
 
         welford_load_mean_m2_from_dst(dst1);
-        welford_store_mean_var_to_dst_col<W>(dst1, W - 1, *p_reciprocals);
+        welford_store_mean_var_to_dst_row<W>(dst1, W - 1, *p_reciprocals);
 
         tile_regs_commit();
         tile_regs_wait();
