@@ -96,12 +96,12 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     # keep in mind that rope is not applied by model definition on the vision branch while HF has differnent format in weights thus the following is done so it does affect other scripts
     prefix = "global_" if is_global else ""
     for id_b, _ in enumerate(callable_reference.layers):
-        state_dict[
-            "vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wq.weight".format(id_b)
-        ] = callable_reference.layers[id_b].self_attn.q_proj.weight
-        state_dict[
-            "vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wk.weight".format(id_b)
-        ] = callable_reference.layers[id_b].self_attn.k_proj.weight
+        callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
+            state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wq.weight".format(id_b)]
+        )
+        callable_reference.layers[id_b].self_attn.k_proj.weight = torch.nn.Parameter(
+            state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wk.weight".format(id_b)]
+        )
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageTransformer(
