@@ -25,6 +25,8 @@ public:
 
     uint32_t get_next_event(uint8_t cq_id);
 
+    uint32_t get_last_event(uint8_t cq_id);
+
     void reset_event_id(uint8_t cq_id);
 
     void increment_event_id(uint8_t cq_id, uint32_t val);

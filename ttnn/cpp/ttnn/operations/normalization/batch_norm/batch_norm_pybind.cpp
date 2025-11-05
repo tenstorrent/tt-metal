@@ -19,8 +19,6 @@ void bind_batch_norm_operation(py::module& module) {
         module,
         ttnn::batch_norm,
         R"doc(
-        ``ttnn.batch_norm(input: ttnn.Tensor, running_mean: Optional[ttnn.Tensor] = None, running_var: Optional[ttnn.Tensor] = None, training: bool = False, eps: float = 1e-05, momentum: float = 0.1, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, output: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
-
         Applies batch norm over each channel on :attr:`input_tensor`.
         See `Spatial Batch Normalization <https://arxiv.org/abs/1502.03167>`_ for more details.
 
