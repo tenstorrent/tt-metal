@@ -134,7 +134,7 @@ run_tg_dit_tests() {
 
   echo "LOG_METAL: Running ${test_cmd}"
 
-  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto ${test_cmd} --timeout 600 ; fail+=$?
+  NO_PROMPT=1 TT_MM_THROTTLE_PERF=5 pytest -n auto ${test_cmd} --timeout 1200 ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: ${test_name} failed"

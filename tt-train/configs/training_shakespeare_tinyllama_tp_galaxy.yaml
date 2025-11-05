@@ -23,7 +23,7 @@ training_config:
     num_blocks: 22
     vocab_size: 32000
     max_sequence_length: 2048
-    runner_type: memory_efficient
+    runner_type: default
     theta: 10000.0
     weight_tying: "disabled"
 eval_config:
