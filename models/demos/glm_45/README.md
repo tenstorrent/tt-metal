@@ -1,6 +1,6 @@
-# GPT-OSS: Mixture of Experts Language Model
+# GLM-4.5-Air: Mixture of Experts Language Model
 
-Inference implementation for GPT-OSS models on Tenstorrent Wormhole accelerators.
+Inference implementation for GLM models on Tenstorrent Wormhole accelerators.
 
 **Model Source**: [GLM-4.5 Air on HuggingFace](https://huggingface.co/zai-org/GLM-4.5-Air) (custom MoE architecture)
 
