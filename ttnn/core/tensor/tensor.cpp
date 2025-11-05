@@ -186,7 +186,7 @@ Tensor Tensor::from_vector(
         TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
     auto res = Tensor(create_host_buffer_from_row_major_data(std::move(buffer), buffer_spec, pad_value), buffer_spec);
     // Convert to datatype from original spec
-    res = ttnn::to_dtype(res, spec.data_type());
+    res = ops::to_dtype(res, spec.data_type());
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
