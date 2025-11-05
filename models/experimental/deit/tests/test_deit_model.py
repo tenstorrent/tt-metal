@@ -8,8 +8,8 @@ from transformers import DeiTForImageClassification, AutoImageProcessor
 from loguru import logger
 
 from models.experimental.deit.tt.deit_model import TtDeiTModel
-from models.common.utility_functions import (
-    torch_to_tt_tensor_rm,
+from models.utility_functions import (
+    torch_to_tt_tensor_tile,
     tt_to_torch_tensor,
     comp_pcc,
     comp_allclose_and_pcc,
@@ -49,7 +49,7 @@ def test_deit_model_inference(device, hf_cat_image_sample_input, pcc=0.95):
         )[0]
 
         # setup tt model
-        tt_image = torch_to_tt_tensor_rm(input_image, device, put_on_device=False)
+        tt_image = torch_to_tt_tensor_tile(input_image, device)
         tt_model = TtDeiTModel(
             config,
             device,
