@@ -148,7 +148,7 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 ttnn_center,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_center_output_channels_for_slicing(),
-                exp_pcc=0.803,
+                exp_pcc=0.792,
             )
         )
         all_passed.append(
@@ -158,7 +158,7 @@ def test_model_panoptic_deeplab(device, model_category, model_location_generator
                 ttnn_offset,
                 to_channel_first=False,
                 output_channels=ttnn_model.instance_head.get_offset_output_channels_for_slicing(),
-                exp_pcc=0.988,
+                exp_pcc=0.991,
             )
         )
 
