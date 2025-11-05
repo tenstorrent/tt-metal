@@ -13,7 +13,8 @@
 namespace ttnn::operations::core {
 
 // Helper function to update device buffer metadata (page size and shard spec)
-// This mirrors the logic from view.cpp but is extracted for clarity
+// This mirrors the logic from view.cpp
+// TODO: Test this function with all kinds of memory configs and layouts
 static ttnn::Tensor update_device_tensor_metadata(const ttnn::Tensor& input_tensor, const TensorSpec& new_spec) {
     auto device_storage = std::get<tt::tt_metal::DeviceStorage>(input_tensor.storage());
 

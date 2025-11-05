@@ -170,6 +170,8 @@ public:
     bool is_allocated() const;
 
     tt::tt_metal::Buffer* buffer() const;
+    // TODO: map more buffer properties here when we find ops that need them
+    uint32_t buffer_alignment() const;
 
     const tt::tt_metal::DeviceStorage& device_storage() const&;
     const tt::tt_metal::DeviceStorage& device_storage() const&& = delete;
