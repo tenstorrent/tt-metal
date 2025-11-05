@@ -251,7 +251,9 @@ class Attention:
         mode = "decode" if is_decode_mode else "prefill"
 
         # QKV projection: single matmul + bias
-        xqkv_fused = ttnn.matmul(x, self.wqkv, dtype=ttnn.bfloat16)
+        # Use L1_WIDTH_SHARDED for decode mode (like tt-transformers), DRAM for prefill
+        matmul_mem_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if is_decode_mode else ttnn.DRAM_MEMORY_CONFIG
+        xqkv_fused = ttnn.matmul(x, self.wqkv, dtype=ttnn.bfloat16, memory_config=matmul_mem_config)
         xqkv_fused = ttnn.add(xqkv_fused, self.wqkv_bias, output_tensor=xqkv_fused)
 
         if is_decode_mode:
@@ -286,10 +288,8 @@ class Attention:
             tt_k, rope_mats[0], rope_mats[1], self.transformation_mats[mode], is_decode_mode=is_decode_mode
         )
 
-        # After RoPE in decode mode, convert back to interleaved for KV cache update
-        if is_decode_mode:
-            tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-            tt_k = ttnn.to_memory_config(tt_k, ttnn.DRAM_MEMORY_CONFIG)
+        # After RoPE: Q/K stay in HEIGHT_SHARDED format for decode (required by SDPA decode)
+        # For prefill, they're already in DRAM interleaved
 
         if is_decode_mode:
             # Use external kv_cache if provided (like tt-transformers), otherwise use internal cache
@@ -318,6 +318,7 @@ class Attention:
             tt_v.deallocate(True)
 
             # Use paged SDPA when page_table is available (like tt-transformers)
+            # Q comes in HEIGHT_SHARDED, output to DRAM for decode
             if page_table is not None:
                 tt_sdpa_tensor = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                     tt_q,
@@ -347,10 +348,30 @@ class Attention:
                 )
             tt_q.deallocate(True)
 
-            tt_sdpa_tensor = ttnn.transpose(tt_sdpa_tensor, 1, 2)
-            tt_sdpa_out = ttnn.experimental.nlp_concat_heads(
-                tt_sdpa_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )  # [1, 1, num_tokens, dim * nh]
+            # Convert SDPA output to HEIGHT_SHARDED for nlp_concat_heads_decode
+            # SDPA decode output shape is already correct - don't transpose!
+            # Create sharded memory config matching tt-transformers pattern
+            grid_size = self.mesh_device.compute_with_storage_grid_size()
+            batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
+
+            # Calculate padded heads (must be tile-aligned, e.g., 32)
+            # Use local heads per device, not global heads
+            padded_heads = ((self.num_local_heads + 31) // 32) * 32
+
+            height_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=(padded_heads, self.head_dim),  # Shape per shard (tile-aligned)
+                core_grid=batch_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
+
+            # Use nlp_concat_heads_decode for decode mode (requires HEIGHT_SHARDED input)
+            # Pass local heads per device (tensor is already sharded across devices)
+            tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(
+                tt_sdpa_tensor, num_heads=self.num_local_heads
+            )  # [1, 1, num_tokens, local_dim]
             tt_sdpa_tensor.deallocate(True)
         else:
             # Fill cache (prefill mode)
@@ -409,18 +430,30 @@ class Attention:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16)
+        # O-projection: use WIDTH_SHARDED for decode, DRAM for prefill
+        matmul_mem_config = ttnn.L1_MEMORY_CONFIG
+        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16, memory_config=matmul_mem_config)
         tt_sdpa_out.deallocate(True)
         tt_out = ttnn.add(tt_out, self.o_proj_bias, output_tensor=tt_out)
+        print(tt_out.shape, (batch_size, max(32, seq_len), self.hidden_size))
 
-        tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
+        tt_out = ttnn.reshape(tt_out, (batch_size, max(32, seq_len), self.hidden_size))
 
         # Clean tensor parallel communication (with performance padding)
         if self.mesh_config.tp > 1:
             tt_out = ttnn.unsqueeze(tt_out, 0)
             tt_out = self.mesh_config.allreduce(
-                tt_out, self.ccl_manager, pad_size=192 if self.mesh_config.tp == 8 else 0, axis=self.mesh_config.tp_axis
+                tt_out,
+                self.ccl_manager,
+                memory_config=matmul_mem_config,
+                pad_size=192 if self.mesh_config.tp == 8 else 0,
+                axis=self.mesh_config.tp_axis,
             )
-            tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
+            print(
+                tt_out.shape, (batch_size, seq_len, self.hidden_size), (batch_size, max(32, seq_len), self.hidden_size)
+            )
+            tt_out = ttnn.reshape(
+                tt_out, (batch_size, seq_len, self.hidden_size), (batch_size, max(32, seq_len), self.hidden_size)
+            )
 
         return tt_out
