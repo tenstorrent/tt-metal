@@ -2162,6 +2162,9 @@ void ControlPlane::populate_fabric_connection_info(
             physical_chip_id, mux_core_logical, CoreType::WORKER);
         // Get the RISC ID that handles this ethernet channel
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
+        // In UDM mode, MUX only has 1 channel (worker channel = 0) for now
+        uint32_t tensix_sender_channel =
+            (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) ? 0 : sender_channel;
 
         fill_tensix_connection_info_fields(
             tensix_connection_info,
@@ -2169,7 +2172,7 @@ void ControlPlane::populate_fabric_connection_info(
             tensix_config,
             physical_chip_id,
             eth_channel_id,
-            sender_channel,
+            tensix_sender_channel,
             core_id);
     } else {
         dispatcher_connection_info = worker_connection_info;
