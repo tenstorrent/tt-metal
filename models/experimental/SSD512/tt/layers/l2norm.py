@@ -32,34 +32,41 @@ class TtL2Norm:
         """Apply L2 normalization and learned scale.
 
         Args:
-            x: Input tensor of shape [N, C, H, W]
+            x: Input tensor (ttnn.Tensor) in NHWC format [N, H, W, C] from VGG backbone
 
         Returns:
-            Normalized and scaled tensor of same shape as input.
+            Normalized and scaled tensor in NCHW format [N, C, H, W]
         """
-        # Compute L2 norm across channel dimension (dim=1)
+        # Input x is in NHWC format from VGG backbone: [N, H, W, C]
+        # Convert to torch to check format and convert to NCHW
+        x_torch = tt_to_torch_tensor(x)
+
+        # Check if already in NCHW format (shape[1] == channels)
+        if x_torch.shape[1] == self.n_channels:
+            # Already in NCHW format
+            x_nchw = x_torch
+        else:
+            # Assume NHWC format: [N, H, W, C] -> [N, C, H, W]
+            x_nchw = x_torch.permute(0, 3, 1, 2)
+
+        # Convert back to TTNN in NCHW format for L2Norm computation
+        x_nchw_ttnn = torch_to_tt_tensor_rm(x_nchw, device=self.device)
+
+        # Compute L2 norm across channel dimension (dim=1 in NCHW)
         # Square -> sum across channels -> sqrt -> add eps
-        squared = ttnn.mul(x, x)  # Element-wise square
+        squared = ttnn.mul(x_nchw_ttnn, x_nchw_ttnn)
         squared = ttnn.to_layout(squared, layout=ttnn.TILE_LAYOUT)
-        norm = ttnn.sqrt(ttnn.sum(squared, dim=1, keepdim=True)) + self.eps
+        norm = ttnn.sqrt(ttnn.sum(squared, dim=1, keepdim=True)) + self.eps  # Sum along C dimension in NCHW
 
         # Convert norm back to same layout as input for division
         norm = ttnn.to_layout(norm, layout=ttnn.TILE_LAYOUT)
 
-        # Normalize by dividing by norm (broadcasting 1 across channel dim)
-        x_norm = ttnn.div(x, norm)  # norm broadcasts from [N,1,H,W] to [N,C,H,W]
+        # Normalize by dividing by norm (broadcasting [N,1,H,W] across [N,C,H,W])
+        x_norm = ttnn.div(x_nchw_ttnn, norm)
 
-        x_norm = tt_to_torch_tensor(x_norm)
-        x_norm = torch.permute(x_norm, (0, 3, 1, 2))
-        x_norm = torch_to_tt_tensor_rm(x_norm, device=self.device)
-
-        # weight_torch = tt_to_torch_tensor(self.weight)
-        # Permute from [1, C, 1, 1] (NCHW) to [1, 1, 1, C] (NHWC)
-        # weight_nhwc_torch = weight_torch.permute(0, 2, 3, 1)  # [1, C, 1, 1] -> [1, 1, 1, C]
-        # weight_nhwc = torch_to_tt_tensor_rm(weight_nhwc_torch, device=self.device)
-
-        # Scale each channel by learned weight (broadcasts [1,C,1,1] across N,H,W)
-        out = ttnn.mul(x_norm, self.weight)  # weight: [1,1,1,C], x_norm: [N,C,H,W]
+        # Scale each channel by learned weight (weight is [1, C, 1, 1] in NCHW)
+        # This broadcasts [1,C,1,1] across [N,C,H,W]
+        out = ttnn.mul(x_norm, self.weight)
 
         return out
 

@@ -254,6 +254,16 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
             bias = layer.get("bias", None)
             config = layer["config"]
 
+            # if isinstance(weight, torch.Tensor):
+            #     weight = ttnn.from_torch(
+            #         weight, device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            #     )
+            # if bias is not None and isinstance(bias, torch.Tensor):
+            #     bias_reshaped = bias.reshape((1, 1, 1, -1))
+            #     bias = ttnn.from_torch(
+            #         bias_reshaped, device=device, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            #     )
+
             # Use tracked dimensions instead of reading from tensor shape
             input_height = current_h
             input_width = current_w
@@ -308,6 +318,17 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                 conv_bias = bias  # Use bias normally for L1 slicing
                 slice_config = ttnn.Conv2dL1FullSliceConfig
 
+            # Create compute_config with HiFi4 and fp32 accumulator for higher precision
+            compute_config = None
+            if device is not None:
+                compute_config = ttnn.init_device_compute_kernel_config(
+                    device.arch(),
+                    math_fidelity=ttnn.MathFidelity.HiFi4,  # High fidelity for better precision
+                    fp32_dest_acc_en=True,  # Use fp32 accumulator for higher precision
+                    packer_l1_acc=False,
+                    math_approx_mode=False,  # Disable math approximation for maximum precision
+                )
+
             # Call ttnn.conv2d with slice_config
             # Note: When using DRAM slicing, bias_tensor must be Python None
             output_tensor, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
@@ -330,6 +351,7 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                 dtype=dtype,
                 memory_config=memory_config,
                 slice_config=slice_config,
+                compute_config=compute_config,  # HiFi4 with fp32 accumulator for higher precision
             )
 
             # Convert back to TILE_LAYOUT if we switched to ROW_MAJOR for slicing
@@ -389,7 +411,7 @@ extras = {
 }
 
 
-def build_extras_backbone(size=300, input_channels=1024, device=None):
+def build_extras_backbone(size=512, input_channels=1024, device=None):
     """
     Build extras backbone for specified input size.
 

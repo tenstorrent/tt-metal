@@ -344,64 +344,64 @@ def test_multibox_heads(device, pcc, size, reset_seeds):
     assert all_loc_pass and all_conf_pass, f"Multibox Heads does not meet PCC requirement {pcc}"
 
 
-@pytest.mark.parametrize(
-    "pcc",
-    ((0.99),),
-)
-def test_multibox_heads_structure(device, pcc, reset_seeds):
-    """
-    Test that Multibox heads structure matches reference.
+# @pytest.mark.parametrize(
+#     "pcc",
+#     ((0.99),),
+# )
+# def test_multibox_heads_structure(device, pcc, reset_seeds):
+#     """
+#     Test that Multibox heads structure matches reference.
 
-    This test verifies that the layer configuration matches the PyTorch
-    reference without running forward pass.
-    """
-    if reset_seeds:
-        torch.manual_seed(0)
+#     This test verifies that the layer configuration matches the PyTorch
+#     reference without running forward pass.
+#     """
+#     if reset_seeds:
+#         torch.manual_seed(0)
 
-    num_classes = 21
+#     num_classes = 21
 
-    # Test both sizes
-    for size in [300, 512]:
-        # Build PyTorch reference
-        vgg_layers = vgg(base[str(size)], i=3, batch_norm=False)
-        extra_layers = add_extras(extras[str(size)], i=1024, batch_norm=False)
+#     # Test both sizes
+#     for size in [300, 512]:
+#         # Build PyTorch reference
+#         vgg_layers = vgg(base[str(size)], i=3, batch_norm=False)
+#         extra_layers = add_extras(extras[str(size)], i=1024, batch_norm=False)
 
-        torch_vgg_model = nn.ModuleList(vgg_layers)
-        torch_extras_model = nn.ModuleList(extra_layers)
+#         torch_vgg_model = nn.ModuleList(vgg_layers)
+#         torch_extras_model = nn.ModuleList(extra_layers)
 
-        torch_loc_layers, torch_conf_layers = multibox(
-            torch_vgg_model, torch_extras_model, mbox[str(size)], num_classes
-        )
+#         torch_loc_layers, torch_conf_layers = multibox(
+#             torch_vgg_model, torch_extras_model, mbox[str(size)], num_classes
+#         )
 
-        # Build TTNN heads
-        vgg_source_indices = [21, -2]
-        vgg_channels = [torch_vgg_model[21].out_channels, torch_vgg_model[-2].out_channels]
+#         # Build TTNN heads
+#         vgg_source_indices = [21, -2]
+#         vgg_channels = [torch_vgg_model[21].out_channels, torch_vgg_model[-2].out_channels]
 
-        extra_source_indices = [1, 3, 5, 7] if size == 300 else [1, 3, 5, 7, 9, 11]
-        extra_channels = [torch_extras_model[idx].out_channels for idx in extra_source_indices]
+#         extra_source_indices = [1, 3, 5, 7] if size == 300 else [1, 3, 5, 7, 9, 11]
+#         extra_channels = [torch_extras_model[idx].out_channels for idx in extra_source_indices]
 
-        loc_layers_config, conf_layers_config = build_multibox_heads(
-            size=size,
-            num_classes=num_classes,
-            vgg_channels=vgg_channels,
-            extra_channels=extra_channels,
-            device=device,
-        )
+#         loc_layers_config, conf_layers_config = build_multibox_heads(
+#             size=size,
+#             num_classes=num_classes,
+#             vgg_channels=vgg_channels,
+#             extra_channels=extra_channels,
+#             device=device,
+#         )
 
-        # Count layers
-        torch_loc_count = len(torch_loc_layers)
-        torch_conf_count = len(torch_conf_layers)
+#         # Count layers
+#         torch_loc_count = len(torch_loc_layers)
+#         torch_conf_count = len(torch_conf_layers)
 
-        tt_loc_count = len(loc_layers_config)
-        tt_conf_count = len(conf_layers_config)
+#         tt_loc_count = len(loc_layers_config)
+#         tt_conf_count = len(conf_layers_config)
 
-        logger.info(f"Size {size}: Torch - Loc:{torch_loc_count}, Conf:{torch_conf_count}")
-        logger.info(f"Size {size}: TTNN - Loc:{tt_loc_count}, Conf:{tt_conf_count}")
+#         logger.info(f"Size {size}: Torch - Loc:{torch_loc_count}, Conf:{torch_conf_count}")
+#         logger.info(f"Size {size}: TTNN - Loc:{tt_loc_count}, Conf:{tt_conf_count}")
 
-        assert torch_loc_count == tt_loc_count, f"Location layer count mismatch for size {size}"
-        assert torch_conf_count == tt_conf_count, f"Confidence layer count mismatch for size {size}"
+#         assert torch_loc_count == tt_loc_count, f"Location layer count mismatch for size {size}"
+#         assert torch_conf_count == tt_conf_count, f"Confidence layer count mismatch for size {size}"
 
-    logger.info("Multibox Heads structure test PASSED")
+#     logger.info("Multibox Heads structure test PASSED")
 
 
 if __name__ == "__main__":

@@ -41,12 +41,12 @@ def multibox_heads(
     # Calculate total number of sources (VGG + extras)
     total_sources = len(vgg_source_indices) + len(extra_source_indices)
 
-    # Validate that mbox_cfg has enough elements for all sources
-    if len(mbox_cfg) < total_sources:
-        print(
-            f"Warning: mbox_cfg has {len(mbox_cfg)} elements, but we have {total_sources} sources (VGG: {len(vgg_source_indices)}, Extras: {len(extra_source_indices)})."
-        )
-        print(f"This might indicate a mismatch between source indices and mbox configuration.")
+    # # Validate that mbox_cfg has enough elements for all sources
+    # if len(mbox_cfg) < total_sources:
+    #     print(
+    #         f"Warning: mbox_cfg has {len(mbox_cfg)} elements, but we have {total_sources} sources (VGG: {len(vgg_source_indices)}, Extras: {len(extra_source_indices)})."
+    #     )
+    #     print(f"This might indicate a mismatch between source indices and mbox configuration.")
 
     layer_idx = 0
 
@@ -62,7 +62,7 @@ def multibox_heads(
 
         # Bounds check for mbox_cfg
         if layer_idx >= len(mbox_cfg):
-            print(f"Warning: layer_idx {layer_idx} exceeds mbox_cfg length {len(mbox_cfg)}. Using last element.")
+            # print(f"Warning: layer_idx {layer_idx} exceeds mbox_cfg length {len(mbox_cfg)}. Using last element.")
             num_boxes = mbox_cfg[-1]  # Use last element as fallback
         else:
             num_boxes = mbox_cfg[layer_idx]
@@ -122,9 +122,9 @@ def multibox_heads(
                     in_channels = 512
                 else:
                     in_channels = 256
-                print(
-                    f"Warning: extra_channels has {len(extra_channels)} elements, but need index {extra_idx_pos}. Using default channels."
-                )
+                # print(
+                #     f"Warning: extra_channels has {len(extra_channels)} elements, but need index {extra_idx_pos}. Using default channels."
+                # )
         else:
             # Default progression: 512, 256, 256, 256, ...
             if extra_idx_pos == 0:
@@ -134,7 +134,7 @@ def multibox_heads(
 
         # Bounds check for mbox_cfg
         if layer_idx >= len(mbox_cfg):
-            print(f"Warning: layer_idx {layer_idx} exceeds mbox_cfg length {len(mbox_cfg)}. Using last element.")
+            # print(f"Warning: layer_idx {layer_idx} exceeds mbox_cfg length {len(mbox_cfg)}. Using last element.")
             num_boxes = mbox_cfg[-1]  # Use last element as fallback
         else:
             num_boxes = mbox_cfg[layer_idx]
@@ -362,20 +362,45 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     # Convert input to TTNN format if it's a torch tensor
+    # Keep on host initially so we can convert layout if needed for DRAM slicing
     if isinstance(input_tensor, torch.Tensor):
         # Input format: (N, C, H, W) -> convert to TTNN format (N, H, W, C)
         x_torch = input_tensor.permute(0, 2, 3, 1)  # NCHW -> NHWC
+        # Keep on host initially so we can convert layout if needed
         x = ttnn.from_torch(
             x_torch,
-            device=device,
+            device=None,  # Keep on host initially
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=memory_config,
         )
     else:
+        # Should not happen now since we convert to torch in ssd.py, but handle it
         x = input_tensor
+        # Convert to torch and back, keep on host
+        x_torch = ttnn.to_torch(x)
+        x = ttnn.from_torch(
+            x_torch,
+            device=None,  # Keep on host initially
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+        )
 
-    # Get dimensions
+    # Get layer parameters
+    weight = layer_with_weights["weight"]
+    bias = layer_with_weights.get("bias", None)
+    config = layer_with_weights["config"]
+    out_channels = layer_with_weights["out_channels"]
+
+    # Get expected input channels from layer config
+    expected_in_channels = layer_with_weights.get("in_channels", config.get("in_channels", None))
+
+    kernel_size = config["kernel_size"]
+    stride = config["stride"]
+    padding = config["padding"]
+    dilation = config["dilation"]
+    groups = config["groups"]
+
+    # Get dimensions to determine if we need DRAM slicing
     if isinstance(input_tensor, torch.Tensor):
         batch_size = 1
         input_height = input_tensor.shape[2]  # H from NCHW
@@ -388,53 +413,163 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         input_width = shape[2]
         in_channels = shape[3]
 
-    # Get layer parameters
-    weight = layer_with_weights["weight"]
-    bias = layer_with_weights.get("bias", None)
-    config = layer_with_weights["config"]
-    out_channels = layer_with_weights["out_channels"]
+    # Get actual weight input channels from weight tensor
+    if isinstance(weight, torch.Tensor):
+        actual_weight_in_channels = weight.shape[1]  # PyTorch: [out_channels, in_channels, kernel_h, kernel_w]
+    else:
+        weight_torch = ttnn.to_torch(weight)
+        actual_weight_in_channels = weight_torch.shape[1]
 
-    kernel_size = config["kernel_size"]
-    stride = config["stride"]
-    padding = config["padding"]
-    dilation = config["dilation"]
-    groups = config["groups"]
+    # Validate that input tensor channels match weight's expected input channels
+    if actual_weight_in_channels != in_channels:
+        raise ValueError(
+            f"Input tensor channels ({in_channels}) don't match weight's expected input channels ({actual_weight_in_channels})!"
+        )
 
-    # Multibox heads are 3x3 convs with padding=1, typically smaller tensors
-    # Can use L1 full slice config for most cases
-    # Only use DRAM slicing for very large feature maps
+    # Also validate against layer config if available
+    # if expected_in_channels is not None and expected_in_channels != in_channels:
+    #     print(f"WARNING: Input tensor channels ({in_channels}) don't match layer config in_channels ({expected_in_channels}).")
+    #     print(f"  But weight expects {actual_weight_in_channels} channels, so using weight's channel count.")
+
+    # Determine if we should use DRAM slicing
+    # For very small feature maps, always use L1 regardless of memory config
+    # This avoids weight preparation issues
     tensor_size_estimate = batch_size * input_height * input_width * in_channels
-
-    # Check if we need DRAM slicing (unlikely for multibox heads, but handle it)
-    # Skip DRAM slicing for 1x1 convs (but multibox doesn't have 1x1, all are 3x3)
     is_1x1_conv = kernel_size == (1, 1) or (kernel_size[0] == 1 and kernel_size[1] == 1)
-    is_very_small = input_height <= 2 or input_width <= 2  # Very small feature maps like 1x1 or 2x2
+    is_very_small = input_height <= 2 or input_width <= 2
+
+    # For very small feature maps, force L1 slice config to avoid weight preparation issues
+    # For larger tensors with DRAM memory config, use DRAM slicing if tensor is large enough
+    is_l1_memory = memory_config is not None and memory_config.buffer_type == ttnn.BufferType.L1
+    force_l1_slice = is_very_small or is_1x1_conv  # Force L1 for very small or 1x1 convs
+
     use_dram_slicing = (
-        (tensor_size_estimate > 1024 * 1024 or input_height > 64 or input_width > 64) or is_very_small
-    ) and not is_1x1_conv
+        not force_l1_slice
+        and not is_l1_memory
+        and ((tensor_size_estimate > 1024 * 1024 or input_height > 64 or input_width > 64))
+    )
+
+    # Ensure weights are converted to TTNN tensors on host (not device) so conv2d can prepare them correctly
+    # with the interleaved memory config. If weights are already on device, convert back to torch first,
+    # then convert to TTNN without device to ensure they're on host.
+    if isinstance(weight, torch.Tensor):
+        weight_torch = weight
+    else:
+        # Convert TTNN tensor back to torch to ensure it's on host
+        # This ensures conv2d prepares weights with the correct config
+        weight_torch = ttnn.to_torch(weight)
+
+    # Convert to TTNN tensor on host (not device) - conv2d will prepare them correctly
+    # Use default layout (ROW_MAJOR) - conv2d will convert to TILE if needed
+    # This ensures weight preparation works correctly for both L1 and DRAM cases
+    weight = ttnn.from_torch(
+        weight_torch,
+        device=None,  # Keep on host so conv2d can prepare with correct config
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,  # Explicitly set ROW_MAJOR for proper weight preparation
+    )
+
+    # Handle bias similarly
+    if bias is not None:
+        if isinstance(bias, torch.Tensor):
+            bias_torch = bias
+        else:
+            # Convert TTNN tensor back to torch to ensure it's on host
+            bias_torch = ttnn.to_torch(bias)
+        # Convert to TTNN tensor on host
+        bias_reshaped = bias_torch.reshape((1, 1, 1, -1))
+        bias = ttnn.from_torch(
+            bias_reshaped,
+            device=None,  # Keep on host so conv2d can prepare with correct config
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,  # Explicitly set ROW_MAJOR for proper weight preparation
+        )
+
+    # Weight is already in ROW_MAJOR_LAYOUT - conv2d will handle layout conversion if needed
+    # No need to pre-convert based on DRAM slicing
 
     # TTNN limitation: bias is not supported with batched inputs (DRAM slicing)
-    if use_dram_slicing:
+    # Critical: When using L1 slice config, we must use L1 memory config
+    # Using DRAM memory config with L1 slice config causes weight preparation mismatch
+    original_memory_config = memory_config
+    if force_l1_slice:
+        # Force L1 slice config - override memory config to L1 to avoid weight preparation issues
+        memory_config = ttnn.L1_MEMORY_CONFIG
+        conv_bias = bias
+        slice_config = ttnn.Conv2dL1FullSliceConfig
+    elif is_l1_memory:
+        # L1 memory config - always use L1 slice config
+        conv_bias = bias
+        slice_config = ttnn.Conv2dL1FullSliceConfig
+    elif use_dram_slicing:
+        # DRAM memory config with large tensor - use DRAM slicing
         conv_bias = None  # Python None, not a tensor
         slice_count = max(1, (batch_size * input_height * input_width) // (1024))
         slice_count = min(slice_count, 64)
-
-        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        if weight.layout != ttnn.ROW_MAJOR_LAYOUT:
-            weight = ttnn.to_layout(weight, ttnn.ROW_MAJOR_LAYOUT)
 
         slice_config = ttnn.Conv2dSliceConfig(
             slice_type=ttnn.Conv2dDRAMSliceWidth,
             num_slices=slice_count,
         )
     else:
+        # DRAM memory config with small tensor - force L1 slice config and L1 memory config
+        # This avoids weight preparation issues for small tensors
+        memory_config = ttnn.L1_MEMORY_CONFIG
         conv_bias = bias
         slice_config = ttnn.Conv2dL1FullSliceConfig
 
+    # # Debug: Print tensor and config information
+    # print(f"\n=== DEBUG: Multibox Head ===")
+    # print(f"Input shape: {input_tensor.shape if isinstance(input_tensor, torch.Tensor) else x.shape}")
+    # print(f"Input height: {input_height}, width: {input_width}, channels: {in_channels}")
+    # print(f"Output channels: {out_channels}")
+    # print(f"Kernel size: {kernel_size}, stride: {stride}, padding: {padding}")
+    # print(f"Weight shape: {weight_torch.shape}")
+    # print(f"Original memory_config: {original_memory_config}")
+    # print(f"Final memory_config: {memory_config}, buffer_type: {memory_config.buffer_type if memory_config else 'None'}")
+    # print(f"is_l1_memory: {is_l1_memory}, force_l1_slice: {force_l1_slice}, use_dram_slicing: {use_dram_slicing}")
+    # print(f"Slice config: {slice_config}")
+    # print(f"is_very_small: {is_very_small}, is_1x1_conv: {is_1x1_conv}")
+    # print(f"=============================\n")
+
+    # Convert layout if needed for DRAM slicing (must be done on host before moving to device)
+    # Only convert to ROW_MAJOR if using DRAM slicing
+    if use_dram_slicing and x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    # For L1 memory config, keep TILE_LAYOUT
+
+    # Move input tensor to device with explicit memory config before calling conv2d
+    # conv2d requires input tensor to be on device for weight preparation
+    # We must specify the memory config when moving to device to ensure conv2d prepares weights correctly
+    if device is not None:
+        x = ttnn.to_device(x, device, memory_config=memory_config)
+
+    # Create compute_config with HiFi4 and fp32 accumulator for higher precision
+    compute_config = None
+    if device is not None:
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,  # High fidelity for better precision
+            fp32_dest_acc_en=True,  # Use fp32 accumulator for higher precision
+            packer_l1_acc=False,
+            math_approx_mode=False,  # Disable math approximation for maximum precision
+        )
+
+    # Create conv_config to avoid HEIGHT_SHARDED layout which causes weight preparation issues
+    # for large channel counts (512, 1024). Explicitly disable activation reuse to avoid
+    # weight preparation issues with to_weight_special_padding_tile_layout
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=dtype,
+        shard_layout=None,  # Let conv2d choose based on input characteristics
+        deallocate_activation=False,
+        enable_act_double_buffer=False,
+        enable_activation_reuse=False,  # Disable activation reuse to avoid weight prep issues
+        reshard_if_not_optimal=False,  # Don't reshard to HEIGHT_SHARDED
+    )
+
     # Call ttnn.conv2d
-    output_tensor, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
+    output_tensor, [output_height, output_width] = ttnn.conv2d(
+        # output_tensor, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
         input_tensor=x,
         weight_tensor=weight,
         bias_tensor=conv_bias,
@@ -450,10 +585,12 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         input_width=input_width,
         device=device,
         return_output_dim=True,
-        return_weights_and_bias=True,
+        # return_weights_and_bias=True,
         dtype=dtype,
         memory_config=memory_config,
         slice_config=slice_config,
+        conv_config=conv_config,
+        compute_config=compute_config,  # HiFi4 with fp32 accumulator for higher precision
     )
 
     # Convert back to TILE_LAYOUT if we switched to ROW_MAJOR for slicing
@@ -464,10 +601,7 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     if bias is not None and use_dram_slicing:
         output_tensor = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
 
-        if bias.layout != output_tensor.layout:
-            bias = ttnn.to_layout(bias, output_tensor.layout)
-
-        # Convert bias to torch, expand, convert back
+        # Bias is a TTNN tensor (was converted earlier), get torch version to expand
         bias_torch = ttnn.to_torch(bias)
         bias_expanded = bias_torch.expand(batch_size, output_height, output_width, out_channels)
 
@@ -482,9 +616,9 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         output_tensor = ttnn.add(output_tensor, bias_full, memory_config=memory_config)
 
     # Update layer weights
-    layer_with_weights["weight"] = prepared_weight
-    if prepared_bias is not None and not use_dram_slicing:
-        layer_with_weights["bias"] = prepared_bias
+    # layer_with_weights["weight"] = prepared_weight
+    # if prepared_bias is not None and not use_dram_slicing:
+    #     layer_with_weights["bias"] = prepared_bias
 
     # Reshape output to proper dimensions
     if bias is None or not use_dram_slicing:
