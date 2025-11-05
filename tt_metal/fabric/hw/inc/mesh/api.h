@@ -2085,4 +2085,34 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
         page_size);
 }
 
+// Addrgen overload for _set_state variant
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint16_t wrap,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    // Call base _set_state with UpdateMask to set up all header fields
+    // This is typically called once before a loop
+    constexpr auto UpdateMask = UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
+                                UnicastFusedAtomicIncUpdateMask::SemaphoreAddr | UnicastFusedAtomicIncUpdateMask::Wrap |
+                                UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush |
+                                UnicastFusedAtomicIncUpdateMask::PayloadSize;
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush},
+        page_size);
+}
+
 }  // namespace tt::tt_fabric::mesh::experimental

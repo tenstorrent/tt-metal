@@ -207,13 +207,15 @@ Notes:
     constexpr const char* KDIR =
         "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/fused_atomic_inc_addrgen/kernels/";
 
-    // For fused atomic inc, we have base and _with_state variants
+    // For fused atomic inc, we have base, _with_state, and _set_state variants
     auto get_writer_kernel_path = [](AddrgenApiVariant variant) -> std::string {
         switch (variant) {
             case AddrgenApiVariant::FusedAtomicIncWrite:
                 return std::string(KDIR) + "fused_atomic_inc_tx_writer_addrgen.cpp";
             case AddrgenApiVariant::FusedAtomicIncWriteWithState:
                 return std::string(KDIR) + "fused_atomic_inc_tx_writer_with_state_addrgen.cpp";
+            case AddrgenApiVariant::FusedAtomicIncWriteSetState:
+                return std::string(KDIR) + "fused_atomic_inc_tx_writer_set_state_addrgen.cpp";
             default: TT_FATAL(false, "Unknown API variant for fused atomic inc"); return "";
         }
     };
