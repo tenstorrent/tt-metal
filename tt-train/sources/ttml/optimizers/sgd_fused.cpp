@@ -40,10 +40,7 @@ void SGDFused::zero_grad() {
 }
 
 void SGDFused::step() {
-    if (m_config_dirty) {
-        validate_config();
-        m_config_dirty = false;
-    }
+    validate_config();
 
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
@@ -109,7 +106,6 @@ float SGDFused::get_lr() const {
 
 void SGDFused::set_lr(float lr) {
     m_config.lr = lr;
-    m_config_dirty = true;
 }
 
 float SGDFused::get_momentum() const {
@@ -118,7 +114,6 @@ float SGDFused::get_momentum() const {
 
 void SGDFused::set_momentum(float momentum) {
     m_config.momentum = momentum;
-    m_config_dirty = true;
 }
 
 float SGDFused::get_dampening() const {
@@ -127,7 +122,6 @@ float SGDFused::get_dampening() const {
 
 void SGDFused::set_dampening(float dampening) {
     m_config.dampening = dampening;
-    m_config_dirty = true;
 }
 
 float SGDFused::get_weight_decay() const {
@@ -136,7 +130,6 @@ float SGDFused::get_weight_decay() const {
 
 void SGDFused::set_weight_decay(float weight_decay) {
     m_config.weight_decay = weight_decay;
-    m_config_dirty = true;
 }
 
 bool SGDFused::get_nesterov() const {
@@ -145,7 +138,6 @@ bool SGDFused::get_nesterov() const {
 
 void SGDFused::set_nesterov(bool nesterov) {
     m_config.nesterov = nesterov;
-    m_config_dirty = true;
 }
 
 void SGDFused::validate_config() const {

@@ -49,7 +49,6 @@ public:
 
 private:
     void validate_config() const;
-    bool m_config_dirty{false};
     size_t m_steps{0};
     SGDFusedConfig m_config;
     ttml::serialization::NamedParameters m_momentum;
