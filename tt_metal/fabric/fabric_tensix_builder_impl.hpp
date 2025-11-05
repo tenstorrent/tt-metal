@@ -23,7 +23,7 @@ namespace tt::tt_fabric {
 
 // Forward declarations
 enum class FabricMuxChannelType : uint8_t;
-enum class FabricTensixRiscId : uint8_t;
+enum class FabricTensixCoreType : uint8_t;
 
 /**
  * FabricTensixDatamoverBaseConfig
@@ -193,7 +193,7 @@ public:
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
         uint32_t link_idx,
-        FabricTensixRiscId risc_id,
+        FabricTensixCoreType core_id,
         uint32_t noc_x,
         uint32_t noc_y,
         std::shared_ptr<FabricTensixDatamoverMuxConfig> config,
@@ -209,7 +209,7 @@ public:
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
-    FabricTensixRiscId get_risc_id() const { return risc_id_; }
+    FabricTensixCoreType get_core_id() const { return core_id_; }
     uint32_t get_noc_x() const { return noc_x_; }
     uint32_t get_noc_y() const { return noc_y_; }
     eth_chan_directions get_direction() const { return direction_; }
@@ -229,7 +229,7 @@ private:
     uint32_t link_idx_;
 
     // RISC and NOC configuration
-    FabricTensixRiscId risc_id_;
+    FabricTensixCoreType core_id_;
     uint32_t noc_x_;
     uint32_t noc_y_;
 
@@ -259,7 +259,7 @@ public:
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
         uint32_t ethernet_channel_id,
         uint32_t link_idx,
-        FabricTensixRiscId risc_id,
+        FabricTensixCoreType core_id,
         uint32_t noc_x,
         uint32_t noc_y,
         std::shared_ptr<FabricTensixDatamoverRelayConfig> config,
@@ -275,7 +275,7 @@ public:
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const { return local_fabric_node_id_; }
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const { return remote_fabric_node_id_; }
     uint32_t get_ethernet_channel_id() const { return ethernet_channel_id_; }
-    FabricTensixRiscId get_risc_id() const { return risc_id_; }
+    FabricTensixCoreType get_core_id() const { return core_id_; }
     uint32_t get_noc_x() const { return noc_x_; }
     uint32_t get_noc_y() const { return noc_y_; }
     eth_chan_directions get_direction() const { return direction_; }
@@ -295,7 +295,7 @@ private:
     uint32_t link_idx_;
 
     // RISC and NOC configuration
-    FabricTensixRiscId risc_id_;
+    FabricTensixCoreType core_id_;
     uint32_t noc_x_;
     uint32_t noc_y_;
 
