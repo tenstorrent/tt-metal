@@ -176,6 +176,7 @@ class Experts:
         seq_len_global = hidden_states.shape[1]
 
         if sp > 1:
+            seq_len_local = seq_len_global // sp
             hidden_states_torch = ttnn.to_torch(ttnn.get_device_tensors(hidden_states)[0])
             routing_weights_torch = ttnn.to_torch(ttnn.get_device_tensors(routing_weights)[0])
             hidden_states.deallocate(True)
@@ -235,12 +236,15 @@ class Experts:
             )
             program_config = self.sparse_matmul_program_config(3, 4, hidden_states_4D.shape[2], self.gate_proj.shape[3])
 
+            # Use L1_WIDTH_SHARDED for decode mode (like tt-transformers MLP), DRAM for prefill
+            matmul_mem_config = ttnn.L1_MEMORY_CONFIG if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
+
             gate = ttnn.sparse_matmul(
                 hidden_states_4D,
                 self.gate_proj,
                 sparsity=sparsity,
                 nnz=num_experts_per_tok,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=matmul_mem_config,
                 output_tile=output_tile,
                 program_config=program_config,
                 dtype=ttnn.bfloat8_b,
@@ -262,7 +266,7 @@ class Experts:
                 self.up_proj,
                 sparsity=sparsity,
                 nnz=num_experts_per_tok,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=matmul_mem_config,
                 output_tile=output_tile,
                 program_config=program_config,
                 dtype=ttnn.bfloat8_b,
@@ -325,7 +329,7 @@ class Experts:
                     self.down_proj,
                     sparsity=sparsity,
                     nnz=num_experts_per_tok,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=matmul_mem_config,
                     output_tile=output_tile,
                     is_input_a_sparse=True,
                     program_config=self.batched_sparse_matmul_program_config(

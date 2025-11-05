@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
@@ -190,14 +191,21 @@ def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_la
 @parametrize_mesh_with_fabric()
 @parametrize_batch_seq(
     [
-        (1, 1),
-        (1, 128),
-    ]
+        (1, 1),  # decode
+        (1, 128),  # prefill
+        (1, 1024),  # prefill 1k
+        (1, 4096),  # prefill 4k
+        # (1, 8192), # prefill 8k
+        # (1, 16384), # prefill 16k
+        # (1, 32768), # prefill 32k
+        # (1, 65536), # prefill 64k
+        # (1, 131072), # prefill 128k
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_shape",
     [
-        (1, 8),
+        # (1, 8),
         (4, 8),
     ],
 )
@@ -351,4 +359,5 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     passing, output = run_component_comparison(
         tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
     )
+    logger.info(f"Decoder layer test: {passing} with output: {output}")
     assert passing, f"Decoder layer test failed. Output: {output}"
