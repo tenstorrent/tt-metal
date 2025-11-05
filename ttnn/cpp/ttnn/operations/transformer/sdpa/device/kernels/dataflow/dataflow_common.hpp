@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include <tt-metalium/constants.hpp>
 #include "debug/assert.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 template <uint32_t tile_bytes, uint32_t num_readers>
 constexpr uint32_t get_barrier_read_threshold() {
@@ -705,6 +706,7 @@ void read_block(
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold,
     const bool transpose) {
+    // DeviceZoneScopedN("read_block");
     const uint32_t src_rows = src_slice.get_d2_size();
     const uint32_t src_cols = src_slice.get_d3_size();
     const uint32_t num_tiles = src_rows * src_cols;
