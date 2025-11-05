@@ -98,7 +98,12 @@ void kernel_main() {
             dst_mesh_id,
             src_l1_addr,
             dst_acc,  // TensorAccessor as addrgen
-            i         // page_id
+            i,        // page_id
+            sem_noc,  // semaphore NOC address
+            1,        // val (increment by 1)
+            0,        // wrap (no wrap)
+            0,        // offset
+            true      // flush
         );
 
         cb_pop_front(CB_ID, 1);
