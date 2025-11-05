@@ -26,10 +26,10 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-def test_grok_attention_inference(t3k_mesh_device, reset_seeds):
+def test_grok_attention_inference(mesh_device, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -50,7 +50,7 @@ def test_grok_attention_inference(t3k_mesh_device, reset_seeds):
     batch = 32
     seq_len = 1  # length to generate
 
-    tt_model = TtGrokAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_model = TtGrokAttention(mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     rot_mat = prepare_rotation_mat_ttnn(
         model_args.head_dim,
@@ -85,9 +85,7 @@ def test_grok_attention_inference(t3k_mesh_device, reset_seeds):
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del attention_input, attn_mask
         tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
-            .squeeze(2)
-            .view(batch, 1, -1)
+            ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0].squeeze(2).view(batch, 1, -1)
         )  # [ batch, seq, hidden_dim]
 
         positions = torch.LongTensor([current_pos])

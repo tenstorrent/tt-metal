@@ -26,10 +26,10 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-def test_grok_rms_norm_inference(t3k_mesh_device, reset_seeds):
+def test_grok_rms_norm_inference(mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -41,7 +41,7 @@ def test_grok_rms_norm_inference(t3k_mesh_device, reset_seeds):
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtRMSNorm(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         dtype=dtype,
@@ -53,14 +53,14 @@ def test_grok_rms_norm_inference(t3k_mesh_device, reset_seeds):
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_mesh_device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
@@ -75,10 +75,10 @@ def test_grok_rms_norm_inference(t3k_mesh_device, reset_seeds):
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
-def test_grok_rms_norm_sharded_inference(t3k_mesh_device, reset_seeds):
+def test_grok_rms_norm_sharded_inference(mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -90,7 +90,7 @@ def test_grok_rms_norm_sharded_inference(t3k_mesh_device, reset_seeds):
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtRMSNormSharded(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         dtype=dtype,
@@ -102,14 +102,14 @@ def test_grok_rms_norm_sharded_inference(t3k_mesh_device, reset_seeds):
 
     tt_input = ttnn.from_torch(
         input,
-        device=t3k_mesh_device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
+        mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
 
     tt_output = tt_model(tt_input)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

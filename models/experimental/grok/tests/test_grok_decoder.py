@@ -22,7 +22,7 @@ from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.timeout(500 * 8)
-def test_grok_decoder_inference(t3k_mesh_device, reset_seeds):
+def test_grok_decoder_inference(mesh_device, reset_seeds):
     """
     b: batch
     s: sequence length
@@ -31,7 +31,7 @@ def test_grok_decoder_inference(t3k_mesh_device, reset_seeds):
 
     pcc = 0.98
     dtype = ttnn.bfloat8_b
-    model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
+    model_args = TtModelArgs(mesh_device, dummy_weights=os.getenv("CI") == "true")
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
     key_start = "model.layers.0."
@@ -52,7 +52,7 @@ def test_grok_decoder_inference(t3k_mesh_device, reset_seeds):
 
     # Initialize TT model
     tt_model = TtTransformerBlock(
-        mesh_device=t3k_mesh_device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,
@@ -91,7 +91,7 @@ def test_grok_decoder_inference(t3k_mesh_device, reset_seeds):
         # Work around program cache issue https://github.com/tenstorrent/tt-metal/issues/7159
         del decode_input_b1sh, attn_mask
         tt_output_torch_b1h = (
-            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
+            ttnn.to_torch(tt_out_b1sh, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))[0]
             .squeeze(1)
             .view(batch, 1, -1)
         )
