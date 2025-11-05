@@ -90,7 +90,7 @@ def validate_test(num_devices, topology, shape, cluster_axis):
             ttnn.Topology.Linear,
         ),
     ],
-    indirect=["device_params", "device_params_tensix_extension"],
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("chunks_per_sync", [20])
@@ -197,7 +197,7 @@ def test_all_gather_linear_2D_nightly(
             ttnn.Topology.Linear,
         ),
     ],
-    indirect=["device_params", "device_params_tensix_extension"],
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("chunks_per_sync", [20])
