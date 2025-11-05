@@ -242,7 +242,7 @@ jobs:
             should-run: ${{ needs.update-submodule.outputs.should-run-blackhole }}
           - workflow: "tt-metal-l2-nightly.yaml"
             name: "TT-Metal L2 Nightly APC"
-            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole }}
+            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole == 'true' || needs.update-submodule.outputs.should-run-blackhole == 'true' }}
     steps:
       - name: Checkout
         if: matrix.should-run == 'true'
@@ -442,13 +442,6 @@ jobs:
               RESULTS+="- $(check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows")"$'\n'
               ALL_PASSED=false
             fi
-
-            if check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC"; then
-              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
-            else
-              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
-              ALL_PASSED=false
-            fi
           fi
 
           if [ "$SHOULD_RUN_BH" = "true" ]; then
@@ -456,6 +449,15 @@ jobs:
               RESULTS+="- $(check_workflow "blackhole-post-commit.yaml" "Blackhole Post Commit")"$'\n'
             else
               RESULTS+="- $(check_workflow "blackhole-post-commit.yaml" "Blackhole Post Commit")"$'\n'
+              ALL_PASSED=false
+            fi
+          fi
+
+          if [ "$SHOULD_RUN_WH" = "true" ] || [ "$SHOULD_RUN_BH" = "true" ]; then
+            if check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC"; then
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
+            else
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
               ALL_PASSED=false
             fi
           fi
@@ -527,18 +529,6 @@ jobs:
               WH_URL=$(echo "$WH_RUNS" | jq -r '.url // ""')
               TEST_STATUS+="- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"$'\n'
             fi
-
-            # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
-            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
-              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
-            else
-              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
-            fi
-
-            if [ "$L2_RUNS" != "empty" ]; then
-              L2_URL=$(echo "$L2_RUNS" | jq -r '.url // ""')
-              TEST_STATUS+="- ✅ **TT-Metal L2 Nightly APC** passed: [View run]($L2_URL)"$'\n'
-            fi
           fi
 
           if [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
@@ -552,6 +542,20 @@ jobs:
             if [ "$BH_RUNS" != "empty" ]; then
               BH_URL=$(echo "$BH_RUNS" | jq -r '.url // ""')
               TEST_STATUS+="- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"$'\n'
+            fi
+          fi
+
+          if [ "${{ needs.update-submodule.outputs.should-run-wormhole || 'false' }}" = "true" ] || [ "${{ needs.update-submodule.outputs.should-run-blackhole || 'false' }}" = "true" ] || [ "${{ inputs.recheck_tests }}" = "true" ]; then
+            # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+            fi
+
+            if [ "$L2_RUNS" != "empty" ]; then
+              L2_URL=$(echo "$L2_RUNS" | jq -r '.url // ""')
+              TEST_STATUS+="- ✅ **TT-Metal L2 Nightly APC** passed: [View run]($L2_URL)"$'\n'
             fi
           fi
 
