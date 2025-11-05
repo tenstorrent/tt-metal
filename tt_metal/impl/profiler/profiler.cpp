@@ -266,6 +266,23 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     return device_markers_vec;
 }
 
+std::set<OpAnalysisData> processOpsPerfResults(const OpsPerfResults& ops_perf_results) {
+    ZoneScoped;
+
+    std::set<OpAnalysisData> ops_analyses_data;
+    for (const auto& [op_id, op_perf_results] : ops_perf_results.op_id_to_perf_results) {
+        OpAnalysisData op_analysis_data;
+        op_analysis_data.op_id = op_id;
+        TT_ASSERT(op_perf_results.analysis_results.size() == ops_perf_results.analysis_results_configs.size());
+        for (uint32_t i = 0; i < op_perf_results.analysis_results.size(); ++i) {
+            const AnalysisResultsConfig results_config = ops_perf_results.analysis_results_configs[i];
+            op_analysis_data.op_analyses_results[results_config.analysis_name] = op_perf_results.analysis_results[i];
+        }
+        ops_analyses_data.insert(op_analysis_data);
+    }
+    return ops_analyses_data;
+}
+
 bool doAllDispatchCoresComeAfterNonDispatchCores(const IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     const auto& dispatch_core_config = get_dispatch_core_config();
     const std::vector<CoreCoord> logical_dispatch_cores =
@@ -1714,25 +1731,6 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
     this->is_last_fd_read_done = false;
     this->device_tracy_contexts.reserve(
         device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
-#endif
-}
-
-std::set<OpAnalysisData> processOpsPerfResults(const OpsPerfResults& ops_perf_results) {
-#if defined(TRACY_ENABLE)
-    ZoneScoped;
-
-    std::set<OpAnalysisData> ops_analyses_data;
-    for (const auto& [op_id, op_perf_results] : ops_perf_results.op_id_to_perf_results) {
-        OpAnalysisData op_analysis_data;
-        op_analysis_data.op_id = op_id;
-        TT_ASSERT(op_perf_results.analysis_results.size() == ops_perf_results.analysis_results_configs.size());
-        for (uint32_t i = 0; i < op_perf_results.analysis_results.size(); ++i) {
-            const AnalysisResultsConfig results_config = ops_perf_results.analysis_results_configs[i];
-            op_analysis_data.op_analyses_results[results_config.analysis_name] = op_perf_results.analysis_results[i];
-        }
-        ops_analyses_data.insert(op_analysis_data);
-    }
-    return ops_analyses_data;
 #endif
 }
 
