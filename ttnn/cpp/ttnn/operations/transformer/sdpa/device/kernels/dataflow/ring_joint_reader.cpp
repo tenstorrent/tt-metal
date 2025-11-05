@@ -29,7 +29,9 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<17>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    constexpr auto joint_q_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+    constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+    constexpr auto gathered_v_args = TensorAccessorArgs<gathered_k_args.next_compile_time_args_offset()>();
+    constexpr auto joint_q_args = TensorAccessorArgs<gathered_v_args.next_compile_time_args_offset()>();
     constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
     constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
 
@@ -37,6 +39,8 @@ void kernel_main() {
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
@@ -58,8 +62,10 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
 
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
-    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
-    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    const auto local_k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
+    const auto local_v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
+    const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr, k_tile_bytes);
+    const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr, v_tile_bytes);
     const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr, q_tile_bytes);
     const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr, k_tile_bytes);
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr, v_tile_bytes);
@@ -69,19 +75,32 @@ void kernel_main() {
     const auto joint_tile_logical = TensorTileShape(B, NH, logical_Lt, DHt);
     const auto cat_q_generator =
         CatAddrGenerator(q_reader, q_input_tile_logical, local_Nt, joint_q_reader, joint_tile_logical, padded_Lqt);
-    const auto cat_k_generator =
-        CatAddrGenerator(k_reader, kv_input_tile_logical, global_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
-    const auto cat_v_generator =
-        CatAddrGenerator(v_reader, kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
 
+    const auto cat_local_k_generator = CatAddrGenerator(
+        local_k_reader, kv_input_tile_logical, global_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
+    const auto cat_local_v_generator = CatAddrGenerator(
+        local_v_reader, kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
+
+    const auto cat_gathered_k_generator = CatAddrGenerator(
+        gathered_k_reader, kv_input_tile_logical, global_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
+    const auto cat_gathered_v_generator = CatAddrGenerator(
+        gathered_v_reader, kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
+
+    /**
+     * Iterate over ring indices.
+     * On the first iteration, read from local K, V. Also process the joint K, V.
+     * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
+     */
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
-        // Only the last iteration will append joint_K, joint_V to K, V.
+        // Only the first iteration will append joint_K, joint_V to K, V.
         const uint32_t iter_k_num_chunks =
-            ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
-        const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
+            ring_iter == 0 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
+        // Start at K chunk 0 if ring iter 0 is indexing into local K, V.
+        const uint32_t iter_k_chunk_start = ring_iter == 0 ? 0 : ring_id * N_k_num_chunks_local;
+
         const uint32_t iter_k_chunk_end = iter_k_chunk_start + iter_k_num_chunks;
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
