@@ -28,10 +28,12 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "vae_tp", "topology", "num_links", "mesh_test_id"),
     [
-        # pytest.param((2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1", id="2x4cfg0sp0tp1"),
-        pytest.param(
-            (2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg1sp0tp1", id="2x4cfg1sp0tp1"
-        ),
+        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1"],
+        [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg1sp0tp1"],
+    ],
+    ids=[
+        "2x4cfg0sp0tp1",
+        "2x4cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -46,7 +48,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
     "traced",
     [
         pytest.param(True, id="traced"),
-        # pytest.param(False, id="not_traced"),
+        pytest.param(False, id="not_traced"),
     ],
 )
 def test_motif_pipeline(
@@ -68,6 +70,8 @@ def test_motif_pipeline(
     use_torch_clip_text_encoder: bool,
     traced: bool,
     mesh_test_id: str,
+    is_ci_env: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pipeline = MotifPipeline.create_pipeline(
         mesh_device=mesh_device,
@@ -76,14 +80,23 @@ def test_motif_pipeline(
         dit_tp=tp,
         encoder_tp=encoder_tp,
         vae_tp=vae_tp,
-        enable_t5_text_encoder=enable_t5_text_encoder,
-        use_torch_t5_text_encoder=use_torch_t5_text_encoder,
-        use_torch_clip_text_encoder=use_torch_clip_text_encoder,
+        enable_t5_text_encoder=True,
+        use_torch_t5_text_encoder=False,
+        use_torch_clip_text_encoder=False,
         num_links=num_links,
         topology=topology,
         width=width,
         height=height,
     )
+
+    # Setup CI environment
+    if is_ci_env:
+        if use_cache:
+            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+        else:
+            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
+        if traced:
+            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
 
     pipeline.timing_collector = TimingCollector()
 

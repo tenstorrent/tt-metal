@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -102,7 +102,7 @@ class MotifPipeline:
         ]
 
         self.encoder_device = self._submesh_devices[0]
-        self.original_submesh_shape = tuple(self.encoder_device.shape)
+        self.encoder_mesh_shape = ttnn.MeshShape(1, self._encoder_parallel_config.tensor_parallel.factor)
         self.vae_device = self._submesh_devices[0]
         self.encoder_submesh_idx = 0  # Use submesh 0 for encoder
         self.vae_submesh_idx = 0  # Use submesh 0 for VAE
@@ -183,27 +183,42 @@ class MotifPipeline:
 
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
 
-        self._text_encoder = TextEncoder(
-            device=self.encoder_device,
-            ccl_manager=self._ccl_managers[0],
-            parallel_config=encoder_parallel_config,
-            enable_t5=enable_t5_text_encoder,
-            use_torch_clip_encoder=use_torch_clip_text_encoder,
-            use_torch_t5_encoder=use_torch_t5_text_encoder,
-        )
+        with self.encoder_reshape(self.encoder_device):
+            logger.info("creating TT-NN CLIP text encoder...")
+            self._text_encoder = TextEncoder(
+                device=self.encoder_device,
+                ccl_manager=self._ccl_managers[0],
+                parallel_config=encoder_parallel_config,
+                enable_t5=enable_t5_text_encoder,
+                use_torch_clip_encoder=use_torch_clip_text_encoder,
+                use_torch_t5_encoder=use_torch_t5_text_encoder,
+            )
+
+            ttnn.synchronize_device(self.encoder_device)
+
+            logger.info("creating TT-NN VAE decoder...")
+            self._vae_decoder = VAEDecoder.from_torch(
+                torch_ref=self._torch_vae.decoder,
+                mesh_device=self.vae_device,
+                parallel_config=self._vae_parallel_config,
+                ccl_manager=self._ccl_managers[self.vae_submesh_idx],
+            )
+            ttnn.synchronize_device(self.encoder_device)
 
         self._traces = None
-
-        ttnn.synchronize_device(self.encoder_device)
-
-        self._vae_decoder = VAEDecoder.from_torch(
-            torch_ref=self._torch_vae.decoder,
-            mesh_device=self.vae_device,
-            parallel_config=self._vae_parallel_config,
-            ccl_manager=self._ccl_managers[self.vae_submesh_idx],
-        )
-
         self.warmup()
+
+    @contextmanager
+    def encoder_reshape(self, device: ttnn.MeshDevice):
+        original_mesh_shape = ttnn.MeshShape(tuple(device.shape))
+        assert (
+            original_mesh_shape.mesh_size() == self.encoder_mesh_shape.mesh_size()
+        ), f"Device cannot be reshaped device shape: {device.shape} encoder mesh shape: {self.encoder_mesh_shape}"
+        if original_mesh_shape != self.encoder_mesh_shape:
+            device.reshape(self.encoder_mesh_shape)
+        yield
+        if original_mesh_shape != device.shape:
+            device.reshape(original_mesh_shape)
 
     @staticmethod
     def create_pipeline(
@@ -335,16 +350,17 @@ class MotifPipeline:
             logger.info("encoding prompts...")
 
             with timer.time_section("total_encoding") if timer else nullcontext():
-                prompt_embeds1, pooled_prompt_embeds1, prompt_embeds2, pooled_prompt_embeds2 = self._encode_prompts(
-                    prompt_1=prompt_1,
-                    prompt_2=prompt_2,
-                    prompt_3=prompt_3,
-                    negative_prompt_1=negative_prompt_1,
-                    negative_prompt_2=negative_prompt_2,
-                    negative_prompt_3=negative_prompt_3,
-                    num_images_per_prompt=num_images_per_prompt,
-                    cfg_enabled=cfg_enabled,
-                )
+                with self.encoder_reshape(self.encoder_device):
+                    prompt_embeds1, pooled_prompt_embeds1, prompt_embeds2, pooled_prompt_embeds2 = self._encode_prompts(
+                        prompt_1=prompt_1,
+                        prompt_2=prompt_2,
+                        prompt_3=prompt_3,
+                        negative_prompt_1=negative_prompt_1,
+                        negative_prompt_2=negative_prompt_2,
+                        negative_prompt_3=negative_prompt_3,
+                        num_images_per_prompt=num_images_per_prompt,
+                        cfg_enabled=cfg_enabled,
+                    )
 
             logger.info("preparing timesteps...")
             timesteps, sigmas = _schedule(
@@ -515,9 +531,10 @@ class MotifPipeline:
                     width=self._width // self._vae_scale_factor,
                 )
 
-                tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
-                tt_decoded_output = self._vae_decoder(tt_latents)
-                decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
+                with self.encoder_reshape(self.encoder_device):
+                    tt_latents = tensor.from_torch(torch_latents, device=self.vae_device)
+                    tt_decoded_output = self._vae_decoder(tt_latents)
+                    decoded_output = ttnn.to_torch(ttnn.get_device_tensors(tt_decoded_output)[0]).permute(0, 3, 1, 2)
 
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 assert isinstance(image, torch.Tensor)

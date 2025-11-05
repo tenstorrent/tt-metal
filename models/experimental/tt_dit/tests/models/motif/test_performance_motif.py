@@ -21,6 +21,7 @@ from ....pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large 
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, encoder_tp, vae_tp, topology, num_links",
     [
+        # [(2, 4), (2, 1), (2, 0), (2, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (2, 0), (4, 0), (8, 1), (4, 0), (4, 0), ttnn.Topology.Linear, 4],
     ],
