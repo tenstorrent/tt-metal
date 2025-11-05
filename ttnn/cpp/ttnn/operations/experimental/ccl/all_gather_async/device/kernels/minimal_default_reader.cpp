@@ -24,22 +24,16 @@ constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
-constexpr bool direction = get_compile_time_arg_val(8);  // 1 is forward, 0 is backward
-constexpr uint32_t gather_dim = get_compile_time_arg_val(9);
-constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(12);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(13);
-constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(14);
-constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(15);
-constexpr uint32_t output_tensor_C = get_compile_time_arg_val(16);
-constexpr uint32_t input_tile_id_start = get_compile_time_arg_val(17);
-constexpr uint32_t input_tile_id_end = get_compile_time_arg_val(18);
-constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(19);
-constexpr uint32_t start_row_offset = get_compile_time_arg_val(20);
-constexpr bool fuse_op = get_compile_time_arg_val(21);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(22);
-constexpr uint32_t reverse = get_compile_time_arg_val(23) == 1;
+constexpr uint32_t gather_dim = get_compile_time_arg_val(8);
+constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(9);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
+constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(11);
+constexpr uint32_t input_tensor_C = get_compile_time_arg_val(12);
+constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(13);
+constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
+constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
+constexpr bool fuse_op = get_compile_time_arg_val(16);
+constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -50,8 +44,14 @@ void kernel_main() {
     address_t input_tensor_address = get_arg_val<address_t>(arg_idx++);
     address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 0 is forward, 1 is backward
+    const auto input_tile_id_start = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tile_id_end = get_arg_val<uint32_t>(arg_idx++);
+    const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
+    const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 24;
+    constexpr uint32_t ct_idx = 18;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -139,7 +139,7 @@ void kernel_main() {
     uint32_t slices_expected = 0;
     uint32_t writes_expected = 0;
     if constexpr (topology == Topology::Linear) {
-        if constexpr (direction == 1) {
+        if (direction == 1) {
             slices_expected = num_targets_forward_direction;
             writes_expected = num_targets_backward_direction ? num_targets_forward_direction : 0;
         } else {
@@ -147,7 +147,7 @@ void kernel_main() {
             writes_expected = num_targets_forward_direction ? num_targets_backward_direction : 0;
         }
     } else if constexpr (topology == Topology::Ring) {
-        if constexpr (direction == 1) {
+        if (direction == 1) {
             slices_expected = num_targets_backward_direction;
             writes_expected = num_targets_backward_direction - 1;
         } else {
@@ -170,7 +170,7 @@ void kernel_main() {
 
         int sender_chip_id;
         uint32_t actual_sender_chip_id;
-        if constexpr (direction == 1) {
+        if (direction == 1) {
             sender_chip_id = my_chip_id + slices_received + 1;
             actual_sender_chip_id = (sender_chip_id >= (int)ring_size) ? sender_chip_id - ring_size : sender_chip_id;
         } else {

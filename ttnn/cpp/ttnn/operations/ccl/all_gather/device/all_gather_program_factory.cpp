@@ -152,8 +152,8 @@ void AllGatherDeviceOperation::AllGatherProgram::override_runtime_arguments(
 
         all_gather_async_minimal_default_helper_override_runtime_arguments(
             program,
-            shared_variables.program_artifacts.reader_kernel_ids,
-            shared_variables.program_artifacts.writer_kernel_ids,
+            shared_variables.program_artifacts.reader_kernel_id,
+            shared_variables.program_artifacts.writer_kernel_id,
             shared_variables.program_artifacts.all_cores,
             operation_attributes.num_links,
             shared_variables.program_artifacts.num_directions_per_link,
