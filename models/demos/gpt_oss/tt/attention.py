@@ -9,7 +9,6 @@ from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from ..tt.sdpa import sdpa as tt_sdpa
 from ..utils.general_utils import MAX_SEQ_LEN
 
 
@@ -188,11 +187,17 @@ class Attention:
         )
 
         # SDPA setup
-        self.sdpa_program_config = ttnn.SDPAProgramConfig(
+        self.sdpa_decode_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=0,
             k_chunk_size=128,
             exp_approx_mode=False,
+        )
+        self.sdpa_program_config = lambda seqlen: ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+            exp_approx_mode=False,
+            q_chunk_size=256 if seqlen >= 2048 else 32,
+            k_chunk_size=256 if seqlen >= 2048 else 32,
         )
 
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -324,7 +329,7 @@ class Attention:
                     attention_sink=self.decode_sinks,
                     page_table_tensor=page_table,
                     scale=self.scaling,
-                    program_config=self.sdpa_program_config,
+                    program_config=self.sdpa_decode_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
@@ -337,7 +342,7 @@ class Attention:
                     sliding_window_size=self.sliding_window,
                     attention_sink=self.decode_sinks,
                     scale=self.scaling,
-                    program_config=self.sdpa_program_config,
+                    program_config=self.sdpa_decode_program_config,
                     compute_kernel_config=self.sdpa_compute_kernel_config,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
@@ -389,26 +394,20 @@ class Attention:
                     batch_idx=0,
                 )
 
-            # Transpose tensors back for SDPA computation
-
-            # Reshape for custom SDPA: Q [seq_len, num_kv_heads, Q/K ratio, head_dim], K/V [seq_len, num_kv_heads, head_dim]
-            # Q: [1, num_local_heads, seq_len, head_dim] -> transpose -> [1, seq_len, num_local_heads, head_dim]
-            tt_q = ttnn.transpose(tt_q, 1, 2)  # [1, seq_len, num_local_heads, head_dim]
-            tt_q = ttnn.reshape(
-                tt_q, [seq_len, self.num_local_kv_heads, self.num_local_heads // self.num_local_kv_heads, self.head_dim]
-            )
-            tt_k = ttnn.reshape(tt_k, [seq_len, self.num_local_kv_heads, self.head_dim])
-            tt_v = ttnn.reshape(tt_v, [seq_len, self.num_local_kv_heads, self.head_dim])
-
-            tt_sdpa_out, _ = tt_sdpa(
+            tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
                 tt_q,
                 tt_k,
                 tt_v,
-                self.sinks,
-                sm_scale=self.scaling,
-                tt_mask=mask,
-                tt_cache=None,
-                position_idx=None,
+                is_causal=True,
+                sliding_window_size=self.sliding_window,
+                program_config=self.sdpa_program_config(tt_q.shape[-2]),
+                compute_kernel_config=self.sdpa_compute_kernel_config,
+                attention_sink=self.sinks,
+            )
+
+            tt_sdpa_out = ttnn.experimental.nlp_concat_heads(
+                tt_sdpa_out,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16)

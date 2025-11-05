@@ -40,6 +40,7 @@ class ModelArgs:
         self.max_seq_len = max_seq_len
         self.optimizations = optimizations
         self.cache_hf = cache_hf
+        self.can_enable_trace = lambda seqlen: False
 
         # GPT-OSS specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
