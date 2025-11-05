@@ -63,12 +63,12 @@ void kernel_main() {
             uint32_t src_offset = args[args_idx++];  // only used if source is in DRAM
             uint32_t dst_offset = args[args_idx++];
             uint32_t size = args[args_idx++];
-            uint32_t bank_id = 0;
+            uint32_t bank_id = args[args_idx++];  // Always present (0 for L1, actual bank_id for DRAM)
 
-            // Extract bank_id if input is in DRAM
             if constexpr (is_input_in_dram) {
-                bank_id = args[args_idx++];
-                DPRINT << "Extracted bank_id=" << bank_id << " for DRAM transfer" << ENDL();
+                DPRINT << "Using DRAM bank_id=" << bank_id << ENDL();
+            } else {
+                DPRINT << "Using L1 transfer, bank_id=" << bank_id << " (ignored)" << ENDL();
             }
 
             uint64_t src_addr_base;

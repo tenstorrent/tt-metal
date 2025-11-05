@@ -16,17 +16,7 @@ struct BatchTransferInstruction {
     uint32_t src_offset;
     uint32_t dst_offset;
     uint32_t transfer_size;
-};
-
-struct DramTransferInstruction {
-    uint32_t src_core_idx;
-    uint32_t dst_core_idx;
-    CoreCoord src_core_coord;
-    CoreCoord dst_core_coord;
-    uint32_t src_offset;
-    uint32_t dst_offset;
-    uint32_t transfer_size;
-    uint32_t bank_id;
+    uint32_t bank_id;  // 0 for L1 transfers, actual bank_id for DRAM transfers
 };
 
 struct TransferData {
@@ -79,8 +69,8 @@ std::vector<BatchTransferInstruction> generate_batch_redistribution_transfers(
 template <typename T>
 std::vector<std::vector<T>> group_by_destination_core(const std::vector<T>& transfers, int num_output_cores);
 
-std::vector<DramTransferInstruction> convert_l1_to_dram_transfers(
-    const std::vector<BatchTransferInstruction>& l1_transfers,
+void populate_dram_bank_ids(
+    std::vector<BatchTransferInstruction>& transfers,
     const std::vector<CoreCoord>& dram_cores,
     const tt::tt_metal::BufferType& dram_buffer_type,
     tt::tt_metal::IDevice* device);

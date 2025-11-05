@@ -120,7 +120,8 @@ std::vector<BatchTransferInstruction> optimize_transfers_batch_aware(
                         output_cores[dst_core],
                         current_transfer.src_offset,
                         current_transfer.dst_offset,
-                        current_transfer.size);
+                        current_transfer.size,
+                        0);  // bank_id = 0 for L1 transfers
                     current_transfer = next_transfer;
                 }
             }
@@ -133,7 +134,8 @@ std::vector<BatchTransferInstruction> optimize_transfers_batch_aware(
                 output_cores[dst_core],
                 current_transfer.src_offset,
                 current_transfer.dst_offset,
-                current_transfer.size);
+                current_transfer.size,
+                0);  // bank_id = 0 for L1 transfers
         }
     }
 
@@ -350,9 +352,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         static_cast<int>(input_format),
         input_element_size);
 
-    const auto transfers = generate_batch_redistribution_transfers(
+    auto transfers = generate_batch_redistribution_transfers(
         batch_size, input_channels, hw_total, l1_input_cores, l1_input_cores, input_element_size);
-    const auto grouped_transfers = group_by_destination_core(transfers, l1_input_cores.size());
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
@@ -376,7 +377,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_full_input_total_size,
         cb_full_input_page_size,
         input_format,
-        is_input_in_dram ? nullptr : a.buffer());  // DONT DO THIS IF DRAM
+        is_input_in_dram ? nullptr : a.buffer());
 
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const uint32_t cb_in_page_size = l1_input_shard_width * input_element_size;
@@ -432,39 +433,35 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         static_cast<int>(remote_core_type),
         static_cast<int>(remote_buffer_type));
 
-    // Convert L1-to-L1 transfers to DRAM-to-L1 transfers if input is in DRAM
-    std::vector<std::vector<DramTransferInstruction>> grouped_dram_transfers;
+    // Update transfers with DRAM bank IDs if input is in DRAM
     if (is_input_in_dram) {
-        const auto dram_transfers =
-            convert_l1_to_dram_transfers(transfers, dram_input_cores, remote_buffer_type, a.device());
+        populate_dram_bank_ids(transfers, dram_input_cores, remote_buffer_type, a.device());
 
-        log_info(
-            tt::LogType::LogAlways, "convert_to_hwc: Generated {} DRAM transfer instructions", dram_transfers.size());
-        for (size_t i = 0; i < dram_transfers.size(); i++) {
-            const auto& dram_transfer = dram_transfers[i];
+        log_info(tt::LogType::LogAlways, "convert_to_hwc: Generated {} DRAM transfer instructions", transfers.size());
+        for (size_t i = 0; i < transfers.size(); i++) {
+            const auto& transfer = transfers[i];
             log_info(
                 tt::LogType::LogAlways,
                 "  DRAM[{}]: src_core={}({},{}), dst_core={}({},{}), src_offset={}, dst_offset={}, size={}, bank_id={}",
                 i,
-                dram_transfer.src_core_idx,
-                dram_transfer.src_core_coord.x,
-                dram_transfer.src_core_coord.y,
-                dram_transfer.dst_core_idx,
-                dram_transfer.dst_core_coord.x,
-                dram_transfer.dst_core_coord.y,
-                dram_transfer.src_offset,
-                dram_transfer.dst_offset,
-                dram_transfer.transfer_size,
-                dram_transfer.bank_id);
+                transfer.src_core_idx,
+                transfer.src_core_coord.x,
+                transfer.src_core_coord.y,
+                transfer.dst_core_idx,
+                transfer.dst_core_coord.x,
+                transfer.dst_core_coord.y,
+                transfer.src_offset,
+                transfer.dst_offset,
+                transfer.transfer_size,
+                transfer.bank_id);
         }
-
-        // Group DRAM transfers by destination core
-        grouped_dram_transfers = group_by_destination_core(dram_transfers, l1_input_cores.size());
-        log_info(
-            tt::LogType::LogAlways,
-            "convert_to_hwc: Grouped DRAM transfers into {} destination cores",
-            grouped_dram_transfers.size());
     }
+
+    const auto grouped_transfers = group_by_destination_core(transfers, l1_input_cores.size());
+    log_info(
+        tt::LogType::LogAlways,
+        "convert_to_hwc: Grouped transfers into {} destination cores",
+        grouped_transfers.size());
 
     // Split DRAM read across each kernel along tensor height since this is the best way to split work evenly
     const uint32_t total_num_sticks_kernel_0 = (l1_input_shard_height / batch_size);
@@ -558,7 +555,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              is_input_in_dram,
                              l1_input_cores,
                              grouped_transfers,
-                             grouped_dram_transfers,
                              writer_kernel_id0,
                              writer_kernel_id1,
                              total_num_sticks_kernel_0,
@@ -570,56 +566,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
             std::vector<uint32_t> runtime_args_0 = {remote_address};
             std::vector<uint32_t> runtime_args_1 = {remote_address};
 
-            if (is_input_in_dram && !grouped_dram_transfers.empty()) {
-                const auto& dram_args_for_all_segments = grouped_dram_transfers.at(core_idx);
-                log_info(
-                    tt::LogType::LogAlways,
-                    "convert_to_hwc: Core {} has {} DRAM transfer segments, batch_size={}",
-                    core_idx,
-                    dram_args_for_all_segments.size(),
-                    batch_size);
-                runtime_args_0.push_back(dram_args_for_all_segments.size());
-                runtime_args_1.push_back(dram_args_for_all_segments.size());
+            const auto& args_for_all_segments = grouped_transfers.at(core_idx);
+            log_info(
+                tt::LogType::LogAlways,
+                "convert_to_hwc: Core {} has {} transfer segments, batch_size={}",
+                core_idx,
+                args_for_all_segments.size(),
+                batch_size);
+            runtime_args_0.push_back(args_for_all_segments.size());
+            runtime_args_1.push_back(args_for_all_segments.size());
 
-                for (const auto& dram_args : dram_args_for_all_segments) {
-                    auto core = a.device()->worker_core_from_logical_core(dram_args.src_core_coord);
-                    const std::vector<uint32_t> segment_kernel_0 = {
-                        core.x,
-                        core.y,
-                        dram_args.src_offset,
-                        dram_args.dst_offset,
-                        dram_args.transfer_size,
-                        dram_args.bank_id};
-                    const std::vector<uint32_t> segment_kernel_1 = {
-                        core.x,
-                        core.y,
-                        dram_args.src_offset,
-                        dram_args.dst_offset,
-                        dram_args.transfer_size,
-                        dram_args.bank_id};
-                    runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
-                    runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
-                }
-            } else {
-                const auto& args_for_all_segments = grouped_transfers.at(core_idx);
-                log_info(
-                    tt::LogType::LogAlways,
-                    "convert_to_hwc: Core {} has {} L1 transfer segments, batch_size={}",
-                    core_idx,
-                    args_for_all_segments.size(),
-                    batch_size);
-                runtime_args_0.push_back(args_for_all_segments.size());
-                runtime_args_1.push_back(args_for_all_segments.size());
-
-                for (const auto& args : args_for_all_segments) {
-                    auto core = a.device()->worker_core_from_logical_core(args.src_core_coord);
-                    const std::vector<uint32_t> segment_kernel_0 = {
-                        core.x, core.y, args.src_offset, args.dst_offset, args.transfer_size};
-                    const std::vector<uint32_t> segment_kernel_1 = {
-                        core.x, core.y, args.src_offset, args.dst_offset, args.transfer_size};
-                    runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
-                    runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
-                }
+            for (const auto& args : args_for_all_segments) {
+                auto core = a.device()->worker_core_from_logical_core(args.src_core_coord);
+                // Always pass bank_id (0 for L1 transfers, actual bank_id for DRAM transfers)
+                const std::vector<uint32_t> segment_kernel_0 = {
+                    core.x, core.y, args.src_offset, args.dst_offset, args.transfer_size, args.bank_id};
+                const std::vector<uint32_t> segment_kernel_1 = {
+                    core.x, core.y, args.src_offset, args.dst_offset, args.transfer_size, args.bank_id};
+                runtime_args_0.insert(runtime_args_0.end(), segment_kernel_0.begin(), segment_kernel_0.end());
+                runtime_args_1.insert(runtime_args_1.end(), segment_kernel_1.begin(), segment_kernel_1.end());
             }
             log_info(
                 tt::LogType::LogAlways,
@@ -658,42 +623,25 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-std::vector<DramTransferInstruction> convert_l1_to_dram_transfers(
-    const std::vector<BatchTransferInstruction>& l1_transfers,
+void populate_dram_bank_ids(
+    std::vector<BatchTransferInstruction>& transfers,
     const std::vector<CoreCoord>& dram_cores,
     const tt::tt_metal::BufferType& dram_buffer_type,
     tt::tt_metal::IDevice* device) {
-    std::vector<DramTransferInstruction> dram_transfers;
-    dram_transfers.reserve(l1_transfers.size());
-
-    for (const auto& l1_transfer : l1_transfers) {
-        DramTransferInstruction dram_transfer;
-
-        // Copy basic transfer information
-        dram_transfer.src_core_idx = l1_transfer.src_core_idx;
-        dram_transfer.dst_core_idx = l1_transfer.dst_core_idx;
-        dram_transfer.dst_core_coord = l1_transfer.dst_core_coord;
-        dram_transfer.src_offset = l1_transfer.src_offset;
-        dram_transfer.dst_offset = l1_transfer.dst_offset;
-        dram_transfer.transfer_size = l1_transfer.transfer_size;
-
+    for (auto& transfer : transfers) {
         // Map source core index to DRAM core and get bank ID
         TT_FATAL(
-            l1_transfer.src_core_idx < dram_cores.size(),
+            transfer.src_core_idx < dram_cores.size(),
             "Source core index {} exceeds available DRAM cores {}",
-            l1_transfer.src_core_idx,
+            transfer.src_core_idx,
             dram_cores.size());
 
-        dram_transfer.src_core_coord = dram_cores[l1_transfer.src_core_idx];
+        transfer.src_core_coord = dram_cores[transfer.src_core_idx];
 
         // Get bank ID for the DRAM core
-        dram_transfer.bank_id = device->allocator()->get_bank_ids_from_logical_core(
-            dram_buffer_type, dram_cores[l1_transfer.src_core_idx])[0];
-
-        dram_transfers.push_back(dram_transfer);
+        transfer.bank_id =
+            device->allocator()->get_bank_ids_from_logical_core(dram_buffer_type, dram_cores[transfer.src_core_idx])[0];
     }
-
-    return dram_transfers;
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail
