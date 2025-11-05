@@ -87,10 +87,20 @@ runs:
           grep -nE -C 2 '(?i)(^\[gw\d+\]\s+FAILED|^FAILED\b|^ERROR\b|^E\s+[A-Z]|AssertionError|Traceback|^==\s*.*\sfailed,)' "$nolog" \
             | head -n 150 > fail-first.txt || true
 
-          # Main compact summary:
-          grep -nE -C "${{ inputs.summary_context }}" "${{ inputs.summary_pattern }}" "$nolog" \
-            | head -n "${{ inputs.summary_max_lines }}" \
-            | grep -v "PytestBenchmarkWarning\|pytest_benchmark" > compact-summary.txt || true
+          # Main compact summary (only content after "short test summary info"):
+          # First, find the line number of "short test summary info"
+          summary_start_line=$(grep -n "short test summary info" "$nolog" | tail -1 | cut -d: -f1 || echo "0")
+          if [[ "$summary_start_line" -gt 0 ]]; then
+            # Extract from that line onwards, then apply the pattern
+            tail -n +$summary_start_line "$nolog" | grep -nE "${{ inputs.summary_pattern }}" \
+              | head -n "${{ inputs.summary_max_lines }}" \
+              | grep -v "PytestBenchmarkWarning\|pytest_benchmark" > compact-summary.txt || true
+          else
+            # Fallback to original behavior if no summary section found
+            grep -nE "${{ inputs.summary_pattern }}" "$nolog" \
+              | head -n "${{ inputs.summary_max_lines }}" \
+              | grep -v "PytestBenchmarkWarning\|pytest_benchmark" > compact-summary.txt || true
+          fi
 
           # Build summary content
           summary_content=""
