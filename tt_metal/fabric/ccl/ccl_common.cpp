@@ -28,10 +28,10 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
     // Ethernet Kernels
     const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
-    log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
-    log_trace(tt::LogOp, "CT ARGS:");
+    log_trace(tt::LogFabric, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
+    log_trace(tt::LogFabric, "CT ARGS:");
     for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
-        log_trace(tt::LogOp, "\t{}", s);
+        log_trace(tt::LogFabric, "\t{}", s);
     }
 
     auto kernel_config =
