@@ -14,7 +14,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/compute_kernel_config.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/cpu_features.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/debug.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/device.hpp

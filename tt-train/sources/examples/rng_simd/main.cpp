@@ -15,13 +15,11 @@
 #include <type_traits>
 #include <vector>
 
-#include "core/cpu_features.hpp"
 #include "core/random.hpp"
 #include "core/random_sse.hpp"
 #include "tt-metalium/bfloat16.hpp"
 
 using namespace std::chrono;
-using ttml::core::CpuFeatures;
 
 // Global configuration for CSV output
 struct CsvConfig {
@@ -224,7 +222,7 @@ void benchmark_distribution(
     results.push_back(run_benchmark<T>("MT19937 (Parallel)", type_name, params.name, func_par, size));
 
     // SSE Sequential and Parallel - only if SIMD is supported for this distribution
-    if (params.has_simd_support && CpuFeatures::has_sse_support()) {
+    if (params.has_simd_support) {
         auto func_seq = [&](std::vector<T>& data) {
             ttml::core::sse::sequential_generate(std::span{data}, dist_factory, seed);
         };
@@ -489,7 +487,6 @@ int main(int argc, const char** argv) {
     } else {
         // Print system info only in console mode
         std::cout << "CPU Features:\n";
-        std::cout << "  SSE4.2 + AES-NI: " << (CpuFeatures::has_sse_support() ? "✓" : "✗") << "\n";
         std::cout << "  Hardware threads: " << std::thread::hardware_concurrency() << "\n";
     }
 
