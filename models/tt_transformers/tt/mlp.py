@@ -23,6 +23,7 @@ class MLP(LightweightModule):
         dtype,
         model_config,
         state_dict_prefix=None,
+        prefetcher=None,
     ):
         super().__init__()
 
@@ -32,6 +33,8 @@ class MLP(LightweightModule):
         self.dim = args.dim
         self.model_config = model_config
         self.layer_num = layer_num
+        self.prefetcher = prefetcher
+
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
@@ -85,6 +88,11 @@ class MLP(LightweightModule):
             args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
         )
 
+        if self.prefetcher is not None:
+            self.prefetcher.insert_tensor(self.w1)
+            self.prefetcher.insert_tensor(self.w3)
+            self.prefetcher.insert_tensor(self.w2)
+
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
@@ -108,9 +116,14 @@ class MLP(LightweightModule):
                 pc_2 = self.model_config["FF2_TG_PROGCFG"] if self.dim >= 4096 else None
                 pc_3 = self.model_config["FF1_3_TG_PROGCFG"] if self.dim >= 4096 else None
             else:
-                pc_1 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
-                pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
-                pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
+                if self.prefetcher is not None:
+                    pc_1 = self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"]
+                    pc_2 = self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"]
+                    pc_3 = self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"]
+                else:
+                    pc_1 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
+                    pc_2 = self.model_config["DECODE_MLP_W2_PRG_CONFIG"]
+                    pc_3 = self.model_config["DECODE_MLP_W1_W3_PRG_CONFIG"]
         else:  # Update the program configs based for prefill
             if seq_len >= self.args.prefill_len_cutoff:  # 512 if Blackhole, 1024 if Wormhole
                 # Reshape input to to fit on device and parallelize computation

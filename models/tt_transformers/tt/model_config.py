@@ -462,12 +462,13 @@ class ModelArgs:
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        prefetcher=None,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
         self.arch_name = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
-
+        self.prefetcher = prefetcher
         self.device_name = determine_device_name(self.mesh_device)
 
         logger.info(f"Inferring device name: {self.device_name}")
@@ -661,6 +662,8 @@ class ModelArgs:
 
             grid = device.compute_with_storage_grid_size()
             self.max_grid_size = ttnn.CoreGrid(x=grid.x, y=grid.y)
+
+            self.model_config["PREFETCHER"] = self.prefetcher
 
             # DRAM weight grid specs for dram sharding matmuls
             self.dram_weight_grid = ttnn.CoreRangeSet(
@@ -1151,6 +1154,31 @@ class ModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+
+            self.model_config["PREFETCHER_MLP_W1_W3_PRG_CONFIG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                8192 // self.cluster_shape[0],
+                3840,  # Use padded N
+                self.prefetcher.ring_size,
+            )
+
+            self.model_config["PREFETCHER_MLP_W2_PRG_CONFIG"] = self.matmul_1d_ring_config(
+                1,
+                32,
+                3584,
+                9216 // 4,  # Use padded N
+                self.prefetcher.ring_size,
+            )
+
+            self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 3840 // self.prefetcher.ring_size),  # Use padded N
+                core_grid=self.prefetcher.receiver_cores_list,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
             self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
                     shape=(32, self.dim // 8 // 4),  # shard_grid_cores = 8, num_devices=4
@@ -2243,6 +2271,63 @@ class ModelArgs:
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
             fused_activation=fused_activation,
         )
+
+    def matmul_1d_ring_config(
+        self,
+        B,
+        M,
+        K,
+        N,
+        num_cores,
+        prefetch=True,
+    ):
+        M *= B  # Fuse batch always enabled
+
+        in0_block_h = M // ttnn.TILE_SIZE
+        in0_block_w = K // num_cores // ttnn.TILE_SIZE
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = N // num_cores // ttnn.TILE_SIZE
+
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
+        num_blocks_total = num_blocks_y * num_blocks_x
+
+        if num_blocks_total != num_cores:
+            assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
+
+        out_subblock_h = 1
+        out_subblock_w = 8
+        while out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+
+        hop_grid = [(3, 6)] if prefetch else []  # FIXME: Make not hard coded
+        hop_core_range_set = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in hop_grid
+            }
+        )
+        grid = num_to_coregrid(num_cores)
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=hop_core_range_set,
+            num_global_cb_receivers=2 if prefetch else 1,
+        )
+
+        return program_config
 
     def matmul_1d_config(
         self,
