@@ -15,6 +15,14 @@ on:
         description: "Type of tag to create: 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
         default: ""
         type: string
+      force-bump-type:
+        description: "Force a specific bump type instead of auto-detecting from commits. Options: 'major', 'minor', 'patch', 'none'."
+        default: ""
+        type: string
+      ignore-commits:
+        description: "Comma-separated list of commit SHAs to ignore when analyzing version bumps"
+        default: ""
+        type: string
       dry-run:
         description: "If true, do not upload tag."
         default: false
@@ -43,6 +51,8 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/calculate-version@main
         with:
           tag-type: ${{ inputs.tag-type }}
+          force-bump-type: ${{ inputs.force-bump-type }}
+          ignore-commits: ${{ inputs.ignore-commits }}
 
 
 
