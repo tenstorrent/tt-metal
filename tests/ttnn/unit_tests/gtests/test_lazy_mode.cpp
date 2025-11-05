@@ -25,7 +25,7 @@
 #include "ttnn/operations/copy/typecast/device/typecast_device_op.hpp"
 #include "ttnn/operations/rand/device/rand_device_operation.hpp"
 #include "ttnn/operations/data_movement/split/split.hpp"
-// #include "ttnn/operations/data_movement/concat/concat.hpp"  // Commented out - concat tests disabled
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
@@ -730,19 +730,19 @@ TEST_F(LazyModeFixture, DataMovementOperationsLazy) {
         << "Second split should have shape [32, 32]";
 
     // Test 2: Concat operation - concat the split results back
-    // log_info(tt::LogTest, "Testing concat operation in eager mode...");
-    // auto concat_result_eager = ttnn::concat(split_results_eager, 1, std::nullopt);
-    // ASSERT_EQ(concat_result_eager.logical_shape(), shape) << "Concat should restore original shape";
+    log_info(tt::LogTest, "Testing concat operation in eager mode...");
+    auto concat_result_eager = ttnn::concat(split_results_eager, 1, std::nullopt);
+    ASSERT_EQ(concat_result_eager.logical_shape(), shape) << "Concat should restore original shape";
 
-    // Test 3: Reshape operation - use first split result
+    // Test 3: Reshape operation
     log_info(tt::LogTest, "Testing reshape operation in eager mode...");
-    auto reshape_result_eager = ttnn::reshape(split_results_eager[0], ttnn::Shape({64, 16}), std::nullopt);
-    ASSERT_EQ(reshape_result_eager.logical_shape(), ttnn::Shape({64, 16})) << "Reshape should produce shape [64, 16]";
+    auto reshape_result_eager = ttnn::reshape(concat_result_eager, ttnn::Shape({64, 32}), std::nullopt);
+    ASSERT_EQ(reshape_result_eager.logical_shape(), ttnn::Shape({64, 32})) << "Reshape should produce shape [64, 32]";
 
     // Test 4: Repeat operation
     log_info(tt::LogTest, "Testing repeat operation in eager mode...");
     auto repeat_result_eager = ttnn::repeat(reshape_result_eager, ttnn::SmallVector<uint32_t>{1, 2}, std::nullopt);
-    ASSERT_EQ(repeat_result_eager.logical_shape(), ttnn::Shape({64, 32})) << "Repeat should produce shape [64, 32]";
+    ASSERT_EQ(repeat_result_eager.logical_shape(), ttnn::Shape({64, 64})) << "Repeat should produce shape [64, 64]";
 
     // Add element-wise operation to make the test more interesting
     auto relu_result_eager = ttnn::relu(repeat_result_eager);
@@ -765,13 +765,14 @@ TEST_F(LazyModeFixture, DataMovementOperationsLazy) {
     ASSERT_FALSE(split_results_lazy[1].lazy()->is_materialized()) << "Second split result should not be materialized";
 
     // Test 2: Concat operation - should be captured lazily
-    // log_info(tt::LogTest, "Applying concat operation in lazy mode...");
-    // auto concat_result_lazy = ttnn::concat(split_results_lazy, 1, std::nullopt);
-    // ASSERT_FALSE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should not be materialized";
+    log_info(tt::LogTest, "Applying concat operation in lazy mode...");
+    auto concat_result_lazy = ttnn::concat(split_results_lazy, 1, std::nullopt);
 
-    // Test 3: Reshape operation - should be captured lazily, use first split result
+    ASSERT_FALSE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should not be materialized";
+
+    // Test 3: Reshape operation - should be captured lazily
     log_info(tt::LogTest, "Applying reshape operation in lazy mode...");
-    auto reshape_result_lazy = ttnn::reshape(split_results_lazy[0], ttnn::Shape({64, 16}), std::nullopt);
+    auto reshape_result_lazy = ttnn::reshape(concat_result_lazy, ttnn::Shape({64, 32}), std::nullopt);
 
     ASSERT_FALSE(reshape_result_lazy.lazy()->is_materialized()) << "Reshape result should not be materialized";
 
@@ -788,10 +789,11 @@ TEST_F(LazyModeFixture, DataMovementOperationsLazy) {
 
     log_info(
         tt::LogTest,
-        "split_results_lazy[0] id: {}, split_results_lazy[1] id: {}, "
+        "split_results_lazy[0] id: {}, split_results_lazy[1] id: {}, concat_result_lazy id: {}, "
         "reshape_result_lazy id: {}, repeat_result_lazy id: {}, relu_result_lazy id: {}",
         split_results_lazy[0].lazy()->id(),
         split_results_lazy[1].lazy()->id(),
+        concat_result_lazy.lazy()->id(),
         reshape_result_lazy.lazy()->id(),
         repeat_result_lazy.lazy()->id(),
         relu_result_lazy.lazy()->id());
@@ -803,9 +805,9 @@ TEST_F(LazyModeFixture, DataMovementOperationsLazy) {
     ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
     ASSERT_TRUE(repeat_result_lazy.lazy()->is_materialized()) << "Repeat result should be materialized";
     ASSERT_TRUE(reshape_result_lazy.lazy()->is_materialized()) << "Reshape result should be materialized";
-    // ASSERT_TRUE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should be materialized";
+    ASSERT_TRUE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should be materialized";
     ASSERT_TRUE(split_results_lazy[0].lazy()->is_materialized()) << "First split result should be materialized";
-    // Second split result may or may not be materialized since it's not used
+    ASSERT_TRUE(split_results_lazy[1].lazy()->is_materialized()) << "Second split result should be materialized";
     ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
 
     auto lazy_result = relu_result_lazy.cpu();

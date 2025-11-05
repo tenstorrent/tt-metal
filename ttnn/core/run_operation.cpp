@@ -27,12 +27,12 @@ namespace detail {
 distributed::MeshDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
-            return input_tensor.device_storage().get_device();
+            return input_tensor.device();
         }
     }
     for (auto& optional_input_tensor : optional_input_tensors) {
         if (optional_input_tensor.has_value() and optional_input_tensor->storage_type() == StorageType::DEVICE) {
-            return optional_input_tensor->device_storage().get_device();
+            return optional_input_tensor->device();
         }
     }
     auto device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();
