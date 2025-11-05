@@ -3078,6 +3078,7 @@ def determine_device_name(mesh_device):
             2: "P300",
             4: "P150x4",
             8: "P150x8",
+            32: "BHGLX",
         }
     elif is_wormhole_b0():
         dict_device_names = {
