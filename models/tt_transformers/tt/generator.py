@@ -1389,38 +1389,58 @@ class Generator:
         prompt_tokens_tensor = torch.tensor(prompt_tokens, dtype=torch.long).reshape(1, -1)  # B, S
         # Suboptimal to allocate caches every time
         model_id = 0
-        xattn_caches = self.model[model_id].setup_cache(self.model_args[model_id].max_batch_size)
-        (
-            xattn_caches,
-            prefill_cross_attention_masks,
-            prefill_full_text_row_masked_out_mask,
-            decode_cross_attention_masks,
-            decode_full_text_row_masked_out_mask,
-            logits,
-        ) = self._prefill_forward_single_user(
-            vision_images,
-            vision_mask,
-            prompt_tokens_tensor,
-            xattn_caches,
-            user_id=0,
-            total_len=total_len,
-            prefill_len=prefill_len,
-            model_id=model_id,
-        )
+        text_only = not hasattr(self.model[model_id], "setup_cache")
+        if text_only:
+            # Text-only path: use existing text prefill util
+            logits = self.prefill_forward_text(
+                prompt_tokens_tensor,
+                page_table=None,
+                kv_cache=None,
+                prompt_lens=torch.tensor([prefill_len]),
+                empty_slots=[0],
+                enable_trace=False,
+            )
+            # Placeholders for cross-attention-related structures
+            prefill_cross_attention_masks = None
+            prefill_full_text_row_masked_out_mask = None
+            decode_cross_attention_masks = None
+            decode_full_text_row_masked_out_mask = None
+            xattn_caches = None
+        else:
+            xattn_caches = self.model[model_id].setup_cache(self.model_args[model_id].max_batch_size)
+            (
+                xattn_caches,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+                logits,
+            ) = self._prefill_forward_single_user(
+                vision_images,
+                vision_mask,
+                prompt_tokens_tensor,
+                xattn_caches,
+                user_id=0,
+                total_len=total_len,
+                prefill_len=prefill_len,
+                model_id=model_id,
+            )
 
         last_token_idx = prefill_len - 1
-        logits = self.model[model_id].process_output_prefill(logits, 1, last_token_idx=(last_token_idx % 32))
-        logits = logits.view(1, 1, self.model_args[model_id].vocab_size)
+        if not text_only:
+            logits = self.model[model_id].process_output_prefill(logits, 1, last_token_idx=(last_token_idx % 32))
+            logits = logits.view(1, 1, self.model_args[model_id].vocab_size)
 
         prefill_output_xattn_masks = [[] for _ in range(self.data_parallel)]
         prefill_output_full_text_row_masked_out_masks = [[] for _ in range(self.data_parallel)]
         decode_output_xattn_masks = [[] for _ in range(self.data_parallel)]
         decode_output_full_text_row_masked_out_masks = [[] for _ in range(self.data_parallel)]
 
-        prefill_output_xattn_masks[model_id].append(prefill_cross_attention_masks)
-        prefill_output_full_text_row_masked_out_masks[model_id].append(prefill_full_text_row_masked_out_mask)
-        decode_output_xattn_masks[model_id].append(decode_cross_attention_masks)
-        decode_output_full_text_row_masked_out_masks[model_id].append(decode_full_text_row_masked_out_mask)
+        if not text_only:
+            prefill_output_xattn_masks[model_id].append(prefill_cross_attention_masks)
+            prefill_output_full_text_row_masked_out_masks[model_id].append(prefill_full_text_row_masked_out_mask)
+            decode_output_xattn_masks[model_id].append(decode_cross_attention_masks)
+            decode_output_full_text_row_masked_out_masks[model_id].append(decode_full_text_row_masked_out_mask)
 
         def sample(logits):
             if temperature > 0:
