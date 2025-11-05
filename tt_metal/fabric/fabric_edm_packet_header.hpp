@@ -23,6 +23,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+// NOLINTBEGIN(misc-unused-parameters)
 namespace tt::tt_fabric {
 
 enum TerminationSignal : uint32_t {
@@ -735,3 +736,4 @@ static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));
 }  // namespace tt::tt_fabric
 
 #pragma GCC diagnostic pop
+// NOLINTEND(misc-unused-parameters)
