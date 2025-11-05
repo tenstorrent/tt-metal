@@ -31,6 +31,15 @@ PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
 
 
+def is_6u_wrapper():
+    ctx = mp.get_context("spawn")
+    with ctx.Pool() as pool:
+        result = pool.apply(is_6u)
+        pool.close()
+        pool.join()
+    return result
+
+
 def get_device_data(setupStr=""):
     postProcessRun = os.system(
         f"cd {PROFILER_SCRIPTS_ROOT} && " f"./process_device_log.py {setupStr} --no-artifacts --no-print-stats"
@@ -358,8 +367,8 @@ def test_device_trace_run():
 @skip_for_blackhole()
 def test_dispatch_cores():
     REF_COUNT_DICT = {
-        "Tensix CQ Dispatch*": [600, 760, 1310, 2330],
-        "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
+        "Tensix CQ Dispatch*": [600, 760, 1310, 2330, 3558, 4915, 6383],
+        "Tensix CQ Prefetch": [900, 1440, 2012, 3870, 5000, 7752],
         "dispatch_total_cq_cmd_op_time": [236],
         "dispatch_go_send_wait_time": [236],
     }
@@ -384,7 +393,7 @@ def test_dispatch_cores():
 
     verify_stats(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.WORKER",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.WORKER",
             setupAutoExtract=True,
             doDispatchCores=True,
         ),
@@ -407,8 +416,12 @@ def test_dispatch_cores():
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
+@pytest.mark.skipif(is_6u_wrapper(), reason="Ethernet dispatch is not needed to be tested on 6U")
 def test_ethernet_dispatch_cores():
-    REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
+    REF_COUNT_DICT = {
+        "Ethernet CQ Dispatch": [590, 1080, 1430, 1660, 1994, 2777, 3285, 3530, 3769, 4237, 4881, 6681, 7150],
+        "Ethernet CQ Prefetch": [572, 1058, 2108, 4030, 7795],
+    }
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.ETH",
         setupAutoExtract=True,
@@ -429,7 +442,7 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
     devicesData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices -k DispatchCoreType.ETH",
+        testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_mesh_device -k DispatchCoreType.ETH",
         setupAutoExtract=True,
         doDispatchCores=True,
     )
@@ -454,13 +467,16 @@ def test_profiler_host_device_sync():
     syncInfoFile = PROFILER_LOGS_DIR / PROFILER_HOST_DEVICE_SYNC_INFO
 
     deviceData = run_device_profiler_test(
-        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_all_devices", doSync=True
+        testName=f"pytest {TRACY_TESTS_DIR}/test_profiler_sync.py::test_mesh_device", doSync=True
     )
     reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
     assert os.path.isfile(syncInfoFile)
 
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
+    available_devices = sorted(int(device_id) for device_id in deviceData["data"]["devices"].keys())
+    missing_devices = [device_id for device_id in available_devices if device_id not in devices]
+    assert len(missing_devices) == 0, f"Missing sync info for devices {missing_devices}"
     for device in devices:
         deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
         if not np.isnan(deviceFreq):  # host sync entry
@@ -485,6 +501,9 @@ def test_profiler_host_device_sync():
 
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
+    available_devices = sorted(int(device_id) for device_id in deviceData["data"]["devices"].keys())
+    missing_devices = [device_id for device_id in available_devices if device_id not in devices]
+    assert len(missing_devices) == 0, f"Missing sync info for devices {missing_devices}"
     for device in devices:
         deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
         if not np.isnan(deviceFreq):  # host sync entry
@@ -498,7 +517,7 @@ def test_timestamped_events():
     OP_COUNT = 2
     RISC_COUNT = 5
     ZONE_COUNT = 100
-    WH_ERISC_COUNTS = [0, 3, 6]  # N150, N300, T3K
+    WH_ERISC_COUNTS = [0, 3, 6, 16]  # N150, N300, T3K, 6U
     WH_TENSIX_COUNTS = [72, 64, 56]
     BH_ERISC_COUNTS = [0, 1, 6, 8]
     BH_TENSIX_COUNTS = [130, 120, 110]
@@ -729,15 +748,6 @@ def test_fabric_event_profiler_fabric_mux():
         assert (
             fabric_event_count == expected_output["FABRIC_EVENT_COUNT"]
         ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {expected_output['FABRIC_EVENT_COUNT']}"
-
-
-def is_6u_wrapper():
-    ctx = mp.get_context("spawn")
-    with ctx.Pool() as pool:
-        result = pool.apply(is_6u)
-        pool.close()
-        pool.join()
-    return result
 
 
 @skip_for_blackhole()

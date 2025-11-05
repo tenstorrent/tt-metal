@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <google/protobuf/text_format.h>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
@@ -96,8 +97,7 @@ Node build_node(
     const std::string& node_descriptor_name,
     HostId host_id,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
+    std::unordered_map<std::string, Node>& node_templates) {
     const std::string& node_type = node_descriptor_name;
     auto it = node_templates.find(node_type);
     if (it != node_templates.end()) {
@@ -119,17 +119,7 @@ Node build_node(
     for (const auto& board_item : node_descriptor.boards().board()) {
         TrayId tray_id = TrayId(board_item.tray_id());
         auto board_type = get_board_type_from_string(board_item.board_type());
-
-        // Check cache first
-        auto board_it = board_templates.find(board_type);
-        if (board_it != board_templates.end()) {
-            template_node.boards.emplace(tray_id, board_it->second);
-        } else {
-            // Create new board and cache it
-            Board board = create_board(board_type);
-            board_templates.emplace(board_type, board);
-            template_node.boards.emplace(tray_id, board);
-        }
+        template_node.boards.emplace(tray_id, create_board(board_type));
     }
 
     // Add inter-board connections and validate/mark ports
@@ -200,14 +190,14 @@ HostId resolve_path_from_proto(
     }
 }
 
-// Build resolved graph instance from template and concrete host mappings
-std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
+// Builds a resolved graph instance from a graph instance and deployment descriptor.
+// deployment_descriptor is optional - if nullptr, no validation is performed.
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor* deployment_descriptor,
     const std::string& instance_name,
-    std::unordered_map<std::string, Node>& node_templates,
-    std::unordered_map<tt::umd::BoardType, Board>& board_templates) {
+    std::unordered_map<std::string, Node>& node_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
     resolved->template_name = graph_instance.template_name();
     resolved->instance_name = instance_name;
@@ -223,43 +213,46 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
         if (child_def.has_node_ref()) {
             // Leaf node - create node
             if (child_mapping.mapping_case() != tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
-                throw std::runtime_error("Node child must have host_id mapping: " + child_name);
+                TT_THROW("Node child must have host_id mapping: {}", child_name);
             }
 
             HostId host_id = HostId(child_mapping.host_id());
             const std::string& node_descriptor_name = child_def.node_ref().node_descriptor();
 
-            // Validate deployment node type if specified
-            if (*host_id < deployment_descriptor.hosts().size()) {
-                const auto& deployment_host = deployment_descriptor.hosts()[*host_id];
-                if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
-                    throw std::runtime_error(
-                        "Node type mismatch for host " + deployment_host.host() + " (host_id " +
-                        std::to_string(*host_id) + "): " + "deployment specifies '" + deployment_host.node_type() +
-                        "' " + "but cluster configuration expects '" + node_descriptor_name + "'");
+            // Validate deployment node type if deployment descriptor is provided
+            if (deployment_descriptor != nullptr) {
+                if (*host_id < deployment_descriptor->hosts().size()) {
+                    const auto& deployment_host = deployment_descriptor->hosts()[*host_id];
+                    if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
+                        TT_THROW(
+                            "Node type mismatch for host {} (host_id {}): deployment specifies '{}' "
+                            "but cluster configuration expects '{}'",
+                            deployment_host.host(),
+                            *host_id,
+                            deployment_host.node_type(),
+                            node_descriptor_name);
+                    }
+                } else {
+                    TT_THROW("Host ID {} not found in deployment", *host_id);
                 }
-            } else {
-                throw std::runtime_error("Host ID " + std::to_string(*host_id) + " not found in deployment");
             }
 
-            // Find node descriptor and build node inside build_node
-            resolved->nodes[child_name] =
-                build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates, board_templates);
+            // Find node descriptor and build node
+            resolved->nodes[child_name] = build_node(node_descriptor_name, host_id, cluster_descriptor, node_templates);
 
         } else if (child_def.has_graph_ref()) {
             // Non-leaf node - recursively build subgraph
             if (child_mapping.mapping_case() !=
                 tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
-                throw std::runtime_error("Graph child must have sub_instance mapping: " + child_name);
+                TT_THROW("Graph child must have sub_instance mapping: {}", child_name);
             }
 
-            resolved->subgraphs[child_name] = build_graph_instance(
+            resolved->subgraphs[child_name] = build_graph_instance_impl(
                 child_mapping.sub_instance(),
                 cluster_descriptor,
                 deployment_descriptor,
                 child_name,
-                node_templates,
-                board_templates);
+                node_templates);
         }
     }
 
@@ -283,8 +276,6 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
             HostId host_a_id = resolve_path_from_proto(path_a, graph_instance, cluster_descriptor);
             HostId host_b_id = resolve_path_from_proto(path_b, graph_instance, cluster_descriptor);
 
-            // Can't use create_port_connection here because we don't have all the nodes yet
-
             // Store connection with resolved HostId
             resolved->internal_connections[*port_type].emplace_back(
                 std::make_tuple(host_a_id, board_a_id, port_a_id), std::make_tuple(host_b_id, board_b_id, port_b_id));
@@ -307,13 +298,55 @@ void populate_deployment_hosts(
             .aisle = proto_host.aisle(),
             .rack = proto_host.rack(),
             .shelf_u = proto_host.shelf_u(),
-            .motherboard = node_templates.at(proto_host.node_type()).motherboard});
+            .motherboard = node_templates.at(proto_host.node_type()).motherboard,
+            .node_type = proto_host.node_type()});
     }
+}
+
+void populate_deployment_hosts_from_hostnames(
+    const std::vector<std::string>& hostnames,
+    const std::map<HostId, Node*>& host_id_to_node,
+    std::vector<Host>& deployment_hosts) {
+    // Store deployment hosts with just hostname and motherboard (no physical location info)
+    deployment_hosts.reserve(hostnames.size());
+    for (size_t i = 0; i < hostnames.size(); ++i) {
+        HostId host_id = HostId(i);
+        auto it = host_id_to_node.find(host_id);
+        if (it == host_id_to_node.end()) {
+            throw std::runtime_error("Host ID " + std::to_string(i) + " not found in cluster configuration");
+        }
+        deployment_hosts.emplace_back(Host{
+            .hostname = hostnames[i],
+            .hall = "",
+            .aisle = "",
+            .rack = 0,
+            .shelf_u = 0,
+            .motherboard = it->second->motherboard});
+    }
+}
+
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const std::string& instance_name,
+    std::unordered_map<std::string, Node>& node_templates) {
+    return build_graph_instance_impl(
+        graph_instance, cluster_descriptor, &deployment_descriptor, instance_name, node_templates);
+}
+
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const std::string& instance_name,
+    std::unordered_map<std::string, Node>& node_templates) {
+    return build_graph_instance_impl(
+        graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
 }  // anonymous namespace
 
-// Constructor
+// Constructor with full deployment descriptor
 CablingGenerator::CablingGenerator(
     const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
     // Load descriptors from file paths
@@ -325,13 +358,8 @@ CablingGenerator::CablingGenerator(
             deployment_descriptor_path);
 
     // Build cluster with all connections and port validation
-    root_instance_ = build_graph_instance(
-        cluster_descriptor.root_instance(),
-        cluster_descriptor,
-        deployment_descriptor,
-        "",
-        node_templates_,
-        board_templates_);
+    root_instance_ =
+        build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
 
     // Validate host_id uniqueness across all nodes
     validate_host_id_uniqueness();
@@ -346,6 +374,30 @@ CablingGenerator::CablingGenerator(
     populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
 }
 
+// Constructor with just hostnames (no physical location info)
+CablingGenerator::CablingGenerator(
+    const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames) {
+    // Load cluster descriptor
+    auto cluster_descriptor =
+        load_descriptor_from_textproto<tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor>(
+            cluster_descriptor_path);
+
+    // Build cluster with all connections and port validation (without deployment descriptor)
+    root_instance_ = build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, "", node_templates_);
+
+    // Validate host_id uniqueness across all nodes
+    validate_host_id_uniqueness();
+
+    // Populate the host_id_to_node_ map
+    populate_host_id_to_node();
+
+    // Generate all logical chip connections
+    generate_logical_chip_connections();
+
+    // Populate deployment hosts from hostnames
+    populate_deployment_hosts_from_hostnames(hostnames, host_id_to_node_, deployment_hosts_);
+}
+
 // Getters for all data
 const std::vector<Host>& CablingGenerator::get_deployment_hosts() const { return deployment_hosts_; }
 
@@ -353,13 +405,16 @@ const std::vector<LogicalChannelConnection>& CablingGenerator::get_chip_connecti
     return chip_connections_;
 }
 
-// Method to emit textproto factory system descriptor
-void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
+// Helper function to build factory system descriptor protobuf (shared between emit and generate_string methods)
+static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_system_descriptor(
+    const std::vector<Host>& deployment_hosts,
+    const std::map<HostId, Node*>& host_id_to_node,
+    const std::vector<LogicalChannelConnection>& chip_connections) {
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
 
     // Add host information from deployment hosts (indexed by host_id)
-    for (size_t i = 0; i < deployment_hosts_.size(); ++i) {
-        const auto& deployment_host = deployment_hosts_[i];
+    for (size_t i = 0; i < deployment_hosts.size(); ++i) {
+        const auto& deployment_host = deployment_hosts[i];
         auto* host = fsd.add_hosts();
         host->set_hostname(deployment_host.hostname);
         host->set_hall(deployment_host.hall);
@@ -370,7 +425,7 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     }
 
     // Add board types
-    for (const auto& [host_id, node] : host_id_to_node_) {
+    for (const auto& [host_id, node] : host_id_to_node) {
         for (const auto& [tray_id, board] : node->boards) {
             auto* board_location = fsd.mutable_board_types()->add_board_locations();
             board_location->set_host_id(*host_id);
@@ -379,8 +434,8 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
         }
     }
 
-    // Add ASIC connections from chip_connections_
-    for (const auto& [start, end] : chip_connections_) {
+    // Add ASIC connections from chip_connections
+    for (const auto& [start, end] : chip_connections) {
         auto* connection = fsd.mutable_eth_connections()->add_connection();
 
         auto* endpoint_a = connection->mutable_endpoint_a();
@@ -395,6 +450,13 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
         endpoint_b->set_asic_location(end.asic_channel.asic_location);
         endpoint_b->set_chan_id(*end.asic_channel.channel_id);
     }
+
+    return fsd;
+}
+
+// Method to emit textproto factory system descriptor
+void CablingGenerator::emit_factory_system_descriptor(const std::string& output_path) const {
+    auto fsd = build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
 
     // Create parent directory if it doesn't exist
     std::filesystem::path output_file_path(output_path);
@@ -422,6 +484,11 @@ void CablingGenerator::emit_factory_system_descriptor(const std::string& output_
     output_file.close();
 }
 
+// Method to generate factory system descriptor as protobuf object (uses shared helper)
+tt::scaleout_tools::fsd::proto::FactorySystemDescriptor CablingGenerator::generate_factory_system_descriptor() const {
+    return build_factory_system_descriptor(deployment_hosts_, host_id_to_node_, chip_connections_);
+}
+
 void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bool loc_info) const {
     // Create parent directory if it doesn't exist
     std::filesystem::path output_file_path(output_path);
@@ -443,7 +510,8 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         {CableLength::UNKNOWN, "UNKNOWN"}};
 
     const std::unordered_map<tt::ARCH, std::string> speed_str = {
-        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "800G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
+        //TODO: BLACKHOLE cable speed 200G in early stages/validation, but should be able to support 800G in the future.
+        {tt::ARCH::WORMHOLE_B0, "400G"}, {tt::ARCH::BLACKHOLE, "400G"}, {tt::ARCH::Invalid, "UNKNOWN"}};
 
     // Unknown for lengths unable to be calculated (longer than avaiable cables, cross-aisle/hall, etc.)
 
@@ -453,11 +521,13 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
     CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
-        output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
-        output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,," << std::endl;
+        output_file << "Source,,,,,,,,,Destination,,,,,,,,,Cable Length,Cable Type" << std::endl;
+        output_file << "Hostname,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hostname,Hall,Aisle,Rack,Shelf "
+                       "U,Tray,Port,Label,Node Type,,"
+                    << std::endl;
     } else {
-        output_file << "Source,,,Destination,," << std::endl;
-        output_file << "Hostname,Tray,Port,Hostname,Tray,Port" << std::endl;
+        output_file << "Source,,,,Destination,,," << std::endl;
+        output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type" << std::endl;
     }
     for (const auto& [start, end] : conn_list) {
         auto host_id1 = std::get<0>(start).get();
@@ -471,30 +541,47 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
         const auto& host1 = deployment_hosts_[host_id1];
         const auto& host2 = deployment_hosts_[host_id2];
 
+        // Create node_type strings with "_DEFAULT" suffix removed if present;
+        //  all the default connections are enumerated
+        const std::string suffix = "_DEFAULT";
+        std::string host1_node_type = host1.node_type;
+        if (host1_node_type.size() >= suffix.size() &&
+            host1_node_type.compare(host1_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            host1_node_type = host1_node_type.substr(0, host1_node_type.size() - suffix.size());
+        }
+        std::string host2_node_type = host2.node_type;
+        if (host2_node_type.size() >= suffix.size() &&
+            host2_node_type.compare(host2_node_type.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            host2_node_type = host2_node_type.substr(0, host2_node_type.size() - suffix.size());
+        }
+
         // Get arch from node
         // Assume arch for start and end are the same
         // This is validated in create_port_connection
-        auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
 
-        CableLength cable_l = calc_cable_length(host1, host2);
+        // TODO: Determine better heuristic/specification for cable length and type
+        // auto arch = host_id_to_node_.at(std::get<0>(start))->boards.at(std::get<1>(start)).get_arch();
+        // CableLength cable_l = calc_cable_length(host1, tray_id1, host2, tray_id2, host1_node_type);
+
         if (loc_info) {
+            output_file << host1.hostname << ",";
             output_file << host1.hall << "," << host1.aisle << "," << std::setw(2) << host1.rack << ",U" << std::setw(2)
                         << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
 
             output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2)
-                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << ",";
+                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << "," << host1_node_type << ",";
 
+            output_file << host2.hostname << ",";
             output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
                         << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
             output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
-                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << ",";
+                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2_node_type << ",";
 
-            output_file << cable_length_str.at(cable_l) << ",";
-            output_file << speed_str.at(arch) << "_" << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC")
-                        << std::endl;
+            output_file << ",";        // Length blank, leaving up to technician
+            output_file << std::endl;  // Type blank, leaving up to technician
         } else {
-            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << ",";
-            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << std::endl;
+            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1_node_type << ",";
+            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2_node_type << std::endl;
         }
     }
 
@@ -680,23 +767,34 @@ void CablingGenerator::get_all_connections_of_type(
     }
 }
 
-CableLength calc_cable_length(const Host& host1, const Host& host2) {
+CableLength calc_cable_length(
+    const Host& host1, int tray_id1, const Host& host2, int tray_id2, const std::string& node_type) {
     if (host1.hall != host2.hall) {
         return CableLength::UNKNOWN;
     } else if (host1.aisle != host2.aisle) {
         return CableLength::UNKNOWN;
     }
 
+
+    int tray_id_0 = tray_id1;
+    int tray_id_1 = tray_id2;
     int rack_0 = host1.rack;
-    int shelf_u_0 = host1.shelf_u;
     int rack_1 = host2.rack;
-    int shelf_u_1 = host2.shelf_u;
+
+    double tray_u_est_0 = host1.shelf_u;
+    double tray_u_est_1 = host2.shelf_u;
+    if (node_type.find("GALAXY") != std::string::npos) {
+        // 1.25 U per tray, 1 U at bottom of 6U shelf, BH_GALAXY has 8U shelves
+        tray_u_est_0 += (((4 - tray_id_0) * 1.25) + 1);
+        tray_u_est_1 += (((4 - tray_id_1) * 1.25) + 1);
+    }
+
 
     double standard_rack_w = 600.0;    // mm
     double standard_rack_u_h = 44.45;  // mm
 
     double rack_distance = std::abs(rack_0 - rack_1) * standard_rack_w;
-    double u_distance = std::abs(shelf_u_0 - shelf_u_1) * standard_rack_u_h;
+    double u_distance = std::abs(tray_u_est_0 - tray_u_est_1) * standard_rack_u_h;
 
     double cable_length = std::sqrt((rack_distance * rack_distance) + (u_distance * u_distance)) + 150;  // 150mm slack
 

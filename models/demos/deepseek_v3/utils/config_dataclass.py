@@ -126,6 +126,21 @@ class AllGatherAsyncConfig(OpConfigBase):
 
 
 @dataclass
+class AllToAllAsyncGenericConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.all_to_all_async_generic op"""
+
+    in_dim: int | None = None
+    out_dim: int | None = None
+    cluster_axis: int | None = None
+    mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
+    num_links: int | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+
+
+@dataclass
 class ReduceScatterAsyncMinimalConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
 
@@ -151,7 +166,7 @@ class PointToPointConfig(OpConfigBase):
     receiver_coord: ttnn.MeshCoordinate | None = None
     sender_coord: ttnn.MeshCoordinate | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
-    optional_output_tensor: ttnn.Tensor | None = None
+    output_tensor: ttnn.Tensor | None = None
 
 
 @dataclass
@@ -275,7 +290,7 @@ class AllToAllDispatchConfig(OpConfigBase):
 class AllToAllCombineConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_combine op"""
 
-    axis: int
+    cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear

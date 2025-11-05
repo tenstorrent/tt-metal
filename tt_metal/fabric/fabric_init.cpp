@@ -34,8 +34,8 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
     const tt::tt_fabric::RoutingDirection direction,
     tt::tt_fabric::MeshId mesh_id0,
     tt::tt_fabric::MeshId mesh_id1,
-    chip_id_t chip0,
-    chip_id_t chip1,
+    ChipId chip0,
+    ChipId chip1,
     bool wrap_around_mesh) {
     auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
     auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
@@ -168,8 +168,15 @@ void build_tt_fabric_program(
 
     if (is_TG && device->is_mmio_capable()) {
         const auto& edm_config = fabric_context.get_fabric_router_config();
+
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
+            log_debug(
+                tt::LogFabric,
+                "FabricEriscDatamoverConfig for device {}: eth_chan={}, direction={}",
+                device->id(),
+                eth_chan,
+                eth_direction);
             // remote_fabric_node_id is only used to determine the handshake master, no functional impact
             // for now treat the mmio chips as the handshake master
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
@@ -227,7 +234,7 @@ void build_tt_fabric_program(
         // assume same neighbor per direction
         TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
         TT_FATAL(
-            std::set<chip_id_t>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
+            std::set<ChipId>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
             "Multiple neighbors per direction is currently unsupported");
 
         // 1D fabric only supports intramesh connections apart from TG gateways

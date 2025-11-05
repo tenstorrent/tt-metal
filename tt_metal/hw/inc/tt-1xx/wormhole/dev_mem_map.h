@@ -55,7 +55,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 512)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 2048
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
@@ -154,6 +154,12 @@
 
 #define MEM_BANK_TO_NOC_SCRATCH (MEM_NCRISC_INIT_IRAM_L1_BASE_SCRATCH + MEM_NCRISC_LOCAL_SIZE)
 #define MEM_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+
+// Scratch area for logical to virtual coordinate mapping.
+// This size must match the firmware noc_size_x & noc_size Y. Size is largest chip (X + Y) * sizeof uint8_t.
+// Chip sizes must round up to nearest multiple of 4 to deal with uint32_t alignment for L1 to local copies.
+#define MEM_LOGICAL_TO_VIRTUAL_SCRATCH (MEM_BANK_TO_NOC_SCRATCH + MEM_BANK_TO_NOC_SIZE)
+#define MEM_LOGICAL_TO_VIRTUAL_SIZE ((12 + 12) * sizeof(uint8_t))
 
 /////////////
 // Stack info

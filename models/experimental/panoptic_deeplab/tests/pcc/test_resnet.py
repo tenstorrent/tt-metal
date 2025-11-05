@@ -22,6 +22,7 @@ from models.experimental.panoptic_deeplab.tt.common import (
     PDL_L1_SMALL_SIZE,
     get_panoptic_deeplab_weights_path,
     get_panoptic_deeplab_config,
+    preprocess_nchw_input_tensor,
 )
 
 
@@ -50,7 +51,6 @@ def create_panoptic_models(device, weights_path):
         decoder_channels=decoder_channels,
         sem_seg_head_channels=sem_seg_head_channels,
         ins_embed_head_channels=ins_embed_head_channels,
-        norm="SyncBN",
         train_size=train_size,
         weights_path=weights_path,
     )
@@ -58,7 +58,10 @@ def create_panoptic_models(device, weights_path):
     pytorch_model.eval()
 
     # Create TTNN parameters from the PyTorch model with loaded weights
-    ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
+    # The new preprocessing system automatically computes input shapes
+    ttnn_parameters = create_panoptic_deeplab_parameters(
+        pytorch_model, device, input_height=512, input_width=1024, batch_size=1  # Use half the original Cityscapes size
+    )
 
     # Apply Conv+BatchNorm fusion to the parameters
     logger.info("Applying Conv+BatchNorm fusion to parameters...")
@@ -70,6 +73,8 @@ def create_panoptic_models(device, weights_path):
         conv_act_dtype=ttnn.bfloat8_b,
         conv_w_dtype=ttnn.bfloat8_b,
     )
+    # Apply ResNet-specific configurations to match test_conv2d_panoptic
+    model_configs.setup_resnet_backbone()
 
     # Create TTNN model with fused parameters and centralized configuration
     ttnn_model = TtPanopticDeepLab(
@@ -81,7 +86,6 @@ def create_panoptic_models(device, weights_path):
         decoder_channels=decoder_channels,
         sem_seg_head_channels=sem_seg_head_channels,
         ins_embed_head_channels=ins_embed_head_channels,
-        norm="",
         train_size=train_size,
         model_configs=model_configs,
     )
@@ -90,18 +94,20 @@ def create_panoptic_models(device, weights_path):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
-    "height,width",
-    [(512, 1024)],
+    "input_shape_nchw",
+    [(1, 3, 512, 1024)],
 )
-def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_location_generator):
+def test_resnet_stem_pcc(device, input_shape_nchw, reset_seeds, model_location_generator):
     """Test ResNet stem layer PCC between PyTorch and TTNN implementations."""
     compute_grid = device.compute_with_storage_grid_size()
     if compute_grid.x != 5 or compute_grid.y != 4:
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
 
     torch.manual_seed(0)
+
+    batch_size, C, height, width = input_shape_nchw
+    assert batch_size == 1, "Batch size greater than 1 is not supported in this test."
 
     # Get the weights path using the common utility function
     complete_weights_path = get_panoptic_deeplab_weights_path(model_location_generator, __file__)
@@ -111,19 +117,16 @@ def test_resnet_stem_pcc(device, batch_size, height, width, reset_seeds, model_l
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
-    torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
-    ttnn_input = ttnn.from_torch(
-        torch_input.permute(0, 2, 3, 1),
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
+    torch_input = torch.randn(batch_size, C, height, width, dtype=torch.bfloat16)
+    ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
     ttnn_stem_output = ttnn_model.backbone.stem(ttnn_input)
     with torch.no_grad():
         torch_stem_output = pytorch_model.backbone.stem(torch_input)
 
-    ttnn_output_torch = ttnn.to_torch(ttnn_stem_output).permute(0, 3, 1, 2)
+    ttnn_output_torch = ttnn.to_torch(ttnn_stem_output).permute(0, 3, 1, 2).reshape(torch_stem_output.shape)
     pcc_passed, pcc_message = assert_with_pcc(torch_stem_output, ttnn_output_torch, 0.99)
 
     logger.info(f"ResNet stem PCC: {pcc_message}")
@@ -172,7 +175,7 @@ def test_resnet_layer_pcc(
         torch_layer_input.permute(0, 2, 3, 1),
         dtype=ttnn.bfloat16,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     if layer_name == "res2":
@@ -202,7 +205,7 @@ def test_resnet_layer_pcc(
         elif layer_name == "res5":
             torch_layer_output = pytorch_model.backbone.res5(torch_layer_input)
 
-    ttnn_output_torch = ttnn.to_torch(ttnn_layer_output).permute(0, 3, 1, 2)
+    ttnn_output_torch = ttnn.to_torch(ttnn_layer_output).permute(0, 3, 1, 2).reshape(torch_layer_output.shape)
 
     pcc_passed, pcc_message = assert_with_pcc(torch_layer_output, ttnn_output_torch, expected_pcc)
 
@@ -232,13 +235,10 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
     except FileNotFoundError:
         pytest.fail("model_final_bd324a.pkl file not found. Please place the weights file in the weights folder.")
 
+    # Both models have ImageNet normalization fused into conv1 weights
+    # so they both receive unnormalized input (no explicit normalization needed)
     torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
-    ttnn_input = ttnn.from_torch(
-        torch_input.permute(0, 2, 3, 1),
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    ttnn_input = preprocess_nchw_input_tensor(device, torch_input)
 
     ttnn_outputs = ttnn_model.backbone(ttnn_input)
     with torch.no_grad():
@@ -247,16 +247,16 @@ def test_resnet_full_pcc(device, batch_size, height, width, reset_seeds, model_l
     failed_layers = []
     # Set layer-specific PCC thresholds based on test failures
     layer_pcc_thresholds = {
-        "res2": 0.99,
-        "res3": 0.99,
-        "res4": 0.99,
-        "res5": 0.99,
+        "res2": 0.998,
+        "res3": 0.997,
+        "res4": 0.9965,
+        "res5": 0.9945,
     }
 
     for layer_name in ["res2", "res3", "res4", "res5"]:
         torch_output = torch_outputs[layer_name]
         ttnn_output = ttnn_outputs[layer_name]
-        ttnn_output_torch = ttnn.to_torch(ttnn_output).permute(0, 3, 1, 2)
+        ttnn_output_torch = ttnn.to_torch(ttnn_output).permute(0, 3, 1, 2).reshape(torch_output.shape)
 
         pcc_threshold = layer_pcc_thresholds[layer_name]
         pcc_passed, pcc_message = check_with_pcc(torch_output, ttnn_output_torch, pcc_threshold)

@@ -37,21 +37,28 @@ struct ProgramData {
     uint64_t program_id{};
     time_point compile_started_timestamp;
     time_point compile_finished_timestamp;
-    std::unordered_map<int, KernelData> kernels{};
-    std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device{};
+    std::unordered_map<int, KernelData> kernels;
+    std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device;
 };
 
 struct MeshDeviceData {
     const distributed::MeshDevice* mesh_device = nullptr;
     int mesh_id{};
-    std::optional<int> parent_mesh_id{};
+    std::optional<int> parent_mesh_id;
     bool initialized = false;
 };
 
 struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload = nullptr;
     uint64_t mesh_workload_id{};
-    std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device{};
+    std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
+};
+
+struct CoreInfo {
+    tt::tt_metal::DispatchWorkerType worker_type;
+    ChipId device_id;
+    ChipId servicing_device_id;
+    uint8_t cq_id;
 };
 
 }  // namespace tt::tt_metal::inspector

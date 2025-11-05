@@ -83,13 +83,14 @@ std::vector<TrafficConfig> generate_sweep_traffic_configs() {
 
 void configure_local_kernels(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     const std::vector<uint32_t>& inputs,
-    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     size_t packet_size_bytes,
     size_t packet_size_words,
-    size_t data_size) {
+    size_t data_size,
+    bool fwd) {
     const auto& host_name = physical_system_descriptor.my_host_name();
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -97,79 +98,94 @@ void configure_local_kernels(
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
-    std::unordered_map<chip_id_t, std::vector<CoreCoord>> kernel_coords;
+    std::unordered_map<ChipId, std::vector<CoreCoord>> kernel_coords;
+    std::vector<uint32_t> all_zeros(inputs.size(), 0);
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
-        auto sender_chip_id = asic_id_to_chip_id[*asic_id];
-        auto sender_device = devices[sender_chip_id];
-        auto& sender_program = programs[sender_chip_id];
+        auto curr_chip_id = asic_id_to_chip_id[*asic_id];
+        auto curr_chip = devices[curr_chip_id];
+        auto& curr_program = programs[curr_chip_id];
 
-        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
-            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) != host_name) {
+        for (const auto& [neighbor_asic_id, eth_connections] : asic_connections) {
+            if (physical_system_descriptor.get_host_name_for_asic(neighbor_asic_id) != host_name) {
                 continue;
             }
-            auto receiver_chip_id = asic_id_to_chip_id[*dst_asic_id];
-            auto receiver_device = devices[receiver_chip_id];
-            auto& receiver_program = programs[receiver_chip_id];
+            auto neighbor_chip_id = asic_id_to_chip_id[*neighbor_asic_id];
+            auto neighbor_chip = devices[neighbor_chip_id];
+            auto& neighbor_program = programs[neighbor_chip_id];
 
             for (const auto& eth_connection : eth_connections) {
-                auto src_chan = eth_connection.src_chan;
-                auto dst_chan = eth_connection.dst_chan;
+                auto curr_chan = eth_connection.src_chan;
+                auto neighbor_chan = eth_connection.dst_chan;
 
-                const auto& sender_soc_desc = cluster.get_soc_desc(sender_chip_id);
-                const auto& receiver_soc_desc = cluster.get_soc_desc(receiver_chip_id);
-                auto sender_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                auto receiver_coord = receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
+                const auto& curr_soc_desc = cluster.get_soc_desc(curr_chip_id);
+                const auto& neighbor_soc_desc = cluster.get_soc_desc(neighbor_chip_id);
+                auto curr_coord = curr_soc_desc.get_eth_core_for_channel(curr_chan, CoordSystem::LOGICAL);
+                auto neighbor_coord = neighbor_soc_desc.get_eth_core_for_channel(neighbor_chan, CoordSystem::LOGICAL);
 
-                if (std::find(
-                        kernel_coords[sender_chip_id].begin(), kernel_coords[sender_chip_id].end(), sender_coord) ==
-                    kernel_coords[sender_chip_id].end()) {
+                if (std::find(kernel_coords[curr_chip_id].begin(), kernel_coords[curr_chip_id].end(), curr_coord) ==
+                    kernel_coords[curr_chip_id].end()) {
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                        sender_chip_id,
-                        sender_device->ethernet_core_from_logical_core(sender_coord),
-                        inputs,
+                        curr_chip_id,
+                        curr_chip->ethernet_core_from_logical_core(curr_coord),
+                        fwd ? inputs : all_zeros,
                         src_eth_l1_byte_address);
-                    std::vector<uint32_t> all_zeros(inputs.size(), 0);
+
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                        receiver_chip_id,
-                        receiver_device->ethernet_core_from_logical_core(receiver_coord),
-                        all_zeros,
+                        neighbor_chip_id,
+                        neighbor_chip->ethernet_core_from_logical_core(neighbor_coord),
+                        fwd ? all_zeros : inputs,
                         dst_eth_l1_byte_address);
 
-                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(sender_chip_id);
-                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_chip_id);
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(curr_chip_id);
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(neighbor_chip_id);
 
-                    auto sender_kernel = tt::tt_metal::CreateKernel(
-                        sender_program,
-                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
-                        sender_coord,
-                        tt::tt_metal::EthernetConfig{
-                            .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
-                    tt::tt_metal::SetRuntimeArgs(
-                        sender_program,
-                        sender_kernel,
-                        sender_coord,
-                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
-
-                    auto receiver_kernel = tt::tt_metal::CreateKernel(
-                        receiver_program,
-                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
-                        receiver_coord,
+                    auto sender_kernel_path =
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp";
+                    auto receiver_kernel_path =
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp";
+                    std::vector<uint32_t> sender_compile_args = {packet_size_bytes, packet_size_words};
+                    std::vector<uint32_t> receiver_compile_args = {};
+                    auto curr_kernel = tt::tt_metal::CreateKernel(
+                        curr_program,
+                        fwd ? sender_kernel_path : receiver_kernel_path,
+                        curr_coord,
                         tt::tt_metal::EthernetConfig{
                             .noc = tt::tt_metal::NOC::NOC_0,
-                        });
-                    tt::tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_coord, {data_size});
-                    kernel_coords[sender_chip_id].push_back(sender_coord);
-                    kernel_coords[receiver_chip_id].push_back(receiver_coord);
+                            .compile_args = fwd ? std::vector<uint32_t>{packet_size_bytes, packet_size_words}
+                                                : std::vector<uint32_t>{}});
+
+                    auto neighbor_kernel = tt::tt_metal::CreateKernel(
+                        neighbor_program,
+                        fwd ? receiver_kernel_path : sender_kernel_path,
+                        neighbor_coord,
+                        tt::tt_metal::EthernetConfig{
+                            .noc = tt::tt_metal::NOC::NOC_0,
+                            .compile_args = fwd ? std::vector<uint32_t>{}
+                                                : std::vector<uint32_t>{packet_size_bytes, packet_size_words}});
+                    tt::tt_metal::SetRuntimeArgs(
+                        fwd ? curr_program : neighbor_program,
+                        fwd ? curr_kernel : neighbor_kernel,
+                        fwd ? curr_coord : neighbor_coord,
+                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+
+                    tt::tt_metal::SetRuntimeArgs(
+                        fwd ? neighbor_program : curr_program,
+                        fwd ? neighbor_kernel : curr_kernel,
+                        fwd ? neighbor_coord : curr_coord,
+                        {data_size});
+
+                    kernel_coords[curr_chip_id].push_back(curr_coord);
+                    kernel_coords[neighbor_chip_id].push_back(neighbor_coord);
                 } else {
                     TT_FATAL(
                         std::find(
-                            kernel_coords[receiver_chip_id].begin(),
-                            kernel_coords[receiver_chip_id].end(),
-                            receiver_coord) != kernel_coords[receiver_chip_id].end(),
+                            kernel_coords[neighbor_chip_id].begin(),
+                            kernel_coords[neighbor_chip_id].end(),
+                            neighbor_coord) != kernel_coords[neighbor_chip_id].end(),
                         "Expected kernel to be populated for device {}, logical eth core {}",
-                        receiver_chip_id,
-                        receiver_coord.str());
+                        neighbor_chip_id,
+                        neighbor_coord.str());
                 }
             }
         }
@@ -178,26 +194,28 @@ void configure_local_kernels(
 
 void configure_cross_host_kernels(
     const PhysicalSystemDescriptor& physical_system_descriptor,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     const std::vector<uint32_t>& inputs,
-    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     size_t packet_size_bytes,
     size_t packet_size_words,
-    size_t data_size) {
+    size_t data_size,
+    bool fwd) {
     const auto& host_name = physical_system_descriptor.my_host_name();
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
     const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
+    std::vector<uint32_t> all_zeros(inputs.size(), 0);
     for (const auto& host_neighbor : physical_system_descriptor.get_host_neighbors(host_name)) {
         const auto& exit_nodes = physical_system_descriptor.get_connecting_exit_nodes(host_name, host_neighbor);
         for (const auto& exit_node : exit_nodes) {
             auto my_asic = exit_node.src_exit_node;
             auto my_chip = asic_id_to_chip_id[*my_asic];
             auto neighbor_asic = exit_node.dst_exit_node;
-            bool sender = (*my_asic > *neighbor_asic);
+            bool sender = fwd ? (*my_asic > *neighbor_asic) : (*my_asic < *neighbor_asic);
             auto my_device = devices[my_chip];
             auto& my_program = programs[my_chip];
             const auto& my_soc_desc = cluster.get_soc_desc(my_chip);
@@ -216,7 +234,6 @@ void configure_cross_host_kernels(
                 tt::tt_metal::SetRuntimeArgs(
                     my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
             } else {
-                std::vector<uint32_t> all_zeros(inputs.size(), 0);
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     my_chip, my_device->ethernet_core_from_logical_core(my_coord), all_zeros, dst_eth_l1_byte_address);
                 tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
@@ -232,9 +249,9 @@ void configure_cross_host_kernels(
 }
 
 void execute_workloads(
-    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    std::unordered_map<ChipId, tt::tt_metal::Program>& programs,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>>& devices) {
-    std::unordered_map<chip_id_t, tt::tt_metal::distributed::MeshWorkload> mesh_workloads;
+    std::unordered_map<ChipId, tt::tt_metal::distributed::MeshWorkload> mesh_workloads;
 
     for (auto& [device_id, program] : programs) {
         mesh_workloads[device_id] = tt::tt_metal::distributed::MeshWorkload();
@@ -265,7 +282,7 @@ void execute_workloads(
 
 bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
     auto retrain_count_increasing = [&](const std::vector<LinkStatus>& link_stats) {
-        uint32_t prev_retrain_count = 0;
+        uint32_t prev_retrain_count = link_stats[0].metrics.retrain_count;
         for (const auto& dumped_stat : link_stats) {
             const auto& metric = dumped_stat.metrics;
             if (metric.retrain_count > prev_retrain_count) {
@@ -276,10 +293,28 @@ bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
         return false;
     };
 
+    auto zero_retrain_count = [&](const std::vector<LinkStatus>& link_stats) {
+        return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
+            return dumped_stat.metrics.retrain_count == 0;
+        });
+    };
+
     auto crc_error_reported = [&](const std::vector<LinkStatus>& link_stats) {
         return std::any_of(link_stats.begin(), link_stats.end(), [&](const LinkStatus& dumped_stat) {
             return dumped_stat.metrics.crc_error_count > 0;
         });
+    };
+
+    auto uncorrected_codewords_increasing = [&](const std::vector<LinkStatus>& link_stats) {
+        uint32_t prev_uncorrected_codeword_count = link_stats[0].metrics.uncorrected_codeword_count;
+        for (const auto& dumped_stat : link_stats) {
+            const auto& metric = dumped_stat.metrics;
+            if (metric.uncorrected_codeword_count > prev_uncorrected_codeword_count) {
+                return true;
+            }
+            prev_uncorrected_codeword_count = metric.uncorrected_codeword_count;
+        }
+        return false;
     };
 
     auto uncorrected_codewords_detected = [&](const std::vector<LinkStatus>& link_stats) {
@@ -293,9 +328,22 @@ bool link_unhealthy(const std::vector<LinkStatus>& link_stats) {
             return dumped_stat.num_mismatched_words > 0;
         });
     };
+    bool retrain_count_increasing_ = retrain_count_increasing(link_stats);
+    bool crc_error_reported_ = crc_error_reported(link_stats);
+    bool uncorrected_codewords_detected_ = uncorrected_codewords_detected(link_stats);
+    bool uncorrected_codewords_increasing_ = uncorrected_codewords_increasing(link_stats);
+    bool data_mismatch_ = data_mismatch(link_stats);
+    bool zero_retrain_count_ = zero_retrain_count(link_stats);
 
-    return retrain_count_increasing(link_stats) || crc_error_reported(link_stats) ||
-           uncorrected_codewords_detected(link_stats) || data_mismatch(link_stats);
+    // A link is considered unhealthy if:
+    // - The retrain count is increasing
+    // - A CRC error is reported
+    // - Uncorrected codewords are detected but no retrains were issued
+    // - Uncorrected codewords are increasing
+    // - A data mismatch is detected
+    return retrain_count_increasing_ || crc_error_reported_ ||
+           (zero_retrain_count_ && uncorrected_codewords_detected_) || uncorrected_codewords_increasing_ ||
+           data_mismatch_;
 }
 
 LinkStatus get_first_failure(const std::vector<LinkStatus>& link_stats) {
@@ -411,7 +459,7 @@ LinkMetricsResult process_link_statuses(
 void dump_link_stats(
     std::vector<uint32_t>& inputs,
     PhysicalSystemDescriptor& physical_system_descriptor,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id,
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>>& statuses_per_link,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     size_t data_size,
@@ -421,7 +469,7 @@ void dump_link_stats(
     const auto& host_name = physical_system_descriptor.my_host_name();
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
     const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
-    physical_system_descriptor.generate_local_ethernet_metrics();
+    auto local_ethernet_metrics = physical_system_descriptor.query_local_ethernet_metrics();
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto chip_id = asic_id_to_chip_id[*asic_id];
@@ -454,7 +502,7 @@ void dump_link_stats(
                                       .channel = src_chan,
                                   }]
                     .push_back(LinkStatus{
-                        .metrics = physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan),
+                        .metrics = local_ethernet_metrics.at(asic_id).at(src_chan),
                         .traffic_params =
                             TrafficParams{
                                 .packet_size_bytes = packet_size_bytes,
@@ -497,7 +545,7 @@ LinkMetricsResult send_traffic_and_validate_links(
     bool sweep_traffic_configs,
     uint32_t packet_size_bytes,
     uint32_t data_size,
-    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id) {
+    std::unordered_map<uint64_t, ChipId>& asic_id_to_chip_id) {
     std::vector<TrafficConfig> traffic_configs;
     if (sweep_traffic_configs) {
         traffic_configs = generate_sweep_traffic_configs();
@@ -513,7 +561,7 @@ LinkMetricsResult send_traffic_and_validate_links(
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    std::vector<chip_id_t> device_ids;
+    std::vector<ChipId> device_ids;
     for (auto chip : cluster.all_chip_ids()) {
         device_ids.push_back(chip);
     }
@@ -526,15 +574,15 @@ LinkMetricsResult send_traffic_and_validate_links(
         tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
 
     std::unordered_map<EthChannelIdentifier, std::vector<LinkStatus>> statuses_per_link;
+    bool fwd = true;
     for (int i = 0; i < num_iterations; i++) {
         for (const auto& traffic_config : traffic_configs) {
             std::size_t pkt_size_bytes = traffic_config.packet_size_bytes;
             std::size_t pkt_size_words = pkt_size_bytes >> 4;
             std::size_t d_size = traffic_config.data_size;
 
-            std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
+            std::unordered_map<ChipId, tt::tt_metal::Program> programs;
             auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, d_size / sizeof(uint32_t));
-
             configure_local_kernels(
                 physical_system_descriptor,
                 asic_id_to_chip_id,
@@ -543,7 +591,8 @@ LinkMetricsResult send_traffic_and_validate_links(
                 programs,
                 pkt_size_bytes,
                 pkt_size_words,
-                d_size);
+                d_size,
+                fwd);
 
             configure_cross_host_kernels(
                 physical_system_descriptor,
@@ -553,7 +602,8 @@ LinkMetricsResult send_traffic_and_validate_links(
                 programs,
                 pkt_size_bytes,
                 pkt_size_words,
-                d_size);
+                d_size,
+                fwd);
 
             execute_workloads(programs, devices);
 
@@ -565,6 +615,7 @@ LinkMetricsResult send_traffic_and_validate_links(
                 devices,
                 d_size,
                 pkt_size_bytes);
+            fwd = !fwd;  // Toggle direction to test bidirectional traffic across links
         }
     }
 
@@ -600,10 +651,6 @@ std::unordered_map<tt::tt_metal::AsicID, std::unordered_map<uint8_t, PortType>> 
 
 void print_ethernet_connectivity(
     bool print_connectivity, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
-    if (print_connectivity) {
-        log_output_rank0("Generating Ethernet Connectivity Logs");
-    }
-
     auto port_types = generate_port_types(physical_system_descriptor);
 
     // Collect all connections and organize by: connection_type -> hostname -> port_type -> connections
@@ -612,19 +659,22 @@ void print_ethernet_connectivity(
         organized_connections;
 
     for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
-        for (const auto& [asic_id, channel_metrics] : physical_system_descriptor.get_ethernet_metrics()) {
-            if (physical_system_descriptor.get_host_name_for_asic(asic_id) == host) {
-                auto tray_id = physical_system_descriptor.get_asic_descriptors().at(asic_id).tray_id;
-                auto asic_location = physical_system_descriptor.get_asic_descriptors().at(asic_id).asic_location;
+        const auto& asic_connections = physical_system_descriptor.get_asic_topology(host);
+        for (auto asic_id : physical_system_descriptor.get_asics_connected_to_host(host)) {
+            auto tray_id = physical_system_descriptor.get_asic_descriptors().at(asic_id).tray_id;
+            auto asic_location = physical_system_descriptor.get_asic_descriptors().at(asic_id).asic_location;
 
-                for (const auto& [channel, metrics] : channel_metrics) {
-                    auto [connected_asic_id, connected_channel] =
-                        physical_system_descriptor.get_connected_asic_and_channel(asic_id, channel);
-                    auto connected_tray_id =
-                        physical_system_descriptor.get_asic_descriptors().at(connected_asic_id).tray_id;
-                    auto connected_asic_location =
-                        physical_system_descriptor.get_asic_descriptors().at(connected_asic_id).asic_location;
-                    const auto& connected_host = physical_system_descriptor.get_host_name_for_asic(connected_asic_id);
+            for (const auto& asic_connection : asic_connections.at(asic_id)) {
+                auto connected_asic_id = asic_connection.first;
+                auto connected_tray_id =
+                    physical_system_descriptor.get_asic_descriptors().at(connected_asic_id).tray_id;
+                auto connected_asic_location =
+                    physical_system_descriptor.get_asic_descriptors().at(connected_asic_id).asic_location;
+                const auto& connected_host = physical_system_descriptor.get_host_name_for_asic(connected_asic_id);
+
+                for (const auto& eth_connection : asic_connection.second) {
+                    auto channel = eth_connection.src_chan;
+                    auto connected_channel = eth_connection.dst_chan;
                     auto port_type_str = enchantum::to_string(port_types.at(asic_id).at(channel));
 
                     ConnectionInfo conn_info{
@@ -739,7 +789,8 @@ void log_link_metrics(
         TrafficParams traffic_params;
         uint32_t retrain_count;
         uint32_t crc_error_count;
-        uint32_t uncorrected_codeword_count;
+        uint64_t corrected_codeword_count;
+        uint64_t uncorrected_codeword_count;
         uint32_t num_mismatched_words;
     };
 
@@ -754,52 +805,46 @@ void log_link_metrics(
                  link.link_status.traffic_params,
                  link.link_status.metrics.retrain_count,
                  link.link_status.metrics.crc_error_count,
+                 link.link_status.metrics.corrected_codeword_count,
                  link.link_status.metrics.uncorrected_codeword_count,
                  link.link_status.num_mismatched_words});
         }
     } else {
-        // When logging failures: one row per metric type with non-zero values
+        // When logging failures: one row per link with all metrics and combined failure types
         for (const auto& link : link_metrics) {
+            std::vector<std::string> failure_types;
+
             if (link.link_status.metrics.retrain_count > 0) {
-                metric_rows.push_back(
-                    {link.channel_identifier,
-                     "Retrain",
-                     link.link_status.traffic_params,
-                     link.link_status.metrics.retrain_count,
-                     0,
-                     0,
-                     0});
+                failure_types.push_back("Retrain");
             }
             if (link.link_status.metrics.crc_error_count > 0) {
-                metric_rows.push_back(
-                    {link.channel_identifier,
-                     "CRC Error",
-                     link.link_status.traffic_params,
-                     0,
-                     link.link_status.metrics.crc_error_count,
-                     0,
-                     0});
+                failure_types.push_back("CRC Error");
             }
             if (link.link_status.metrics.uncorrected_codeword_count > 0) {
-                metric_rows.push_back(
-                    {link.channel_identifier,
-                     "Uncorrected CW",
-                     link.link_status.traffic_params,
-                     0,
-                     0,
-                     link.link_status.metrics.uncorrected_codeword_count,
-                     0});
+                failure_types.push_back("Uncorrected CW");
             }
             if (link.link_status.num_mismatched_words > 0) {
-                metric_rows.push_back(
-                    {link.channel_identifier,
-                     "Data Mismatch",
-                     link.link_status.traffic_params,
-                     0,
-                     0,
-                     0,
-                     link.link_status.num_mismatched_words});
+                failure_types.push_back("Data Mismatch");
             }
+
+            // Combine failure types with "+"
+            std::string combined_failure_type;
+            for (size_t i = 0; i < failure_types.size(); ++i) {
+                if (i > 0) {
+                    combined_failure_type += " + ";
+                }
+                combined_failure_type += failure_types[i];
+            }
+
+            metric_rows.push_back(
+                {link.channel_identifier,
+                 combined_failure_type,
+                 link.link_status.traffic_params,
+                 link.link_status.metrics.retrain_count,
+                 link.link_status.metrics.crc_error_count,
+                 link.link_status.metrics.corrected_codeword_count,
+                 link.link_status.metrics.uncorrected_codeword_count,
+                 link.link_status.num_mismatched_words});
         }
     }
 
@@ -822,22 +867,22 @@ void log_link_metrics(
         std::cout << "Total Links: " << link_metrics.size() << std::endl;
         std::cout << "Total Metric Entries: " << metric_rows.size() << std::endl << std::endl;
     } else {
-        std::cout << "Total Faulty Link Occurrences: " << link_metrics.size() << std::endl;
-        std::cout << "Total Failure Instances: " << metric_rows.size() << std::endl << std::endl;
+        std::cout << "Total Faulty Links: " << link_metrics.size() << std::endl << std::endl;
     }
 
     // Table header
     std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
               << std::setw(5) << "Ch" << std::setw(14) << "Unique ID" << std::setw(12) << "Retrains" << std::setw(14)
-              << "CRC Err" << std::setw(18) << "Uncorrected CW" << std::setw(16) << "Mismatch Words";
+              << "CRC Err" << std::setw(18) << "Corrected CW" << std::setw(18) << "Uncorrected CW" << std::setw(16)
+              << "Mismatch Words";
 
     if (!log_ethernet_metrics) {
-        std::cout << std::setw(18) << "Failure Type";
+        std::cout << std::setw(40) << "Failure Type";
     }
 
     std::cout << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << std::endl;
 
-    std::cout << std::string(log_ethernet_metrics ? 135 : 153, '-') << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 153 : 193, '-') << std::endl;
 
     // Table rows
     for (const auto& row : metric_rows) {
@@ -858,6 +903,11 @@ void log_link_metrics(
         crc_stream << "0x" << std::hex << row.crc_error_count;
         std::cout << std::left << std::setw(14) << crc_stream.str();
 
+        // Corrected codewords
+        std::stringstream corr_stream;
+        corr_stream << "0x" << std::hex << row.corrected_codeword_count;
+        std::cout << std::left << std::setw(18) << corr_stream.str();
+
         // Uncorrected codewords
         std::stringstream uncorr_stream;
         uncorr_stream << "0x" << std::hex << row.uncorrected_codeword_count;
@@ -868,14 +918,14 @@ void log_link_metrics(
 
         // Failure Type (only for faulty links report)
         if (!log_ethernet_metrics) {
-            std::cout << std::left << std::setw(18) << row.metric_type;
+            std::cout << std::left << std::setw(40) << row.metric_type;
         }
 
         std::cout << std::setw(12) << (std::to_string(row.traffic_params.packet_size_bytes) + " B") << std::setw(12)
                   << (std::to_string(row.traffic_params.data_size) + " B") << std::endl;
     }
 
-    std::cout << std::string(log_ethernet_metrics ? 135 : 153, '-') << std::endl << std::endl;
+    std::cout << std::string(log_ethernet_metrics ? 153 : 193, '-') << std::endl << std::endl;
 
     // Write CSV file
     std::filesystem::path csv_path =
@@ -889,7 +939,8 @@ void log_link_metrics(
             csv_file << ",Failure_Type";
         }
         csv_file << ",Packet_Size_Bytes,Data_Size_Bytes,"
-                 << "Retrain_Count,CRC_Error_Count,Uncorrected_Codeword_Count,Mismatched_Words" << std::endl;
+                 << "Retrain_Count,CRC_Error_Count,Corrected_Codeword_Count,Uncorrected_Codeword_Count,Mismatched_Words"
+                 << std::endl;
 
         // CSV rows
         for (const auto& row : metric_rows) {
@@ -902,6 +953,7 @@ void log_link_metrics(
             csv_file << "," << row.traffic_params.packet_size_bytes << "," << row.traffic_params.data_size << ","
                      << row.retrain_count << ","
                      << "0x" << std::hex << row.crc_error_count << std::dec << ","
+                     << "0x" << std::hex << row.corrected_codeword_count << std::dec << ","
                      << "0x" << std::hex << row.uncorrected_codeword_count << std::dec << ","
                      << row.num_mismatched_words << std::endl;
         }
@@ -911,6 +963,302 @@ void log_link_metrics(
     } else {
         log_output_rank0("✗ Warning: Could not open CSV file for writing: " + csv_path.string());
     }
+}
+
+void point_to_point_barrier(const ResetPair& reset_pair) {
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    TT_FATAL(
+        *distributed_context.rank() == reset_pair.src_rank || *distributed_context.rank() == reset_pair.dst_rank,
+        "Point-to-Point barrier for ranks {} and {} cannot be called on rank {}.",
+        reset_pair.src_rank,
+        reset_pair.dst_rank,
+        *distributed_context.rank());
+
+    uint32_t tag = (reset_pair.src_rank << 8) | reset_pair.dst_rank;
+
+    if (*distributed_context.rank() == reset_pair.src_rank) {
+        int sync_msg = 1;
+        distributed_context.ssend(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+            tt::tt_metal::distributed::multihost::Rank{reset_pair.dst_rank},
+            tt::tt_metal::distributed::multihost::Tag{tag});
+    } else {
+        int sync_msg = 0;
+        distributed_context.recv(
+            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&sync_msg), sizeof(sync_msg)),
+            tt::tt_metal::distributed::multihost::Rank{reset_pair.src_rank},
+            tt::tt_metal::distributed::multihost::Tag{tag});
+    }
+}
+
+void reset_local_link(ChipId src_chip, ChipId dst_chip, uint8_t src_chan, uint8_t dst_chan) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::vector<uint32_t> set = {1};
+
+    const auto& sender_soc_desc = cluster.get_soc_desc(src_chip);
+    const auto& receiver_soc_desc = cluster.get_soc_desc(dst_chip);
+    auto logical_src_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+    auto logical_dst_coord = receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
+    auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+        src_chip, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
+    auto dst_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+        dst_chip, tt_xy_pair(logical_dst_coord.x, logical_dst_coord.y), CoreType::ETH);
+
+    cluster.write_core(src_chip, src_coord, set, 0x1EFC);
+    cluster.write_core(dst_chip, dst_coord, set, 0x1EFC);
+
+    bool reset = false;
+    while (!reset) {
+        std::vector<uint32_t> reset_src = {0};
+        std::vector<uint32_t> reset_dst = {0};
+
+        cluster.read_core(reset_src, sizeof(uint32_t), tt_cxy_pair(src_chip, src_coord), 0x1EFC);
+        cluster.read_core(reset_dst, sizeof(uint32_t), tt_cxy_pair(dst_chip, dst_coord), 0x1EFC);
+        reset = !(reset_src[0] || reset_dst[0]);
+    }
+}
+
+void forward_link_reset_metadata_from_controller(
+    std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>>& ordered_exit_nodes,
+    std::unordered_map<uint32_t, std::vector<ResetPair>>& ordered_reset_pairs,
+    std::vector<EthChannelIdentifier>& exit_nodes_to_reset,
+    std::vector<ResetPair>& reset_pairs) {
+    constexpr uint32_t CONTROLLER_RANK = 0;
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    if (*distributed_context.rank() == CONTROLLER_RANK) {
+        for (const auto& [rank, exit_nodes] : ordered_exit_nodes) {
+            if (rank == *distributed_context.rank()) {
+                continue;
+            }
+            auto serialized_exit_nodes = tt::scaleout::validation::serialize_eth_chan_identifiers_to_bytes(exit_nodes);
+            auto serialized_exit_nodes_size = serialized_exit_nodes.size();
+            auto serialized_reset_pairs =
+                tt::scaleout::validation::serialize_reset_pairs_to_bytes(ordered_reset_pairs[rank]);
+            auto serialized_reset_pairs_size = serialized_reset_pairs.size();
+
+            distributed_context.send(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
+                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Tag{0});
+            distributed_context.send(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Tag{0});
+
+            distributed_context.send(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
+                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Tag{0});
+            distributed_context.send(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
+                tt::tt_metal::distributed::multihost::Rank{rank},
+                tt::tt_metal::distributed::multihost::Tag{0});
+        }
+        exit_nodes_to_reset = ordered_exit_nodes[*distributed_context.rank()];
+        reset_pairs = ordered_reset_pairs[*distributed_context.rank()];
+    } else {
+        std::size_t serialized_exit_nodes_size = 0;
+        distributed_context.recv(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&serialized_exit_nodes_size), sizeof(serialized_exit_nodes_size)),
+            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
+            tt::tt_metal::distributed::multihost::Tag{0});
+        std::vector<uint8_t> serialized_exit_nodes(serialized_exit_nodes_size);
+        distributed_context.recv(
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<uint8_t>(serialized_exit_nodes.data(), serialized_exit_nodes.size())),
+            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
+            tt::tt_metal::distributed::multihost::Tag{0});
+        exit_nodes_to_reset =
+            tt::scaleout::validation::deserialize_eth_chan_identifiers_from_bytes(serialized_exit_nodes);
+        std::size_t serialized_reset_pairs_size = 0;
+        distributed_context.recv(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&serialized_reset_pairs_size), sizeof(serialized_reset_pairs_size)),
+            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
+            tt::tt_metal::distributed::multihost::Tag{0});
+        std::vector<uint8_t> serialized_reset_pairs(serialized_reset_pairs_size);
+        distributed_context.recv(
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<uint8_t>(serialized_reset_pairs.data(), serialized_reset_pairs.size())),
+            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
+            tt::tt_metal::distributed::multihost::Tag{0});
+        reset_pairs = tt::scaleout::validation::deserialize_reset_pairs_from_bytes(serialized_reset_pairs);
+    }
+
+    TT_FATAL(
+        exit_nodes_to_reset.size() == reset_pairs.size(),
+        "Expected reset pairs to be the same size as the number of links to reset {} {} {}",
+        exit_nodes_to_reset.size(),
+        reset_pairs.size(),
+        *distributed_context.rank());
+}
+
+void reset_local_ethernet_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor, const AsicTopology& asic_topology) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+    std::vector<uint32_t> set = {1};
+    std::unordered_map<uint64_t, std::set<uint8_t>> reset_cores;
+
+    for (const auto& [asic_id, asic_connections] : asic_topology) {
+        if (physical_system_descriptor.get_host_name_for_asic(asic_id) != physical_system_descriptor.my_host_name()) {
+            continue;
+        }
+        auto src_chip_id = asic_id_to_chip_id[*asic_id];
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) !=
+                physical_system_descriptor.my_host_name()) {
+                continue;
+            }
+            auto dst_chip_id = asic_id_to_chip_id[*dst_asic_id];
+            for (const auto& eth_connection : eth_connections) {
+                auto src_chan = eth_connection.src_chan;
+                auto dst_chan = eth_connection.dst_chan;
+
+                if (reset_cores[*dst_asic_id].find(dst_chan) != reset_cores[*dst_asic_id].end()) {
+                    TT_FATAL(
+                        reset_cores[*asic_id].find(src_chan) != reset_cores[*asic_id].end(),
+                        "Expected channel {} on ASIC {} to already be reset",
+                        src_chan,
+                        *asic_id);
+                    continue;
+                }
+                reset_cores[*asic_id].insert(src_chan);
+                reset_cores[*dst_asic_id].insert(dst_chan);
+                const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(asic_id);
+                const auto& dst_asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(dst_asic_id);
+                log_output_rank0(
+                    "Host: " + asic_descriptor.host_name + " Resetting Link " + std::to_string(src_chan) + " on " +
+                    " Tray: " + std::to_string(*asic_descriptor.tray_id) + " Location: " +
+                    std::to_string(*asic_descriptor.asic_location) + " and Link: " + std::to_string(dst_chan) + " on " +
+                    " Tray: " + std::to_string(*dst_asic_descriptor.tray_id) +
+                    " Location: " + std::to_string(*dst_asic_descriptor.asic_location));
+
+                reset_local_link(src_chip_id, dst_chip_id, src_chan, dst_chan);
+            }
+        }
+    }
+}
+
+void get_cross_node_ethernet_links_to_reset(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const AsicTopology& asic_topology,
+    std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
+    std::vector<ResetPair>& cross_node_reset_pairs) {
+    constexpr uint32_t CONTROLLER_RANK = 0;
+
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    std::unordered_map<uint32_t, std::vector<EthChannelIdentifier>> ordered_exit_nodes;
+    std::unordered_map<uint32_t, std::vector<ResetPair>> ordered_reset_pairs;
+    std::unordered_map<uint64_t, std::unordered_set<uint64_t>> paired_asic_ids;
+
+    for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
+        ordered_exit_nodes[physical_system_descriptor.get_rank_for_hostname(host)] =
+            std::vector<EthChannelIdentifier>();
+        ordered_reset_pairs[physical_system_descriptor.get_rank_for_hostname(host)] = std::vector<ResetPair>();
+    }
+
+    if (*distributed_context.rank() == CONTROLLER_RANK) {
+        for (const auto& [asic_id, asic_connections] : asic_topology) {
+            auto src_host_rank = physical_system_descriptor.get_rank_for_hostname(
+                physical_system_descriptor.get_host_name_for_asic(asic_id));
+            for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+                // These links are being retrained for the second time if the current dst_asic was paired with the
+                // current src_asic in a previous iteration.
+                // In this case, we skip the link reset.
+                if (paired_asic_ids.find(*dst_asic_id) != paired_asic_ids.end() and
+                    paired_asic_ids[*dst_asic_id].find(*asic_id) != paired_asic_ids[*dst_asic_id].end()) {
+                    continue;
+                }
+                paired_asic_ids[*asic_id].insert(*dst_asic_id);
+                auto dst_host_rank = physical_system_descriptor.get_rank_for_hostname(
+                    physical_system_descriptor.get_host_name_for_asic(dst_asic_id));
+                if (src_host_rank == dst_host_rank) {
+                    continue;
+                }
+                for (const auto& eth_connection : eth_connections) {
+                    ordered_exit_nodes[src_host_rank].push_back(EthChannelIdentifier{
+                        physical_system_descriptor.get_host_name_for_asic(asic_id),
+                        asic_id,
+                        TrayID{0},
+                        ASICLocation{0},
+                        eth_connection.src_chan});
+                    ordered_exit_nodes[dst_host_rank].push_back(EthChannelIdentifier{
+                        physical_system_descriptor.get_host_name_for_asic(dst_asic_id),
+                        dst_asic_id,
+                        TrayID{0},
+                        ASICLocation{0},
+                        eth_connection.dst_chan});
+                    ordered_reset_pairs[src_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
+                    ordered_reset_pairs[dst_host_rank].push_back(ResetPair{src_host_rank, dst_host_rank});
+                }
+            }
+        }
+    }
+    forward_link_reset_metadata_from_controller(
+        ordered_exit_nodes, ordered_reset_pairs, cross_node_links_to_reset, cross_node_reset_pairs);
+}
+
+void reset_cross_node_ethernet_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::vector<EthChannelIdentifier>& cross_node_links_to_reset,
+    const std::vector<ResetPair>& cross_node_reset_pairs) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    std::vector<uint32_t> set = {1};
+
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
+
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+
+    for (size_t i = 0; i < cross_node_links_to_reset.size(); i++) {
+        const auto& link = cross_node_links_to_reset[i];
+        const auto& reset_pair = cross_node_reset_pairs[i];
+
+        auto src_chip_id = asic_id_to_chip_id[*link.asic_id];
+        const auto& src_soc_desc = cluster.get_soc_desc(src_chip_id);
+        auto logical_src_coord = src_soc_desc.get_eth_core_for_channel(link.channel, CoordSystem::LOGICAL);
+        auto src_coord = cluster.get_virtual_coordinate_from_logical_coordinates(
+            src_chip_id, tt_xy_pair(logical_src_coord.x, logical_src_coord.y), CoreType::ETH);
+        const auto& asic_descriptor = physical_system_descriptor.get_asic_descriptors().at(link.asic_id);
+        log_output_rank0(
+            "Resetting Cross-Node Link " + std::to_string(link.channel) + " on " + std::to_string(*link.asic_id) +
+            " Host: " + asic_descriptor.host_name + " Tray: " + std::to_string(*asic_descriptor.tray_id) +
+            " Location: " + std::to_string(*asic_descriptor.asic_location));
+        point_to_point_barrier(reset_pair);
+        cluster.write_core(src_chip_id, src_coord, set, 0x1EFC);
+        std::vector<uint32_t> reset = {1};
+        while (reset[0]) {
+            cluster.read_core(reset, sizeof(uint32_t), tt_cxy_pair(src_chip_id, src_coord), 0x1EFC);
+        }
+    }
+}
+
+void reset_ethernet_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor, const AsicTopology& asic_topology) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    // Reset All Local Ethernet Links, specified in the topology. Ethernet Links on Exit Nodes are reset separately.
+    reset_local_ethernet_links(physical_system_descriptor, asic_topology);
+    distributed_context.barrier();
+
+    // Reset All Cross-Node Ethernet Links, specified in the topology.
+    std::vector<EthChannelIdentifier> cross_node_links_to_reset;
+    std::vector<ResetPair> cross_node_reset_pairs;
+    get_cross_node_ethernet_links_to_reset(
+        physical_system_descriptor, asic_topology, cross_node_links_to_reset, cross_node_reset_pairs);
+    reset_cross_node_ethernet_links(physical_system_descriptor, cross_node_links_to_reset, cross_node_reset_pairs);
 }
 
 // ============================================================================
@@ -926,7 +1274,7 @@ bool generate_link_metrics(
     uint32_t packet_size_bytes,
     uint32_t data_size,
     const std::filesystem::path& output_path) {
-    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
+    std::unordered_map<uint64_t, ChipId> asic_id_to_chip_id;
     for (const auto& [chip_id, asic_id] : tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids()) {
         asic_id_to_chip_id[asic_id] = chip_id;
     }
@@ -957,6 +1305,45 @@ bool generate_link_metrics(
     }
     log_link_metrics(result.unhealthy_links, output_path, false);
     return result.unhealthy_links.empty();
+}
+
+AsicTopology generate_asic_topology_from_connections(
+    const std::set<PhysicalChannelConnection>& physical_connections,
+    PhysicalSystemDescriptor& physical_system_descriptor) {
+    AsicTopology asic_topology;
+    std::unordered_map<tt_metal::AsicID, std::set<tt_metal::AsicID>> visited;
+    std::unordered_map<tt_metal::AsicID, std::unordered_map<tt_metal::AsicID, uint32_t>> visited_idx;
+    for (const auto& connection : physical_connections) {
+        auto src = connection.first;
+        auto dst = connection.second;
+        auto src_asic_id = physical_system_descriptor.get_asic_id(
+            src.hostname, tt_metal::TrayID(*src.tray_id), tt_metal::ASICLocation(src.asic_channel.asic_location));
+        auto dst_asic_id = physical_system_descriptor.get_asic_id(
+            dst.hostname, tt_metal::TrayID(*dst.tray_id), tt_metal::ASICLocation(dst.asic_channel.asic_location));
+        if (visited[src_asic_id].find(dst_asic_id) == visited[src_asic_id].end()) {
+            asic_topology[src_asic_id].push_back(
+                {dst_asic_id,
+                 {EthConnection(
+                     *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname)}});
+            visited[src_asic_id].insert(dst_asic_id);
+            visited_idx[src_asic_id][dst_asic_id] = asic_topology[src_asic_id].size() - 1;
+        } else {
+            asic_topology[src_asic_id][visited_idx[src_asic_id][dst_asic_id]].second.push_back(EthConnection(
+                *src.asic_channel.channel_id, *dst.asic_channel.channel_id, src.hostname == dst.hostname));
+        }
+        if (visited[dst_asic_id].find(src_asic_id) == visited[dst_asic_id].end()) {
+            asic_topology[dst_asic_id].push_back(
+                {src_asic_id,
+                 {EthConnection(
+                     *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname)}});
+            visited[dst_asic_id].insert(src_asic_id);
+            visited_idx[dst_asic_id][src_asic_id] = asic_topology[dst_asic_id].size() - 1;
+        } else {
+            asic_topology[dst_asic_id][visited_idx[dst_asic_id][src_asic_id]].second.push_back(EthConnection(
+                *dst.asic_channel.channel_id, *src.asic_channel.channel_id, src.hostname == dst.hostname));
+        }
+    }
+    return asic_topology;
 }
 
 }  // namespace tt::scaleout_tools

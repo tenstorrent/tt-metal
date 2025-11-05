@@ -313,7 +313,6 @@ void Hal::initialize_qa() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = false;
-    this->intermesh_eth_links_enabled_ = false;  // Intermesh routing is not enabled on Quasar
     this->virtualized_core_types_ = {
         dev_msgs::AddressableCoreType::TENSIX,
         dev_msgs::AddressableCoreType::ETH,
@@ -330,6 +329,10 @@ void Hal::initialize_qa() {
     this->noc_y_id_translate_table_ = {};
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryQuasar>();
+
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t /*eth_fw_version*/) {
+        // No checks
+    };
 }
 
 }  // namespace tt_metal

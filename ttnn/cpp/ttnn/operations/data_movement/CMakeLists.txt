@@ -125,6 +125,9 @@ target_sources(
         moe_expert_token_remap/moe_expert_token_remap.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
         moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
+        moe_routing_remap/moe_routing_remap.cpp
+        moe_routing_remap/device/moe_routing_remap_device_operation.cpp
+        moe_routing_remap/device/moe_routing_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp

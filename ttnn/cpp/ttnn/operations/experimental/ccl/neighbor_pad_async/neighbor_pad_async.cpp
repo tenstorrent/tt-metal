@@ -27,9 +27,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     std::optional<ttnn::ccl::Topology> topology,
     std::optional<uint32_t> secondary_cluster_axis,
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "neighbor_pad_async op is only supported for Fast Dispatch");
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     auto mesh_device = input_tensor.device();
@@ -40,9 +37,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
 
     TT_FATAL(num_devices > 1, "neighbor_pad_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology.value_or(ttnn::ccl::Topology::Linear);
-
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     return tt::tt_metal::operation::run(
                ttnn::NeighborPadAsync(

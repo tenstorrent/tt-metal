@@ -19,6 +19,23 @@
 namespace ttnn {
 namespace ccl {
 
+bool is_fabric_2d() {
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    return (
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+}
+
+tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topology) {
+    if (topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Linear) {
+        return tt::tt_fabric::Topology::Linear;
+    } else if (topology == tt::tt_fabric::Topology::Torus || topology == tt::tt_fabric::Topology::Ring) {
+        return tt::tt_fabric::Topology::Ring;
+    }
+    return topology;
+}
+
 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis) {
     auto mesh_shape = tensor.device()->shape();
@@ -273,12 +290,12 @@ SenderReceiverConfig get_device_sender_receiver_config(
 
             config.receiver_device_id = is_last_chip_in_clockwise_direction
                                             ? std::nullopt
-                                            : std::optional<chip_id_t>(devices.at((i + 1) % num_devices)->id());
+                                            : std::optional<tt::ChipId>(devices.at((i + 1) % num_devices)->id());
 
             config.sender_device_id =
                 is_last_chip_in_counter_clockwise_direction
                     ? std::nullopt
-                    : std::optional<chip_id_t>(devices.at((i + num_devices - 1) % num_devices)->id());
+                    : std::optional<tt::ChipId>(devices.at((i + num_devices - 1) % num_devices)->id());
         }
     }
 
@@ -297,7 +314,7 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
         "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
-    auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
+    auto get_chip_id = [&](std::size_t line_index) -> std::optional<tt::ChipId> {
         auto new_row = mesh_coord[0];
         auto new_col = mesh_coord[1];
         if (cluster_axis == 0) {
@@ -1727,13 +1744,6 @@ void validate_fabric_2d_dynamic_config(Topology topology) {
     TT_FATAL(
         physical_mesh_shape.dims() == 2,
         "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
-    TT_FATAL(
-        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1 ||
-            (physical_mesh_shape[0] == 2 && physical_mesh_shape[1] == 2),
-        "Fabric 2D dynamic CCLs are only supported for 1D physical meshes OR 1 2X2 ring that is equivalent to 1D but "
-        "physical shape reported is {} X {}",
-        physical_mesh_shape[0],
-        physical_mesh_shape[1]);
 }
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(

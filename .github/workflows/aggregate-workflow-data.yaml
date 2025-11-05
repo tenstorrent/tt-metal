@@ -4,7 +4,7 @@ on:
     branches:
       - mchiou/0-aggregate-workflow-report
   schedule:
-    - cron: '0 * * * *' # every hour
+    - cron: '*/10 * * * *' # every 10 minutes
   workflow_dispatch:
     inputs:
       days:
@@ -20,8 +20,11 @@ jobs:
       commits-path: ${{ steps.fetch.outputs.commits-path }}
       annotations-root: ${{ steps.fetch.outputs.annotations-root }}
       annotations-index-path: ${{ steps.fetch.outputs.annotations-index-path }}
-      logs-root: ${{ steps.fetch.outputs.logs-root }}
-      logs-index-path: ${{ steps.fetch.outputs.logs-index-path }}
+      gtest-logs-root: ${{ steps.fetch.outputs.gtest-logs-root }}
+      gtest-logs-index-path: ${{ steps.fetch.outputs.gtest-logs-index-path }}
+      other-logs-root: ${{ steps.fetch.outputs.other-logs-root }}
+      other-logs-index-path: ${{ steps.fetch.outputs.other-logs-index-path }}
+      last-success-timestamps-path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
@@ -35,6 +38,54 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           days: ${{ github.event.inputs.days || 15 }}
+          workflow_ids: |
+            [
+              ".github/workflows/all-post-commit-workflows.yaml",
+              ".github/workflows/blackhole-post-commit.yaml",
+              ".github/workflows/blackhole-nightly-tests.yaml",
+              ".github/workflows/blackhole-demo-tests.yaml",
+              ".github/workflows/galaxy-profiler-tests.yaml",
+              ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
+              ".github/workflows/galaxy-deepseek-tests.yaml",
+              ".github/workflows/galaxy-model-perf-tests.yaml",
+              ".github/workflows/galaxy-demo-tests.yaml",
+              ".github/workflows/galaxy-unit-tests.yaml",
+              ".github/workflows/galaxy-frequent-tests.yaml",
+              ".github/workflows/galaxy-stress-tests.yaml",
+              ".github/workflows/galaxy-nightly-tests.yaml",
+              ".github/workflows/galaxy-quick.yaml",
+              ".github/workflows/t3000-model-perf-tests.yaml",
+              ".github/workflows/t3000-nightly-tests.yaml",
+              ".github/workflows/t3000-frequent-tests.yaml",
+              ".github/workflows/t3000-profiler-tests.yaml",
+              ".github/workflows/t3000-perplexity-tests.yaml",
+              ".github/workflows/t3000-demo-tests.yaml",
+              ".github/workflows/t3000-unit-tests.yaml",
+              ".github/workflows/fast-dispatch-frequent-tests.yaml",
+              ".github/workflows/perf-device-models.yaml",
+              ".github/workflows/perf-models.yaml",
+              ".github/workflows/fast-dispatch-full-regressions-and-models.yaml",
+              ".github/workflows/single-card-demo-tests.yaml",
+              ".github/workflows/tt-metal-l2-nightly.yaml",
+              ".github/workflows/ttnn-run-sweeps.yaml",
+              ".github/workflows/vllm-nightly-tests.yaml",
+              ".github/workflows/metal-run-microbenchmarks.yaml",
+              ".github/workflows/apc-nightly-debug.yaml"
+            ]
+          workflow_configs: |
+            [
+              {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
+              {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
+              {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
+              {"display": "Galaxy prefix", "wkflw_prefix": "(Galaxy)"},
+              {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
+              {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
+              {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
+              {"display": "ttnn - Run sweeps", "wkflw_name": "ttnn - Run sweeps"},
+              {"display": "vLLM nightly tests", "wkflw_name": "vLLM nightly tests"},
+              {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
+              {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
+            ]
       - name: Upload workflow data
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
@@ -58,13 +109,29 @@ jobs:
           path: ${{ steps.fetch.outputs.commits-path }}
           retention-days: 1
 
-      - name: Upload logs artifact (if any)
+      - name: Upload gtest logs artifact (if any)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
-          name: workflow-logs
+          name: workflow-gtest-logs
           path: |
-            ${{ steps.fetch.outputs.logs-root }}/
-            ${{ steps.fetch.outputs.logs-index-path }}
+            ${{ steps.fetch.outputs.gtest-logs-root }}/
+            ${{ steps.fetch.outputs.gtest-logs-index-path }}
+          retention-days: 1
+
+      - name: Upload other logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-other-logs
+          path: |
+            ${{ steps.fetch.outputs.other-logs-root }}/
+            ${{ steps.fetch.outputs.other-logs-index-path }}
+          retention-days: 1
+
+      - name: Upload last success timestamps artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: last-success-timestamps
+          path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
           retention-days: 1
 
       - name: Debug cache file
@@ -139,15 +206,25 @@ jobs:
         with:
           name: workflow-annotations
           path: ${{ github.workspace }}/annotations
-      - name: Download logs (if any)
+      - name: Download gtest logs (if any)
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: workflow-logs
-          path: ${{ github.workspace }}/logs
+          name: workflow-gtest-logs
+          path: ${{ github.workspace }}/logs/gtest
+      - name: Download other logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-other-logs
+          path: ${{ github.workspace }}/logs/other
       - name: Download commits index
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: commits-main
+          path: ${{ github.workspace }}
+      - name: Download last success timestamps
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: last-success-timestamps
           path: ${{ github.workspace }}
       - name: Analyze workflow data
         id: analyze
@@ -159,15 +236,16 @@ jobs:
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
           annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
           commits-path: ${{ github.workspace }}/commits-main.json
-          logs-index-path: ${{ github.workspace }}/logs/logs-index.json
+          gtest-logs-index-path: ${{ github.workspace }}/logs/gtest/gtest-logs-index.json
+          other-logs-index-path: ${{ github.workspace }}/logs/other/other-logs-index.json
+          last-success-timestamps-path: ${{ github.workspace }}/last-success-timestamps.json
           alert-all: 'false'
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
               {"display": "Blackhole post-commit tests", "wkflw_name": "Blackhole post-commit tests"},
               {"display": "(Blackhole) prefix", "wkflw_prefix": "(Blackhole)"},
-              {"display": "(TG) prefix", "wkflw_prefix": "(TG)"},
-              {"display": "Galaxy prefix", "wkflw_prefix": "Galaxy"},
+              {"display": "Galaxy prefix", "wkflw_prefix": "(Galaxy)"},
               {"display": "(T3K) prefix", "wkflw_prefix": "(T3K)"},
               {"display": "(Single-card) prefix", "wkflw_prefix": "(Single-card)"},
               {"display": "Nightly tt-metal L2 tests", "wkflw_name": "Nightly tt-metal L2 tests"},
@@ -183,7 +261,6 @@ jobs:
           path: ${{ steps.analyze.outputs.status_changes_path }}
           retention-days: 1
 
-      # Slack notification moved to handle-failures job
 
   handle-failures:
     needs: analyze-data

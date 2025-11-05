@@ -51,7 +51,7 @@ get_port_connections(tt::scaleout_tools::cabling_generator::proto::NodeDescripto
 // N300 Node class
 class N300T3KNode {
 protected:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create(const std::string& motherboard) {
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create(const std::string& motherboard, const bool default_cabling = false) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard(motherboard);
 
@@ -59,9 +59,11 @@ protected:
         add_boards(&node, "N300", 1, 4);
 
         // Add QSFP connections
-        auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD");
-        add_connection(qsfp_connections, 1, 1, 4, 1);
-        add_connection(qsfp_connections, 2, 2, 3, 2);
+        if (default_cabling) {
+            auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD");
+            add_connection(qsfp_connections, 1, 1, 4, 1);
+            add_connection(qsfp_connections, 2, 2, 3, 2);
+        }
 
         // Add WARP100 connections
         auto* const warp100_connections = get_port_connections(&node, "WARP100");
@@ -78,7 +80,14 @@ protected:
 class N300LBNode : public N300T3KNode {
 public:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return N300T3KNode::create("X12DPG-QT6");
+        return N300T3KNode::create("X12DPG-QT6", false);
+    }
+};
+
+class N300LBDefaultNode : public N300T3KNode {
+public:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+        return N300T3KNode::create("X12DPG-QT6", true);
     }
 };
 
@@ -86,7 +95,14 @@ public:
 class N300QBNode : public N300T3KNode {
 public:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
-        return N300T3KNode::create("SIENAD8-2L2T");
+        return N300T3KNode::create("SIENAD8-2L2T", false);
+    }
+};
+
+class N300QBDefaultNode : public N300T3KNode {
+public:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+        return N300T3KNode::create("SIENAD8-2L2T", true);
     }
 };
 
@@ -196,7 +212,7 @@ public:
 // P150 QB AE Node class
 class P150QBAENode {
 public:
-    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create(const bool default_cabling = false) {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
         node.set_motherboard("SIENAD8-2L2T");
 
@@ -204,19 +220,29 @@ public:
         add_boards(&node, "P150", 1, 4);
 
         // Add QSFP connections
-        auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD");
-        add_connection(qsfp_connections, 1, 1, 2, 1);
-        add_connection(qsfp_connections, 1, 2, 2, 2);
-        add_connection(qsfp_connections, 1, 3, 4, 3);
-        add_connection(qsfp_connections, 1, 4, 4, 4);
-        add_connection(qsfp_connections, 2, 3, 3, 3);
-        add_connection(qsfp_connections, 2, 4, 3, 4);
-        add_connection(qsfp_connections, 3, 1, 4, 1);
-        add_connection(qsfp_connections, 3, 2, 4, 2);
+        if (default_cabling) {
+            auto* const qsfp_connections = get_port_connections(&node, "QSFP_DD");
+            add_connection(qsfp_connections, 1, 1, 2, 1);
+            add_connection(qsfp_connections, 1, 2, 2, 2);
+            add_connection(qsfp_connections, 1, 3, 4, 3);
+            add_connection(qsfp_connections, 1, 4, 4, 4);
+            add_connection(qsfp_connections, 2, 3, 3, 3);
+            add_connection(qsfp_connections, 2, 4, 3, 4);
+            add_connection(qsfp_connections, 3, 1, 4, 1);
+            add_connection(qsfp_connections, 3, 2, 4, 2);
+        }
 
         return node;
     }
 };
+
+class P150QBAEDefaultNode : public P150QBAENode {
+public:
+    static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
+        return P150QBAENode::create(true);
+    }
+};
+
 
 // P300 QB GE Node class
 class P300QBGENode {
@@ -231,7 +257,6 @@ public:
         // Add WARP400 connections
         auto* const warp400_connections = get_port_connections(&node, "WARP400");
         add_connection(warp400_connections, 1, 1, 2, 1);
-        add_connection(warp400_connections, 1, 2, 2, 2);
 
         return node;
     }
@@ -284,24 +309,24 @@ public:
 
         // Add LINKING_BOARD_1 connections
         auto* const lb1_connections = get_port_connections(&node, "LINKING_BOARD_1");
-        add_connection(lb1_connections, 1, 1, 2, 1);
-        add_connection(lb1_connections, 1, 2, 2, 2);
-        add_connection(lb1_connections, 3, 1, 4, 1);
-        add_connection(lb1_connections, 3, 2, 4, 2);
+        add_connection(lb1_connections, 1, 1, 3, 1);
+        add_connection(lb1_connections, 1, 2, 3, 2);
+        add_connection(lb1_connections, 2, 1, 4, 1);
+        add_connection(lb1_connections, 2, 2, 4, 2);
 
         // Add LINKING_BOARD_2 connections
         auto* const lb2_connections = get_port_connections(&node, "LINKING_BOARD_2");
-        add_connection(lb2_connections, 1, 1, 2, 1);
-        add_connection(lb2_connections, 1, 2, 2, 2);
-        add_connection(lb2_connections, 3, 1, 4, 1);
-        add_connection(lb2_connections, 3, 2, 4, 2);
+        add_connection(lb2_connections, 1, 1, 3, 1);
+        add_connection(lb2_connections, 1, 2, 3, 2);
+        add_connection(lb2_connections, 2, 1, 4, 1);
+        add_connection(lb2_connections, 2, 2, 4, 2);
 
         // Add LINKING_BOARD_3 connections
         auto* const lb3_connections = get_port_connections(&node, "LINKING_BOARD_3");
-        add_connection(lb3_connections, 1, 1, 3, 1);
-        add_connection(lb3_connections, 1, 2, 3, 2);
-        add_connection(lb3_connections, 2, 1, 4, 1);
-        add_connection(lb3_connections, 2, 2, 4, 2);
+        add_connection(lb3_connections, 1, 1, 2, 1);
+        add_connection(lb3_connections, 1, 2, 2, 2);
+        add_connection(lb3_connections, 3, 1, 4, 1);
+        add_connection(lb3_connections, 3, 2, 4, 2);
 
         // Add QSFP connections based on topology (one-hot encoded)
         if (static_cast<int>(topology) & static_cast<int>(BHGalaxyTopology::X_TORUS)) {  // X_TORUS bit
@@ -343,12 +368,15 @@ public:
 tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descriptor(NodeType node_type) {
     switch (node_type) {
         case NodeType::N300_LB: return N300LBNode::create();
+        case NodeType::N300_LB_DEFAULT: return N300LBDefaultNode::create();
         case NodeType::N300_QB: return N300QBNode::create();
+        case NodeType::N300_QB_DEFAULT: return N300QBDefaultNode::create();
         case NodeType::WH_GALAXY: return WHGalaxyNode::create();
         case NodeType::WH_GALAXY_X_TORUS: return WHGalaxyXTorusNode::create();
         case NodeType::WH_GALAXY_Y_TORUS: return WHGalaxyYTorusNode::create();
         case NodeType::WH_GALAXY_XY_TORUS: return WHGalaxyXYTorusNode::create();
         case NodeType::P150_QB_AE: return P150QBAENode::create();
+        case NodeType::P150_QB_AE_DEFAULT: return P150QBAEDefaultNode::create();
         case NodeType::P300_QB_GE: return P300QBGENode::create();
         case NodeType::BH_GALAXY: return BHGalaxyNode::create();
         case NodeType::BH_GALAXY_X_TORUS: return BHGalaxyXTorusNode::create();

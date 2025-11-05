@@ -21,7 +21,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 480
+        default: 720
   workflow_call:
     inputs:
       mirrored_branch:
@@ -42,7 +42,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 480
+        default: 720
     outputs:
       all-post-commit-result:
         description: 'Result of All post-commit tests (status:url format)'
@@ -61,7 +61,7 @@ concurrency:
 env:
   PARENT_BRANCH_NAME: test-llk-${{ inputs.mirrored_branch }}-${{ github.run_id }}
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 480 }}
+  WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 720 }}
   METAL_REPO: tenstorrent/tt-metal
   LLK_REPO: tenstorrent/tt-llk
   GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
@@ -78,7 +78,7 @@ permissions:
 jobs:
   setup-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 720
     outputs:
       branch-exists: ${{ steps.check-branch.outputs.branch-exists }}
       test-branch-name: ${{ steps.check-branch.outputs.test-branch-name }}
@@ -178,7 +178,7 @@ jobs:
           declare -A workflows
           workflows["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}"
           workflows["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}"
-          workflows["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit }}"
+          workflows["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}"
 
           declare -A run_ids
 
@@ -324,7 +324,7 @@ jobs:
           declare -A workflow_configs
           workflow_configs["all-post-commit-workflows.yaml"]="${{ inputs.run_all_post_commit }}:$ALL_POST_COMMIT_RUN_ID:all-post-commit-result"
           workflow_configs["blackhole-post-commit.yaml"]="${{ inputs.run_blackhole_post_commit }}:$BLACKHOLE_RUN_ID:blackhole-result"
-          workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
+          workflow_configs["tt-metal-l2-nightly.yaml"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:$TT_METAL_L2_NIGHTLY_RUN_ID:tt-metal-l2-nightly-result"
           exit_code=0
           for workflow_file in "${!workflow_configs[@]}"; do
             IFS=':' read -r enabled run_id output_var <<< "${workflow_configs[$workflow_file]}"
@@ -417,7 +417,7 @@ jobs:
             declare -A test_configs
             test_configs["All Post-Commit Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.all-post-commit-result }}"
             test_configs["Blackhole Post-Commit Tests"]="${{ inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.blackhole-result }}"
-            test_configs["TT-Metal L2 Nightly APC Tests"]="${{ inputs.run_all_post_commit }}:${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
+            test_configs["TT-Metal L2 Nightly APC Tests"]="${{ inputs.run_all_post_commit || inputs.run_blackhole_post_commit }}:${{ needs.setup-and-test.outputs.tt-metal-l2-nightly-result }}"
 
             # Function to display test result
             display_test_result() {

@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "conv2d_op_program_factory_common.hpp"
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <tuple>
-#include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <vector>
 #include <tt_stl/assert.hpp>
@@ -121,18 +120,7 @@ std::vector<CBInfo> get_cb_info(
 
     // Block dims
     if (!split_reader_enabled || is_1d_depthwise_conv) {
-        if (!conv_config.enable_activation_reuse) {
-            act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
-        } else {
-            act_block_num_tiles = calculate_act_cb_size_with_reuse(
-                block_config.act_block_h_ntiles,
-                block_config.act_block_w_ntiles,
-                output_image_width,
-                padded_in_channels,
-                kernel_size,
-                input_tile_size,
-                input_datatype);
-        }
+        act_block_num_tiles = block_config.act_block_h_ntiles * block_config.act_block_w_ntiles;
     } else {
         // Calculate split reader parameters
         uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
@@ -215,6 +203,8 @@ std::vector<CBInfo> get_cb_info(
         .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
         .data_format = partial_df});
 
+    const bool overlap_im2col_cb =
+        sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
     {
         // ACT and ACT_SECOND_READER CB
         if (conv_config.enable_act_double_buffer) {
@@ -241,9 +231,12 @@ std::vector<CBInfo> get_cb_info(
             .page_size = act_cb_tile_size,
             .data_format = act_cb_data_format,
             .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
+
+        // In block sharded convs when overlapping of the img2col cb is done, we don't need this cb, the main one will
+        // just be full size (Conv2dCb::ACT)
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_SECOND_READER,
-            .num_pages = act_block_split_num_tiles,
+            .num_pages = overlap_im2col_cb ? 0 : act_block_split_num_tiles,
             .page_size = input_tile_size,
             .data_format = conv_input_df});
     }
@@ -278,15 +271,12 @@ std::vector<CBInfo> get_cb_info(
             row_major_act_cb_num_tiles = act_block_num_tiles;
         }
 
-        // If split reader is enabled, we disable overlap for ACT_ROW_MAJOR_BFLOAT16 CB for now - subject to change
-        const bool overlap_act_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && !split_reader_enabled &&
-                                    conv_input_df == output_df && !skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
-            .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,
+            .num_pages = overlap_im2col_cb ? 0 : row_major_act_cb_num_tiles,
             .page_size = input_tile_size,
             .data_format = conv_input_df,
-            .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
+            .overlapped_by_cb = overlap_im2col_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
     }
 
     // Output CB
@@ -613,7 +603,7 @@ bool is_split_reader_viable(
     DataType output_datatype,
     bool act_reuse_enabled) {
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        return false;
+        return true;
     }
     // If activation reuse is enabled, we always enable split_reader
     if (act_reuse_enabled) {

@@ -17,7 +17,9 @@ file(
     groupnorm/device/kernels/*
     layernorm/device/kernels/*
     layernorm_distributed/device/kernels/*
+    rmsnorm_distributed/device/kernels/*
     softmax/device/kernels/*
+    kernel_util/compute/*
 )
 target_sources(
     ttnn_op_normalization
@@ -28,6 +30,7 @@ target_sources(
         FILES
             layernorm/layernorm.hpp
             layernorm/device/layernorm_types.hpp
+            layernorm_distributed/device/layernorm_distributed_types.hpp
             rmsnorm/rmsnorm.hpp
             softmax/device/softmax_operation_types.hpp
             softmax/device/softmax_device_operation.hpp

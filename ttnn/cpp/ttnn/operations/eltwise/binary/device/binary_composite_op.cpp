@@ -10,7 +10,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -89,7 +89,7 @@ Tensor ExecuteMinimum::invoke(
 
 Tensor ExecuteMinimum::invoke(
     const Tensor& input_a,
-    const std::variant<int32_t, float> value,
+    unary::ScalarVariant value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -99,9 +99,8 @@ Tensor ExecuteMinimum::invoke(
     std::optional<bool> use_legacy) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::
-                ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MINIMUM>::invoke(
-                    input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MINIMUM>::
+                invoke(input_a, input_b, memory_config, optional_output_tensor);
         },
         value);
 }
@@ -130,7 +129,7 @@ Tensor ExecuteMaximum::invoke(
 
 Tensor ExecuteMaximum::invoke(
     const Tensor& input_a,
-    const std::variant<int32_t, float> value,
+    unary::ScalarVariant value,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
@@ -140,9 +139,8 @@ Tensor ExecuteMaximum::invoke(
     std::optional<bool> use_legacy) {
     return std::visit(
         [&](auto input_b) {
-            return ttnn::operations::unary::
-                ExecuteUnaryWithVariantFloatIntParameter<ttnn::operations::unary::UnaryOpType::MAXIMUM>::invoke(
-                    input_a, input_b, memory_config, optional_output_tensor);
+            return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::MAXIMUM>::
+                invoke(input_a, input_b, memory_config, optional_output_tensor);
         },
         value);
 }
@@ -281,8 +279,6 @@ Tensor ExecuteDiv::invoke(
     } else {
         Tensor a = typecast(input_a, DataType::FLOAT32);
         Tensor b = typecast(input_b, DataType::FLOAT32);
-
-        // Div operation without inf/nan handling as reciprocal(0) = 1.7014118346046923e+38 not inf/nan
         result =
             ttnn::multiply(a, ttnn::reciprocal(b, output_mem_config), std::nullopt, output_mem_config, output_tensor);
     }
@@ -292,33 +288,9 @@ Tensor ExecuteDiv::invoke(
     } else if (round_mode == "floor") {
         result = ttnn::floor(result, output_mem_config, output_tensor);
     }
-
     if (is_fp32) {
         return result;
     }
-
-    // Accurate mode: handles division by zero (inf/nan cases) for non-fp32 inputs
-    if (accurate_mode) {
-        float t_nan = std::nanf("");
-        result = typecast(result, input_dtype, std::nullopt, output_tensor);
-        Tensor is_b_zero = ttnn::eqz(input_b, output_mem_config);
-        result = ttnn::where(
-            ttnn::logical_and(is_b_zero, ttnn::eqz(input_a, output_mem_config)),
-            t_nan,
-            result,
-            output_mem_config,
-            output_tensor);
-
-        // If b=0 in round_mode == "floor" or "trunc", then for b/0  Golden = +/-inf   TT= +/-2147483648.0, assuming the
-        // sign of a
-        if (round_mode == "floor" || round_mode == "trunc") {
-            float t_inf = std::numeric_limits<float>::infinity();
-            Tensor sign_inf = ttnn::sign(input_b, output_mem_config);
-            sign_inf = ttnn::where(is_b_zero, ttnn::sign(input_a, output_mem_config), sign_inf);
-            result = ttnn::where(is_b_zero, ttnn::multiply(sign_inf, t_inf), result, output_mem_config, output_tensor);
-        }
-    }
-
     return typecast(result, input_dtype, std::nullopt, output_tensor);
 }
 
@@ -372,7 +344,7 @@ Tensor ExecutePrelu::invoke(
 }
 
 Tensor run_remainder(
-    const Tensor& input_a, const Tensor& input_b, float t_nan, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
     Tensor result = ttnn::subtract(
@@ -423,9 +395,6 @@ Tensor run_remainder(
             false),
         result);
 
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result), output_mem_config);
-    result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result, output_mem_config);
     return result;
 }
 // Binary remainder will be overloaded by unary remainder in another PR
@@ -433,15 +402,13 @@ Tensor ExecuteBinaryRemainder::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     DataType input_dtype = input_a.dtype();
 
-    float t_nan = tt::tt_metal::hal::get_nan();
-
     // No typecast for FP32 input
     const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;
     const auto& a = do_typecast ? typecast(input_a, DataType::FLOAT32) : input_a;
     const auto& b = do_typecast ? typecast(input_b, DataType::FLOAT32) : input_b;
 
     // Perform the remainder operation
-    Tensor result = run_remainder(a, b, t_nan, output_mem_config);
+    Tensor result = run_remainder(a, b, output_mem_config);
 
     // Return the result, typecasted if necessary
     return do_typecast ? typecast(result, input_dtype) : result;
@@ -462,8 +429,7 @@ Tensor run_fmod(
         ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    return ttnn::where(ttnn::eqz(input_b, output_mem_config), std::nanf(""), result);
+    return result;
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -471,8 +437,7 @@ Tensor run_fmod(
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     DataType input_dtype = input_a.dtype();
-    Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-    div_res = ttnn::trunc(div_res, output_mem_config);
+    Tensor div_res = ttnn::div(input_a, input_b, true, "trunc", std::nullopt, output_mem_config);
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         return run_fmod(input_a, input_b, div_res, output_mem_config);

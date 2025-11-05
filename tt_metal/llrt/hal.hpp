@@ -18,6 +18,9 @@
 #include <functional>
 #include <memory>
 #include <ostream>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_types.hpp>
+#include <umd/device/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -139,6 +142,8 @@ private:
     CoreType core_type_;
     // indices represents processor class and type positions, value is build configuration params
     std::vector<std::vector<HalJitBuildConfig>> processor_classes_;
+    // indices represents processor class and type positions, values are abbreviated name and full name pairs
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names_;
     std::vector<DeviceAddr> mem_map_bases_;
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
@@ -154,12 +159,14 @@ public:
         std::vector<DeviceAddr> mem_map_bases,
         std::vector<uint32_t> mem_map_sizes,
         std::vector<uint32_t> eth_fw_mailbox_msgs,
+        std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names,
         bool supports_cbs,
         bool supports_receiving_multicast_cmds,
         dev_msgs::Factory dev_msgs_factory) :
         programmable_core_type_(programmable_core_type),
         core_type_(core_type),
         processor_classes_(std::move(processor_classes)),
+        processor_classes_names_(std::move(processor_classes_names)),
         mem_map_bases_(std::move(mem_map_bases)),
         mem_map_sizes_(std::move(mem_map_sizes)),
         eth_fw_mailbox_msgs_{std::move(eth_fw_mailbox_msgs)},
@@ -174,6 +181,7 @@ public:
     uint32_t get_processor_index(HalProcessorClassType processor_class, uint32_t processor_type_idx) const;
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(uint32_t processor_index) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const std::string& get_processor_class_name(uint32_t processor_index, bool is_abbreviated) const;
     const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
@@ -253,6 +261,7 @@ public:
     using DispatchFeatureQueryFunc = std::function<bool(DispatchFeature)>;
     using SetIRAMTextSizeFunc = std::function<void(
         dev_msgs::launch_msg_t::View, HalProgrammableCoreType, HalProcessorClassType, uint32_t, uint32_t)>;
+    using VerifyFwVersionFunc = std::function<void(tt::umd::semver_t)>;
 
 private:
     tt::ARCH arch_;
@@ -285,7 +294,6 @@ private:
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
-    bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
@@ -314,6 +322,7 @@ private:
     DispatchFeatureQueryFunc device_features_func_;
     std::unique_ptr<HalJitBuildQueryInterface> jit_build_query_;
     SetIRAMTextSizeFunc set_iram_text_size_func_;
+    VerifyFwVersionFunc verify_eth_fw_version_func_;
 
 public:
     Hal(tt::ARCH arch, bool is_base_routing_fw_enabled);
@@ -368,7 +377,6 @@ public:
     std::uint32_t get_virtual_worker_start_x() const { return this->virtual_worker_start_x_; }
     std::uint32_t get_virtual_worker_start_y() const { return this->virtual_worker_start_y_; }
     bool get_eth_fw_is_cooperative() const { return this->eth_fw_is_cooperative_; }
-    bool intermesh_eth_links_enabled() const { return this->intermesh_eth_links_enabled_; }
     const std::unordered_set<dev_msgs::AddressableCoreType>& get_virtualized_core_types() const {
         return this->virtualized_core_types_;
     }
@@ -432,6 +440,9 @@ public:
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
 
+    const std::string& get_processor_class_name(
+        HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const;
+
     uint64_t relocate_dev_addr(uint64_t addr, uint64_t local_init_addr = 0, bool has_shared_local_mem = false) const {
         return relocate_func_(addr, local_init_addr, has_shared_local_mem);
     }
@@ -476,6 +487,12 @@ public:
     uint64_t get_pcie_addr_lower_bound() const;
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
+
+    // Verify that the eth version is compatible with the HAL capabilities. Throws an exception if version is
+    // not compatible.
+    void verify_eth_fw_version(tt::umd::semver_t eth_fw_version) const {
+        this->verify_eth_fw_version_func_(eth_fw_version);
+    }
 };
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
@@ -600,6 +617,12 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
     uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const {
     TT_ASSERT(programmable_core_type_index < this->core_info_.size());
     return this->core_info_[programmable_core_type_index].get_jit_build_config(processor_class_idx, processor_type_idx);
+}
+
+inline const std::string& Hal::get_processor_class_name(
+    HalProgrammableCoreType programmable_core_type, uint32_t processor_index, bool is_abbreviated) const {
+    auto idx = get_programmable_core_type_index(programmable_core_type);
+    return this->core_info_[idx].get_processor_class_name(processor_index, is_abbreviated);
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig

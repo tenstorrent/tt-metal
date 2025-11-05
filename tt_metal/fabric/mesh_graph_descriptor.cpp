@@ -15,6 +15,7 @@
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include "tt-metalium/mesh_graph_descriptor.hpp"
 #include "tt-metalium/mesh_coord.hpp"
+#include "tt-metalium/fabric_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 #include <google/protobuf/text_format.h>
@@ -121,7 +122,8 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) : top_level_id_(static_cast<GlobalNodeId>(-1)), backwards_compatible_(backwards_compatible) {
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    top_level_id_(static_cast<GlobalNodeId>(-1)) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
 
@@ -155,6 +157,25 @@ proto::Architecture MeshGraphDescriptor::get_arch() const {
 
 uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
+}
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
+    const auto& dim_types = mesh_desc->device_topology().dim_types();
+    if (dim_types.size() < 2) {
+        return FabricType::MESH;
+    }
+
+    bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
+    bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
+
+    if (y_is_ring && x_is_ring) {
+        return FabricType::TORUS_XY;
+    } else if (y_is_ring) {
+        return FabricType::TORUS_Y;
+    } else if (x_is_ring) {
+        return FabricType::TORUS_X;
+    }
+    return FabricType::MESH;
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
@@ -753,7 +774,7 @@ GlobalNodeId MeshGraphDescriptor::populate_graph_instance(
         // Check that the child instance created has the same type as rest of the graph descriptor
         if (child_instance.kind == NodeKind::Graph) {
             if (child_graph_type.empty()) {
-                child_graph_type = child_instance.type.c_str();
+                child_graph_type = child_instance.type;
             } else {
                 TT_FATAL(child_graph_type == child_instance.type, "Graph instance type {} does not match graph descriptor child type {}", std::string(child_graph_type), std::string(child_instance.type));
             }

@@ -130,7 +130,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # Construct the config
         return {
-            "device": MeshDeviceStub(mesh_device.shape),
+            "mesh_device": MeshDeviceStub(mesh_device.shape),
             "num_devices": mesh_device.get_num_devices(),
             "num_experts_per_device": num_experts_per_device,
             "hidden_size": hf_config.hidden_size,
@@ -147,7 +147,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "input_memory_config": memory_config,
             "output_memory_config": memory_config,
             "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
-            "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
+            "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
             "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,
                 dim=3,
@@ -177,6 +177,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        ttnn.synchronize_device(cfg["mesh_device"])
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
@@ -216,8 +217,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
         all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
             experts_output,
-            cfg["expert_mapping_tensors"],
             all_to_all_dispatch_metadata_tensors,
+            cfg["expert_mapping_tensors"],
             **cfg["all_to_all_combine"],
         )
         post_combine_output_tensor = ttnn.reshape(

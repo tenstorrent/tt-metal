@@ -18,23 +18,31 @@ namespace ttnn::operations::ccl {
 
 void py_bind_reduce_scatter(py::module& module) {
     auto doc =
-        R"doc(reduce_scatter(input_tensor: ttnn.Tensor, dim: int, cluster_axis: Optional[int] = None, topology: ttnn.Topology = ttnn.Topology.Linear, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, subdevice_id: Optional[ttnn.SubDeviceId] = None, queue_id: int = 0) -> ttnn.Tensor
+        R"doc(
+        Reduce-scatter operation across devices along a selected dimension and optional cluster axis. This operation reduces the mesh tensor across the devices in the mesh, along the specified dimension. It then scatters the reduced tensor back to the devices in the mesh, along the same dimension. When cluster axis is specified, we reduce and scatter along the cluster axis. When it is not specified, then we reduce and scatter across all devices in the mesh. When the layout is row-major or the scatter breaks apart tiles, we use the composite reduce-scatter implementation that falls back to all-broadcast.
 
-            Reduce-scatter operation across devices along a selected dimension and optional cluster axis.
+        Args:
+            input_tensor (ttnn.Tensor): Input tensor to be reduced and scattered.
+            dim (int): Dimension along which to reduce.
 
-            Args:
-                input_tensor (ttnn.Tensor): Input tensor to be reduced and scattered.
-                dim (int): Dimension along which to reduce.
+        Keyword Args:
+            cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
+            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
+            memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
+            num_links (int, optional): The number of links to use for the reduce-scatter operation. Defaults to `None`, for which the number of links is determined automatically.
+            topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
 
-            Keyword Args:
-                cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
-                topology (ttnn.Topology, optional): Fabric topology. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
-                memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
-                subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
+        Returns:
+            ttnn.Tensor: The reduced and scattered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] / num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices along the mesh.
 
-           Returns:
-               ttnn.Tensor: The reduced and scattered tensor.)doc";
+        Example:
+            >>> # ttnn_tensor shape is [1, 8, 32, 256]
+            >>> # num_devices along cluster_axis is 8
+            >>> output = ttnn.reduce_scatter(ttnn_tensor, dim=1, cluster_axis=1)
+            >>> print(output.shape)
+            [1, 1, 32, 256]
+        )doc";
 
     using OperationType = decltype(ttnn::reduce_scatter);
     ttnn::bind_registered_operation(
@@ -69,7 +77,7 @@ void py_bind_reduce_scatter(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("num_links") = std::nullopt,
-            py::arg("topology") = std::nullopt,
+            py::arg("topology").noconvert() = std::nullopt,
         });
 }
 

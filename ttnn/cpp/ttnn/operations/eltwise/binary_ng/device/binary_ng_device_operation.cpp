@@ -1,32 +1,32 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
+#include "binary_ng_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::binary_ng {
 
 namespace utils {
-bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
+bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_approximate_mode = false) {
     using enum BinaryOpType;
     using enum DataType;
     switch (val) {
         case ADD:
         case SUB:
-            return (
-                (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
-                (a == UINT16 && b == UINT16));
         case MUL:
         case EQ:
         case NE:
+            return (
+                (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
+                (a == UINT16 && b == UINT16));
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
         case SQUARED_DIFFERENCE:
             return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case DIV:
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
@@ -53,6 +53,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case MINIMUM:
         case XLOGY:
         case POWER: return true;
+        case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32);
         default: return false;
     }
     return false;
@@ -141,27 +142,6 @@ DataType BinaryNgDeviceOperation::operation_attributes_t::get_dtype() const {
     return this->dtype.value_or(this->input_dtype);
 }
 
-// TODO: more to check, or less
-void validate_sharding(
-    TensorMemoryLayout memory_layout_x,
-    const ShardSpec& shard_spec_x,
-    TensorMemoryLayout memory_layout_y,
-    const ShardSpec& shard_spec_y,
-    SubtileBroadcastType subtile_broadcast_type) {
-    TT_FATAL(memory_layout_x == memory_layout_y, "Operands to eltwise binary need to have the same memory layout");
-
-    switch (subtile_broadcast_type) {
-        case SubtileBroadcastType::NONE:
-            TT_FATAL(shard_spec_x == shard_spec_y, "Operands to eltwise binary need to have the same shard spec");
-            break;
-        default:
-            TT_FATAL(
-                shard_spec_x.orientation == shard_spec_y.orientation,
-                "Operands to eltwise binary must have same shard orientation");
-            break;
-    }
-}
-
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // We don't support sharding for now
@@ -200,10 +180,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "LHS operand must be either sharded or interleaved");
-    } else {
-        TT_FATAL(
-            input_tensor_a.memory_config().buffer_type() == BufferType::L1,
-            "Sharded input tensor A memory config must be in L1");
     }
 
     bool output_sharded = attributes.memory_config.is_sharded();
@@ -211,9 +187,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             attributes.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Output must be interleaved or sharded");
-    } else {
-        TT_FATAL(
-            attributes.memory_config.buffer_type() == BufferType::L1, "Sharded output memory config must be in L1");
     }
 
     bool tensor_b_sharded = false;
@@ -229,44 +202,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 input_tensor_b->memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                 "RHS operand must be either sharded or interleaved");
-        } else {
-            TT_FATAL(
-                input_tensor_b->memory_config().buffer_type() == BufferType::L1,
-                "Sharded input tensor B memory config must be in L1");
         }
-    }
-
-    // Validate that all shard specs match
-    if (tensor_a_sharded) {
-        if (tensor_b_sharded) {
-            validate_sharding(
-                input_tensor_a.memory_config().memory_layout(),
-                *input_tensor_a.shard_spec(),
-                input_tensor_b->memory_config().memory_layout(),
-                *input_tensor_b->shard_spec(),
-                attributes.subtile_broadcast_type);
-        }
-        if (output_sharded) {
-            validate_sharding(
-                input_tensor_a.memory_config().memory_layout(),
-                *input_tensor_a.shard_spec(),
-                attributes.memory_config.memory_layout(),
-                attributes.memory_config.shard_spec().value_or(*input_tensor_a.shard_spec()),
-                attributes.subtile_broadcast_type);
-        }
-    } else if (tensor_b_sharded) {
-        if (output_sharded) {
-            validate_sharding(
-                input_tensor_b->memory_config().memory_layout(),
-                *input_tensor_b->shard_spec(),
-                attributes.memory_config.memory_layout(),
-                attributes.memory_config.shard_spec().value_or(*input_tensor_b->shard_spec()),
-                attributes.subtile_broadcast_type);
-        }
-    } else if (output_sharded) {
-        TT_FATAL(
-            attributes.memory_config.shard_spec().has_value(),
-            "Sharded output memory config must have shard spec if neither input is sharded");
     }
 }
 
@@ -381,10 +317,33 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         const auto& shard_spec = attributes.memory_config.shard_spec();
         const auto& input_a_shard_spec = input_tensor_a.memory_config().shard_spec();
         const auto& input_b_shard_spec = tensor_b.has_value() ? tensor_b->memory_config().shard_spec() : std::nullopt;
-        // TODO: is prefered order of a over b correct?
-        const auto& output_shard_spec = shard_spec.has_value()           ? *shard_spec
-                                        : input_a_shard_spec.has_value() ? *input_a_shard_spec
-                                                                         : *input_b_shard_spec;
+
+        ShardSpec output_shard_spec{CoreRangeSet(), {0, 0}};
+        // Check if memory config was inherited from an input (needs adjustment)
+        // or explicitly provided by user (use as-is)
+        bool inherited_from_input_a =
+            input_a_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_a_shard_spec;
+        bool inherited_from_input_b =
+            input_b_shard_spec.has_value() && shard_spec.has_value() && *shard_spec == *input_b_shard_spec;
+
+        if (shard_spec.has_value() && !inherited_from_input_a && !inherited_from_input_b) {
+            // User explicitly provided a shard spec that differs from both inputs - use as-is
+            output_shard_spec = *shard_spec;
+        } else if (input_a_shard_spec.has_value() && !inherited_from_input_b) {
+            // A has a spec AND we're not using B's spec → adjust from A
+            auto padded_output_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+            output_shard_spec =
+                adjust_to_shape(*input_a_shard_spec, input_tensor_a.padded_shape(), padded_output_shape);
+        } else if (input_b_shard_spec.has_value()) {
+            // B has a spec (either inherited from B or fallback to B) → adjust from B
+            TT_FATAL(tensor_b.has_value(), "Cannot adjust from input_b when tensor_b is not present");
+            auto padded_output_shape = tensor_b->tensor_spec().tensor_layout().compute_padded_shape(output_shape);
+            output_shard_spec = adjust_to_shape(*input_b_shard_spec, tensor_b->padded_shape(), padded_output_shape);
+        } else {
+            TT_FATAL(shard_spec.has_value(), "Sharded memory config specified but no shard spec available");
+            output_shard_spec = *shard_spec;
+        }
+
         return TensorSpec(
             output_shape,
             TensorLayout(
@@ -393,6 +352,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 MemoryConfig(memory_layout, buffer_type, output_shard_spec)));
     }
 
+    // If not sharded, use the memory config from input a that is interleaved
     return TensorSpec(
         output_shape, TensorLayout(attributes.get_dtype(), PageConfig(Layout::TILE), attributes.memory_config));
 }
@@ -456,6 +416,7 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
+    const std::optional<bool>& fast_and_approximate_mode,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations) {
@@ -478,7 +439,8 @@ BinaryNgDeviceOperation::invoke(
 
     DataType dtype_a = input_tensor_a.dtype();
     DataType dtype_b = input_tensor_b.dtype();
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b));
+    bool is_sfpu_op =
+        (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{
@@ -488,7 +450,9 @@ BinaryNgDeviceOperation::invoke(
             {post_activations.begin(), post_activations.end()},
             std::nullopt,
             memory_config.value_or(
-                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
+                output_tensor.has_value()                     ? output_tensor->memory_config()
+                : input_tensor_a.memory_config().is_sharded() ? input_tensor_a.memory_config()
+                                                              : input_tensor_b.memory_config()),
             input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
                                      // depending on which LLK is meant to be used.
             output_dtype,
@@ -508,11 +472,13 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
+    const std::optional<bool>& fast_and_approximate_mode,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
     DataType dtype_a = input_tensor_a.dtype();
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a));
+    bool is_sfpu_op =
+        (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
     return {
         operation_attributes_t{
@@ -521,7 +487,6 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar,
-            // TODO : verify memory config choice is correct, by fall back to input a
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
             input_tensor_a.dtype(),

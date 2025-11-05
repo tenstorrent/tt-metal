@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import itertools
-
 import pytest
 import torch
 from loguru import logger
@@ -15,7 +13,7 @@ from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.model.row_pipelined_model import RowPipelinedModel
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     add_inv_scale_to_state_dict,
@@ -24,7 +22,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
-    load_state_dict,
     paged_caches_from_torch,
     run_reference_with_attention,
     torch_cache_from_transformers,
@@ -38,6 +35,7 @@ def generate_reference_io(
     batch_size: int,
     hf_config: PretrainedConfig,
     model_path: str,
+    state_dict: dict[str, torch.Tensor],
 ):
     """Generate reference input and output for the given mode using either real or random weights."""
     # This needs to be disabled as deterministic way to quantize weights is not supported
@@ -46,15 +44,7 @@ def generate_reference_io(
     if use_real_weights:
         torch.use_deterministic_algorithms(False)
 
-        logger.info(f"Loading state dict from {model_path}")
-        state_dict = load_state_dict(model_path, "")
-        logger.info(f"State dict loaded")
-        state_dict = {
-            k: v
-            for k, v in state_dict.items()
-            for layer_idx_str in ["".join(itertools.takewhile(str.isdigit, k.removeprefix("model.layers.")))]
-            if not layer_idx_str or int(layer_idx_str) < hf_config.num_hidden_layers
-        }  # Trim the loaded state dict to not run out of memory
+        state_dict = sub_state_dict(state_dict, "", hf_config.num_hidden_layers)
 
         logger.info(f"Creating reference model")
         # Create model on meta device (no weight initialization or memory allocation)
@@ -112,6 +102,7 @@ def run_test_forward_pass_ppmodel(
     model_path,
     ccl,
     force_recalculate_weight_config,
+    state_dict,
 ):
     # Check params
     if mode == "prefill":
@@ -122,7 +113,7 @@ def run_test_forward_pass_ppmodel(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        use_real_weights, mode, seq_len, batch_size, hf_config_short, model_path
+        use_real_weights, mode, seq_len, batch_size, hf_config_short, model_path, state_dict
     )
 
     # Set up page config
@@ -201,6 +192,7 @@ def run_test_forward_pass_dpmodel(
     model_path,
     ccl,
     force_recalculate_weight_config,
+    state_dict,
 ):
     # Check params
     if mode == "prefill":
@@ -213,7 +205,7 @@ def run_test_forward_pass_dpmodel(
     # Get reference IO
     logger.info("Setting up reference IO")
     state_dict, position_ids, torch_input, reference_output, input_cache, output_cache = generate_reference_io(
-        use_real_weights, mode, seq_len, batch_size, hf_config_short, model_path
+        use_real_weights, mode, seq_len, batch_size, hf_config_short, model_path, state_dict
     )
 
     # Set up page config
@@ -273,7 +265,9 @@ def run_test_forward_pass_dpmodel(
             tt_input, position_ids_tensor, run_config, rope_tensors, tt_page_tables
         )
 
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
+    )
     assert (
         tt_output_torch.shape[-1] == hf_config_short.vocab_size
     ), f"Output shape mismatch: {tt_output_torch.shape} vs {hf_config_short.vocab_size}"
@@ -308,7 +302,6 @@ def test_forward_pass(
     seq_len,
     batch_size_per_row,
     hf_config_short,
-    tmp_path,
     cache_path,
     mesh_device,
     model_path,
@@ -316,13 +309,10 @@ def test_forward_pass(
     force_recalculate_weight_config,
     test_closure,
     set_deterministic_env,
+    state_dict,
 ):
     # Set less layers and shorter max length for the sake of testing
     hf_config_short.num_hidden_layers = 8
-
-    if not use_real_weights:  # Do not cache random weights
-        cache_path = tmp_path
-        force_recalculate_weight_config = True
 
     test_closure(
         use_real_weights,
@@ -335,6 +325,7 @@ def test_forward_pass(
         model_path,
         ccl,
         force_recalculate_weight_config,
+        state_dict,
     )
 
 

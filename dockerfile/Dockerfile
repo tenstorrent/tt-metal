@@ -14,7 +14,8 @@ ENV PATH="$CARGO_HOME/bin:$PATH"
 
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
-COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
+COPY /tt_metal/sfpi-info.sh /opt/tt_metal_infra/scripts/docker/sfpi-info.sh
+COPY /tt_metal/sfpi-version /opt/tt_metal_infra/scripts/docker/sfpi-version
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
 #############################################################
@@ -196,10 +197,14 @@ ENV PYTHON_ENV_DIR=/opt/venv
 ENV TT_METAL_HOME=/tt-metal
 ENV PYTHONPATH=/tt-metal
 
+# Accept git reference argument
+ARG GIT_REF=main
+
 # Clone tt-metal
 RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
     https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
-    && cd ${TT_METAL_HOME}"
+    && cd ${TT_METAL_HOME} \
+    && git checkout ${GIT_REF}"
 
 WORKDIR /tt-metal
 

@@ -73,7 +73,7 @@ run_tg_prefetcher_tests() {
 
   echo "LOG_METAL: Running run_tg_prefetcher_tests"
 
-  pytest tests/ttnn/unit_tests/operations/test_prefetcher_TG.py --timeout 600; fail+=$?
+  pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py --timeout 600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -88,7 +88,7 @@ run_tg_tests() {
   if [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running run_tg_unit_tests"
     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
-    TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCard*Fixture.*"
+    # TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCard*Fixture.*" #See issue #29677
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
     ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
