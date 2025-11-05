@@ -385,7 +385,7 @@ FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
     uint32_t link_idx,
-    FabricTensixRiscId risc_id,
+    FabricTensixCoreType core_id,
     uint32_t noc_x,
     uint32_t noc_y,
     std::shared_ptr<FabricTensixDatamoverMuxConfig> config,
@@ -395,7 +395,7 @@ FabricTensixDatamoverMuxBuilder::FabricTensixDatamoverMuxBuilder(
     remote_fabric_node_id_(remote_fabric_node_id),
     ethernet_channel_id_(ethernet_channel_id),
     link_idx_(link_idx),
-    risc_id_(risc_id),
+    core_id_(core_id),
     noc_x_(noc_x),
     noc_y_(noc_y),
     config_(config),
@@ -436,13 +436,13 @@ void FabricTensixDatamoverMuxBuilder::append_upstream_routers_noc_xy(uint32_t no
 
 void FabricTensixDatamoverMuxBuilder::create_and_compile(
     tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-    // Select processor and NOC based on RISC ID
-    tt::tt_metal::DataMovementProcessor processor = (risc_id_ == FabricTensixRiscId::MUX)
+    // Select processor and NOC based on core type
+    tt::tt_metal::DataMovementProcessor processor = (core_id_ == FabricTensixCoreType::MUX)
                                                         ? tt::tt_metal::DataMovementProcessor::RISCV_0
                                                         : tt::tt_metal::DataMovementProcessor::RISCV_1;
 
-    tt::tt_metal::NOC noc =
-        (risc_id_ == FabricTensixRiscId::MUX) ? tt::tt_metal::NOC::RISCV_0_default : tt::tt_metal::NOC::RISCV_1_default;
+    tt::tt_metal::NOC noc = (core_id_ == FabricTensixCoreType::MUX) ? tt::tt_metal::NOC::RISCV_0_default
+                                                                    : tt::tt_metal::NOC::RISCV_1_default;
 
     // Create the mux kernel
     auto mux_kernel = tt::tt_metal::CreateKernel(
@@ -498,7 +498,7 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args(tt:
     const auto worker_channel = is_2d_fabric ? direction_ : 0;
     const auto& tensix_config = fabric_context.get_tensix_config();
     const auto worker_stream_id =
-        tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel, risc_id_);
+        tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel, core_id_);
 
     std::vector<uint32_t> fabric_stream_ids;
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
@@ -565,7 +565,7 @@ FabricTensixDatamoverRelayBuilder::FabricTensixDatamoverRelayBuilder(
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
     uint32_t ethernet_channel_id,
     uint32_t link_idx,
-    FabricTensixRiscId risc_id,
+    FabricTensixCoreType core_id,
     uint32_t noc_x,
     uint32_t noc_y,
     std::shared_ptr<FabricTensixDatamoverRelayConfig> config,
@@ -575,7 +575,7 @@ FabricTensixDatamoverRelayBuilder::FabricTensixDatamoverRelayBuilder(
     remote_fabric_node_id_(remote_fabric_node_id),
     ethernet_channel_id_(ethernet_channel_id),
     link_idx_(link_idx),
-    risc_id_(risc_id),
+    core_id_(core_id),
     noc_x_(noc_x),
     noc_y_(noc_y),
     config_(config),
@@ -607,13 +607,13 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverRelayBuilder::build_
 
 void FabricTensixDatamoverRelayBuilder::create_and_compile(
     tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
-    // Select processor and NOC based on RISC ID
-    tt::tt_metal::DataMovementProcessor processor = (risc_id_ == FabricTensixRiscId::MUX)
+    // Select processor and NOC based on core type
+    tt::tt_metal::DataMovementProcessor processor = (core_id_ == FabricTensixCoreType::MUX)
                                                         ? tt::tt_metal::DataMovementProcessor::RISCV_0
                                                         : tt::tt_metal::DataMovementProcessor::RISCV_1;
 
-    tt::tt_metal::NOC noc =
-        (risc_id_ == FabricTensixRiscId::MUX) ? tt::tt_metal::NOC::RISCV_0_default : tt::tt_metal::NOC::RISCV_1_default;
+    tt::tt_metal::NOC noc = (core_id_ == FabricTensixCoreType::MUX) ? tt::tt_metal::NOC::RISCV_0_default
+                                                                    : tt::tt_metal::NOC::RISCV_1_default;
 
     // Create the relay kernel
     auto relay_kernel = tt::tt_metal::CreateKernel(
