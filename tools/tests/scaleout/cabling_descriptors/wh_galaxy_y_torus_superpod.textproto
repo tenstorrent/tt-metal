@@ -1,0 +1,20 @@
+graph_templates {
+  key: "5_wh_galaxy_y_torus_superpod"
+  value {
+    children {
+      name: "node1"
+      node_ref { node_descriptor: "WH_GALAXY_Y_TORUS" }
+    }
+    internal_connections {
+    }
+  }
+}
+
+# Root instance with concrete host mappings
+root_instance {
+  template_name: "5_wh_galaxy_y_torus_superpod"
+  child_mappings {
+    key: "node1"
+    value { host_id: 0 }
+  }
+}
