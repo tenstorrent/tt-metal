@@ -36,14 +36,8 @@ struct dispatch_s_dependent_config_t {
 class DispatchSKernel : public FDKernel {
 public:
     DispatchSKernel(
-        int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
-        FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
-        uint16_t channel =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device_id);
-        this->logical_core_ = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().dispatcher_s_core(
-            device_id, channel, cq_id_);
-        this->kernel_type_ = FDKernelType::DISPATCH;
-    }
+        int node_id, ChipId device_id, ChipId servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection);
+
     void CreateKernel() override;
     void GenerateStaticConfigs() override;
     void GenerateDependentConfigs() override;

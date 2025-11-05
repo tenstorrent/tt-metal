@@ -15,7 +15,8 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
     retrieve_timesteps,
-    run_tt_iteration,
+    run_tt_denoising,
+    run_torch_denoising,
     prepare_input_tensors,
     allocate_input_tensors,
     create_user_tensors,
@@ -24,90 +25,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
+# TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {"10": 0.862, "50": 0.894}
-
-
-def run_tt_denoising(
-    ttnn_device,
-    tt_latents_device,
-    tt_latents_output,
-    tt_unet,
-    tt_scheduler,
-    input_shape,
-    ttnn_prompt_embeds,
-    ttnn_add_text_embeds,
-    ttnn_add_time_ids,
-    guidance_scale,
-    extra_step_kwargs,
-    tid=None,
-    compile_run=False,
-):
-    B, C, H, W = input_shape
-    if tid is None:
-        tid = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if not compile_run else None
-        unet_outputs = []
-        tt_latents = tt_latents_device
-        for unet_slice in range(len(ttnn_prompt_embeds)):
-            tt_latent_model_input = tt_latents
-            noise_pred, noise_shape = run_tt_iteration(
-                tt_unet,
-                tt_scheduler,
-                tt_latent_model_input,
-                [B, C, H, W],
-                ttnn_prompt_embeds[unet_slice],
-                ttnn_add_time_ids[unet_slice],
-                ttnn_add_text_embeds[unet_slice],
-            )
-            C, H, W = noise_shape
-
-            unet_outputs.append(noise_pred)
-
-        noise_pred_uncond, noise_pred_text = unet_outputs
-        noise_pred_text = ttnn.sub_(noise_pred_text, noise_pred_uncond)
-        noise_pred_text = ttnn.mul_(noise_pred_text, guidance_scale)
-        noise_pred = ttnn.add_(noise_pred_uncond, noise_pred_text)
-
-        tt_latents = tt_scheduler.step(noise_pred, None, tt_latents, **extra_step_kwargs, return_dict=False)[0]
-
-        ttnn.deallocate(noise_pred_uncond)
-        ttnn.deallocate(noise_pred_text)
-
-        if not compile_run:
-            ttnn.end_trace_capture(ttnn_device, tid, cq_id=0)
-    else:
-        ttnn.execute_trace(ttnn_device, tid, cq_id=0, blocking=True)
-    return tid, tt_latents_device, tt_latents_output, [C, H, W]
-
-
-def run_torch_denoising(
-    latents,
-    iter,
-    pipeline,
-    prompt_embeds,
-    added_cond_kwargs,
-    t,
-    guidance_scale,
-    extra_step_kwargs,
-):
-    latent_model_input = torch.cat([latents] * 2)
-
-    latent_model_input = pipeline.scheduler.scale_model_input(latent_model_input, t)
-
-    noise_pred = pipeline.unet(
-        latent_model_input,
-        t,
-        encoder_hidden_states=prompt_embeds[iter],
-        timestep_cond=None,
-        cross_attention_kwargs=None,
-        added_cond_kwargs=added_cond_kwargs[iter],
-        return_dict=False,
-    )[0]
-
-    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-    latents = pipeline.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
-    return latents
 
 
 @torch.no_grad()

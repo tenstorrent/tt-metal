@@ -111,7 +111,7 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void open_devices(const TestFabricSetup& fabric_setup) {
+    bool open_devices(const TestFabricSetup& fabric_setup) {
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
@@ -149,6 +149,13 @@ public:
             new_fabric_config = it->second;
         }
 
+        // Use the new ControlPlane validation API - always skip on mismatch
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        if (!control_plane.is_fabric_config_valid(new_fabric_config)) {
+            log_warning(tt::LogTest, "Fabric configuration validation failed - can't open device");
+            return false;
+        }
+
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_) {
             if (are_devices_open_) {
@@ -163,6 +170,7 @@ public:
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
+        return true;
     }
 
     void setup_workload() {
@@ -730,6 +738,77 @@ public:
         return hops;
     }
 
+    std::vector<RoutingDirection> get_neighbor_directions_for_topology() const {
+        switch (topology_) {
+            case Topology::Mesh:
+            case Topology::Torus:
+                return {RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W};
+            case Topology::Linear: return {RoutingDirection::E, RoutingDirection::W};
+            case Topology::Ring:
+                // Ring topology handled separately - no directional logic
+                return {};
+        }
+        return {};
+    }
+
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> get_neighbor_exchange_pairs() const override {
+        const auto device_ids = get_global_node_ids();
+        std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+
+        auto directions = get_neighbor_directions_for_topology();
+
+        if (!directions.empty()) {
+            // Handle mesh, torus, and linear topologies with directional neighbors
+            for (const auto& src_node : device_ids) {
+                for (const auto& direction : directions) {
+                    // Check if neighbor exists in this direction
+                    const auto& neighbors =
+                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
+                            src_node, direction);
+
+                    if (!neighbors.empty()) {
+                        // Get the first (and should be only) neighbor mesh
+                        auto neighbor_mesh_it = neighbors.begin();
+                        const auto& neighbor_chips = neighbor_mesh_it->second;
+
+                        if (!neighbor_chips.empty()) {
+                            // Get the first (and should be only) neighbor chip
+                            FabricNodeId neighbor(neighbor_mesh_it->first, neighbor_chips[0]);
+
+                            // Only add if neighbor exists and is different from source
+                            bool is_valid_neighbor = (neighbor != src_node);
+
+                            // For linear topology, also check if devices are on the same line
+                            if (topology_ == Topology::Linear) {
+                                is_valid_neighbor &= are_devices_linear({src_node, neighbor});
+                            }
+
+                            if (is_valid_neighbor) {
+                                pairs.emplace_back(src_node, neighbor);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (topology_ == Topology::Ring) {
+            // Handle ring topology with logical ring neighbors
+            for (const auto& src_node : device_ids) {
+                auto ring_neighbors = get_wrap_around_mesh_ring_neighbors(src_node, device_ids);
+                if (ring_neighbors.has_value()) {
+                    auto [forward_neighbor, backward_neighbor] = ring_neighbors.value();
+                    if (forward_neighbor != src_node) {
+                        pairs.emplace_back(src_node, forward_neighbor);
+                    }
+                    if (backward_neighbor != src_node) {
+                        pairs.emplace_back(src_node, backward_neighbor);
+                    }
+                }
+            }
+        }
+
+        return pairs;
+    }
+
     std::optional<std::pair<FabricNodeId, FabricNodeId>> get_wrap_around_mesh_ring_neighbors(
         const FabricNodeId& src_node, const std::vector<FabricNodeId>& devices) const override {
         // Get mesh dimensions
@@ -1262,7 +1341,7 @@ public:
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
             // Try to move in current direction
             MeshCoordinate next_coord = current_coord;
-            bool need_wraparound = false;
+            [[maybe_unused]] bool need_wraparound = false;
 
             switch (current_direction) {
                 case RoutingDirection::N:
