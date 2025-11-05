@@ -29,7 +29,7 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.generator import Generator as TTGenerator
 from models.tt_transformers.tt.model import Transformer as TTTransformer
-from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 DEFAULT_HF_ID = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 
@@ -48,8 +48,17 @@ class DSQwenBuildConfig:
 
 
 def _select_optimizations(accuracy_mode: bool):
-    model_name = "DeepSeek-R1-Distill-Qwen-1.5B"
-    return ModelOptimizations.accuracy(model_name) if accuracy_mode else ModelOptimizations.performance(model_name)
+    """Return a callable that produces DecodersPrecision given ModelArgs.
+
+    ModelArgs expects `optimizations` to be a callable that takes the
+    ModelArgs instance and returns a DecodersPrecision configured per
+    decoder. Passing a ModelOptimizations instance directly causes
+    AttributeError when attention tries to call get_tensor_dtype.
+    """
+    if accuracy_mode:
+        return lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name)
+    else:
+        return lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
 
 def _set_checkpoint_env(checkpoint_dir: Optional[str], hf_model_id: str) -> None:
