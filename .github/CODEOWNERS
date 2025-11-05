@@ -342,6 +342,7 @@ tools/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-
 # tt-triage
 tools/tt-triage.py @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/metalium-codeowners-large-changes
 tools/triage/ @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/metalium-codeowners-large-changes
+tools/tests/triage/ @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/metalium-codeowners-large-changes
 scripts/install_debugger.sh @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/metalium-codeowners-large-changes
 scripts/ttexalens_ref.txt @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/metalium-codeowners-large-changes
 
