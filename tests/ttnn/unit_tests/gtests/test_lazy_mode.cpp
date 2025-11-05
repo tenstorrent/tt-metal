@@ -28,6 +28,11 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/permute/permute.hpp"
+#include "ttnn/operations/data_movement/tilize/tilize.hpp"
+#include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices.hpp"
 
 namespace ttnn {
 namespace test {
@@ -721,69 +726,50 @@ TEST_F(LazyModeFixture, DataMovementOperationsLazy) {
     const auto input_eager = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
 
     // Test 1: Split operation - split along dim 1 (width) into chunks of size 32
-    log_info(tt::LogTest, "Testing split operation in eager mode...");
     auto split_results_eager = ttnn::split(input_eager, 32, 1, std::nullopt);
-    ASSERT_EQ(split_results_eager.size(), 2) << "Split should produce 2 tensors";
-    ASSERT_EQ(split_results_eager[0].logical_shape(), ttnn::Shape({32, 32}))
-        << "First split should have shape [32, 32]";
-    ASSERT_EQ(split_results_eager[1].logical_shape(), ttnn::Shape({32, 32}))
-        << "Second split should have shape [32, 32]";
-
     // Test 2: Concat operation - concat the split results back
-    log_info(tt::LogTest, "Testing concat operation in eager mode...");
     auto concat_result_eager = ttnn::concat(split_results_eager, 1, std::nullopt);
-    ASSERT_EQ(concat_result_eager.logical_shape(), shape) << "Concat should restore original shape";
-
     // Test 3: Reshape operation
-    log_info(tt::LogTest, "Testing reshape operation in eager mode...");
     auto reshape_result_eager = ttnn::reshape(concat_result_eager, ttnn::Shape({64, 32}), std::nullopt);
-    ASSERT_EQ(reshape_result_eager.logical_shape(), ttnn::Shape({64, 32})) << "Reshape should produce shape [64, 32]";
-
     // Test 4: Repeat operation
-    log_info(tt::LogTest, "Testing repeat operation in eager mode...");
     auto repeat_result_eager = ttnn::repeat(reshape_result_eager, ttnn::SmallVector<uint32_t>{1, 2}, std::nullopt);
-    ASSERT_EQ(repeat_result_eager.logical_shape(), ttnn::Shape({64, 64})) << "Repeat should produce shape [64, 64]";
 
     // Add element-wise operation to make the test more interesting
     auto relu_result_eager = ttnn::relu(repeat_result_eager);
     auto eager_result = relu_result_eager.cpu();
 
+    ASSERT_EQ(split_results_eager.size(), 2) << "Split should produce 2 tensors";
+    ASSERT_EQ(split_results_eager[0].logical_shape(), ttnn::Shape({32, 32}))
+        << "First split should have shape [32, 32]";
+    ASSERT_EQ(split_results_eager[1].logical_shape(), ttnn::Shape({32, 32}))
+        << "Second split should have shape [32, 32]";
+    ASSERT_EQ(concat_result_eager.logical_shape(), shape) << "Concat should restore original shape";
+    ASSERT_EQ(reshape_result_eager.logical_shape(), ttnn::Shape({64, 32})) << "Reshape should produce shape [64, 32]";
+    ASSERT_EQ(repeat_result_eager.logical_shape(), ttnn::Shape({64, 64})) << "Repeat should produce shape [64, 64]";
+
     // Now run in lazy mode
-    log_info(tt::LogTest, "Running same operations in LAZY mode...");
     lazy::enable();
     ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
 
     const auto input_lazy = ttnn::full(shape, 2.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
-
     // Test 1: Split operation - should be captured lazily (split into chunks of size 32)
-    log_info(tt::LogTest, "Applying split operation in lazy mode...");
     auto split_results_lazy = ttnn::split(input_lazy, 32, 1, std::nullopt);
-    ASSERT_EQ(split_results_lazy.size(), 2) << "Split should produce 2 tensors";
-
-    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
-    ASSERT_FALSE(split_results_lazy[0].lazy()->is_materialized()) << "First split result should not be materialized";
-    ASSERT_FALSE(split_results_lazy[1].lazy()->is_materialized()) << "Second split result should not be materialized";
-
     // Test 2: Concat operation - should be captured lazily
-    log_info(tt::LogTest, "Applying concat operation in lazy mode...");
     auto concat_result_lazy = ttnn::concat(split_results_lazy, 1, std::nullopt);
-
-    ASSERT_FALSE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should not be materialized";
-
     // Test 3: Reshape operation - should be captured lazily
-    log_info(tt::LogTest, "Applying reshape operation in lazy mode...");
     auto reshape_result_lazy = ttnn::reshape(concat_result_lazy, ttnn::Shape({64, 32}), std::nullopt);
-
-    ASSERT_FALSE(reshape_result_lazy.lazy()->is_materialized()) << "Reshape result should not be materialized";
-
     // Test 4: Repeat operation - should be captured lazily
-    log_info(tt::LogTest, "Applying repeat operation in lazy mode...");
     auto repeat_result_lazy = ttnn::repeat(reshape_result_lazy, ttnn::SmallVector<uint32_t>{1, 2}, std::nullopt);
-
-    ASSERT_FALSE(repeat_result_lazy.lazy()->is_materialized()) << "Repeat result should not be materialized";
-
     // Add element-wise operation
     auto relu_result_lazy = ttnn::relu(repeat_result_lazy);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_EQ(split_results_lazy.size(), 2) << "Split should produce 2 tensors";
+    ASSERT_FALSE(split_results_lazy[0].lazy()->is_materialized()) << "First split result should not be materialized";
+    ASSERT_FALSE(split_results_lazy[1].lazy()->is_materialized()) << "Second split result should not be materialized";
+    ASSERT_FALSE(concat_result_lazy.lazy()->is_materialized()) << "Concat result should not be materialized";
+    ASSERT_FALSE(reshape_result_lazy.lazy()->is_materialized()) << "Reshape result should not be materialized";
+    ASSERT_FALSE(repeat_result_lazy.lazy()->is_materialized()) << "Repeat result should not be materialized";
 
     ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
 
@@ -894,6 +880,289 @@ TEST_F(LazyModeFixture, SplitOperationLazy) {
     log_info(tt::LogTest, "✓ Lazy and eager results match!");
     log_info(tt::LogTest, "✓ Sibling evaluation verified: evaluating one output materialized both outputs!");
     log_info(tt::LogTest, "==== Finished SplitOperationLazy test ====");
+}
+
+// Test: Slice operation in lazy mode
+TEST_F(LazyModeFixture, SliceOperationLazy) {
+    log_info(tt::LogTest, "==== Starting SliceOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running slice operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 64});
+    const auto input_eager = ttnn::full(shape, 5.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto slice_result_eager = ttnn::slice(
+        input_eager,
+        ttnn::SmallVector<uint32_t>{0, 16},
+        ttnn::SmallVector<uint32_t>{32, 48},
+        ttnn::SmallVector<uint32_t>{1, 1},
+        std::nullopt);
+    auto relu_result_eager = ttnn::relu(slice_result_eager);
+    auto eager_result = relu_result_eager.cpu();
+
+    ASSERT_EQ(slice_result_eager.logical_shape(), ttnn::Shape({32, 32})) << "Slice should produce shape [32, 32]";
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running slice operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = ttnn::full(shape, 5.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto slice_result_lazy = ttnn::slice(
+        input_lazy,
+        ttnn::SmallVector<uint32_t>{0, 16},
+        ttnn::SmallVector<uint32_t>{32, 48},
+        ttnn::SmallVector<uint32_t>{1, 1},
+        std::nullopt);
+    auto relu_result_lazy = ttnn::relu(slice_result_lazy);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(slice_result_lazy.lazy()->is_materialized()) << "Slice result should not be materialized";
+    ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    relu_result_lazy.evaluate();
+
+    ASSERT_TRUE(slice_result_lazy.lazy()->is_materialized()) << "Slice result should be materialized";
+    ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
+
+    auto lazy_result = relu_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished SliceOperationLazy test ====");
+}
+
+// Test: Pad operation in lazy mode
+TEST_F(LazyModeFixture, PadOperationLazy) {
+    log_info(tt::LogTest, "==== Starting PadOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running pad operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 32});
+    const auto input_eager = ttnn::full(shape, 3.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto pad_result_eager =
+        ttnn::pad(input_eager, ttnn::SmallVector<std::array<uint32_t, 2>>{{0, 0}, {0, 32}}, 0.0f, false, std::nullopt);
+    auto relu_result_eager = ttnn::relu(pad_result_eager);
+    auto eager_result = relu_result_eager.cpu();
+
+    ASSERT_EQ(pad_result_eager.logical_shape(), ttnn::Shape({32, 64})) << "Pad should produce shape [32, 64]";
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running pad operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = ttnn::full(shape, 3.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto pad_result_lazy =
+        ttnn::pad(input_lazy, ttnn::SmallVector<std::array<uint32_t, 2>>{{0, 0}, {0, 32}}, 0.0f, false, std::nullopt);
+    auto relu_result_lazy = ttnn::relu(pad_result_lazy);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(pad_result_lazy.lazy()->is_materialized()) << "Pad result should not be materialized";
+    ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    relu_result_lazy.evaluate();
+
+    ASSERT_TRUE(pad_result_lazy.lazy()->is_materialized()) << "Pad result should be materialized";
+    ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
+
+    auto lazy_result = relu_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished PadOperationLazy test ====");
+}
+
+// Test: Permute operation in lazy mode
+TEST_F(LazyModeFixture, PermuteOperationLazy) {
+    log_info(tt::LogTest, "==== Starting PermuteOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running permute operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 64});
+    const auto input_eager = ttnn::full(shape, 2.5f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto permute_result_eager = ttnn::permute(input_eager, ttnn::SmallVector<int64_t>{1, 0});
+    auto relu_result_eager = ttnn::relu(permute_result_eager);
+    auto eager_result = relu_result_eager.cpu();
+
+    ASSERT_EQ(permute_result_eager.logical_shape(), ttnn::Shape({64, 32})) << "Permute should produce shape [64, 32]";
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running permute operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = ttnn::full(shape, 2.5f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_);
+    auto permute_result_lazy = ttnn::permute(input_lazy, ttnn::SmallVector<int64_t>{1, 0});
+    auto relu_result_lazy = ttnn::relu(permute_result_lazy);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(permute_result_lazy.lazy()->is_materialized()) << "Permute result should not be materialized";
+    ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    relu_result_lazy.evaluate();
+
+    ASSERT_TRUE(permute_result_lazy.lazy()->is_materialized()) << "Permute result should be materialized";
+    ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
+
+    auto lazy_result = relu_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished PermuteOperationLazy test ====");
+}
+
+// Test: Tilize operation in lazy mode
+TEST_F(LazyModeFixture, TilizeOperationLazy) {
+    log_info(tt::LogTest, "==== Starting TilizeOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running tilize operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    ttnn::Shape shape({32, 64});
+    const auto input_eager = ttnn::full(shape, 4.0f, DataType::BFLOAT16, ttnn::ROW_MAJOR_LAYOUT, *device_);
+    auto tilize_result_eager = ttnn::tilize(input_eager, std::nullopt, std::nullopt, false);
+    auto relu_result_eager = ttnn::relu(tilize_result_eager);
+    auto eager_result = relu_result_eager.cpu();
+
+    ASSERT_EQ(tilize_result_eager.layout(), Layout::TILE) << "Tilize should produce TILE layout";
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running tilize operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = ttnn::full(shape, 4.0f, DataType::BFLOAT16, ttnn::ROW_MAJOR_LAYOUT, *device_);
+    auto tilize_result_lazy = ttnn::tilize(input_lazy, std::nullopt, std::nullopt, false);
+    auto relu_result_lazy = ttnn::relu(tilize_result_lazy);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_FALSE(tilize_result_lazy.lazy()->is_materialized()) << "Tilize result should not be materialized";
+    ASSERT_FALSE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should not be materialized";
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    relu_result_lazy.evaluate();
+
+    ASSERT_TRUE(tilize_result_lazy.lazy()->is_materialized()) << "Tilize result should be materialized";
+    ASSERT_TRUE(relu_result_lazy.lazy()->is_materialized()) << "Relu result should be materialized";
+
+    auto lazy_result = relu_result_lazy.cpu();
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_TRUE(ttnn::allclose<::bfloat16>(lazy_result, eager_result))
+        << "Lazy and eager execution results should match";
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished TilizeOperationLazy test ====");
+}
+
+// Test: Nonzero operation in lazy mode
+TEST_F(LazyModeFixture, NonzeroOperationLazy) {
+    log_info(tt::LogTest, "==== Starting NonzeroOperationLazy test ====");
+
+    // Run in eager mode
+    log_info(tt::LogTest, "Running nonzero operation in EAGER mode for baseline...");
+    lazy::disable();
+    ASSERT_FALSE(lazy::is_lazy_enabled()) << "Lazy mode should be disabled";
+
+    // nonzero requires 4D tensor with shape [1, 1, 1, X] and ROW_MAJOR layout
+    ttnn::Shape shape({1, 1, 1, 1024});
+    auto spec = TensorSpec(
+        shape,
+        TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(ttnn::ROW_MAJOR_LAYOUT),
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM)));
+    std::vector<bfloat16> data(shape.volume(), 0.0f);
+    // Create a pattern with some non-zero values
+    for (int i = 0; i < shape.volume(); i++) {
+        if (i % 10 == 0) {
+            data[i] = 1.0f;
+        }
+    }
+    const auto input_eager = Tensor::from_vector(data, spec, device_);
+    auto nonzero_results_eager = ttnn::nonzero(input_eager, std::nullopt);
+
+    log_info(tt::LogTest, "Nonzero returned {} tensors", nonzero_results_eager.size());
+    ASSERT_GT(nonzero_results_eager.size(), 0) << "Nonzero should return at least one tensor";
+
+    std::vector<Tensor> eager_results_cpu;
+    eager_results_cpu.reserve(nonzero_results_eager.size());
+    for (const auto& result : nonzero_results_eager) {
+        eager_results_cpu.push_back(result.cpu());
+    }
+
+    // Run in lazy mode
+    log_info(tt::LogTest, "Running nonzero operation in LAZY mode...");
+    lazy::enable();
+    ASSERT_TRUE(lazy::is_lazy_enabled()) << "Lazy mode should be enabled";
+
+    const auto input_lazy = Tensor::from_vector(data, spec, device_);
+    auto nonzero_results_lazy = ttnn::nonzero(input_lazy, std::nullopt);
+
+    ASSERT_TRUE(input_lazy.lazy()->is_materialized()) << "Input tensor should be materialized";
+    ASSERT_EQ(nonzero_results_lazy.size(), nonzero_results_eager.size())
+        << "Lazy and eager should return same number of tensors";
+
+    for (const auto& result : nonzero_results_lazy) {
+        ASSERT_FALSE(result.lazy()->is_materialized()) << "Nonzero result should not be materialized";
+    }
+
+    log_info(tt::LogTest, "Executing lazy graph...");
+    for (auto& result : nonzero_results_lazy) {
+        result.evaluate();
+    }
+
+    for (const auto& result : nonzero_results_lazy) {
+        ASSERT_TRUE(result.lazy()->is_materialized()) << "Nonzero result should be materialized";
+    }
+
+    std::vector<Tensor> lazy_results_cpu;
+    lazy_results_cpu.reserve(nonzero_results_lazy.size());
+    for (const auto& result : nonzero_results_lazy) {
+        lazy_results_cpu.push_back(result.cpu());
+    }
+
+    // Compare results
+    log_info(tt::LogTest, "Comparing lazy and eager results...");
+    ASSERT_EQ(lazy_results_cpu.size(), eager_results_cpu.size())
+        << "Lazy and eager results should have the same number of tensors";
+
+    for (size_t i = 0; i < lazy_results_cpu.size(); i++) {
+        ASSERT_EQ(lazy_results_cpu[i].logical_shape(), eager_results_cpu[i].logical_shape())
+            << "Lazy and eager results should have the same shape for tensor " << i;
+        ASSERT_TRUE(ttnn::allclose<::uint32_t>(lazy_results_cpu[i], eager_results_cpu[i]))
+            << "Lazy and eager execution results should match for tensor " << i;
+    }
+
+    log_info(tt::LogTest, "✓ Lazy and eager results match!");
+    log_info(tt::LogTest, "==== Finished NonzeroOperationLazy test ====");
 }
 
 }  // namespace test
