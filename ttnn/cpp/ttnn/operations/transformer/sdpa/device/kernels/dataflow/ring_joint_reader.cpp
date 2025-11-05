@@ -97,10 +97,10 @@ void kernel_main() {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
+        // Only the last iteration will append joint_K, joint_V to K, V.
         const uint32_t iter_k_num_chunks =
             ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
 
-        // Start at K chunk 0 if ring iter 0 is indexing into local K, V.
         const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
 
         const uint32_t iter_k_chunk_end = iter_k_chunk_start + iter_k_num_chunks;

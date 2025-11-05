@@ -94,7 +94,13 @@ void kernel_main() {
     uint32_t row_offset = 0;
     uint32_t tile_id_start = my_chip_id * input_tensor_Wt;
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        // Write out the local slice to both DRAM and forward and backward
+        /**
+         * Write out the local slice to forward and backward devices
+         * Note that it is not copied to local output buffer. This is because
+         * the fused op (RingJointAttention) reads from the input buffer directly
+         * when accessing the local slice. This is a performance optimization
+         * to remove startup latency from the fused op.
+         */
         uint32_t pages_read_in_row = input_tile_id_start % input_tensor_Wt;
         uint32_t row_offset = (input_tile_id_start / input_tensor_Wt) * output_tensor_Wt;
         uint32_t tiles_read = input_tile_id_start;
@@ -124,16 +130,6 @@ void kernel_main() {
                 if (num_pages_to_read == 2) {
                     uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
 
-                    // if constexpr (direction == 1) {
-                    //     // Backwards does local write
-                    //     noc_async_write(
-                    //         l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
-                    //     noc_async_write(
-                    //         l1_read_addr + output_page_size,
-                    //         output_addrgens[input_idx].get_noc_addr(second_tile_id),
-                    //         output_page_size);
-                    // }
-
                     if constexpr (num_targets_in_direction) {
                         scatter_fabric_write_unidir(
                             tile_id,
@@ -152,10 +148,7 @@ void kernel_main() {
                     }
                 } else {
                     ASSERT(num_pages_to_read == 1);
-                    // if constexpr (direction == 1) {
-                    //     noc_async_write(
-                    //         l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
-                    // }
+
                     if constexpr (num_targets_in_direction) {
                         // Has valid targets to send to
                         fabric_write_unidir(
@@ -183,7 +176,12 @@ void kernel_main() {
     noc_async_write_barrier();
     // increment locally
     if constexpr (fuse_op && direction == 1) {
-        // Synchronize and signal that the local tensor slice is available
+        /**
+         * Synchronize and signal that the local tensor slice is available
+         *
+         * While the fused op will not wait on this "local write done" increment,
+         * the fused op signaler will account for it in future waits.
+         */
         op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
     }
 
