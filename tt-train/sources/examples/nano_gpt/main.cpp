@@ -839,13 +839,6 @@ int main(int argc, char **argv) {
                 loss_float = get_loss_value(loss);
                 ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
 
-                if (device_config.enable_tp) {
-                    auto ones_grad = ttnn::ones_like(loss->get_value());
-                    ones_grad = ttnn::multiply(
-                        ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
-                    loss->set_grad(ones_grad);
-                }
-
                 loss->backward();
             } else {
                 output->backward();
