@@ -254,21 +254,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow);
-
-// is_fp32_dest_acc_en == false
-template <>
-sfpi_inline sfpi::vFloat _sfpu_binary_power_<false>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_21f_<false>(base, pow);
-}
-
-// is_fp32_dest_acc_en == true
-template <>
-sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_61f_(base, pow);
-}
-
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     if constexpr (BINOP == BinaryOp::POW) {
@@ -278,7 +263,7 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
             sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
             sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-            sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
+            sfpi::vFloat result = _sfpu_binary_power_61f_(in0, in1);
 
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
             sfpi::dst_reg++;
