@@ -2003,4 +2003,55 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
         connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
 }
 
+// Fused Unicast Write + Atomic Inc Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint16_t wrap,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush});
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id,
+    uint64_t semaphore_noc_address,
+    uint16_t val,
+    uint16_t wrap,
+    uint32_t offset = 0,
+    bool flush = true) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
+
+    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+        connection_manager,
+        route_id,
+        src_addr,
+        page_size,
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{noc_address, semaphore_noc_address, val, wrap, flush});
+}
+
 }  // namespace tt::tt_fabric::mesh::experimental

@@ -261,3 +261,40 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
+
+# ---- Test: fused_atomic_inc_addrgen (standalone test executable) ----
+add_executable(
+    test_fused_atomic_inc_addrgen
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/fused_atomic_inc_addrgen/test_fused_atomic_inc_addrgen_main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/unicast/fused_atomic_inc_addrgen/run_fused_atomic_inc_once_addrgen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/collectives/common/perf_helpers.cpp
+)
+
+target_link_libraries(
+    test_fused_atomic_inc_addrgen
+    PRIVATE
+        tt_metal
+        gtest
+        test_common_libs
+)
+
+add_dependencies(test_fused_atomic_inc_addrgen tt_metal)
+
+target_include_directories(
+    test_fused_atomic_inc_addrgen
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
+        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
+)
+
+set_target_properties(
+    test_fused_atomic_inc_addrgen
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
