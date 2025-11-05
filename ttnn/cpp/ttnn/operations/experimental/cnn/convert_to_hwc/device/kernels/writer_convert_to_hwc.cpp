@@ -20,8 +20,8 @@ FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_a
 
 
 void kernel_main() {
-    constexpr uint32_t cb_full_input = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_in = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_in_batch = get_compile_time_arg_val(1);
     constexpr uint32_t cb_in_transpose = get_compile_time_arg_val(2);
     constexpr uint32_t cb_out = get_compile_time_arg_val(3);
     constexpr uint32_t channels = get_compile_time_arg_val(4);  // stick size
@@ -37,7 +37,7 @@ void kernel_main() {
 
     constexpr uint32_t channel_size = channels * element_size_bytes;
 
-    const uint32_t dram_base_read_addr = is_input_in_dram ? get_arg_val<uint32_t>(0) : get_read_ptr(cb_full_input);
+    const uint32_t dram_base_read_addr = is_input_in_dram ? get_arg_val<uint32_t>(0) : get_read_ptr(cb_in);
     const uint32_t num_segments = get_arg_val<uint32_t>(1);
 
     ASSERT(num_segments == input_num_blocks);
@@ -56,7 +56,7 @@ void kernel_main() {
 
     for (uint32_t block_id = 0; block_id < input_num_blocks; block_id++) {
         if constexpr (is_reader) {
-            cb_reserve_back(cb_in, input_block_size_sticks_per_core);
+            cb_reserve_back(cb_in_batch, input_block_size_sticks_per_core);
 
             uint32_t src_x = args[args_idx++];
             uint32_t src_y = args[args_idx++];
@@ -65,29 +65,21 @@ void kernel_main() {
             uint32_t size = args[args_idx++];
             uint32_t bank_id = args[args_idx++];  // Always present (0 for L1, actual bank_id for DRAM)
 
-            if constexpr (is_input_in_dram) {
-                DPRINT << "Using DRAM bank_id=" << bank_id << ENDL();
-            } else {
-                DPRINT << "Using L1 transfer, bank_id=" << bank_id << " (ignored)" << ENDL();
-            }
-
             uint64_t src_addr_base;
             if constexpr (is_input_in_dram) {
                 // Use bank-based addressing for DRAM reads
                 src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
-                DPRINT << "Using DRAM bank_id=" << bank_id << " base_addr=0x" << std::hex << src_addr_base << std::dec
-                       << ENDL();
             } else {
                 // Use NOC coordinates for L1 reads
-                src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_full_input));
-                DPRINT << "Using L1 NOC addr src_x=" << src_x << " src_y=" << src_y << ENDL();
+                src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_in));
             }
 
             uint32_t block_size_bytes = (input_block_size_sticks_per_core * channel_size);
-            noc_async_read(src_addr_base + src_offset, get_write_ptr(cb_in) + (dst_offset % block_size_bytes), size);
+            noc_async_read(
+                src_addr_base + src_offset, get_write_ptr(cb_in_batch) + (dst_offset % block_size_bytes), size);
             noc_async_read_barrier();
 
-            cb_push_back(cb_in, input_block_size_sticks_per_core);
+            cb_push_back(cb_in_batch, input_block_size_sticks_per_core);
         }
 
         for (uint32_t i = 0; i < num_full_tiles; i++) {
