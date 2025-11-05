@@ -183,6 +183,33 @@ protected:
     }
 };
 
+class Fabric1DTensixUdmFixture : public BaseFabricFixture {
+private:
+    inline static bool should_skip_ = false;
+
+protected:
+    static void SetUpTestSuite() {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+            should_skip_ = true;
+            return;
+        }
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::UDM);
+    }
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Fabric1DTensixUdmFixture tests are not supported on Galaxy systems";
+        }
+        BaseFabricFixture::SetUp();
+    }
+};
+
 class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }

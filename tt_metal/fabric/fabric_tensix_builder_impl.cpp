@@ -495,16 +495,19 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args(tt:
     // Get stream IDs based on mode
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
-    const auto worker_channel = is_2d_fabric ? direction_ : 0;
     const auto& tensix_config = fabric_context.get_tensix_config();
-    const auto worker_stream_id =
-        tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel, core_id_);
 
     std::vector<uint32_t> fabric_stream_ids;
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        const auto worker_channel = 0;
+        const auto worker_stream_id =
+            tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel, core_id_);
         // UDM mode: MUX only has 1 worker channel
         fabric_stream_ids = {worker_stream_id};
     } else {
+        const auto worker_channel = is_2d_fabric ? direction_ : 0;
+        const auto worker_stream_id =
+            tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel, core_id_);
         // MUX mode: topology-based channels (includes fabric routers)
         switch (topology) {
             case tt::tt_fabric::Topology::Linear:
