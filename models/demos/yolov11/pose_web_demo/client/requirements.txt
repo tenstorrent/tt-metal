@@ -1,0 +1,8 @@
+streamlit==1.28.1
+streamlit-webrtc==0.47.1
+opencv-python==4.8.1.78
+numpy==1.24.3
+requests==2.31.0
+orjson==3.9.10
+av==10.0.0
+Pillow==10.1.0
