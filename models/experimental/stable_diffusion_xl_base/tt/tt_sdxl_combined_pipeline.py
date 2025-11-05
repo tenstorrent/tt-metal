@@ -51,9 +51,11 @@ class TtSDXLCombinedPipeline:
     then the refiner model (TtSDXLImg2ImgPipeline) takes over to complete the denoising and decode the final image.
     Both models share the same scheduler instance for coordinated timestep management.
 
+    The combined pipeline ALWAYS creates and manages the shared scheduler internally,
+    ensuring proper coordination between base and refiner models.
+
     Usage:
-        # Simple factory method (recommended - handles scheduler sharing automatically):
-        combined = TtSDXLCombinedPipeline.create(
+        combined = TtSDXLCombinedPipeline(
             ttnn_device=mesh_device,
             torch_base_pipeline=base,
             torch_refiner_pipeline=refiner,
@@ -61,16 +63,10 @@ class TtSDXLCombinedPipeline:
             refiner_config=TtSDXLImg2ImgPipelineConfig(...),
             denoising_split=0.8
         )
-
-        # Or manual creation (more control):
-        tt_base = TtSDXLPipeline(...)
-        tt_refiner = TtSDXLImg2ImgPipeline(...)
-        combined = TtSDXLCombinedPipeline(ttnn_device, tt_base, tt_refiner, config)
     """
 
-    @classmethod
-    def create(
-        cls,
+    def __init__(
+        self,
         ttnn_device,
         torch_base_pipeline,
         torch_refiner_pipeline,
@@ -79,10 +75,10 @@ class TtSDXLCombinedPipeline:
         denoising_split: float = 0.8,
     ):
         """
-        Factory method to create a combined pipeline with automatic scheduler sharing.
+        Create a combined pipeline with automatic scheduler sharing.
 
-        This method handles all the complexity of creating a shared scheduler and passing
-        it to both base and refiner pipelines, ensuring optimal memory usage.
+        The combined pipeline creates a single shared scheduler and uses it for both
+        base and refiner pipelines, ensuring optimal memory usage and proper coordination.
 
         Args:
             ttnn_device: The TTNN device
@@ -91,15 +87,24 @@ class TtSDXLCombinedPipeline:
             base_config: Configuration for base pipeline
             refiner_config: Configuration for refiner pipeline
             denoising_split: Fraction of denoising done by base (0.0-1.0), default 0.8
-
-        Returns:
-            TtSDXLCombinedPipeline instance with shared scheduler
         """
         logger.info("Creating combined pipeline with shared scheduler...")
 
+        self.ttnn_device = ttnn_device
+
+        # Create combined pipeline config
+        self.config = TtSDXLCombinedPipelineConfig(
+            base_config=base_config,
+            refiner_config=refiner_config,
+            denoising_split=denoising_split,
+        )
+
+        self.batch_size = list(ttnn_device.shape)[1] if base_config.use_cfg_parallel else ttnn_device.get_num_devices()
+
         # Create a single shared scheduler based on base pipeline's scheduler config
+        logger.info("Creating shared scheduler...")
         with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
-            shared_scheduler = TtEulerDiscreteScheduler(
+            self.shared_scheduler = TtEulerDiscreteScheduler(
                 ttnn_device,
                 torch_base_pipeline.scheduler.config.num_train_timesteps,
                 torch_base_pipeline.scheduler.config.beta_start,
@@ -123,63 +128,27 @@ class TtSDXLCombinedPipeline:
 
         # Create base pipeline with shared scheduler
         logger.info("Creating base pipeline with shared scheduler...")
-        tt_base = TtSDXLPipeline(
+        self.base_pipeline = TtSDXLPipeline(
             ttnn_device=ttnn_device,
             torch_pipeline=torch_base_pipeline,
             pipeline_config=base_config,
-            tt_scheduler=shared_scheduler,
+            tt_scheduler=self.shared_scheduler,
         )
 
-        # Create refiner pipeline with shared scheduler
-        logger.info("Creating refiner pipeline with shared scheduler...")
-        tt_refiner = TtSDXLImg2ImgPipeline(
-            ttnn_device=ttnn_device,
-            torch_pipeline=torch_refiner_pipeline,
-            pipeline_config=refiner_config,
-            tt_scheduler=shared_scheduler,
-        )
-
-        # Create combined pipeline config
-        combined_config = TtSDXLCombinedPipelineConfig(
-            base_config=base_config,
-            refiner_config=refiner_config,
-            denoising_split=denoising_split,
-        )
-
-        # Create and return the combined pipeline
-        return cls(
-            ttnn_device=ttnn_device,
-            tt_base_pipeline=tt_base,
-            tt_refiner_pipeline=tt_refiner,
-            config=combined_config,
-        )
-
-    def __init__(self, ttnn_device, tt_base_pipeline, tt_refiner_pipeline, config: TtSDXLCombinedPipelineConfig):
-        assert isinstance(tt_base_pipeline, TtSDXLPipeline), "tt_base_pipeline must be an instance of TtSDXLPipeline"
-        assert isinstance(
-            tt_refiner_pipeline, TtSDXLImg2ImgPipeline
-        ), "tt_refiner_pipeline must be an instance of TtSDXLImg2ImgPipeline"
-
-        self.ttnn_device = ttnn_device
-        self.config = config
-        self.batch_size = (
-            list(ttnn_device.shape)[1] if config.base_config.use_cfg_parallel else ttnn_device.get_num_devices()
-        )
-
-        logger.info("Initializing base pipeline...")
-        self.base_pipeline = tt_base_pipeline
-
-        if config.use_refiner:
-            logger.info("Initializing refiner pipeline...")
-            self.refiner_pipeline = tt_refiner_pipeline
+        # Create refiner pipeline with shared scheduler if needed
+        if self.config.use_refiner:
+            logger.info("Creating refiner pipeline with shared scheduler...")
+            self.refiner_pipeline = TtSDXLImg2ImgPipeline(
+                ttnn_device=ttnn_device,
+                torch_pipeline=torch_refiner_pipeline,
+                pipeline_config=refiner_config,
+                tt_scheduler=self.shared_scheduler,
+            )
 
             # When using refiner, disable VAE on base pipeline since refiner will handle final decoding
             if self.base_pipeline.pipeline_config.vae_on_device:
                 logger.info("Disabling VAE on base pipeline since refiner will handle final decoding")
                 self.base_pipeline.pipeline_config.vae_on_device = False
-            # Share the scheduler instance between base and refiner
-            self.refiner_pipeline.tt_scheduler = self.base_pipeline.tt_scheduler
-            self.refiner_pipeline.torch_pipeline.scheduler = self.base_pipeline.tt_scheduler
         else:
             self.refiner_pipeline = None
 
@@ -209,6 +178,8 @@ class TtSDXLCombinedPipeline:
         _, _, _ = self.base_pipeline.generate_input_tensors(
             all_prompt_embeds_torch=dummy_embeds,
             torch_add_text_embeds=dummy_text_embeds,
+            fixed_seed_for_batch=True,
+            start_latent_seed=0,
         )
 
         # 3. Compile base image processing
@@ -219,12 +190,14 @@ class TtSDXLCombinedPipeline:
         if self.config.use_refiner:
             logger.info("Allocating device tensors for refiner pipeline...")
             # Create dummy image tensor for img2img pipeline
-            dummy_image = torch.randn(self.batch_size, 3, 1024, 1024)
+            dummy_latents = torch.randn(self.batch_size, 4, 128, 128)
 
             _, _, _ = self.refiner_pipeline.generate_input_tensors(
                 all_prompt_embeds_torch=dummy_embeds,
                 torch_add_text_embeds=dummy_text_embeds,
-                torch_image=dummy_image,
+                input_latents=dummy_latents,
+                fixed_seed_for_batch=True,
+                start_latent_seed=0,
             )
 
             logger.info("Compiling refiner pipeline image processing...")
@@ -397,6 +370,8 @@ class TtSDXLCombinedPipeline:
                 all_prompt_embeds_torch=all_prompt_embeds_torch,
                 torch_add_text_embeds=torch_add_text_embeds,
                 input_latents=base_latents,
+                fixed_seed_for_batch=True,
+                start_latent_seed=0,
                 timesteps=timesteps,
                 sigmas=sigmas,
             )

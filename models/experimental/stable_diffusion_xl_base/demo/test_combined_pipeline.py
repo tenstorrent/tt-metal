@@ -27,9 +27,9 @@ def test_refiner(mesh_device):
         use_safetensors=True,
     )
 
-    # Create combined pipeline using factory method
+    # Create combined pipeline
     # This automatically creates base and refiner pipelines with a shared scheduler
-    combined = TtSDXLCombinedPipeline.create(
+    combined = TtSDXLCombinedPipeline(
         ttnn_device=mesh_device,
         torch_base_pipeline=base,
         torch_refiner_pipeline=refiner,
