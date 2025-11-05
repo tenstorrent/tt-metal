@@ -62,7 +62,37 @@ streamlit run yolov11_pose.py --server.port 8501 --server.address 0.0.0.0 -- --s
 
 **Browser Compatibility:** Use Chrome or Firefox for best WebRTC support. Allow camera permissions when prompted.
 
-### 3. Alternative Manual Run
+**HTTPS Requirement:** Camera access requires HTTPS. Use `./run_streamlit_https.sh` or ngrok for secure access.
+
+### 3. HTTPS Setup for Camera Access
+
+Modern browsers require HTTPS for camera access. Choose one of these options:
+
+**Option A: Self-signed HTTPS (Recommended for local development)**
+```bash
+# Run with auto-generated SSL certificates
+./run_streamlit_https.sh
+```
+- Automatically generates self-signed certificates
+- Accept the security warning in your browser
+- Access at: `https://localhost:8501`
+
+**Option B: Ngrok (Easy HTTPS tunneling)**
+```bash
+# Install ngrok first: https://ngrok.com/download
+ngrok http 8501
+
+# Then run normally (ngrok provides HTTPS URL)
+./run_streamlit.sh
+```
+
+**Option C: Chrome Development Mode**
+```bash
+# Run Chrome with HTTP camera permission
+google-chrome --allow-http-screen-capture --unsafely-treat-insecure-origin-as-secure=http://localhost:8501
+```
+
+### 4. Alternative Manual Run
 
 **Server:**
 ```bash
@@ -129,7 +159,8 @@ Each keypoint includes (x, y, visibility) values.
 6. **Performance issues**: Reduce frame processing rate in client code
 7. **Network timeout**: Check network connectivity between client and server machines
 8. **WebRTC/camera errors**: Try Chrome browser, refresh page, or check camera permissions
-9. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
+9. **"navigator.mediaDevices is undefined"**: Page not loaded securely - use HTTPS (see HTTPS Setup section)
+10. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
 
 ## Comparison with Object Detection Demo
 

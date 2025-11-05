@@ -248,6 +248,39 @@ def main():
     def create_video_processor():
         return VideoProcessor(server_url=args.server_url)
 
+    # Check if running on HTTPS (required for camera access)
+    import streamlit.components.v1 as components
+
+    # Show HTTPS requirement warning
+    https_warning = components.html(
+        """
+    <div id="https-warning" style="display: none;">
+        <div style="background: #ff9800; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;">
+            ⚠️ Camera access requires HTTPS. Please use one of these options:
+        </div>
+    </div>
+    <script>
+    if (window.location.protocol !== 'https:' &&
+        window.location.hostname !== 'localhost' &&
+        window.location.hostname !== '127.0.0.1' &&
+        !window.location.hostname.startsWith('192.168.') &&
+        !window.location.hostname.startsWith('10.') &&
+        !window.location.hostname.startsWith('172.')) {
+        document.getElementById('https-warning').style.display = 'block';
+    }
+    if (navigator.mediaDevices === undefined) {
+        document.getElementById('https-warning').innerHTML =
+            '<div style="background: #f44336; color: white; padding: 10px; border-radius: 5px; margin: 10px 0;">' +
+            '❌ navigator.mediaDevices is undefined. Camera access not supported in this browser/environment.' +
+            '</div>';
+        document.getElementById('https-warning').style.display = 'block';
+    }
+    </script>
+    """
+    )
+
+    st.markdown("---")
+
     # Start webcam stream with error handling
     try:
         ctx = webrtc_streamer(
