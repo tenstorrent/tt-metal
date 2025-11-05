@@ -6,6 +6,7 @@ import ttnn
 from dataclasses import replace
 from models.tt_cnn.tt.builder import (
     Conv2dConfiguration,
+    MaxPool2dConfiguration,
     AutoShardedStrategyConfiguration,
     HeightSliceStrategyConfiguration,
     WidthSliceStrategyConfiguration,
@@ -59,6 +60,9 @@ class ModelOptimisations:
             "config_tensors_in_dram": True,
         }
 
+        # Default overrides applied to all MaxPool2d layers
+        self.default_maxpool_overrides = {}
+
         self.layer_overrides = {}
 
     # =========================================================================
@@ -93,13 +97,33 @@ class ModelOptimisations:
 
         return replace(base_config, **overrides)
 
-    def register_layer_override(self, conv_path: str, **overrides):
+    def apply_maxpool_overrides(
+        self, base_config: MaxPool2dConfiguration, maxpool_path: str = None
+    ) -> MaxPool2dConfiguration:
         """
-        Register layer-specific overrides for a convolution layer.
+        Apply configuration overrides to a base MaxPool2dConfiguration.
 
         Args:
-            conv_path: String path identifying the layer
-            **overrides: Keyword arguments for Conv2dConfiguration fields
+            base_config: Base MaxPool2dConfiguration from preprocessing
+            maxpool_path: String path identifying the layer (e.g., "stem.maxpool")
+
+        Returns:
+            Updated MaxPool2dConfiguration with overrides applied
+        """
+        overrides = self.default_maxpool_overrides.copy()
+
+        if maxpool_path is not None and maxpool_path in self.layer_overrides:
+            overrides.update(self.layer_overrides[maxpool_path])
+
+        return replace(base_config, **overrides)
+
+    def register_layer_override(self, layer_path: str, **overrides):
+        """
+        Register layer-specific overrides for a layer (convolution or maxpool).
+
+        Args:
+            layer_path: String path identifying the layer (e.g., "stem.conv1", "stem.maxpool")
+            **overrides: Keyword arguments for layer configuration fields
 
         Example:
             config.register_layer_override(
@@ -107,10 +131,15 @@ class ModelOptimisations:
                 sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=64),
                 slice_strategy=WidthSliceStrategyConfiguration(num_slices=4)
             )
+            config.register_layer_override(
+                "stem.maxpool",
+                slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
+                dtype=ttnn.bfloat8_b
+            )
         """
-        if conv_path not in self.layer_overrides:
-            self.layer_overrides[conv_path] = {}
-        self.layer_overrides[conv_path].update(overrides)
+        if layer_path not in self.layer_overrides:
+            self.layer_overrides[layer_path] = {}
+        self.layer_overrides[layer_path].update(overrides)
 
     def get_conv_output_dtype(self):
         """Get the default output dtype for convolutions."""
@@ -171,6 +200,12 @@ class ModelOptimisations:
         self._register_multiple_layers(
             ["stem.conv2", "stem.conv3"],
             slice_strategy=WidthSliceStrategyConfiguration(num_slices=0),
+        )
+        self.register_layer_override(
+            "stem.maxpool",
+            slice_strategy=ChannelSliceStrategyConfiguration(num_slices=2),
+            dtype=ttnn.bfloat8_b,
+            output_layout=ttnn.TILE_LAYOUT,
         )
 
     def _setup_res2_stage(self):

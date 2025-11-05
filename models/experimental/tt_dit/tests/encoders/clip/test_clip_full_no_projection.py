@@ -111,11 +111,11 @@ def test_clip_encoder(
     )
 
     tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config, eos_token_id)
-    tt_clip.load_state_dict(hf_model.state_dict())
+    tt_clip.load_torch_state_dict(hf_model.state_dict())
 
     # times TT model inference only
     tt_start_time = time.time()
-    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, encoder_submesh, with_projection=False)
+    tt_sequence_output, tt_pooled_output = tt_clip(tt_prompt, encoder_submesh)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
@@ -126,22 +126,22 @@ def test_clip_encoder(
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
-    hf_sequence_output = hf_output.last_hidden_state  # after final layer norm
-    hf_projected_output = hf_output.pooler_output  # projected/pooled output
+    hf_sequence_output = hf_output.hidden_states[-1]
+    hf_pooled_output = hf_output.pooler_output
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
     tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-1])[0])
-    tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
+    tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0])
 
     logger.info(f"TT model execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF model execution time: {hf_execution_time:.4f} seconds")
 
     assert hf_sequence_output.shape == tt_sequence_output_torch.shape
-    assert hf_projected_output.shape == tt_projected_output_torch.shape
+    assert hf_pooled_output.shape == tt_pooled_output_torch.shape
 
     assert_quality(hf_sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
-    assert_quality(hf_projected_output, tt_projected_output_torch, pcc=expected_pcc)
+    assert_quality(hf_pooled_output, tt_pooled_output_torch, pcc=expected_pcc)
 
 
 if __name__ == "__main__":

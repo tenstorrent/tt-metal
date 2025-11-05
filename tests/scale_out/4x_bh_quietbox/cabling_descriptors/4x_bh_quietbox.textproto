@@ -1,0 +1,140 @@
+node_descriptors {
+  key: "1x_bh_quietbox"
+  value {
+    motherboard: "SIENAD8-2L2T"
+    boards {
+      board { tray_id: 1 board_type: "P150" }
+      board { tray_id: 2 board_type: "P150" }
+      board { tray_id: 3 board_type: "P150" }
+      board { tray_id: 4 board_type: "P150" }
+    }
+    port_type_connections {
+      key: "QSFP_DD"
+      value {
+        connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
+        connections { port_a { tray_id: 1 port_id: 3 } port_b { tray_id: 2 port_id: 3 } }
+        connections { port_a { tray_id: 2 port_id: 2 } port_b { tray_id: 3 port_id: 2 } }
+        connections { port_a { tray_id: 3 port_id: 3 } port_b { tray_id: 4 port_id: 3 } }
+      }
+    }
+  }
+}
+
+graph_templates {
+  key: "4x_bh_quietbox"
+  value {
+    children {
+      name: "qb-01"
+      node_ref { node_descriptor: "1x_bh_quietbox" }
+    }
+    children {
+      name: "qb-03"
+      node_ref { node_descriptor: "1x_bh_quietbox" }
+    }
+    children {
+      name: "qb-02"
+      node_ref { node_descriptor: "1x_bh_quietbox" }
+    }
+    children {
+      name: "qb-04"
+      node_ref { node_descriptor: "1x_bh_quietbox" }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        # QB-1 to QB-2 connections on Port 1
+        connections {
+          port_a { path: ["qb-01"] tray_id: 1 port_id: 1 }
+          port_b { path: ["qb-02"] tray_id: 1 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["qb-01"] tray_id: 2 port_id: 1 }
+          port_b { path: ["qb-02"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["qb-01"] tray_id: 3 port_id: 1 }
+          port_b { path: ["qb-02"] tray_id: 3 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["qb-01"] tray_id: 4 port_id: 1 }
+          port_b { path: ["qb-02"] tray_id: 4 port_id: 1 }
+        }
+
+        # QB-1 to QB-3 connections on Port 4
+        connections {
+          port_a { path: ["qb-01"] tray_id: 1 port_id: 4 }
+          port_b { path: ["qb-03"] tray_id: 1 port_id: 4 }
+        }
+        connections {
+          port_a { path: ["qb-01"] tray_id: 2 port_id: 4 }
+          port_b { path: ["qb-03"] tray_id: 2 port_id: 4 }
+        }
+        connections {
+          port_a { path: ["qb-01"] tray_id: 3 port_id: 4 }
+          port_b { path: ["qb-03"] tray_id: 3 port_id: 4 }
+        }
+        connections {
+          port_a { path: ["qb-01"] tray_id: 4 port_id: 4 }
+          port_b { path: ["qb-03"] tray_id: 4 port_id: 4 }
+        }
+
+        # QB-2 to QB-4 connections on Port 4
+        connections {
+          port_a { path: ["qb-02"] tray_id: 1 port_id: 4 }
+          port_b { path: ["qb-04"] tray_id: 1 port_id: 4 }
+        }
+        connections {
+          port_a { path: ["qb-02"] tray_id: 2 port_id: 4 }
+          port_b { path: ["qb-04"] tray_id: 2 port_id: 4 }
+        }
+        connections {
+          port_a { path: ["qb-02"] tray_id: 3 port_id: 4 }
+          port_b { path: ["qb-04"] tray_id: 3 port_id: 4 }
+        }
+        connections {
+          port_a { path: ["qb-02"] tray_id: 4 port_id: 4 }
+          port_b { path: ["qb-04"] tray_id: 4 port_id: 4 }
+        }
+
+        # QB-3 to QB-4 connections on Port 1
+        connections {
+          port_a { path: ["qb-03"] tray_id: 1 port_id: 1 }
+          port_b { path: ["qb-04"] tray_id: 1 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["qb-03"] tray_id: 2 port_id: 1 }
+          port_b { path: ["qb-04"] tray_id: 2 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["qb-03"] tray_id: 3 port_id: 1 }
+          port_b { path: ["qb-04"] tray_id: 3 port_id: 1 }
+        }
+        connections {
+          port_a { path: ["qb-03"] tray_id: 4 port_id: 1 }
+          port_b { path: ["qb-04"] tray_id: 4 port_id: 1 }
+        }
+      }
+    }
+  }
+}
+
+# Root instance
+root_instance {
+  template_name: "4x_bh_quietbox"
+  child_mappings {
+    key: "qb-01"
+    value { host_id: 0 }
+  }
+  child_mappings {
+    key: "qb-02"
+    value { host_id: 1 }
+  }
+  child_mappings {
+    key: "qb-03"
+    value { host_id: 2 }
+  }
+  child_mappings {
+    key: "qb-04"
+    value { host_id: 3 }
+  }
+}
