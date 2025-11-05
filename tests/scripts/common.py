@@ -284,9 +284,10 @@ def get_updated_device_params(device_params):
         # Only when both fabric_config and fabric_tensix_config are set, we can use ROW dispatch, otherwise force to use COL dispatch
         fabric_config = new_device_params.get("fabric_config", None)
         if not (fabric_config and fabric_tensix_config):
+            # When not both are set, force COL dispatch
             if dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
                 logger.warning(
-                    "when fabric or fabric tensix extension disabled, blackhole arch does not support DispatchCoreAxis.ROW, using DispatchCoreAxis.COL instead."
+                    "ROW dispatch requires both fabric and tensix config, using DispatchCoreAxis.COL instead."
                 )
                 dispatch_core_axis = ttnn.DispatchCoreAxis.COL
 
