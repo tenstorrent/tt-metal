@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from loguru import logger
-from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from models.common.utility_functions import comp_allclose_and_pcc
 
 
 def run_fold_test(device, input_shape, output_size, kernel_size, dilation, padding, stride, dtype):
