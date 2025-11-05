@@ -801,7 +801,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
-            ttnn::DRAM_MEMORY_CONFIG));
+            ttnn::L1_MEMORY_CONFIG));
     const auto weight_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 1568, 64},
         tt::tt_metal::TensorLayout(
@@ -853,8 +853,8 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
         // Ensure some real usage is reported
         EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 10000);
-        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 10000);
-        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 10000);
+        EXPECT_GT(query.resource_usage.l1_buffers_peak_per_core, 200000);
+        EXPECT_GT(query.resource_usage.peak_memory_usage_per_core, 400000);
         ASSERT_TRUE(query.output_tensor_spec.has_value());
         EXPECT_EQ(query.output_tensor_spec.value(), output_spec);
     }
