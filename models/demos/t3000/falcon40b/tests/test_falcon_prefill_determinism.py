@@ -252,6 +252,7 @@ def run_test_falcon_prefill_end_to_end_determinism(
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_falcon_prefill_end_to_end_determinism(
     generate_weights,
     enable_program_cache,

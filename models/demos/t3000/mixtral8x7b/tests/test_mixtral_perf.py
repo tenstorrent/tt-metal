@@ -41,6 +41,7 @@ class Emb(torch.nn.Module):
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_model_perf(
     mesh_device,
     generation_start_pos,
@@ -151,6 +152,7 @@ def test_mixtral_model_perf(
         # "prefill_32k",  # FIXME out of memory (decode)
     ],
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_model_with_prefill_perf(
     mesh_device,
     prefill_seqlen,

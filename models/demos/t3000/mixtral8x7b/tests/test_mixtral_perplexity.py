@@ -259,6 +259,7 @@ def run_test_perplexity(
         # "decode_4096",
     ],
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_perplexity(
     mesh_device,
     reset_seeds,

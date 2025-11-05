@@ -56,6 +56,7 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
     model_version,
     seq_len,

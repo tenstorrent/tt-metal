@@ -263,6 +263,7 @@ def test_falcon_causal_lm(
 @pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
 @pytest.mark.parametrize("num_loops", [50])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 4829184}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_t3k_falcon_causal_lm_with_trace(
     mesh_device,
     model_version,
