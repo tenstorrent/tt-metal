@@ -244,30 +244,16 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     uint32_t input_block_size_bytes = TILE_HEIGHT * input_element_size_bytes;
     // Create Kernels
     // reader
-    std::vector<uint32_t> embedding_compile_time_args;
-    if (use_chunked_processing) {
-        // Chunked kernel expects tiles_per_chunk and num_chunks
-        embedding_compile_time_args = {
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)src1_cb_index,
-            (std::uint32_t)src2_cb_index,
-            (std::uint32_t)input_page_size,
-            (std::uint32_t)weight_page_size,
-            (std::uint32_t)weight_block_size,
-            (std::uint32_t)tiles_per_chunk,
-            (std::uint32_t)input_block_size_bytes,
-            (std::uint32_t)num_chunks};
-    } else {
-        embedding_compile_time_args = {
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)src1_cb_index,
-            (std::uint32_t)src2_cb_index,
-            (std::uint32_t)input_page_size,
-            (std::uint32_t)weight_page_size,
-            (std::uint32_t)weight_block_size,
-            (std::uint32_t)tiles_per_chunk,
-            (std::uint32_t)input_block_size_bytes};
-    }
+    std::vector<uint32_t> embedding_compile_time_args = {
+        (std::uint32_t)src0_cb_index,
+        (std::uint32_t)src1_cb_index,
+        (std::uint32_t)src2_cb_index,
+        (std::uint32_t)input_page_size,
+        (std::uint32_t)weight_page_size,
+        (std::uint32_t)weight_block_size,
+        (std::uint32_t)tiles_per_chunk,
+        (std::uint32_t)input_block_size_bytes,
+        (std::uint32_t)num_chunks};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -275,15 +261,9 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
-    // Use chunked dataflow kernel only if chunking is needed
-    std::string dataflow_kernel_path =
-        use_chunked_processing
-            ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize_chunked.cpp"
-            : "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp";
-
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        dataflow_kernel_path,
+        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
