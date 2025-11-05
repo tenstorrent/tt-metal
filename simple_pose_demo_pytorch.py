@@ -36,7 +36,7 @@ def run_pytorch_pose_demo(image_path):
     # Convert to tensor
     img_tensor = torch.from_numpy(padded_img).float().permute(2, 0, 1) / 255.0
 
-    # Load PyTorch model
+    # Load PyTorch model (working version)
     logger.info("Loading PyTorch pose model...")
     torch_model = YoloV11Pose()
     weights_path = "models/demos/yolov11/reference/yolov11_pose_pretrained_correct.pth"
@@ -53,8 +53,13 @@ def run_pytorch_pose_demo(image_path):
         torch_input = img_tensor.unsqueeze(0)  # Add batch dimension
         torch_output = torch_model(torch_input)
 
-    logger.info(f"PyTorch output shape: {torch_output.shape}")
-    logger.info(f"PyTorch output range: [{torch_output.min():.3f}, {torch_output.max():.3f}]")
+        logger.info(f"PyTorch output shape: {torch_output.shape}")
+        logger.info(f"PyTorch output range: [{torch_output.min():.3f}, {torch_output.max():.3f}]")
+
+        # Debug: Check raw PyTorch output values
+        print(f"Raw PyTorch output shape: {torch_output.shape}")
+        print(f"Raw PyTorch output sample bbox: {torch_output[0, :5, 0]}")  # First 5 bbox values
+        print(f"Raw PyTorch output sample kpts: {torch_output[0, 64:69, 0]}")  # First 5 keypoint values
 
     # Postprocess and visualize
     visualize_pose_results_pytorch(
@@ -169,9 +174,17 @@ def visualize_pose_results_pytorch(image_path, predictions, orig_w, orig_h, scal
         for kpt_idx, kpt in enumerate(kpts):
             kx, ky, kv = kpt
 
+            # Debug: print first few keypoints before transformation
+            if detections_count == 1 and kpt_idx < 5:
+                print(f"PyTorch Keypoint {kpt_idx}: decoded=({kx:.1f}, {ky:.1f}), visibility={kv:.3f}")
+
             # Transform to original image coordinates (no decoding needed)
             kx_final = (kx - pad_left) / scale
             ky_final = (ky - pad_top) / scale
+
+            # Debug: print transformed coordinates
+            if detections_count == 1 and kpt_idx < 5:
+                print(f"  -> PyTorch final=({kx_final:.1f}, {ky_final:.1f})")
 
             # Ensure within bounds
             kx_final = max(0, min(orig_w, kx_final))

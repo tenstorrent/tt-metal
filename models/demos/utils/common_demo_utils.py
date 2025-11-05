@@ -351,6 +351,132 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     logger.info(f"Predictions saved to {output_path}")
 
 
+def save_pose_predictions_by_model(result, save_dir, image_path, model_name):
+    """
+    Save pose estimation predictions with bounding boxes and keypoints.
+
+    Args:
+        result: Results object containing boxes and keypoints
+        save_dir: Directory to save predictions
+        image_path: Path to original image
+        model_name: Name of the model (for subdirectory)
+    """
+    # Import dependencies inside function
+    import os
+    from datetime import datetime
+
+    import cv2
+    import numpy as np
+
+    model_save_dir = os.path.join(save_dir, model_name)
+    os.makedirs(model_save_dir, exist_ok=True)
+
+    # Load and prepare image
+    image = cv2.imread(image_path)
+    if image is None:
+        print(f"Warning: Could not load image {image_path}")
+        return
+
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # Set colors based on model type
+    if model_name == "torch_model":
+        bbox_color, label_color, kpt_color, skeleton_color = (0, 255, 0), (0, 255, 0), (0, 255, 0), (0, 255, 0)
+    else:
+        bbox_color, label_color, kpt_color, skeleton_color = (255, 0, 0), (255, 255, 0), (0, 255, 255), (255, 0, 255)
+
+    # COCO pose skeleton connections (same as used in visualization)
+    skeleton = [
+        [15, 13],
+        [13, 11],
+        [16, 14],
+        [14, 12],
+        [11, 12],
+        [5, 11],
+        [6, 12],
+        [5, 6],
+        [5, 7],
+        [6, 8],
+        [7, 9],
+        [8, 10],
+        [1, 2],
+        [0, 1],
+        [0, 2],
+        [1, 3],
+        [2, 4],
+        [3, 5],
+        [4, 6],
+    ]
+
+    # Keypoint colors (COCO format)
+    keypoint_colors = [
+        (255, 0, 0),  # nose - red
+        (0, 255, 0),  # eyes - green
+        (0, 255, 0),
+        (0, 0, 255),  # ears - blue
+        (0, 0, 255),
+        (255, 255, 0),  # shoulders - cyan
+        (255, 255, 0),
+        (255, 0, 255),  # elbows - magenta
+        (255, 0, 255),
+        (0, 255, 255),  # wrists - yellow
+        (0, 255, 255),
+        (128, 0, 128),  # hips - purple
+        (128, 0, 128),
+        (0, 128, 128),  # knees - teal
+        (0, 128, 128),
+        (128, 128, 0),  # ankles - olive
+        (128, 128, 0),
+    ]
+
+    # Draw bounding boxes and labels
+    if hasattr(result, "boxes") and result.boxes is not None and len(result.boxes) > 0:
+        boxes = result.boxes
+        for i, box in enumerate(boxes):
+            # box format: [x1, y1, x2, y2, conf, class]
+            if len(box) >= 6:
+                x1, y1, x2, y2, conf, cls = map(int, box[:6]) if not hasattr(box, "tolist") else box[:6].tolist()
+                label = f"person {conf/100:.2f}" if hasattr(box, "tolist") else f"person {box[4]:.2f}"
+                cv2.rectangle(image, (x1, y1), (x2, y2), bbox_color, 3)
+                cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
+
+                # Draw keypoints for this detection
+                if hasattr(result, "keypoints") and result.keypoints is not None and len(result.keypoints) > i:
+                    kpts = result.keypoints[i]  # [51] flattened array
+                    if len(kpts) >= 51:
+                        # Reshape to [17, 3] - (x, y, visibility)
+                        kpts_reshaped = (
+                            kpts.reshape(17, 3) if hasattr(kpts, "reshape") else np.array(kpts).reshape(17, 3)
+                        )
+
+                        # Draw keypoints
+                        for j, (x, y, v) in enumerate(kpts_reshaped):
+                            if v > 0.5:  # Only draw visible keypoints
+                                cv2.circle(image, (int(x), int(y)), 4, keypoint_colors[j], -1)
+                                cv2.circle(image, (int(x), int(y)), 2, (255, 255, 255), -1)  # White center
+
+                        # Draw skeleton connections
+                        for connection in skeleton:
+                            start_idx, end_idx = connection
+                            if kpts_reshaped[start_idx, 2] > 0.5 and kpts_reshaped[end_idx, 2] > 0.5:
+                                start_point = (int(kpts_reshaped[start_idx, 0]), int(kpts_reshaped[start_idx, 1]))
+                                end_point = (int(kpts_reshaped[end_idx, 0]), int(kpts_reshaped[end_idx, 1]))
+                                cv2.line(image, start_point, end_point, skeleton_color, 2)
+
+    # Convert back to BGR for saving
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    # Create output filename with timestamp
+    image_base = os.path.splitext(os.path.basename(image_path))[0]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_name = f"{image_base}_pose_prediction_{timestamp}.jpg"
+    output_path = os.path.join(model_save_dir, output_name)
+
+    # Save the image
+    cv2.imwrite(output_path, image)
+    print(f"Saved pose prediction to: {output_path}")
+
+
 def get_mesh_mappers(device):
     if device.get_num_devices() > 1:
         inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
@@ -361,6 +487,151 @@ def get_mesh_mappers(device):
         weights_mesh_mapper = None
         output_mesh_composer = None
     return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def postprocess_pose(preds, img, orig_imgs, batch, names):
+    """
+    Postprocess pose estimation predictions from TTNN YOLOv11.
+
+    Args:
+        preds: [batch, 56, num_anchors] - decoded predictions
+            0-3: bbox (x, y, w, h), 4: conf, 5-55: keypoints (17×3)
+        img: Processed image tensor
+        orig_imgs: List of original images
+        batch: Batch information (paths, etc.)
+        names: Class names (should include 'person')
+
+    Returns:
+        List of Results objects with boxes and keypoints
+    """
+    # Import dependencies inside function
+    import torch
+
+    # Try to import ultralytics components
+    try:
+        from ultralytics.utils import ops
+
+        non_max_suppression = ops.non_max_suppression
+        scale_boxes = ops.scale_boxes
+        from ultralytics.engine.results import Results
+    except ImportError:
+        # Fallback implementations if ultralytics not available
+        print("Warning: ultralytics not found, using simplified postprocessing")
+
+        def non_max_suppression(preds, conf_thres, iou_thres, classes=None, agnostic=False, max_det=300):
+            # Simplified NMS - just return predictions above threshold
+            batch_size = preds.shape[0]
+            results = []
+            for i in range(batch_size):
+                pred = preds[i]
+                # Filter by confidence
+                conf_mask = pred[:, 4] > conf_thres
+                pred = pred[conf_mask]
+                if len(pred) > 0:
+                    # Sort by confidence and take top max_det
+                    pred = pred[pred[:, 4].argsort(descending=True)][:max_det]
+                    results.append(pred)
+                else:
+                    results.append(torch.empty(0, 6))
+            return results
+
+        def scale_boxes(img_shape, boxes, orig_shape):
+            # Simplified scaling - assumes no padding
+            scale_x = orig_shape[1] / img_shape[1]  # width scale
+            scale_y = orig_shape[0] / img_shape[0]  # height scale
+            boxes[:, [0, 2]] *= scale_x  # x coordinates
+            boxes[:, [1, 3]] *= scale_y  # y coordinates
+            return boxes
+
+        class Results:
+            def __init__(self, img, path=None, names=None, boxes=None, keypoints=None):
+                self.img = img
+                self.path = path
+                self.names = names
+                self.boxes = boxes
+                self.keypoints = keypoints
+
+    args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+
+    # Extract person detections (class 0 for COCO person)
+    # preds shape: [batch, 56, num_anchors]
+    # We need to convert to detection format: [num_anchors, 6] for each batch item
+    # Format: [x1, y1, x2, y2, conf, class]
+
+    batch_results = []
+
+    for batch_idx, (pred_batch, orig_img, img_path) in enumerate(zip(preds, orig_imgs, batch[0])):
+        # pred_batch: [56, num_anchors]
+        bbox = pred_batch[:4, :]  # [4, num_anchors] - (x, y, w, h)
+        conf = pred_batch[4:5, :]  # [1, num_anchors]
+        keypoints = pred_batch[5:56, :]  # [51, num_anchors] - 17 keypoints × 3
+
+        # Convert bbox from (x,y,w,h) to (x1,y1,x2,y2) format for NMS
+        x, y, w, h = bbox
+        x1 = x - w / 2
+        y1 = y - h / 2
+        x2 = x + w / 2
+        y2 = y + h / 2
+
+        # Create detection tensor: [num_anchors, 6] - (x1,y1,x2,y2,conf,class)
+        detections = torch.stack([x1, y1, x2, y2, conf.squeeze(0), torch.zeros_like(conf.squeeze(0))], dim=1)
+
+        # Apply non-maximum suppression for person detections
+        nms_detections = non_max_suppression(
+            detections.unsqueeze(0),  # Add batch dimension
+            args["conf"],
+            args["iou"],
+            classes=None,  # Only person class (0)
+            agnostic=args["agnostic_nms"],
+            max_det=args["max_det"],
+        )[
+            0
+        ]  # Remove batch dimension
+
+        if len(nms_detections) > 0:
+            # Scale boxes back to original image coordinates
+            nms_detections[:, :4] = scale_boxes(img.shape[2:], nms_detections[:, :4], orig_img.shape)
+
+            # For each detection, extract corresponding keypoints
+            final_keypoints = []
+            for det in nms_detections:
+                # Find the closest anchor to this detection (simplified - use bbox center)
+                det_x = (det[0] + det[2]) / 2
+                det_y = (det[1] + det[3]) / 2
+
+                # Find anchor with closest center (simplified approach)
+                anchor_centers_x = x
+                anchor_centers_y = y
+                distances = torch.sqrt((anchor_centers_x - det_x) ** 2 + (anchor_centers_y - det_y) ** 2)
+                closest_anchor_idx = torch.argmin(distances)
+
+                # Extract keypoints for this anchor
+                kpt = keypoints[:, closest_anchor_idx]  # [51]
+                kpt = kpt.reshape(17, 3)  # [17, 3] - (x, y, visibility)
+
+                # Scale keypoints back to original image coordinates
+                kpt_x = kpt[:, 0] * (orig_img.shape[1] / img.shape[3])  # Scale X
+                kpt_y = kpt[:, 1] * (orig_img.shape[0] / img.shape[2])  # Scale Y
+                kpt_v = kpt[:, 2]  # Visibility unchanged
+
+                # Combine scaled keypoints
+                scaled_kpt = torch.stack([kpt_x, kpt_y, kpt_v], dim=1).flatten()  # [51]
+                final_keypoints.append(scaled_kpt)
+
+            final_keypoints = torch.stack(final_keypoints) if final_keypoints else torch.empty(0, 51)
+
+            # Create Results object with both boxes and keypoints
+            # Note: This assumes Results class can handle keypoints
+            result = Results(orig_img, path=img_path, names=names, boxes=nms_detections, keypoints=final_keypoints)
+        else:
+            # No detections
+            result = Results(
+                orig_img, path=img_path, names=names, boxes=torch.empty(0, 6), keypoints=torch.empty(0, 51)
+            )
+
+        batch_results.append(result)
+
+    return batch_results
 
 
 # Postprocessing pipeline for object detection
@@ -566,3 +837,122 @@ def load_imagenet_dataset(model_location_generator=None, model_version="ImageNet
     else:
         dataset_path = model_version
     return str(dataset_path)
+
+
+def save_yolo_pose_predictions_by_model(result, save_dir, image_path, model_name):
+    """
+    Save pose estimation predictions with bounding boxes and keypoints.
+
+    Args:
+        result: Results object containing boxes and keypoints
+        save_dir: Directory to save predictions
+        image_path: Path to original image
+        model_name: Name of the model (for subdirectory)
+    """
+    model_save_dir = os.path.join(save_dir, model_name)
+    os.makedirs(model_save_dir, exist_ok=True)
+
+    # Load and prepare image
+    image = cv2.imread(image_path)
+    if image is None:
+        logger.warning(f"Warning: Could not load image {image_path}")
+        return
+
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # Set colors based on model type
+    if model_name == "torch_model":
+        bbox_color, label_color, kpt_color, skeleton_color = (0, 255, 0), (0, 255, 0), (0, 255, 0), (0, 255, 0)
+    else:
+        bbox_color, label_color, kpt_color, skeleton_color = (255, 0, 0), (255, 255, 0), (0, 255, 255), (255, 0, 255)
+
+    # COCO pose skeleton connections (same as used in visualization)
+    skeleton = [
+        [15, 13],
+        [13, 11],
+        [16, 14],
+        [14, 12],
+        [11, 12],
+        [5, 11],
+        [6, 12],
+        [5, 6],
+        [5, 7],
+        [6, 8],
+        [7, 9],
+        [8, 10],
+        [1, 2],
+        [0, 1],
+        [0, 2],
+        [1, 3],
+        [2, 4],
+        [3, 5],
+        [4, 6],
+    ]
+
+    # Keypoint colors (COCO format)
+    keypoint_colors = [
+        (255, 0, 0),  # nose - red
+        (0, 255, 0),  # eyes - green
+        (0, 255, 0),
+        (0, 0, 255),  # ears - blue
+        (0, 0, 255),
+        (255, 255, 0),  # shoulders - cyan
+        (255, 255, 0),
+        (255, 0, 255),  # elbows - magenta
+        (255, 0, 255),
+        (0, 255, 255),  # wrists - yellow
+        (0, 255, 255),
+        (128, 0, 128),  # hips - purple
+        (128, 0, 128),
+        (0, 128, 128),  # knees - teal
+        (0, 128, 128),
+        (128, 128, 0),  # ankles - olive
+        (128, 128, 0),
+    ]
+
+    # Draw bounding boxes and labels
+    if hasattr(result, "boxes") and result.boxes is not None and len(result.boxes) > 0:
+        boxes = result.boxes
+        for i, box in enumerate(boxes):
+            # box format: [x1, y1, x2, y2, conf, class]
+            if len(box) >= 6:
+                x1, y1, x2, y2, conf, cls = map(int, box[:6]) if not hasattr(box, "tolist") else box[:6].tolist()
+                label = f"person {conf/100:.2f}" if hasattr(box, "tolist") else f"person {box[4]:.2f}"
+                cv2.rectangle(image, (x1, y1), (x2, y2), bbox_color, 3)
+                cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
+
+                # Draw keypoints for this detection
+                if hasattr(result, "keypoints") and result.keypoints is not None and len(result.keypoints) > i:
+                    kpts = result.keypoints[i]  # [51] flattened array
+                    if len(kpts) >= 51:
+                        # Reshape to [17, 3] - (x, y, visibility)
+                        kpts_reshaped = (
+                            kpts.reshape(17, 3) if hasattr(kpts, "reshape") else np.array(kpts).reshape(17, 3)
+                        )
+
+                        # Draw keypoints
+                        for j, (x, y, v) in enumerate(kpts_reshaped):
+                            if v > 0.5:  # Only draw visible keypoints
+                                cv2.circle(image, (int(x), int(y)), 4, keypoint_colors[j], -1)
+                                cv2.circle(image, (int(x), int(y)), 2, (255, 255, 255), -1)  # White center
+
+                        # Draw skeleton connections
+                        for connection in skeleton:
+                            start_idx, end_idx = connection
+                            if kpts_reshaped[start_idx, 2] > 0.5 and kpts_reshaped[end_idx, 2] > 0.5:
+                                start_point = (int(kpts_reshaped[start_idx, 0]), int(kpts_reshaped[start_idx, 1]))
+                                end_point = (int(kpts_reshaped[end_idx, 0]), int(kpts_reshaped[end_idx, 1]))
+                                cv2.line(image, start_point, end_point, skeleton_color, 2)
+
+    # Convert back to BGR for saving
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    # Create output filename with timestamp
+    image_base = os.path.splitext(os.path.basename(image_path))[0]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_name = f"{image_base}_pose_prediction_{timestamp}.jpg"
+    output_path = os.path.join(model_save_dir, output_name)
+
+    # Save the image
+    cv2.imwrite(output_path, image)
+    logger.info(f"Saved pose prediction to: {output_path}")
