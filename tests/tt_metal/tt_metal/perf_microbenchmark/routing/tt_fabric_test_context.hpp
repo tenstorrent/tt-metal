@@ -650,7 +650,7 @@ private:
             dst_node_ids = traffic_config.dst_node_ids.value();
 
             // assign hops for 2d LL and 1D
-            hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+            // hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
         }
 
         // for 2d, we need to spcify the mcast start node id
