@@ -496,14 +496,15 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args(tt:
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
     const auto& tensix_config = fabric_context.get_tensix_config();
+    uint8_t num_full_size_channels = config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
 
     std::vector<uint32_t> fabric_stream_ids;
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        const auto worker_channel = 0;
-        const auto worker_stream_id =
-            tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel, core_id_);
-        // UDM mode: MUX only has 1 worker channel
-        fabric_stream_ids = {worker_stream_id};
+        for (uint8_t channel = 0; channel < num_full_size_channels; channel++) {
+            const auto worker_stream_id =
+                tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, channel, core_id_);
+            fabric_stream_ids.push_back(worker_stream_id);
+        }
     } else {
         const auto worker_channel = is_2d_fabric ? direction_ : 0;
         const auto worker_stream_id =
@@ -528,7 +529,6 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args(tt:
         fabric_stream_ids[worker_channel] = worker_stream_id;
     }
 
-    uint8_t num_full_size_channels = config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
     TT_FATAL(
         num_full_size_channels == fabric_stream_ids.size(),
         "the number of fabric stream ids used must equal to the number of mux channels");
