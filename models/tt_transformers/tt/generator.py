@@ -4,6 +4,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import List
 
 import torch
 from loguru import logger
@@ -39,6 +40,21 @@ class SamplingParams:
     temperature: float | list[float]
     top_k: int | list[int]
     top_p: float | list[float]
+
+
+# Split lists into chunks without numpy
+def split_list(lst, n):
+    """Split list into n roughly equal parts"""
+    chunk_size = len(lst) // n
+    remainder = len(lst) % n
+    chunks = []
+    start = 0
+    for i in range(n):
+        # Add 1 to chunk_size for the first 'remainder' chunks
+        end = start + chunk_size + (1 if i < remainder else 0)
+        chunks.append(list(lst[start:end]))  # Convert to list explicitly
+        start = end
+    return chunks
 
 
 class Generator:
@@ -401,12 +417,29 @@ class Generator:
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
         if sampling_on_device:
+            if not isinstance(sampling_params.temperature, List):
+                sampling_params_list = [sampling_params] * self.data_parallel
+            else:
+                temperature_chunks = split_list(sampling_params.temperature, self.data_parallel)
+                top_k_chunks = split_list(sampling_params.top_k, self.data_parallel)
+                top_p_chunks = split_list(sampling_params.top_p, self.data_parallel)
+
+                # Create new SamplingParams objects for each chunk
+                sampling_params_list = []
+                for i in range(self.data_parallel):
+                    new_params = SamplingParams(
+                        temperature=temperature_chunks[i], top_k=top_k_chunks[i], top_p=top_p_chunks[i]
+                    )
+                    sampling_params_list.append(new_params)
+
             for i in range(self.data_parallel):
-                sampling_params = format_sampling_params(sampling_params, self.model_args[i].max_batch_size)
+                formatted_params = format_sampling_params(
+                    sampling_params_list[i], 32
+                )  # Sampling needs params padded to 32 regardless of batch_size
                 self.model[i].tt_sampling.reset_params(
-                    k=sampling_params.top_k,
-                    p=sampling_params.top_p,
-                    temp=sampling_params.temperature,
+                    k=formatted_params.top_k,
+                    p=formatted_params.top_p,
+                    temp=formatted_params.temperature,
                 )
         decode_kwargs = {
             "current_pos": start_pos,
