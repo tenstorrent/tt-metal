@@ -953,29 +953,9 @@ def _watchdog_main(parent_pid, cmd_queue):
       {"cmd": "cancel", "test_id": str}
       {"cmd": "shutdown"}
     """
-    try:
-        parent_pgid = os.getpgid(parent_pid)
-    except Exception:
-        parent_pgid = None
+    logger.debug(f"Watchdog started for parent={parent_pid} pid={os.getpid()}")
 
-    deadlines = {}  # test_id -> { 'deadline': float, 'pid': int }
-
-    def kill_target(pid: int):
-        try:
-            try:
-                # Attempt debug collection before termination
-                run_debug_script()
-            except Exception as e:
-                try:
-                    logger.error(f"Watchdog debug collection failed: {e}")
-                except Exception:
-                    pass
-
-            # Kill only the target worker PID to avoid terminating the controller or other workers
-            os.kill(pid, signal.SIGKILL)
-        finally:
-            # Ensure watchdog exits
-            os._exit(0)
+    deadlines = {}  # test_id -> deadline (float)
 
     while True:
         # Process incoming command, if any
@@ -988,22 +968,24 @@ def _watchdog_main(parent_pid, cmd_queue):
 
         # Check for any expired deadlines
         if deadlines:
-            expired = [tid for tid, info in deadlines.items() if info["deadline"] <= now]
+            expired = [tid for tid, deadline in deadlines.items() if deadline <= now]
             if expired:
-                # Kill the associated worker process for the first expired timer
-                target_pid = deadlines[expired[0]]["pid"]
-                kill_target(target_pid)
+                logger.debug(f"Watchdog detected timeout for {expired}")
+                run_debug_script()
+                logger.debug(f"Watchdog killing parent process {parent_pid}")
+                os.kill(parent_pid, signal.SIGKILL)
+                break
 
         if not msg:
             continue
 
         cmd = msg.get("cmd")
         if cmd == "start":
+            logger.debug(f"Watchdog received start command: {msg}")
             try:
                 test_id = str(msg["test_id"])
                 timeout_secs = float(msg["timeout"])  # seconds from now
-                target_pid = int(msg["pid"])  # worker pid to kill on expiry
-                deadlines[test_id] = {"deadline": time.monotonic() + timeout_secs, "pid": target_pid}
+                deadlines[test_id] = time.monotonic() + timeout_secs
                 try:
                     logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
                 except Exception:
@@ -1014,13 +996,15 @@ def _watchdog_main(parent_pid, cmd_queue):
                 except Exception:
                     pass
         elif cmd == "cancel":
-            test_id = str(msg.get("test_id", ""))
-            deadlines.pop(test_id, None)
+            logger.debug(f"Watchdog received cancel command: {msg}")
             try:
-                logger.debug(f"Watchdog cancelled for {test_id}")
-            except Exception:
-                pass
+                test_id = str(msg.get("test_id", ""))
+                deadlines.pop(test_id, None)
+            except Exception as e:
+                logger.error(f"Watchdog failed to cancel: {e}")
         elif cmd == "shutdown":
+            logger.debug(f"Watchdog received shutdown command: {msg}")
+            logger.debug(f"Watchdog shutting down")
             break
         # ignore unknown commands
 
@@ -1038,7 +1022,7 @@ def pytest_sessionstart(session):
         session.config.stash[watchdog_process_key] = p
         logger.info(f"Started session watchdog pid={p.pid} for parent={parent_pid}")
     except Exception as e:
-        logger.error(f"Failed to start session watchdog: {e}")
+        logger.error(f"Failed to start watchdog for parent={parent_pid}: {e}")
 
 
 @pytest.hookimpl(trylast=True)
@@ -1049,18 +1033,12 @@ def pytest_sessionfinish(session, exitstatus):
     if cmd_queue and p:
         try:
             cmd_queue.put({"cmd": "shutdown"})
-        except Exception:
-            pass
-        try:
             p.join(timeout=2.0)
-        except Exception:
-            pass
-        if getattr(p, "is_alive", lambda: False)():
-            try:
+            if p.is_alive():
                 p.terminate()
                 p.join(timeout=1.0)
-            except Exception:
-                pass
+        except Exception as e:
+            logger.error(f"Failed to terminate watchdog process cleanly: {e}")
 
 
 # This overrides the timer setup hook from pytest-timeout.
@@ -1074,7 +1052,7 @@ def pytest_timeout_set_timer(item, settings):
     if (metal_timeout_enabled is not None or using_xdist) and cmd_queue is not None:
         secs = float(settings.timeout)
         try:
-            cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs, "pid": os.getpid()})
+            cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs})
             logger.debug(f"Watchdog timer set for {item.nodeid} in {secs} seconds")
         except Exception as e:
             logger.error(f"Failed to arm watchdog timer: {e}")
