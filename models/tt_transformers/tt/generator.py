@@ -565,13 +565,13 @@ class Generator:
         Run decode forward text with tracing
         """
         # The trace is different depending on whether we are doing device sampling or not
-        if not self.trace_ids_decode[argmax_on_device]:
+        if not self.trace_ids_decode[sampling_on_device]:
             trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, sampling_on_device=sampling_on_device
             )
-            self.trace_ids_decode[argmax_on_device] = trace_ids
-            self.trace_inputs_decode[argmax_on_device] = device_inputs
-            self.trace_output_decode[argmax_on_device] = tt_out_trace
+            self.trace_ids_decode[sampling_on_device] = trace_ids
+            self.trace_inputs_decode[sampling_on_device] = device_inputs
+            self.trace_output_decode[sampling_on_device] = tt_out_trace
 
         reset_inputs = not sampling_on_device
         if self.prev_page_table is None or any(
@@ -587,13 +587,13 @@ class Generator:
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_decode[argmax_on_device][i],
+                    device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
 
-        for i, trace_id in self.trace_ids_decode[argmax_on_device].items():
+        for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
 
-        return self.trace_output_decode[argmax_on_device]
+        return self.trace_output_decode[sampling_on_device]
 
     def _prefill_forward_single_user(
         self,
