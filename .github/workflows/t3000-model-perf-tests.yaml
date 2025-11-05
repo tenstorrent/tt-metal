@@ -15,6 +15,7 @@ on:
           - resnet50
           - sentence_bert
           - stable_diffusion_35_large
+          - gemma-3-27b-it
   schedule:
     - cron: "0 */12 * * *" # This cron schedule runs the workflow every 12 hours
 
