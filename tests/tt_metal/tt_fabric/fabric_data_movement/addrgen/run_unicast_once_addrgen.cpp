@@ -213,34 +213,53 @@ Notes:
     auto& gsem = (sem_sel++ & 1) ? *gsemB : *gsemA;
 
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
-    constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/unicast_addrgen/kernels/";
+
+    // Determine if this is a fused atomic inc variant
+    const bool is_fused_atomic_inc =
+        (p.api_variant == AddrgenApiVariant::FusedAtomicIncWrite ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState);
+
+    const std::string KDIR = is_fused_atomic_inc
+                                 ? "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen/kernels/fused_atomic_inc/"
+                                 : "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen/kernels/unicast/";
 
     // Helper to select writer kernel based on API variant
-    auto get_writer_kernel_path = [](AddrgenApiVariant variant) -> std::string {
+    auto get_writer_kernel_path = [&KDIR](AddrgenApiVariant variant) -> std::string {
         switch (variant) {
-            case AddrgenApiVariant::UnicastWrite: return std::string(KDIR) + "unicast_tx_writer_cb_to_dst_addrgen.cpp";
-            case AddrgenApiVariant::UnicastWriteWithState:
-                return std::string(KDIR) + "unicast_tx_writer_with_state_addrgen.cpp";
-            case AddrgenApiVariant::UnicastWriteSetState:
-                return std::string(KDIR) + "unicast_tx_writer_set_state_addrgen.cpp";
+            case AddrgenApiVariant::UnicastWrite: return KDIR + "unicast_tx_writer_cb_to_dst_addrgen.cpp";
+            case AddrgenApiVariant::UnicastWriteWithState: return KDIR + "unicast_tx_writer_with_state_addrgen.cpp";
+            case AddrgenApiVariant::UnicastWriteSetState: return KDIR + "unicast_tx_writer_set_state_addrgen.cpp";
+            case AddrgenApiVariant::FusedAtomicIncWrite: return KDIR + "fused_atomic_inc_tx_writer_addrgen.cpp";
+            case AddrgenApiVariant::FusedAtomicIncWriteWithState:
+                return KDIR + "fused_atomic_inc_tx_writer_with_state_addrgen.cpp";
+            case AddrgenApiVariant::FusedAtomicIncWriteSetState:
+                return KDIR + "fused_atomic_inc_tx_writer_set_state_addrgen.cpp";
             default: TT_FATAL(false, "Unknown API variant"); return "";
         }
     };
 
+    const std::string receiver_kernel_name =
+        is_fused_atomic_inc ? "fused_atomic_inc_rx_addrgen.cpp" : "unicast_rx_addrgen.cpp";
+
     auto rx_wait_k = tt::tt_metal::CreateKernel(
         receiver_prog,
-        std::string(KDIR) + "unicast_rx_addrgen.cpp",
+        KDIR + receiver_kernel_name,
         receiver_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .defines = defines});
-    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
+
+    const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
+
+    // For fused atomic inc, each write increments the semaphore, so receiver waits for NUM_PAGES
+    // For regular unicast, a single atomic inc is sent after all writes, so receiver waits for 1
+    const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), sem_wait_value});
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
-
-    const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
     const uint32_t CB_ID = tt::CBIndex::c_0;
     // CB holds 8 pages total so the reader can fill 4 while the writer drains 4.
     auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
@@ -254,9 +273,12 @@ Notes:
     reader_cta.push_back(NUM_PAGES);
     reader_cta.push_back(p.page_size);
 
+    const std::string reader_kernel_name =
+        is_fused_atomic_inc ? "fused_atomic_inc_tx_reader_to_cb_addrgen.cpp" : "unicast_tx_reader_to_cb_addrgen.cpp";
+
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        std::string(KDIR) + "unicast_tx_reader_to_cb_addrgen.cpp",
+        KDIR + reader_kernel_name,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,

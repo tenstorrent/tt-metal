@@ -6,7 +6,7 @@
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-// Existing fixture from original test
+// Fixture for mesh device setup
 struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
     Fixture() :
         ::tt::tt_metal::MeshDeviceFixtureBase(Config{
@@ -16,7 +16,7 @@ struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
     void teardown() { this->TearDown(); }
 };
 
-// Parameterized test for different API variants
+// Parameterized test for all 6 addrgen API variants
 class AddrgenApiVariantTest : public ::testing::TestWithParam<tt::tt_fabric::bench::AddrgenApiVariant> {
 protected:
     Fixture fixture;
@@ -43,26 +43,34 @@ TEST_P(AddrgenApiVariantTest, Write) {
         .api_variant = api_variant  // Test parameter
     };
 
-    // Call existing benchmark function
+    // Call benchmark function (reusing infrastructure)
     auto result = tt::tt_fabric::bench::run_unicast_once(&fixture, p);
 
     // Test passes if no assertion failures occurred
     EXPECT_GT(result.bytes, 0u);
 }
 
-// Instantiate with all variants
+// Instantiate with all 6 variants (3 unicast + 3 fused atomic inc)
 INSTANTIATE_TEST_SUITE_P(
     AddrgenOverloads,
     AddrgenApiVariantTest,
     ::testing::Values(
         tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite,
         tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState,
-        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState),
+        tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState,
+        tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWrite,
+        tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteWithState,
+        tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteSetState),
     [](const ::testing::TestParamInfo<AddrgenApiVariantTest::ParamType>& info) {
         switch (info.param) {
             case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite: return "UnicastWrite";
             case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState: return "UnicastWriteWithState";
             case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState: return "UnicastWriteSetState";
+            case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWrite: return "FusedAtomicIncWrite";
+            case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteWithState:
+                return "FusedAtomicIncWriteWithState";
+            case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteSetState:
+                return "FusedAtomicIncWriteSetState";
             default: return "UnknownVariant";
         }
     });
