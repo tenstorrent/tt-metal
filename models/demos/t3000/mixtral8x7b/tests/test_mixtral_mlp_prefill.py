@@ -22,6 +22,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
         1024 * 32,
     ),
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_mlp_inference(mesh_device, reset_seeds, seq_len):
     # Specify different dtypes for each feedForward weights
     dtypes = {

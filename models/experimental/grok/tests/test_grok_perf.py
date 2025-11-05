@@ -38,6 +38,7 @@ from transformers import AutoTokenizer
         (2048, 150, 0.025),
     ),
 )
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_grok_model_perf(
     mesh_device,
     generation_start_pos,

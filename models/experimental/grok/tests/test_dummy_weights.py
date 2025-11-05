@@ -7,8 +7,10 @@ import ttnn
 
 from models.experimental.grok.tt.grok_model import TtTransformer
 from models.experimental.grok.tt.model_config import TtModelArgs
+import pytest
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_load_dummy_weights(mesh_device):
     # Set to incorrect paths to test dummy weight loading
 

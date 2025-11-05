@@ -22,6 +22,7 @@ from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.timeout(500 * 8)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_grok_decoder_inference(mesh_device, reset_seeds):
     """
     b: batch

@@ -13,6 +13,7 @@ from models.demos.t3000.falcon40b.tt.model_config import model_config_entries
 
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_demo_generate_reference_output(max_seq_len, get_tt_cache_path, mesh_device, is_ci_env):
     if is_ci_env:
         pytest.skip("Skip generating reference output in CI")
@@ -42,6 +43,7 @@ def test_demo_generate_reference_output(max_seq_len, get_tt_cache_path, mesh_dev
 @pytest.mark.parametrize("max_seq_len", (128,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("perf_mode", (True, False))
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_demo(max_seq_len, get_tt_cache_path, mesh_device, perf_mode):
     input_file = "models/demos/t3000/falcon40b/demo/input_data.json"
 

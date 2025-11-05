@@ -40,6 +40,7 @@ def convert2ref(state_dict):
 
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
     pcc = 0.99
     iterations = 1

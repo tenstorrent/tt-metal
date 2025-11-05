@@ -30,6 +30,7 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
     ),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @torch.no_grad()
 def test_mixtral_attention_inference(mesh_device, reset_seeds, seq_len):
     pcc = 0.99

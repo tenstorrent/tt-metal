@@ -28,6 +28,7 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 @pytest.mark.timeout(600)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_grok_moe_inference(mesh_device, reset_seeds):
     pcc = 0.87  # real weights = 0.99
     iterations = 1

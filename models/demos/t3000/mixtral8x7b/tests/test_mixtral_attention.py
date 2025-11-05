@@ -16,6 +16,7 @@ from ttnn import ConcatMeshToTensor
 
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_attention_inference(mesh_device, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b

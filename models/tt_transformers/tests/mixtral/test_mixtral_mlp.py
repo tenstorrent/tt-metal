@@ -24,6 +24,7 @@ def convert2ref(state_dict):
 
 
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
     seqlen = 32
     mesh_device.disable_and_clear_program_cache()

@@ -33,6 +33,7 @@ def convert2ref(state_dict):
     (32,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_params):
     """
     b: batch

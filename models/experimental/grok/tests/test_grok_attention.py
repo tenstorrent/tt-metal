@@ -26,6 +26,7 @@ from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 @pytest.mark.skip(reason=LEGACY_CCL_SKIP)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_grok_attention_inference(mesh_device, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b

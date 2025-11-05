@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import pytest
 from loguru import logger
 
 import ttnn
@@ -8,6 +9,7 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_load_dummy_weights(mesh_device):
     # Set to incorrect paths to test dummy weight loading
 

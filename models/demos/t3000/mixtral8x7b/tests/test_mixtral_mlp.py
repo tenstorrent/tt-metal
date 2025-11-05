@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import pytest
 import torch
 from loguru import logger
 
@@ -12,6 +13,7 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_mlp_inference(mesh_device, reset_seeds):
     # Specify different dtypes for each feedForward weights
     dtypes = {
