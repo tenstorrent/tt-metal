@@ -9,7 +9,7 @@ To build and execute, you may use the following commands:
 
 .. code-block:: bash
 
-    export TT_METAL_HOME=$(pwd)
+	export TT_METAL_HOME=$(pwd)
 	./build_metal.sh --build-programming-examples
 	./build/programming_examples/metal_example_llk_init_uninit_ttsim_tensix_dump
 
