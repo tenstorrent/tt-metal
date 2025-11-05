@@ -953,6 +953,11 @@ def _watchdog_main(parent_pid, cmd_queue):
       {"cmd": "cancel", "test_id": str}
       {"cmd": "shutdown"}
     """
+    try:
+        parent_pgid = os.getpgid(parent_pid)
+    except Exception:
+        parent_pgid = None
+
     deadlines = {}  # test_id -> { 'deadline': float, 'pid': int }
 
     def kill_target(pid: int):
@@ -966,15 +971,8 @@ def _watchdog_main(parent_pid, cmd_queue):
                 except Exception:
                     pass
 
-            # Prefer to kill the target's process group to include its children
-            try:
-                pgid = os.getpgid(pid)
-            except Exception:
-                pgid = None
-            if pgid is not None and pgid > 0:
-                os.killpg(pgid, signal.SIGKILL)
-            else:
-                os.kill(pid, signal.SIGKILL)
+            # Kill only the target worker PID to avoid terminating the controller or other workers
+            os.kill(pid, signal.SIGKILL)
         finally:
             # Ensure watchdog exits
             os._exit(0)
