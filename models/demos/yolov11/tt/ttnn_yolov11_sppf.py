@@ -36,6 +36,7 @@ class TtnnSPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Use DRAM to avoid L1 limits
         )
         m2 = ttnn.max_pool2d(
             m1,
@@ -47,6 +48,7 @@ class TtnnSPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Use DRAM to avoid L1 limits
         )
         m3 = ttnn.max_pool2d(
             m2,
@@ -58,11 +60,13 @@ class TtnnSPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Use DRAM to avoid L1 limits
         )
         if use_sharded_concat:
             y = sharded_concat([x1, m1, m2, m3], to_interleaved=False)
         else:
-            y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+            # Use DRAM memory instead of L1 to avoid memory limit issues
+            y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         x = self.cv2(device, y, output_rm_needed=True)
         deallocate_tensors(x1, m1, m2, m3)
         return x
