@@ -12,6 +12,7 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ....utils.check import assert_quality
 from ....models.transformers.attention_mochi import MochiAttention
 from ....parallel.manager import CCLManager
+from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.padding import pad_vision_seq_parallel
 from diffusers import MochiTransformer3DModel
 from models.tt_transformers.tt.common import get_rot_transformation_mat
@@ -113,18 +114,11 @@ def test_mochi_attention(
         topology=ttnn.Topology.Linear,
     )
 
-    # Create a simple parallel config mock for the attention module
-    class SimpleParallelConfig:
-        def __init__(self, mesh_axis, factor):
-            self.mesh_axis = mesh_axis
-            self.factor = factor
-
-    class MockParallelConfig:
-        def __init__(self, tp_axis, tp_factor, sp_axis, sp_factor):
-            self.tensor_parallel = SimpleParallelConfig(tp_axis, tp_factor)
-            self.sequence_parallel = SimpleParallelConfig(sp_axis, sp_factor)
-
-    parallel_config = MockParallelConfig(tp_axis, tp_factor, sp_axis, sp_factor)
+    parallel_config = DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
+        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
+        cfg_parallel=None,
+    )
 
     # Create TT model
     tt_model = MochiAttention(
