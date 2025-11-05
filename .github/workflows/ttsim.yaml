@@ -277,7 +277,7 @@ jobs:
             tests/ttnn/unit_tests/operations/debug/test_generic_op.py \
             tests/ttnn/unit_tests/operations/eltwise/test_hardtanh.py \
             tests/ttnn/unit_tests/operations/data_movement/test_index_fill.py \
-            tests/ttnn/unit_tests/operations/moreh/test_moreh_full.py \
+            tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_full.py \
             tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py \
             tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py \
             tests/ttnn/unit_tests/operations/eltwise/test_polyval.py \
