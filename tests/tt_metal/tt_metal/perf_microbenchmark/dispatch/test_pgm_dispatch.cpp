@@ -93,20 +93,20 @@ struct TestInfo {
     bool use_left_cores{false};
 };
 
+// Returns the address of the last core in the last column of the mesh. Picks a configuration that works with worst-case harvesting, for consistency.
 std::tuple<uint32_t, uint32_t> get_core_count() {
     uint32_t core_x = 0;
     uint32_t core_y = 0;
 
     std::string arch_name = tt::tt_metal::hal::get_arch_name();
-    if (arch_name == "grayskull") {
-        core_x = 11;
-        core_y = 8;
-    } else if (arch_name == "wormhole_b0") {
+    if (arch_name == "wormhole_b0") {
+        // Three rows harvested.
         core_x = 7;
         core_y = 6;
     } else if (arch_name == "blackhole") {
-        core_x = 12;
-        core_y = 9;
+        // Two columns and one row harvested.
+        core_x = 11;
+        core_y = 8;
     } else {
         log_fatal(tt::LogTest, "Unexpected ARCH_NAME {}", arch_name);
         exit(0);
