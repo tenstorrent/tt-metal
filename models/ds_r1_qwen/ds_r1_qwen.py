@@ -156,6 +156,30 @@ __all__ = [
 ]
 
 
+def set_fabric(fabric_config, reliability_mode=None, fabric_tensix_config=None):
+    # If fabric_config is not None, set it to fabric_config
+    if fabric_config:
+        if reliability_mode is None:
+            reliability_mode = ttnn.FabricReliabilityMode.STRICT_INIT
+
+        # Apply default logic for fabric_tensix_config,
+        # fabric_tensix_config is used for enabling tensix extensions for the fabric router,
+        # some sender channels in the fabric router are moved to the fabric tensix extension
+        # (currently the extension is mux kernel, can have other kernels in future as well).
+        if fabric_tensix_config is None:
+            fabric_tensix_config = get_default_fabric_tensix_config()
+
+        ttnn.set_fabric_config(fabric_config, reliability_mode, None, fabric_tensix_config)  # num_planes
+
+
+def get_default_fabric_tensix_config():
+    # Default to MUX for Blackhole when fabric is enabled, DISABLED otherwise
+    if ttnn.device.is_blackhole():
+        return ttnn.FabricTensixConfig.MUX
+    else:
+        return ttnn.FabricTensixConfig.DISABLED
+
+
 def main():
     """Simple CLI to run a prompt on DS-R1-Distill-Qwen-1.5B using TTNN.
 
@@ -202,9 +226,10 @@ def main():
     dtype = dtype_map[args_cli.dtype]
 
     # Open mesh and build model
-    mesh_shape = ttnn.MeshShape(args_cli.mesh_rows, args_cli.mesh_cols)
+    mesh_shape = ttnn.MeshShape([1, 1])
     mesh = None
     try:
+        set_fabric(ttnn.FabricConfig.FABRIC_1D)
         mesh = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
         ds_args, model = init_ds_r1_qwen_1_5b(
