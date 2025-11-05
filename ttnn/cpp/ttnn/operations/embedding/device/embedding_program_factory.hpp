@@ -158,16 +158,46 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
 
     // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
     constexpr uint32_t max_double_buffer_tiles = 64;
-    uint32_t buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
+
+    constexpr uint32_t max_l1_budget_bytes = 1024 * 1024;  // 1MB budget for embedding CB
+    uint32_t max_tiles_per_chunk = std::min(max_l1_budget_bytes / weights_single_tile_size, num_tiles_per_block);
+    max_tiles_per_chunk = std::max(max_tiles_per_chunk, 1U);
+
+    uint32_t required_memory_bytes = 2 * num_tiles_per_block * weights_single_tile_size;
+    bool use_chunked_processing = required_memory_bytes > max_l1_budget_bytes;
+
+    // For very large embeddings, use chunked processing
+    uint32_t tiles_per_chunk;
+    uint32_t num_chunks;
+    uint32_t buffering;
+
+    if (use_chunked_processing) {
+        tiles_per_chunk = std::min(max_tiles_per_chunk, max_double_buffer_tiles);
+        num_chunks = (num_tiles_per_block + tiles_per_chunk - 1) / tiles_per_chunk;
+        buffering = tiles_per_chunk > max_double_buffer_tiles ? 1 : 2;
+    } else {
+        // Use original non-chunked approach for smaller embeddings
+        tiles_per_chunk = num_tiles_per_block;
+        num_chunks = 1;
+        buffering = 2;
+    }
+
+    printf("use_chunked_processing: %s\n", use_chunked_processing ? "true" : "false");
+    printf("buffering: %u\n", buffering);
+    printf("num_tiles_per_block: %u\n", num_tiles_per_block);
+    printf("tiles_per_chunk: %u\n", tiles_per_chunk);
+    printf("num_chunks: %u\n", num_chunks);
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
+    uint32_t cb0_size = buffering * tiles_per_chunk * weights_single_tile_size;
+    printf("cb0 size: %u\n", cb0_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            buffering * num_tiles_per_block * weights_single_tile_size, {{src0_cb_index, weights_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(cb0_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, weights_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    printf("cb1 size: %u\n", TILE_HEIGHT * input_element_size_bytes);
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(
             TILE_HEIGHT * input_element_size_bytes, {{src1_cb_index, input_cb_data_format}})
@@ -179,7 +209,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     if (output_sharded) {
         output_cb_size = output.buffer()->aligned_size_per_bank();
     } else {
-        output_cb_size = buffering * num_tiles_per_block * output_single_tile_size;
+        output_cb_size = buffering * tiles_per_chunk * output_single_tile_size;
     }
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, output_cb_data_format}})
@@ -214,15 +244,30 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     uint32_t input_block_size_bytes = TILE_HEIGHT * input_element_size_bytes;
     // Create Kernels
     // reader
-    std::vector<uint32_t> embedding_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
-        (std::uint32_t)weight_page_size,
-        (std::uint32_t)weight_block_size,
-        (std::uint32_t)num_tiles_per_block,
-        (std::uint32_t)input_block_size_bytes};
+    std::vector<uint32_t> embedding_compile_time_args;
+    if (use_chunked_processing) {
+        // Chunked kernel expects tiles_per_chunk and num_chunks
+        embedding_compile_time_args = {
+            (std::uint32_t)src0_cb_index,
+            (std::uint32_t)src1_cb_index,
+            (std::uint32_t)src2_cb_index,
+            (std::uint32_t)input_page_size,
+            (std::uint32_t)weight_page_size,
+            (std::uint32_t)weight_block_size,
+            (std::uint32_t)tiles_per_chunk,
+            (std::uint32_t)input_block_size_bytes,
+            (std::uint32_t)num_chunks};
+    } else {
+        embedding_compile_time_args = {
+            (std::uint32_t)src0_cb_index,
+            (std::uint32_t)src1_cb_index,
+            (std::uint32_t)src2_cb_index,
+            (std::uint32_t)input_page_size,
+            (std::uint32_t)weight_page_size,
+            (std::uint32_t)weight_block_size,
+            (std::uint32_t)tiles_per_chunk,
+            (std::uint32_t)input_block_size_bytes};
+    }
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -230,9 +275,15 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         {enchantum::to_string(embeddings_type).data(), "1"},
         {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
+    // Use chunked dataflow kernel only if chunking is needed
+    std::string dataflow_kernel_path =
+        use_chunked_processing
+            ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize_chunked.cpp"
+            : "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp";
+
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
+        dataflow_kernel_path,
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
@@ -241,11 +292,13 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(src0_cb_index),                // input embeddings_cb_index
             uint32_t(output_cb_index),              // output_cb_index
             uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
-            uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
+            uint32_t(tiles_per_chunk),              // tiles_per_chunk
+            uint32_t(num_chunks)                    // num_chunks per block
         };
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
+            use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
+                                   : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_1,
             tt::tt_metal::ComputeConfig{.compile_args = compute_args_1});
     }
@@ -255,11 +308,13 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(src0_cb_index),                // input embeddings_cb_index
             uint32_t(output_cb_index),              // output_cb_index
             uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
-            uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
+            uint32_t(tiles_per_chunk),              // tiles_per_chunk
+            uint32_t(num_chunks)                    // num_chunks per block
         };
         tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
+            use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
+                                   : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_2,
             tt::tt_metal::ComputeConfig{.compile_args = compute_args_2});
     }
@@ -373,6 +428,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
+    printf("running embeddings_rm\n");
     tt::tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
