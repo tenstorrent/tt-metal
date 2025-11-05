@@ -1836,7 +1836,7 @@ class ModelArgs:
         """
         # Trace in prefill is currently supported only for Llama-3.1-8B, Llama-3.1-70B, Llama-3.3-70B
         # TODO: (https://github.com/tenstorrent/tt-metal/issues/25722) Support all other models that use tt_transformers
-        if self.base_model_name != "Llama-3.1-8B" and "70B" not in self.base_model_name:
+        if self.base_model_name not in ["Llama-3.1-8B", "Llama-3.1-70B", "Llama-3.3-70B"]:
             return False
         if hasattr(self, "sliding_window") and getattr(self, "sliding_window") != None:
             return False
