@@ -452,7 +452,8 @@ void ControlPlane::init_control_plane(
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file, fabric_config);
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
@@ -477,9 +478,10 @@ void ControlPlane::init_control_plane(
         // o o o o
         // o o o o
         // o o o o
-        bool is_1d = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[0] == 1 ||
-                     this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1] == 1;
-        if (cluster.is_ubb_galaxy() && !is_1d) {
+        const bool is_1d = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[0] == 1 ||
+                           this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1] == 1;
+        const size_t board_size = cluster.get_unique_chip_ids().size();
+        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32) {  // Using full board size for UBB Galaxy
             int y_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1];
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
