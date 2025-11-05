@@ -352,10 +352,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         batch_size, input_channels, hw_total, l1_input_cores, l1_input_cores, input_element_size);
     const auto grouped_transfers = group_by_destination_core(transfers, l1_input_cores.size());
 
-    for (int i = 0; i < grouped_transfers.size(); i++) {
-        log_info(tt::LogType::LogAlways, "i={} - {}", i, grouped_transfers[0][0].src_core_idx);
-    }
-
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
     log_info(
@@ -433,22 +429,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         remote_address,
         static_cast<int>(remote_core_type),
         static_cast<int>(remote_buffer_type));
-    const auto [runtime_args_for_each_core, _, dram_write_stride_bytes, dram_read_stride_bytes] =
-        data_movement::detail::compute_width_sharding_reshard_segments(
-            {l1_input_shard_height, l1_input_shard_width},
-            a.shard_spec()->shape,  // dram shard shape
-            l1_input_cores,
-            dram_input_cores,
-            remote_buffer_type,
-            remote_core_type,
-            a.device(),
-            2);
-    log_info(
-        tt::LogType::LogAlways,
-        "convert_to_hwc: Stride bytes - dram_write_stride_bytes={}, dram_read_stride_bytes={}",
-        dram_write_stride_bytes,
-        dram_read_stride_bytes);
-    log_info(tt::LogType::LogAlways, "runtime_args_for_each_core[0]={}", runtime_args_for_each_core[0]);
 
     // Convert L1-to-L1 transfers to DRAM-to-L1 transfers if input is in DRAM
     std::vector<std::vector<DramTransferInstruction>> grouped_dram_transfers;
@@ -486,10 +466,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // Split DRAM read across each kernel along tensor height since this is the best way to split work evenly
     const uint32_t total_num_sticks_kernel_0 = (l1_input_shard_height / batch_size);
-    const uint32_t total_num_sticks_kernel_1 = (l1_input_shard_height / batch_size) - total_num_sticks_kernel_0;
 
     const uint32_t num_sticks_block_size_kernel_0 = total_num_sticks_kernel_0;
-    const uint32_t num_sticks_block_size_kernel_1 = total_num_sticks_kernel_1;
 
     // If there is only one HW tile we shouldn't stride the output copies because only one writer is working
     const uint32_t output_addr_stride =
@@ -497,11 +475,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     log_info(
         tt::LogType::LogAlways,
-        "convert_to_hwc: Kernel work split - kernel0_sticks={} (block_size={}), kernel1_sticks={} (block_size={})",
+        "convert_to_hwc: Kernel work split - kernel0_sticks={} (block_size={})",
         total_num_sticks_kernel_0,
-        num_sticks_block_size_kernel_0,
-        total_num_sticks_kernel_1,
-        num_sticks_block_size_kernel_1);
+        num_sticks_block_size_kernel_0);
     log_info(tt::LogType::LogAlways, "output_addr_stride = {}", output_addr_stride);
 
     std::vector<uint32_t> writer_compile_time_args0 = {
@@ -517,9 +493,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         input_element_size,
         is_input_in_dram,
         true,  // is_reader - this writer kernel acts as the reader
-        dram_write_stride_bytes,
-        dram_read_stride_bytes,
-        total_num_sticks_kernel_0,
         num_sticks_block_size_kernel_0,
         batch_size,
         output_addr_stride};
@@ -539,10 +512,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         input_element_size,
         is_input_in_dram,
         false,  // is_reader - this writer kernel does not read input
-        dram_write_stride_bytes,
-        dram_read_stride_bytes,
-        total_num_sticks_kernel_1,
-        num_sticks_block_size_kernel_1,
+        0,      // num_sticks_block_size_kernel_1 - unused
         batch_size,
         output_addr_stride};
     log_info(tt::LogType::LogAlways, "convert_to_hwc: writer_compile_time_args1 = {}", writer_compile_time_args1);
@@ -592,10 +562,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                              writer_kernel_id0,
                              writer_kernel_id1,
                              total_num_sticks_kernel_0,
-                             total_num_sticks_kernel_1,
                              remote_address,
-                             dram_read_stride_bytes,
-                             dram_write_stride_bytes,
                              batch_size](tt::tt_metal::Program& program, const Tensor& a, const Tensor& output) {
         log_info(tt::LogType::LogAlways, "convert_to_hwc: Setting runtime args, is_input_in_dram={}", is_input_in_dram);
 

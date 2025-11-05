@@ -12,8 +12,6 @@ template <uint32_t StickSize, uint32_t PaddedStickSize, uint32_t NumSticks>
 FORCE_INLINE void copy_padded_sticks(uint32_t l1_read_addr, uint32_t& l1_write_addr) {
     noc_async_read_one_packet_set_state(get_noc_addr(l1_read_addr), StickSize);
     for (uint32_t row = 0; row < NumSticks; row++) {
-        // DPRINT << "copy stick from tile cb at " << l1_read_addr << "  to output cb at " << l1_write_addr << ENDL();
-        // tt::data_movement::common::print_bf16_pages(l1_read_addr, 32, 1);
         noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
         l1_read_addr += PaddedStickSize;
         l1_write_addr += StickSize;
@@ -37,15 +35,9 @@ void kernel_main() {
 
     constexpr bool is_input_in_dram = get_compile_time_arg_val(10);
     constexpr bool is_reader = get_compile_time_arg_val(11);
-    constexpr uint32_t dram_write_stride_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t dram_read_stride_bytes = get_compile_time_arg_val(13);
-    constexpr uint32_t input_sticks_per_core = get_compile_time_arg_val(14);
-    constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(15);
-    constexpr uint32_t input_num_blocks = get_compile_time_arg_val(16);
-    constexpr uint32_t l1_write_output_addr_stride = get_compile_time_arg_val(17);
-
-    const uint32_t x = NOC_X(my_x[0]);
-    const uint32_t y = NOC_Y(my_y[0]);
+    constexpr uint32_t input_block_size_sticks_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t input_num_blocks = get_compile_time_arg_val(13);
+    constexpr uint32_t l1_write_output_addr_stride = get_compile_time_arg_val(14);
 
     constexpr uint32_t channel_size = channels * element_size_bytes;
 
