@@ -71,37 +71,43 @@ void kernel_main() {
     const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr, v_tile_bytes);
 
     const auto q_input_tile_logical = TensorTileShape(B, NH, local_Nt, DHt);
-    const auto kv_input_tile_logical = TensorTileShape(B, NH, global_Nt, DHt);
+    const auto local_kv_input_tile_logical = TensorTileShape(B, NH, local_Nt, DHt);
+    const auto gathered_kv_input_tile_logical = TensorTileShape(B, NH, global_Nt, DHt);
     const auto joint_tile_logical = TensorTileShape(B, NH, logical_Lt, DHt);
+
     const auto cat_q_generator =
         CatAddrGenerator(q_reader, q_input_tile_logical, local_Nt, joint_q_reader, joint_tile_logical, padded_Lqt);
 
     const auto cat_local_k_generator = CatAddrGenerator(
-        local_k_reader, kv_input_tile_logical, global_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
+        local_k_reader, local_kv_input_tile_logical, local_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
     const auto cat_local_v_generator = CatAddrGenerator(
-        local_v_reader, kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
+        local_v_reader, local_kv_input_tile_logical, local_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
 
     const auto cat_gathered_k_generator = CatAddrGenerator(
-        gathered_k_reader, kv_input_tile_logical, global_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
+        gathered_k_reader, gathered_kv_input_tile_logical, global_Nt, joint_k_reader, joint_tile_logical, padded_Lkt);
     const auto cat_gathered_v_generator = CatAddrGenerator(
-        gathered_v_reader, kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
+        gathered_v_reader, gathered_kv_input_tile_logical, global_Nt, joint_v_reader, joint_tile_logical, padded_Lkt);
 
     /**
      * Iterate over ring indices.
-     * On the first iteration, read from local K, V. Also process the joint K, V.
+     * On the first iteration, read from local K, V.
      * On subsequent iterations, read from gathered K, V. Sync with AllGather fused signaler.
      */
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Iterate over KV blocks gathered on ring.
-        // Only the first iteration will append joint_K, joint_V to K, V.
         const uint32_t iter_k_num_chunks =
-            ring_iter == 0 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
+            ring_id == ring_size - 1 ? (N_k_num_chunks_local + L_k_num_chunks) : N_k_num_chunks_local;
+
         // Start at K chunk 0 if ring iter 0 is indexing into local K, V.
-        const uint32_t iter_k_chunk_start = ring_iter == 0 ? 0 : ring_id * N_k_num_chunks_local;
+        const uint32_t iter_k_chunk_start = ring_id * N_k_num_chunks_local;
 
         const uint32_t iter_k_chunk_end = iter_k_chunk_start + iter_k_num_chunks;
+
+        // On the first ring iteration, read from local K, V. On subsequent iterations, read from gathered K, V.
+        const auto k_generator = ring_iter == 0 ? cat_local_k_generator : cat_gathered_k_generator;
+        const auto v_generator = ring_iter == 0 ? cat_local_v_generator : cat_gathered_v_generator;
 
         for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
             // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
@@ -122,15 +128,23 @@ void kernel_main() {
                     continue;
                 }
 
-                const auto kv_row_start_tile = k_chunk * Sk_chunk_t;
+                uint32_t k_chunk_adjusted = k_chunk;
+                if (ring_iter == 0) {
+                    /**
+                     * If reading from local K, V, adjust the k chunk index to be relative to the local K, V.
+                     */
+                    k_chunk_adjusted = k_chunk - iter_k_chunk_start;
+                }
+
+                const auto kv_row_start_tile = k_chunk_adjusted * Sk_chunk_t;
                 const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_start_tile + Sk_chunk_t, 0, DHt);
 
                 read_block(
-                    cat_k_generator, kv_slice, cb_k_in, k_tile_bytes, barrier_threshold, true /*transpose*/
+                    k_generator, kv_slice, cb_k_in, k_tile_bytes, barrier_threshold, true /*transpose*/
                 );
 
                 read_block(
-                    cat_v_generator, kv_slice, cb_v_in, v_tile_bytes, barrier_threshold, false /*transpose*/
+                    v_generator, kv_slice, cb_v_in, v_tile_bytes, barrier_threshold, false /*transpose*/
                 );
             }
         }
