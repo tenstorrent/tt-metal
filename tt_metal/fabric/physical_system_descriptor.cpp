@@ -232,7 +232,7 @@ void PhysicalSystemDescriptor::clear() {
 void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     this->clear();
 
-    TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD driver reference in order to run discovery");
+    TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to run discovery");
     tt::umd::Cluster& cluster = *cluster_;
 
     if (!run_live_discovery || target_device_type_ != TargetDevice::Silicon) {
@@ -788,7 +788,7 @@ AsicID PhysicalSystemDescriptor::get_asic_id(
 }
 
 LocalEthernetMetrics PhysicalSystemDescriptor::query_local_ethernet_metrics() const {
-    TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD driver reference in order to query Ethernet metrics");
+    TT_FATAL(cluster_ == nullptr, "PhysicalSystemDescriptor must be initialized with a valid UMD cluster reference in order to query Ethernet metrics");
     tt::umd::Cluster& cluster = *cluster_;
 
     const auto& local_asics = get_asics_connected_to_host(my_host_name());

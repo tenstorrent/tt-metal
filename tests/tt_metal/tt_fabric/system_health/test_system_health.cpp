@@ -40,7 +40,7 @@ std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
 ConnectorType get_connector_type(ChipId chip_id, CoreCoord eth_core, uint32_t chan, ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& driver = cluster.get_driver();
-    TT_FATAL(driver != nullptr, "UMD driver must be initialized");
+    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
     auto arch = cluster.arch();
     auto board_type = cluster.get_board_type(chip_id);
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -150,7 +150,7 @@ bool is_chip_on_corner_of_mesh(ChipId physical_chip_id, tt::tt_metal::ClusterTyp
 std::string get_ubb_id_str(ChipId chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& driver = cluster.get_driver();
-    TT_FATAL(driver != nullptr, "UMD driver must be initialized");
+    TT_FATAL(driver != nullptr, "UMD cluster object must be initialized");
     auto ubb_id = tt::tt_fabric::get_ubb_id(*driver, chip_id);
     return "Tray: " + std::to_string(ubb_id.tray_id) + " N" + std::to_string(ubb_id.asic_id);
 }
