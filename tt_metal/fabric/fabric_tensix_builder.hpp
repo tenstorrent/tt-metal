@@ -21,19 +21,19 @@
 
 namespace tt::tt_fabric {
 
-// RISC ID enum for fabric tensix datamover
-enum class FabricTensixRiscId : uint8_t {
+// Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
+enum class FabricTensixCoreType : uint8_t {
     MUX = 0,   // BRISC - runs MUX kernel
     RELAY = 1  // NCRISC - runs Relay kernel (UDM mode only)
 };
 
 }  // namespace tt::tt_fabric
 
-// Hash function for FabricTensixRiscId to use as unordered_map key
+// Hash function for FabricTensixCoreType to use as unordered_map key
 namespace std {
 template <>
-struct hash<tt::tt_fabric::FabricTensixRiscId> {
-    size_t operator()(const tt::tt_fabric::FabricTensixRiscId& id) const { return static_cast<size_t>(id); }
+struct hash<tt::tt_fabric::FabricTensixCoreType> {
+    size_t operator()(const tt::tt_fabric::FabricTensixCoreType& id) const { return static_cast<size_t>(id); }
 };
 }  // namespace std
 
@@ -49,26 +49,26 @@ public:
     uint8_t get_num_buffers_per_channel() const { return num_buffers_per_channel_; }
     size_t get_buffer_size_bytes_full_size_channel() const { return buffer_size_bytes_full_size_channel_; }
 
-    // Get base L1 address for a RISC ID
-    size_t get_base_l1_address(FabricTensixRiscId risc_id) const;
+    // Get base L1 address for a core type
+    size_t get_base_l1_address(FabricTensixCoreType core_id) const;
 
     // Get NOC coordinates for ethernet channel (requires device)
     std::pair<uint32_t, uint32_t> get_noc_xy(tt::tt_metal::IDevice* device, uint32_t eth_chan_id) const;
 
     // Get channel base address for mux channel ID
-    size_t get_channels_base_address(FabricTensixRiscId risc_id, uint8_t tensix_channel_id) const;
+    size_t get_channels_base_address(FabricTensixCoreType core_id, uint8_t tensix_channel_id) const;
 
-    // Get the RISC ID for a given ethernet channel on a specific device
-    FabricTensixRiscId get_risc_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
+    // Get the core type for a given ethernet channel on a specific device
+    FabricTensixCoreType get_core_id_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
 
     // Get the core for a given ethernet channel on a specific device
     CoreCoord get_core_for_channel(ChipId device_id, uint32_t eth_chan_id) const;
 
-    // Get the config for a specific RISC ID (returns base config pointer)
-    std::shared_ptr<FabricTensixDatamoverBaseConfig> get_config(FabricTensixRiscId risc_id) const;
+    // Get the config for a specific core type (returns base config pointer)
+    std::shared_ptr<FabricTensixDatamoverBaseConfig> get_config(FabricTensixCoreType core_id) const;
 
-    // Check if a RISC ID is active (has channels)
-    bool is_risc_id_active(FabricTensixRiscId risc_id) const;
+    // Check if a core type is active (has channels)
+    bool is_core_id_active(FabricTensixCoreType core_id) const;
 
     // Get translated fabric mux cores
     const std::unordered_set<CoreCoord>& get_translated_fabric_or_dispatch_mux_cores() const {
@@ -83,25 +83,25 @@ public:
         return translated_dispatch_mux_cores_;
     }
 
-    // Wrapper APIs for config access - takes device_id, eth_chan_id, channel_id, and risc_id
-    // Callers must explicitly specify which RISC (MUX or RELAY) they want to access
+    // Wrapper APIs for config access - takes device_id, eth_chan_id, channel_id, and core_id
+    // Callers must explicitly specify which core type (MUX or RELAY) they want to access
     size_t get_local_flow_control_semaphore_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const;
+        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
 
     size_t get_connection_semaphore_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const;
+        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
 
     size_t get_worker_conn_info_base_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const;
+        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
 
     size_t get_buffer_index_semaphore_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const;
+        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
 
     size_t get_channel_credits_stream_id(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixRiscId risc_id) const;
+        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
 
     std::pair<uint32_t, uint32_t> get_termination_address_and_signal(
-        ChipId device_id, uint32_t eth_chan_id, FabricTensixRiscId risc_id) const;
+        ChipId device_id, uint32_t eth_chan_id, FabricTensixCoreType core_id) const;
 
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
@@ -120,23 +120,27 @@ private:
     size_t buffer_size_bytes_full_size_channel_{};
 
     // Base L1 addresses for each RISC ID, [risc id] -> [base addr] mapping
-    std::unordered_map<FabricTensixRiscId, size_t> base_l1_addresses_;
+    std::unordered_map<FabricTensixCoreType, size_t> base_l1_addresses_;
 
     // [device_id][eth chan] -> [core index] mapping for round-robin assignment
     std::unordered_map<ChipId, std::unordered_map<size_t, size_t>> eth_chan_to_core_index_;
 
-    // [device_id][eth chan] -> [risc id] mapping
-    std::unordered_map<ChipId, std::unordered_map<size_t, FabricTensixRiscId>> eth_chan_to_risc_id_;
+    // [device_id][eth chan] -> [core type] mapping
+    std::unordered_map<ChipId, std::unordered_map<size_t, FabricTensixCoreType>> eth_chan_to_core_id_;
 
-    // Configs per RISC ID, [risc id] -> [config] mapping
+    // Configs per core type, [core type] -> [config] mapping
     // In MUX mode: only MUX has config
     // In UDM mode: both MUX and RELAY have configs
-    std::unordered_map<FabricTensixRiscId, std::shared_ptr<FabricTensixDatamoverBaseConfig>> configs_;
+    std::unordered_map<FabricTensixCoreType, std::shared_ptr<FabricTensixDatamoverBaseConfig>> configs_;
 
     // Helper methods for initialization
     bool initialize_channel_mappings();
     void calculate_buffer_allocations();
     void create_configs();  // Creates mode-aware configs based on FabricTensixConfig
+
+    // Helper methods for config creation
+    std::shared_ptr<FabricTensixDatamoverMuxConfig> create_mux_config(FabricTensixCoreType core_id);
+    std::shared_ptr<FabricTensixDatamoverRelayConfig> create_relay_config(FabricTensixCoreType core_id);
 };
 
 /**
@@ -167,7 +171,7 @@ public:
     tt::tt_fabric::FabricNodeId get_local_fabric_node_id() const;
     tt::tt_fabric::FabricNodeId get_remote_fabric_node_id() const;
     uint32_t get_ethernet_channel_id() const;
-    FabricTensixRiscId get_risc_id() const;
+    FabricTensixCoreType get_core_id() const;
     uint32_t get_noc_x() const;
     uint32_t get_noc_y() const;
     eth_chan_directions get_direction() const;
