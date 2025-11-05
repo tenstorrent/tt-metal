@@ -1467,8 +1467,11 @@ class Generator:
         max_gen_len=None,
     ):
         model_id = 0
-        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
-            max_gen_len = self.model[model_id].configuration.max_seq_len - 1
+        # Support both multimodal models (with `.configuration`) and text-only models
+        config = getattr(self.model[model_id], "configuration", None)
+        max_seq_len = config.max_seq_len if config is not None else self.model_args[model_id].max_seq_len
+        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= max_seq_len:
+            max_gen_len = max_seq_len - 1
 
         encoder = self.processor or self.tokenizer
         model_input = encoder.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
@@ -1511,8 +1514,10 @@ class Generator:
     ):
         """Supports only vision models at the moment"""
         model_id = 0
-        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
-            max_gen_len = self.model[model_id].configuration.max_seq_len - 1
+        config = getattr(self.model[model_id], "configuration", None)
+        max_seq_len = config.max_seq_len if config is not None else self.model_args[model_id].max_seq_len
+        if max_gen_len is None or max_gen_len == 0 or max_gen_len >= max_seq_len:
+            max_gen_len = max_seq_len - 1
 
         vision_images = []
         image_token = getattr(self.processor, "image_token", None) or getattr(self.tokenizer, "image_token", None)
