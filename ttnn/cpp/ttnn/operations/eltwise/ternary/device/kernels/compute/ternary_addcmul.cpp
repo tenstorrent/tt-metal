@@ -25,11 +25,9 @@ void MAIN {
     binop_with_scalar_tile_init();
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
+        // Wait for input_b and input_c first (needed for first computation)
         cb_wait_front(cb_in1, num_tiles_per_cycle);
         cb_wait_front(cb_in2, num_tiles_per_cycle);
-
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
 
         tile_regs_acquire();
 
@@ -43,8 +41,15 @@ void MAIN {
         mul_binary_tile_init();
         mul_binary_tile(0, 1, 1);  // DST[0] * DST[1] -> DST[1]
 
+        // Done with cb_in1 and cb_in2, pop them early for pipeline efficiency
+        cb_pop_front(cb_in1, num_tiles_per_cycle);
+        cb_pop_front(cb_in2, num_tiles_per_cycle);
+
         // Step 2: (input_b * input_c) * value -> DST[1]
         mul_unary_tile(1, scalar_u32);  // DST[1] * scalar -> DST[1]
+
+        // Now wait for input_a (only when we need it)
+        cb_wait_front(cb_in0, num_tiles_per_cycle);
 
         // Step 3: Load A and add with result
         copy_tile_to_dst_init_short(cb_in0);
@@ -56,6 +61,9 @@ void MAIN {
         tile_regs_commit();
         tile_regs_wait();
 
+        // Reserve output buffer only when ready to write
+        cb_reserve_back(cb_out, num_tiles_per_cycle);
+
         // Pack the result from DST[0] to output
         pack_tile(0, cb_out);
 
@@ -63,8 +71,6 @@ void MAIN {
 
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_in0, num_tiles_per_cycle);
-        cb_pop_front(cb_in1, num_tiles_per_cycle);
-        cb_pop_front(cb_in2, num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE
