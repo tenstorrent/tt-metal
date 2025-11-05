@@ -483,7 +483,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
     }
 }
 
-YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
+void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) {
     YAML::Node root;
     YAML::Node compute_nodes;
     YAML::Node local_eth_connections(YAML::NodeType::Sequence);
@@ -497,7 +497,7 @@ YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
 
         std::map<TrayID, std::vector<ASICDescriptor>> grouped_asics;
 
-        for (const auto& asic : system_graph_.asic_connectivity_graph.at(host_name)) {
+        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
             AsicID asic_id = asic.first;
             TrayID tray_id = asic_descriptors_.at(asic_id).tray_id;
             grouped_asics[tray_id].push_back(asic_descriptors_.at(asic_id));
@@ -525,7 +525,7 @@ YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
         host_node["asic_info"] = tray_groups;
         compute_nodes[host_name] = host_node;
 
-        for (const auto& asic : system_graph_.asic_connectivity_graph.at(host_name)) {
+        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
             auto src_asic_id = asic.first;
             const auto& src_asic_desc = asic_descriptors_.at(src_asic_id);
             for (const auto& edge : asic.second) {
@@ -571,21 +571,9 @@ YAML::Node PhysicalSystemDescriptor::generate_yaml_node() const {
     root["local_eth_connections"] = local_eth_connections;
     root["global_eth_connections"] = global_eth_connections;
 
-    return root;
-}
-
-void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) const {
-    YAML::Node root = generate_yaml_node();
-
     if (path_to_yaml.has_value()) {
         std::ofstream fout(path_to_yaml.value());
-        if (!fout.is_open()) {
-            TT_THROW("Failed to open file for writing: {}", path_to_yaml.value());
-        }
         fout << root;
-        if (fout.fail()) {
-            TT_THROW("Failed to write YAML content to file: {}", path_to_yaml.value());
-        }
     } else {
         std::cout << root << std::endl;
     }

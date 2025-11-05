@@ -24,14 +24,30 @@
 
 namespace tt::scaleout_tools {
 
-std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
-    const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& generated_fsd,
-    const YAML::Node& discovered_gsd,
+std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
+    const std::string& fsd_filename,
+    const std::string& gsd_filename,
     bool strict_validation,
     bool assert_on_connection_mismatch,
     bool log_output) {
+    // Read the generated FSD using protobuf
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
+    std::ifstream fsd_file(fsd_filename);
+    if (!fsd_file.is_open()) {
+        throw std::runtime_error("Failed to open FSD file: " + fsd_filename);
+    }
+
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &generated_fsd)) {
+        throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
+    }
 
     const auto& hosts = generated_fsd.hosts();
+
+    // Read the discovered GSD (Global System Descriptor) - still using YAML
+    YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
 
     // Compare the FSD with the discovered GSD
     // First, compare hostnames from the hosts field
@@ -482,50 +498,6 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
         }
     }
     return missing_in_gsd;
-}
-
-std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
-    const std::string& fsd_filename,
-    const std::string& gsd_filename,
-    bool strict_validation,
-    bool assert_on_connection_mismatch,
-    bool log_output) {
-    // Read the generated FSD using protobuf
-    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
-    std::ifstream fsd_file(fsd_filename);
-    if (!fsd_file.is_open()) {
-        throw std::runtime_error("Failed to open FSD file: " + fsd_filename);
-    }
-
-    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
-    fsd_file.close();
-
-    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &generated_fsd)) {
-        throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
-    }
-
-    // Read the discovered GSD (Global System Descriptor) - still using YAML
-    YAML::Node discovered_gsd = YAML::LoadFile(gsd_filename);
-
-    // Call a shared validation function that does the actual work
-    return validate_fsd_against_gsd_impl(generated_fsd, discovered_gsd, strict_validation, assert_on_connection_mismatch, log_output);
-}
-
-std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(
-    const std::string& cabling_descriptor_path,
-    const std::vector<std::string>& hostnames,
-    const YAML::Node& gsd_yaml_node,
-    bool strict_validation,
-    bool assert_on_connection_mismatch,
-    bool log_output) {
-    // Generate FSD from the cabling descriptor using CablingGenerator
-    CablingGenerator cabling_generator(cabling_descriptor_path, hostnames);
-
-    // Generate the FSD protobuf object in memory
-    auto generated_fsd = cabling_generator.generate_factory_system_descriptor();
-
-    // Call a shared validation function that does the actual work
-    return validate_fsd_against_gsd_impl(generated_fsd, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output);
 }
 
 }  // namespace tt::scaleout_tools
