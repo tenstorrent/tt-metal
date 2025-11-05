@@ -289,6 +289,30 @@ class MasterConfigLoader:
             print(f"⚠️ Error parsing memory config, using DRAM default: {e}")
             return ttnn.DRAM_MEMORY_CONFIG
 
+    def _count_tensor_inputs(self, configs: List) -> int:
+        """
+        Count the number of tensor inputs by checking the first config.
+
+        Args:
+            configs: List of operation configurations
+
+        Returns:
+            Number of tensor inputs (0, 1, 2, 3, etc.)
+        """
+        if not configs or len(configs) == 0:
+            return 0
+
+        # Check first config for number of tensor arguments
+        first_config = configs[0]
+        tensor_count = 0
+
+        for arg in first_config:
+            tensor_config = self.extract_tensor_config(arg)
+            if tensor_config:
+                tensor_count += 1
+
+        return tensor_count
+
     def _is_binary_operation(self, configs: List) -> bool:
         """
         Detect if an operation is binary (2 tensor inputs) by checking the first config.
@@ -299,21 +323,7 @@ class MasterConfigLoader:
         Returns:
             True if operation has 2 tensor inputs, False otherwise
         """
-        if not configs or len(configs) == 0:
-            return False
-
-        # Check first config for number of tensor arguments
-        first_config = configs[0]
-        tensor_count = 0
-
-        for arg in first_config:
-            tensor_config = self.extract_tensor_config(arg)
-            if tensor_config:
-                tensor_count += 1
-                if tensor_count >= 2:
-                    return True
-
-        return False
+        return self._count_tensor_inputs(configs) == 2
 
     def get_suite_parameters(
         self, operation_name: str, suite_name: str = "model_traced", all_cases: bool = False
@@ -368,17 +378,32 @@ class MasterConfigLoader:
                     "output_memory_config": [],
                 }
 
-            # Detect if this is a binary operation
-            is_binary = self._is_binary_operation(configs)
+            # Detect the number of tensor inputs
+            tensor_count = self._count_tensor_inputs(configs)
 
             # By default, deduplicate inputs unless running all_cases (Cartesian product)
             deduplicate_inputs = not all_cases
 
-            if is_binary:
-                print(f"🔧 Detected binary operation: {operation_name}")
+            if tensor_count == 0:
+                print(
+                    f"⚠️  No tensor inputs detected for {operation_name} - operation may have non-standard parameters"
+                )
+                print(f"    Treating as unary operation with first argument as input")
+                return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+            elif tensor_count == 1:
+                print(f"🔧 Detected unary operation: {operation_name} (1 tensor input)")
+                return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+            elif tensor_count == 2:
+                print(f"🔧 Detected binary operation: {operation_name} (2 tensor inputs)")
                 return self._get_binary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
+            elif tensor_count >= 3:
+                print(f"🔧 Detected multi-input operation: {operation_name} ({tensor_count} tensor inputs)")
+                return self._get_multi_input_suite_parameters(
+                    operation_name, configs, tensor_count, all_cases, deduplicate_inputs
+                )
             else:
-                print(f"🔧 Detected unary operation: {operation_name}")
+                # Fallback - shouldn't reach here
+                print(f"⚠️  Unable to determine operation type for {operation_name}, defaulting to unary")
                 return self._get_unary_suite_parameters(operation_name, configs, all_cases, deduplicate_inputs)
 
         except Exception as e:
@@ -602,6 +627,7 @@ class MasterConfigLoader:
                                 "layout_b": parsed_layout_b,
                                 "memory_config_a": parsed_mem_config_a,
                                 "memory_config_b": parsed_mem_config_b,
+                                "output_memory_config": parsed_mem_config_a,  # Use first input's memory config as default
                             }
                         )
                     else:
@@ -677,16 +703,165 @@ class MasterConfigLoader:
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
             else:
-                # Return config names for exact paired configs (default)
-                traced_config_names = [f"{operation_name}_traced_{i}" for i in range(len(paired_configs))]
+                # Return paired parameters as tuples to keep them together
+                # Use comma-separated parameter names to prevent Cartesian product
+                # For binary ops, we need to handle input_shape specially
+                paired_param_tuples = []
+                for cfg in paired_configs:
+                    paired_param_tuples.append(
+                        (
+                            {"self": cfg["shape_a"], "other": cfg["shape_b"]},  # input_shape as dict
+                            cfg["dtype_a"],
+                            cfg["dtype_b"],
+                            cfg["layout_a"],
+                            cfg["layout_b"],
+                            cfg["memory_config_a"],
+                            cfg["memory_config_b"],
+                            cfg["output_memory_config"],
+                        )
+                    )
 
                 result = {
-                    "traced_config_name": traced_config_names,
+                    "input_shape,input_a_dtype,input_b_dtype,input_a_layout,input_b_layout,input_a_memory_config,input_b_memory_config,output_memory_config": paired_param_tuples,
                 }
 
                 print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
                 dedup_msg = " (unique input pairs)" if deduplicate_inputs else " (all input/output pairs)"
                 print(f"   📊 Will generate {len(paired_configs)} test vectors{dedup_msg}")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+
+            return result
+        else:
+            # No configs successfully parsed, return empty
+            print(f"⚠️ No configurations could be parsed for {operation_name} (TTNN may not be initialized)")
+            return {
+                "traced_config_name": [],
+            }
+
+    def _get_multi_input_suite_parameters(
+        self, operation_name: str, configs: List, tensor_count: int, all_cases: bool, deduplicate_inputs: bool = False
+    ) -> Dict:
+        """
+        Get parameters for multi-input operations (3+ tensor inputs).
+        Handles operations like where (ternary), addcmul, etc.
+        """
+        # Extract configurations for ALL tensors
+        paired_configs = []
+        failed_configs = 0
+
+        for config_idx, config in enumerate(configs):
+            try:
+                # Extract ALL tensors from each config
+                tensor_configs = []
+                for arg in config:
+                    tensor_config = self.extract_tensor_config(arg)
+                    if tensor_config:
+                        tensor_configs.append(tensor_config)
+                        if len(tensor_configs) >= tensor_count:
+                            break
+
+                if len(tensor_configs) < tensor_count:
+                    failed_configs += 1
+                    continue
+
+                # Parse all tensor configs
+                parsed_config = {}
+                for i, tc in enumerate(tensor_configs):
+                    suffix = chr(97 + i)  # a, b, c, d, ...
+                    try:
+                        parsed_config[f"shape_{suffix}"] = tc.shape
+                        parsed_config[f"dtype_{suffix}"] = self.parse_dtype(tc.dtype)
+                        parsed_config[f"layout_{suffix}"] = self.parse_layout(tc.layout)
+                        parsed_config[f"memory_config_{suffix}"] = self.parse_memory_config(tc.memory_config, tc.shape)
+                    except Exception as e:
+                        failed_configs += 1
+                        break
+
+                if len(parsed_config) == tensor_count * 4:  # shape, dtype, layout, mem_config for each tensor
+                    paired_configs.append(parsed_config)
+
+            except Exception as e:
+                failed_configs += 1
+
+        # Build parameter dictionary based on all_cases flag
+        if paired_configs:
+            # Store configs in instance cache for lookup
+            self.traced_configs_cache[operation_name] = paired_configs
+
+            if all_cases:
+                # Return separate lists for Cartesian product
+                result = {}
+
+                # Build input_shape as list of dicts
+                unique_shapes = []
+                seen_shapes = set()
+                for cfg in paired_configs:
+                    shape_tuple = tuple([tuple(cfg[f"shape_{chr(97+i)}"]) for i in range(tensor_count)])
+                    if shape_tuple not in seen_shapes:
+                        shape_dict = {f"input_{chr(97+i)}": cfg[f"shape_{chr(97+i)}"] for i in range(tensor_count)}
+                        unique_shapes.append(shape_dict)
+                        seen_shapes.add(shape_tuple)
+
+                result["input_shape"] = unique_shapes
+
+                # Add dtypes, layouts, and memory configs for each input
+                for i in range(tensor_count):
+                    suffix = chr(97 + i)  # a, b, c, ...
+                    result[f"input_{suffix}_dtype"] = list(set(cfg[f"dtype_{suffix}"] for cfg in paired_configs))
+                    result[f"input_{suffix}_layout"] = list(set(cfg[f"layout_{suffix}"] for cfg in paired_configs))
+
+                    unique_mem_configs = []
+                    seen = set()
+                    for cfg in paired_configs:
+                        mc_str = str(cfg[f"memory_config_{suffix}"])
+                        if mc_str not in seen:
+                            unique_mem_configs.append(cfg[f"memory_config_{suffix}"])
+                            seen.add(mc_str)
+                    result[f"input_{suffix}_memory_config"] = unique_mem_configs
+
+                total_tests = len(unique_shapes)
+                for i in range(tensor_count):
+                    suffix = chr(97 + i)
+                    total_tests *= len(result[f"input_{suffix}_dtype"])
+                    total_tests *= len(result[f"input_{suffix}_layout"])
+                    total_tests *= len(result[f"input_{suffix}_memory_config"])
+
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                print(f"   📊 all_cases=True: Will generate ~{total_tests} test vectors (Cartesian product)")
+                if failed_configs > 0:
+                    print(f"⚠️ Failed to parse {failed_configs} configurations")
+            else:
+                # Return paired parameters as tuples to keep them together
+                paired_param_tuples = []
+                for cfg in paired_configs:
+                    # Build input_shape dict
+                    input_shape = {f"input_{chr(97+i)}": cfg[f"shape_{chr(97+i)}"] for i in range(tensor_count)}
+
+                    # Build tuple with all parameters
+                    param_tuple = [input_shape]
+                    for i in range(tensor_count):
+                        suffix = chr(97 + i)
+                        param_tuple.extend(
+                            [cfg[f"dtype_{suffix}"], cfg[f"layout_{suffix}"], cfg[f"memory_config_{suffix}"]]
+                        )
+
+                    paired_param_tuples.append(tuple(param_tuple))
+
+                # Build parameter name string
+                param_names = ["input_shape"]
+                for i in range(tensor_count):
+                    suffix = chr(97 + i)
+                    param_names.extend(
+                        [f"input_{suffix}_dtype", f"input_{suffix}_layout", f"input_{suffix}_memory_config"]
+                    )
+
+                result = {
+                    ",".join(param_names): paired_param_tuples,
+                }
+
+                print(f"✅ Loaded {len(paired_configs)} traced configurations for {operation_name} (model_traced suite)")
+                print(f"   📊 Will generate {len(paired_configs)} test vectors")
                 if failed_configs > 0:
                     print(f"⚠️ Failed to parse {failed_configs} configurations")
 
