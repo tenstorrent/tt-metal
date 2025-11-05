@@ -2039,7 +2039,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
 // clang-format off
 /**
  * Initiates an asynchronous read for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
- * Must first set the transaction id using \a noc_async_read_tile_dram_sharded_set_trid and the stateful registers
+ * Must first set the transaction id using \a noc_async_read_set_trid and the stateful registers
  * using an API such as \a noc_async_read_one_packet_set_state.
  *
  * Return value: None
@@ -2055,9 +2055,9 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  */
 // clang-format on
 template <bool skip_ptr_update = false>
-FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
+FORCE_INLINE void noc_async_read_tile_with_state_with_trid(
     uint32_t src_base_addr, uint32_t src_addr, uint32_t dest_addr, uint32_t trid = 0, uint8_t noc = noc_index) {
-    RECORD_NOC_EVENT(NocEventType::READ_DRAM_SHARDED_WITH_STATE);
+    RECORD_NOC_EVENT(NocEventType::READ_WITH_STATE_AND_TRID);
 
     WAYPOINT("NRDW");
     ncrisc_noc_fast_read_with_transaction_id<noc_mode, skip_ptr_update>(
@@ -2078,7 +2078,7 @@ FORCE_INLINE void noc_async_read_tile_dram_sharded_with_state_with_trid(
  */
 // clang-format on
 FORCE_INLINE
-void noc_async_read_tile_dram_sharded_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
+void noc_async_read_set_trid(uint32_t trid = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::READ_SET_TRID);
 
     WAYPOINT("NSTW");

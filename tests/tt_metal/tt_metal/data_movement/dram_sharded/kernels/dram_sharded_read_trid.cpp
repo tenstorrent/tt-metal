@@ -35,10 +35,9 @@ void kernel_main() {
             for (uint32_t bank_id = 0; bank_id < num_banks; bank_id++) {
                 uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(bank_id, src_addr);
                 noc_async_read_one_packet_set_state(src_noc_addr, page_size_bytes);
-                noc_async_read_tile_dram_sharded_set_trid(curr_trid);
+                noc_async_read_set_trid(curr_trid);
                 for (uint32_t i = 0; i < pages_per_bank; i++) {
-                    noc_async_read_tile_dram_sharded_with_state_with_trid(
-                        src_noc_addr, i * page_size_bytes, dst_addr, curr_trid);
+                    noc_async_read_tile_with_state_with_trid(src_noc_addr, i * page_size_bytes, dst_addr, curr_trid);
                     dst_addr += page_size_bytes;
                 }
                 curr_trid = (curr_trid + 1) % num_of_trids;  // keep trid between 0 and num_of_trids-1
