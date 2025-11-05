@@ -99,6 +99,7 @@ target_link_libraries(
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
         protobuf::libprotobuf
+        TT::ScaleoutTools
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
