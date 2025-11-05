@@ -49,7 +49,7 @@ bool is_integer_format(DataFormat format);
 
 std::ostream& operator<<(std::ostream& os, const DataFormat& format);
 
-constexpr uint32_t datum_size(const DataFormat& format) {
+constexpr static uint32_t datum_size(const DataFormat& format) {
     switch (format) {
         case DataFormat::Bfp2:
         case DataFormat::Bfp2_b:
