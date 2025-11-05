@@ -111,7 +111,7 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void open_devices(const TestFabricSetup& fabric_setup) {
+    bool open_devices(const TestFabricSetup& fabric_setup) {
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
@@ -149,6 +149,13 @@ public:
             new_fabric_config = it->second;
         }
 
+        // Use the new ControlPlane validation API - always skip on mismatch
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        if (!control_plane.is_fabric_config_valid(new_fabric_config)) {
+            log_warning(tt::LogTest, "Fabric configuration validation failed - can't open device");
+            return false;
+        }
+
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_) {
             if (are_devices_open_) {
@@ -163,6 +170,7 @@ public:
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
+        return true;
     }
 
     void setup_workload() {
