@@ -92,15 +92,6 @@ def main():
     print(f"Loading text data from {args.text_file}...")
     text_data = load_text_data(args.text_file)
 
-    # # Tokenize the text data
-    # print(f"Tokenizing data using tokenizer {args.tokenizer_file}...")
-    # splits_num = 128
-    # tokenized_data = []
-    # for i in range(splits_num):
-    #     text_data_split = text_data[i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num]
-    #     tokenized_data_split = tokenize_text_data(args.tokenizer_file, text_data_split)
-    #     tokenized_data.extend(tokenized_data_split)
-
     tokenizer = AutoTokenizer.from_pretrained(args.hf_tokenizer)
     print(f"Tokenizing data using Hugging Face tokenizer {args.hf_tokenizer}...")
     splits_num = 128
