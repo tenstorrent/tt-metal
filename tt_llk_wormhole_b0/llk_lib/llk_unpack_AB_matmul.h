@@ -384,7 +384,7 @@ inline void _llk_unpack_AB_matmul_(
             }
             if ((t + 1) < t_dim)
             {
-                // Let's load one more tile into srcB
+                // Let's load one more tile into srcA
                 TT_SETDMAREG(0, LOWER_HALFWORD(next_address_b), 0, LO_16(p_gpr_unpack::TMP0));
                 TT_SETDMAREG(0, UPPER_HALFWORD(next_address_b), 0, HI_16(p_gpr_unpack::TMP0));
                 if (0 == unp_cfg_context)
