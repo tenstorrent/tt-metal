@@ -54,7 +54,7 @@ private:
     bool block_shard;
     bool deallocate_activation;
     ttnn::Layout output_layout;
-    bool width_shard;
+    // bool width_shard;
     int act_blocks;
     bool enable_act_double_buffer;
     bool reshard_if_not_optimal;
@@ -82,13 +82,13 @@ public:
 
 private:
     std::shared_ptr<ttnn::MeshDevice> device_;
-    int batchsize;
-    int stride;
-    int expand_ratio;
-    int in_channels;
-    int out_channels;
-    bool block_shard;
-    int id;
+    // int batchsize;
+    // int stride;
+    // int expand_ratio;
+    // int in_channels;
+    // int out_channels;
+    // bool block_shard;
+    // int id;
     bool use_res_connect;
 
     std::unique_ptr<TtMobileNetV2Conv2D> conv1;

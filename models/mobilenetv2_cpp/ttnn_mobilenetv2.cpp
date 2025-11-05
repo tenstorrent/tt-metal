@@ -49,7 +49,7 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
     reshard_if_not_optimal(reshard_if_not_optimal),
     batch_size(batch_size),
     shard_layout(shard_layout),
-    activation(activation) {
+    activation(std::move(activation)) {
     if (block_shard) {
         shard_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
     }
@@ -149,7 +149,7 @@ ttnn::DeviceComputeKernelConfig TtMobileNetV2Conv2D::initialize_compute_config()
         device_->arch(),
         std::nullopt,
         MathFidelity::LoFi,
-        /*math_approx_mode=*/false);
+        /*default_approx_mode=*/false);
 }
 
 TtInvertedResidual::TtInvertedResidual(
@@ -164,13 +164,14 @@ TtInvertedResidual::TtInvertedResidual(
     bool block_shard /* = false*/
     ) :
     device_(device),
-    batchsize(batchsize),
-    stride(stride),
-    expand_ratio(expand_ratio),
-    in_channels(in_channels),
-    out_channels(out_channels),
-    block_shard(block_shard),
-    id(id) {
+    // batchsize(batchsize),
+    // stride(stride),
+    // expand_ratio(expand_ratio),
+    // in_channels(in_channels),
+    // out_channels(out_channels),
+    // block_shard(block_shard),
+    // id(id),
+    use_res_connect(false) {
     int hidden_dim = static_cast<int>(std::round(in_channels * expand_ratio));
     use_res_connect = (stride == 1 && in_channels == out_channels);
 
@@ -200,8 +201,8 @@ TtInvertedResidual::TtInvertedResidual(
     conv2 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{3, stride, 1, hidden_dim},
         std::make_pair(
-            model_params.at(fmt::format("fused_conv_{}_weight", id * 2 + 1)),
-            model_params.at(fmt::format("fused_conv_{}_bias", id * 2 + 1))),
+            model_params.at(fmt::format("fused_conv_{}_weight", (id * 2) + 1)),
+            model_params.at(fmt::format("fused_conv_{}_bias", (id * 2) + 1))),
         device_,
         batchsize,
         /*groups=*/hidden_dim,
@@ -262,7 +263,7 @@ TtMobileNetV2::TtMobileNetV2(
     const std::unordered_map<std::string, ttnn::Tensor>& model_params,
     std::shared_ptr<ttnn::MeshDevice> device,
     int batchsize) :
-    device_(device), model_parameters(model_params), batchsize(batchsize) {
+    device_(std::move(device)), model_parameters(model_params), batchsize(batchsize) {
     conv1 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{3, 2, 1, 32},
         std::make_pair(model_parameters.at("fused_conv_0_weight"), model_parameters.at("fused_conv_0_bias")),
@@ -382,10 +383,10 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
     auto compute_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),
         std::nullopt,
-        /*math_fidelity=*/MathFidelity::LoFi,
-        /*math_approx_mode=*/true,
-        /*fp32_dest_acc_en=*/false,
-        /*packer_l1_acc=*/true);
+        /*default_fidelity=*/MathFidelity::LoFi,
+        /*default_approx_mode=*/true,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/true);
 
     auto matmul_config = TT_matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
         .compute_with_storage_grid_size = {8, 8},

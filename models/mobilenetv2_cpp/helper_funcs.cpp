@@ -188,10 +188,10 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
 }
 
 torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
-    auto logical_shape = tensor.logical_shape();
+    const auto& logical_shape = tensor.logical_shape();
     auto data_type = tensor.dtype();
     auto torch_dtype = torch::kFloat;
-    auto tensor_spec = tensor.tensor_spec();
+    // auto tensor_spec = tensor.tensor_spec();
     auto view = logical_shape.view();
     std::vector<int64_t> torch_shape(view.begin(), view.end());
 
@@ -241,7 +241,7 @@ torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
         torch::from_blob(data_ptr, torch_shape, at::TensorOptions().dtype(torch_dtype).requires_grad(false)));
     // If the tensor is padded, we need to reshape it to the padded shape
     if (padded_output) {
-        auto shape = tensor.padded_shape();
+        const auto& shape = tensor.padded_shape();
         torch_shape = std::vector<int64_t>{shape.cbegin(), shape.cend()};
     }
     torch_tensor = torch_tensor.reshape(torch_shape);
@@ -300,7 +300,7 @@ ttnn::Tensor preprocess_linear_bias(
 
 // Function to create MobileNetV2 model parameters
 std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameters(
-    const torch::jit::Module& model, std::shared_ptr<ttnn::MeshDevice> device) {
+    const torch::jit::Module& model, const std::shared_ptr<ttnn::MeshDevice>& device) {
     std::unordered_map<std::string, ttnn::Tensor> model_parameters;
     int conv_bn_counter = 0;
     int counter = 0;
@@ -452,7 +452,7 @@ torch::jit::Module loadTorchModel() {
 
 // Load TTNN model
 std::shared_ptr<TtMobileNetV2> loadTtnnModel(
-    std::shared_ptr<ttnn::MeshDevice> device, const torch::jit::Module& torch_model, int batch_size) {
+    const std::shared_ptr<ttnn::MeshDevice>& device, const torch::jit::Module& torch_model, int batch_size) {
     auto model_parameters = create_mobilenetv2_model_parameters(torch_model, device);
     auto ttnn_model = std::make_shared<TtMobileNetV2>(model_parameters, device, batch_size);
     return ttnn_model;

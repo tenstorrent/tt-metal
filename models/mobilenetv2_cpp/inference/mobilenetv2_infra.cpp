@@ -7,7 +7,7 @@
 #include "helper_funcs.h"
 
 MobileNetv2TestInfra::MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size) :
-    device_(device), batch_size_(batch_size) {
+    device_(std::move(device)), batch_size_(batch_size) {
     torch::manual_seed(0);
 
     // Load Torch model
@@ -52,8 +52,8 @@ MobileNetv2TestInfra::OneConfResult MobileNetv2TestInfra::setupL1ShardedInput(to
 }
 
 MobileNetv2TestInfra::TwoConfResult MobileNetv2TestInfra::setupDramShardedInput(
-    std::shared_ptr<ttnn::MeshDevice> device, torch::Tensor torch_input_tensor) {
-    auto [tt_inputs_host, input_mem_config] = setupL1ShardedInput(torch_input_tensor);
+    const std::shared_ptr<ttnn::MeshDevice>& device, torch::Tensor torch_input_tensor) {
+    auto [tt_inputs_host, input_mem_config] = setupL1ShardedInput(std::move(torch_input_tensor));
 
     auto dram_grid_size = device->dram_grid_size();
     ttnn::CoreRangeSet dram_shard_grid(

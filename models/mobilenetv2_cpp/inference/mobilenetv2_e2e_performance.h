@@ -15,7 +15,7 @@
 class MobileNetV2Trace2CQ {
 public:
     MobileNetV2Trace2CQ();
-    void initialize_mobilenetv2_trace_2cqs_inference(std::shared_ptr<ttnn::MeshDevice> device, int device_batch_size);
+    void initialize_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshDevice> &device, int device_batch_size);
     void execute_mobilenetv2_trace_2cqs_inference(const ttnn::Tensor& tt_inputs_host);
     void release_mobilenetv2_trace_2cqs_inference();
     ttnn::Tensor get_output();
