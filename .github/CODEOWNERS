@@ -3,7 +3,7 @@
 
 # Top-level files
 /* @tenstorrent/metalium-developers-infra
-METALIUM_GUIDE.md @davorchap
+/METALIUM_GUIDE.md @davorchap
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
@@ -203,7 +203,7 @@ tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/ @stevendae
 tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT
-tests/sweep_framework/sweeps
+tests/sweep_framework/sweeps/ @stevendae
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @yugi957 @llongTT @jvegaTT @nardoTT @amorrisonTT
@@ -217,8 +217,7 @@ tests/ttnn/distributed/ @tenstorrent/metalium-developers-ttnn-core
 
 # models
 /models/ @uaydonat @yieldthought @cglagovichTT
-/models/*/**
-/**/functional_*/ @uaydonat @esmalTT
+/models/**/functional_*/ @uaydonat @esmalTT
 models/common @yieldthought @mtairum @uaydonat
 models/utility_functions.py @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
