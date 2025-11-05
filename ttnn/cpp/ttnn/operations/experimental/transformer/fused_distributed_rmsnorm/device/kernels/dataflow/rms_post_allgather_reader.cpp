@@ -11,6 +11,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "debug/assert.h"
+#include <tt-metalium/constants.hpp>
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -62,6 +63,14 @@ void kernel_main() {
     const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr, rope_cos_tile_bytes);
     const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr, rope_sin_tile_bytes);
 
+    /**
+     * Op asserts that weight input is bf16.
+     * We can calculate the bytes in a face-row and face for usage when reading the weight.
+     */
+    constexpr uint32_t bf16_datum_size_bytes = 2;
+    constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * bf16_datum_size_bytes;
+    constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
+
     // Generate constant tiles for layernorm compute
     generate_reduce_scaler(reduce_scalar_cb, scalar_value);
     generate_bcast_col_scalar(epsilon_cb, epsilon_value);
@@ -111,8 +120,9 @@ void kernel_main() {
 
                         // Rather than read a full tile containing sparse data,
                         // just read the first row of the tile from the faces.
-                        noc_async_read(weight_noc_addr, weight_wr_ptr, 16 * 2 /*one face row*/);
-                        noc_async_read(weight_noc_addr + 512, weight_wr_ptr + 512, 16 * 2 /*one face row*/);
+                        noc_async_read(weight_noc_addr, weight_wr_ptr, face_row_bytes /*one face row*/);
+                        noc_async_read(
+                            weight_noc_addr + face_bytes, weight_wr_ptr + face_bytes, face_row_bytes /*one face row*/);
                         weight_wr_ptr += weight_tile_bytes;
                     }
                     noc_async_read_barrier();

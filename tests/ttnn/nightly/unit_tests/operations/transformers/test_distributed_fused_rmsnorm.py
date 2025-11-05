@@ -14,10 +14,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 
 def get_rot_transformation_mat():
     # ROPE op uses a single tile
-    TILE_SIZE = 32
-    rot_emb_matrix = torch.zeros(1, 1, TILE_SIZE, TILE_SIZE)
-    rot_emb_matrix[..., torch.arange(0, TILE_SIZE, 2), torch.arange(1, TILE_SIZE, 2)] = 1
-    rot_emb_matrix[..., torch.arange(1, TILE_SIZE, 2), torch.arange(0, TILE_SIZE, 2)] = -1
+    rot_emb_matrix = torch.zeros(1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+    rot_emb_matrix[..., torch.arange(0, ttnn.TILE_SIZE, 2), torch.arange(1, ttnn.TILE_SIZE, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, ttnn.TILE_SIZE, 2), torch.arange(0, ttnn.TILE_SIZE, 2)] = -1
     return rot_emb_matrix
 
 
@@ -44,6 +43,11 @@ def chunk_and_shard_tensor(tensor, num_simulated_devices, device, dim, dtype):
         for chunk in chunked
     ]
     return result
+
+
+def check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads):
+    if hidden_dim // ttnn.TILE_SIZE % num_heads != 0:
+        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
 
 
 def run_distributed_fused_rmsnorm(
@@ -186,8 +190,7 @@ def test_distributed_fused_rmsnorm_sweep_fusions(
     reset_seeds,
 ):
     num_heads = num_heads_per_device * num_simulated_devices
-    if hidden_dim // 32 % num_heads != 0:
-        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
+    check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
         device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
@@ -219,8 +222,7 @@ def test_distributed_fused_rmsnorm_sweep_shapes(
     reset_seeds,
 ):
     num_heads = num_heads_per_device * num_simulated_devices
-    if hidden_dim // 32 % num_heads != 0:
-        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
+    check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
         device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
@@ -249,10 +251,10 @@ def test_distributed_fused_rmsnorm_wan_configs(
     use_rope,
     reset_seeds,
 ):
-    num_heads_per_device = 40 // num_simulated_devices
+    WAN_NUM_HEADS = 40
+    num_heads_per_device = WAN_NUM_HEADS // num_simulated_devices
     num_heads = num_heads_per_device * num_simulated_devices
-    if hidden_dim // 32 % num_heads != 0:
-        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
+    check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
     inp_shape = (1, 1, seqlen, hidden_dim)
     run_distributed_fused_rmsnorm(
         device, num_simulated_devices, inp_shape, dtype, stats_dtype, num_heads_per_device, use_weight, use_rope
@@ -280,8 +282,7 @@ def test_distributed_fused_rmsnorm_program_cache(
     reset_seeds,
 ):
     num_heads = num_heads_per_device * num_simulated_devices
-    if hidden_dim // 32 % num_heads != 0:
-        pytest.skip("hidden_dim must be divisible by 32 * num_heads")
+    check_hidden_dim_divisible_by_num_heads(hidden_dim, num_heads)
     inp_shape = (1, 1, seqlen, hidden_dim)
     dummy_tensors = []
     for i in range(2):

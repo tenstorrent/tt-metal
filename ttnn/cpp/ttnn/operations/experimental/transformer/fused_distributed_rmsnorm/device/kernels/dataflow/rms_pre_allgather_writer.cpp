@@ -28,8 +28,6 @@ void kernel_main() {
         cb_wait_front(output_cb, output_tiles_per_row);
         uint32_t l1_read_addr = get_read_ptr(output_cb);
         for (uint32_t tile_col = 0; tile_col < output_tiles_per_row; tile_col++) {
-            // DPRINT << "Writing tile " << tile_id << ENDL();
-            // tt::data_movement::common::print_bf16_pages(l1_read_addr, 1024, 1);
             noc_async_write_tile(tile_id, output_accessor, l1_read_addr);
             tile_id++;
             l1_read_addr += tile_bytes;

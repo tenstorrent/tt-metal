@@ -20,9 +20,7 @@ static void bind_rmsnorm_pre_all_gather_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::wan_fused_rmsnorm_pre_allgather,
-        R"doc(wan_fused_rmsnorm_pre_allgather(input_tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None,
-            compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
-            memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
             Computes per-row RMSNorm statistics over the last dimension of :attr:`input_tensor`, producing a
             one-tile-wide tensor that contains sum(x**2) per row (placed in the leftmost column). Intended to be
             followed by an all-gather across devices, then ``wan_fused_rmsnorm_post_allgather``.
@@ -43,6 +41,11 @@ static void bind_rmsnorm_pre_all_gather_operation(py::module& module) {
                 :attr:`input_tensor` and with the last padded dimension equal to TILE_WIDTH (32). The tile holds
                 E(x**2) in its leftmost column for each row.
 
+            Example:
+              stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
+                x, compute_kernel_config=compute_kernel_config, dtype=stats_dtype
+              )
+
             Limitations:
               - All tensors must be on device.
               - :attr:`input_tensor` must be BFLOAT16.
@@ -61,15 +64,7 @@ static void bind_rmsnorm_post_all_gather_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::experimental::wan_fused_rmsnorm_post_allgather,
-        R"doc(wan_fused_rmsnorm_post_allgather(input_tensor: ttnn.Tensor, stats: ttnn.Tensor,
-            *, epsilon: float = 1e-5, num_heads_per_device: int = 1,
-            weight: Optional[ttnn.Tensor] = None,
-            transformation_mat: Optional[ttnn.Tensor] = None,
-            rope_cos: Optional[ttnn.Tensor] = None,
-            rope_sin: Optional[ttnn.Tensor] = None,
-            memory_config: Optional[ttnn.MemoryConfig] = None,
-            compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None,
-            dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+        R"doc(
             Applies RMSNorm using gathered statistics and optionally fuses per-head output reshape, gamma scaling,
             and rotary positional embeddings (ROPE). This is the second stage of the distributed RMSNorm.
 
@@ -133,6 +128,20 @@ static void bind_rmsnorm_post_all_gather_operation(py::module& module) {
               - A TILE-layout tensor with logical shape [1, num_heads_per_device, seq_len, hidden_dim/num_heads_per_device]
                 and dtype ``dtype`` if provided, otherwise the input dtype.
 
+            Example:
+              out = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
+                x,
+                stats,
+                epsilon=epsilon,
+                num_heads_per_device=num_heads_per_device,
+                weight=weight,
+                transformation_mat=transformation_mat,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                compute_kernel_config=compute_kernel_config,
+                dtype=dtype
+              )
+
             Limitations:
               - All tensors must be on device.
               - :attr:`input_tensor` must be rank-4 with batch dimension 1 and channel dimension 1 (shape [1, 1, S, H]).
@@ -143,6 +152,8 @@ static void bind_rmsnorm_post_all_gather_operation(py::module& module) {
               - If :attr:`weight` is provided it must be TILE layout BFLOAT16 with shape [1, H].
               - When using ROPE, all three tensors (:attr:`transformation_mat`, :attr:`rope_cos`, :attr:`rope_sin`) are required.
               - Inputs cannot be height-sharded; padded height must equal TILE_HEIGHT (32).
+
+
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
