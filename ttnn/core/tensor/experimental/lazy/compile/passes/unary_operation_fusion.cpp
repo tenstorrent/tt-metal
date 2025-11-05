@@ -113,9 +113,12 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
             auto* last_unary_op = chain.back();
             auto old_attributes = last_unary_op->attributes();
 
-            // Get the tensor_args from the first operation (it has the correct input)
+            // Get the tensor structure metadata from the first operation (since we'll use its inputs)
             auto* first_unary_op = chain.front();
-            auto first_tensor_args = first_unary_op->tensor_args();
+            auto tensor_args_meta = first_unary_op->tensor_args_metadata();
+
+            // Get the output specs from the last operation (since that's what our fused op will output)
+            auto output_specs = last_unary_op->compute_output_specs();
 
             // Get the input of the first operation in the chain (for graph dependency update)
             auto first_op_input_tensor = chain_tensors[0]->op_inputs()[0];
@@ -129,10 +132,9 @@ void UnaryOperationsFusionPass::run(const ttnn::Tensor& tensor) {
                 .preserve_fp32_precision = old_attributes.preserve_fp32_precision,
                 .bfp8_pack_precise = old_attributes.bfp8_pack_precise};
 
-            // Create a new LazyDeviceOperation with the merged attributes
-            // Use tensor_args from the first operation (it already has the correct input)
-            auto new_fused_op = make_lazy_device_operation<ttnn::operations::unary::UnaryDeviceOperation>(
-                merged_attributes, first_tensor_args, "fused_unary_operation");
+            // Create a new LazyDeviceOperation with the merged attributes and metadata from existing ops
+            auto new_fused_op = std::make_shared<LazyDeviceOperation<ttnn::operations::unary::UnaryDeviceOperation>>(
+                merged_attributes, tensor_args_meta, output_specs, "fused_unary_operation");
 
             // Update the last tensor in the chain to use the new operation and new input
             chain_tensors.back()->set_op(new_fused_op);

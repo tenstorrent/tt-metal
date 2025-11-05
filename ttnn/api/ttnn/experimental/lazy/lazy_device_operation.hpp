@@ -10,7 +10,6 @@
 #include <tt_stl/reflection.hpp>
 #include <vector>
 #include <memory>
-#include <tuple>
 #include <utility>
 
 namespace ttnn::experimental::lazy {
@@ -24,27 +23,30 @@ public:
     using tensor_args_t = typename operation_t::tensor_args_t;
     using tensor_return_value_t = typename operation_t::tensor_return_value_t;
 
-    // TODO: It's not greate to capture tensor_args_ in the op
-    LazyDeviceOperation(operation_attributes_t attributes, tensor_args_t tensor_args, const std::string& name) :
-        attributes_(std::move(attributes)),
-        tensor_args_(tensor_args),  // Copy tensor_args (shallow copy since Tensor is shallow-copyable)
-        name_(name) {
-        // Compute and cache output specs once at construction time
-        if constexpr (requires { operation_t::compute_output_specs(attributes_, tensor_args_); }) {
-            auto spec = operation_t::compute_output_specs(attributes_, tensor_args_);
-            cached_output_specs_ = convert_spec_to_vector(spec);
-        }
-    }
+    LazyDeviceOperation(operation_attributes_t attributes, const tensor_args_t& tensor_args, const std::string& name) :
+        attributes_(attributes),  // Copy first to use in compute_and_convert_specs
+        tensor_args_meta_(collect_tensor_args_meta(tensor_args)),
+        cached_output_specs_(compute_and_convert_specs(attributes, tensor_args)),
+        name_(name) {}
 
-    // TODO: Can we cache validation result?
-    void validate(const std::vector<Tensor>& input_tensors) const {
-        TT_FATAL(false, "Not implemented");
-        // Call the operation's validation method if it exists
-        // Use validate_on_program_cache_miss for comprehensive validation
-        // TODO: Should we choose validate_on_program_cache_miss or validate_on_program_cache_hit based on the cache
-        // somehow?
-        if constexpr (requires { operation_t::validate_on_program_cache_miss(attributes_, tensor_args_); }) {
-            operation_t::validate_on_program_cache_miss(attributes_, tensor_args_);
+    // Constructor for creating operations with explicit metadata (useful for graph transformations)
+    LazyDeviceOperation(
+        operation_attributes_t attributes,
+        TensorArgsMetadata tensor_args_meta,
+        const std::vector<ttnn::TensorSpec>& output_specs,
+        const std::string& name) :
+        attributes_(std::move(attributes)),
+        tensor_args_meta_(std::move(tensor_args_meta)),
+        cached_output_specs_(output_specs),
+        name_(name) {}
+
+    static std::vector<ttnn::TensorSpec> compute_and_convert_specs(
+        const operation_attributes_t& attrs, const tensor_args_t& t_args) {
+        if constexpr (requires { operation_t::compute_output_specs(attrs, t_args); }) {
+            auto spec = operation_t::compute_output_specs(attrs, t_args);
+            return convert_spec_to_vector_static(spec);
+        } else {
+            return {};
         }
     }
 
@@ -57,9 +59,12 @@ public:
 
     std::vector<tt::tt_metal::metal_tensor::Tensor> invoke(
         const std::vector<tt::tt_metal::metal_tensor::Tensor>& input_tensors) override {
+        // Reconstruct tensor_args from input tensors using stored metadata
+        TensorReconstructionContext ctx(input_tensors, tensor_args_meta_);
+        tensor_args_t reconstructed_tensor_args = reconstruct_tensor_args_impl<tensor_args_t>(ctx);
+
         // Use the standard device operation eager execution path
-        (void)input_tensors;
-        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, tensor_args_);
+        auto result = ttnn::device_operation::detail::invoke<operation_t>(attributes_, reconstructed_tensor_args);
 
         // Convert result to vector
         return convert_result_to_vector(result);
@@ -67,11 +72,10 @@ public:
 
     const operation_attributes_t& attributes() const { return attributes_; }
 
-    const tensor_args_t& tensor_args() const { return tensor_args_; }
+    const TensorArgsMetadata& tensor_args_metadata() const { return tensor_args_meta_; }
 
     tt::stl::hash::hash_t operation_type_id() const override { return tt::stl::hash::type_hash<operation_t>; }
 
-    // TODO: Verify vibecoded to_hash
     // Required for hashing support
     tt::stl::hash::hash_t to_hash() const {
         // Hash based on the operation type and attributes
@@ -85,12 +89,14 @@ public:
 
 private:
     operation_attributes_t attributes_;
-    tensor_args_t tensor_args_;
+    // TODO: In case tensor structure actually changes, graph updates might be quite complex.
+    TensorArgsMetadata tensor_args_meta_;
     std::vector<ttnn::TensorSpec> cached_output_specs_;
     std::string name_;
+
     // Helper to convert any spec type to vector
     template <typename SpecType>
-    std::vector<ttnn::TensorSpec> convert_spec_to_vector(const SpecType& spec) const {
+    static std::vector<ttnn::TensorSpec> convert_spec_to_vector_static(const SpecType& spec) {
         using spec_type = std::decay_t<SpecType>;
 
         // Handle single TensorSpec
