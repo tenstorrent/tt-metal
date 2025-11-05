@@ -255,7 +255,7 @@ struct NocRegisterStateSave {
     }
 };
 
-inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
+inline void __attribute__((always_inline)) profiler_noc_async_write_non_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
@@ -265,7 +265,7 @@ inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
 }
 
 FORCE_INLINE
-void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
+void profiler_noc_async_flush_non_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
     while (!ncrisc_noc_nonposted_writes_flushed(noc));
     WAYPOINT("NPPD");
@@ -343,7 +343,7 @@ __attribute__((noinline)) void finish_profiler() {
                 uint64_t dram_bank_dst_noc_addr =
                     s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-                profiler_noc_async_write_posted(
+                profiler_noc_async_write_non_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data),
                     dram_bank_dst_noc_addr,
                     send_size);
@@ -351,7 +351,7 @@ __attribute__((noinline)) void finish_profiler() {
         }
     }
 
-    profiler_noc_async_flush_posted_write();
+    profiler_noc_async_flush_non_posted_write();
     profiler_control_buffer[RUN_COUNTER]++;
     profiler_control_buffer[PROFILER_DONE] = 1;
 #endif
@@ -410,12 +410,12 @@ __attribute__((noinline)) void quick_push() {
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
         NocRegisterStateSave noc_state;
-        profiler_noc_async_write_posted(
+        profiler_noc_async_write_non_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
             dram_bank_dst_noc_addr,
             wIndex * sizeof(uint32_t));
 
-        profiler_noc_async_flush_posted_write();
+        profiler_noc_async_flush_non_posted_write();
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
     } else {
         mark_dropped_timestamps(HOST_BUFFER_END_INDEX_BR_ER + myRiscID);
