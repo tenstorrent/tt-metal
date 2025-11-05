@@ -42,8 +42,10 @@ void kernel_main() {
     cb_reserve_back(fill_cb_id, onepage);
     uint32_t fill_addr = get_write_ptr(fill_cb_id);
     auto* fill_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(fill_addr);
-    for (uint32_t i = 0; i < row_size; ++i) {
-        fill_ptr[i] = fill_value;
+    if constexpr (!is_last_dim) {
+        for (uint32_t i = 0; i < row_size; ++i) {
+            fill_ptr[i] = fill_value;
+        }
     }
     cb_push_back(fill_cb_id, onepage);
 
