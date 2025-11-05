@@ -295,7 +295,7 @@ jobs:
       build-artifact-name: ${{ needs.build-asan.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-asan.outputs.wheel-artifact-name }}
       runner-label: ${{ matrix.platform }}
-      timeout: 30
+      timeout: 11
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
