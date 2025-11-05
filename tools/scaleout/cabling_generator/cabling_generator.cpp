@@ -190,13 +190,12 @@ HostId resolve_path_from_proto(
     }
 }
 
-// Build resolved graph instance from template and concrete host mappings
-// deployment_descriptor is optional - if std::nullopt, no validation is performed
-std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
+// Builds a resolved graph instance from a graph instance and deployment descriptor.
+// deployment_descriptor is optional - if nullptr, no validation is performed.
+static std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
-    std::optional<std::reference_wrapper<const tt::scaleout_tools::deployment::proto::DeploymentDescriptor>>
-        deployment_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor* deployment_descriptor,
     const std::string& instance_name,
     std::unordered_map<std::string, Node>& node_templates) {
     auto resolved = std::make_unique<ResolvedGraphInstance>();
@@ -221,10 +220,9 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
             const std::string& node_descriptor_name = child_def.node_ref().node_descriptor();
 
             // Validate deployment node type if deployment descriptor is provided
-            if (deployment_descriptor.has_value()) {
-                const auto& deployment = deployment_descriptor->get();
-                if (*host_id < deployment.hosts().size()) {
-                    const auto& deployment_host = deployment.hosts()[*host_id];
+            if (deployment_descriptor != nullptr) {
+                if (*host_id < deployment_descriptor->hosts().size()) {
+                    const auto& deployment_host = deployment_descriptor->hosts()[*host_id];
                     if (!deployment_host.node_type().empty() && deployment_host.node_type() != node_descriptor_name) {
                         TT_THROW(
                             "Node type mismatch for host {} (host_id {}): deployment specifies '{}' "
@@ -249,8 +247,12 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
                 TT_THROW("Graph child must have sub_instance mapping: {}", child_name);
             }
 
-            resolved->subgraphs[child_name] = build_graph_instance(
-                child_mapping.sub_instance(), cluster_descriptor, deployment_descriptor, child_name, node_templates);
+            resolved->subgraphs[child_name] = build_graph_instance_impl(
+                child_mapping.sub_instance(),
+                cluster_descriptor,
+                deployment_descriptor,
+                child_name,
+                node_templates);
         }
     }
 
@@ -323,6 +325,25 @@ void populate_deployment_hosts_from_hostnames(
     }
 }
 
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const std::string& instance_name,
+    std::unordered_map<std::string, Node>& node_templates) {
+    return build_graph_instance_impl(
+        graph_instance, cluster_descriptor, &deployment_descriptor, instance_name, node_templates);
+}
+
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const std::string& instance_name,
+    std::unordered_map<std::string, Node>& node_templates) {
+    return build_graph_instance_impl(
+        graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
+}
+
 }  // anonymous namespace
 
 // Constructor with full deployment descriptor
@@ -337,8 +358,8 @@ CablingGenerator::CablingGenerator(
             deployment_descriptor_path);
 
     // Build cluster with all connections and port validation
-    root_instance_ = build_graph_instance(
-        cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
+    root_instance_ =
+        build_graph_instance(cluster_descriptor.root_instance(), cluster_descriptor, deployment_descriptor, "", node_templates_);
 
     // Validate host_id uniqueness across all nodes
     validate_host_id_uniqueness();
