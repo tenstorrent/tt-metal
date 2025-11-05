@@ -82,7 +82,6 @@ LazyTensor::LazyTensor(const tt::tt_metal::metal_tensor::Tensor& metal_tensor) :
     id_(GraphUtils::get_available_lazy_tensor_id()) {}
 
 // Getters
-
 const std::vector<std::shared_ptr<LazyTensor>>& LazyTensor::op_inputs() const { return op_inputs_; };
 const std::vector<std::shared_ptr<LazyTensor>>& LazyTensor::siblings() const { return siblings_; }
 const std::vector<tt::tt_metal::metal_tensor::Tensor>& LazyTensor::materialized_tensors() const {
@@ -94,14 +93,29 @@ const tt::tt_metal::metal_tensor::Tensor& LazyTensor::materialized_tensor() cons
 tt::tt_metal::metal_tensor::Tensor& LazyTensor::materialized_tensor() {
     return materialized_outputs_[materialized_output_idx_];
 }
+
 const TensorSpec& LazyTensor::tensor_spec() const { return tensor_metadata_.tensor_spec_.value(); }
+tt::tt_metal::StorageType LazyTensor::storage_type() const { return tensor_metadata_.storage_type_; }
+tt::tt_metal::distributed::MeshDevice* LazyTensor::device() const { return tensor_metadata_.device_; }
+uint32_t LazyTensor::buffer_alignment() const { return tensor_metadata_.buffer_metadata_.alignment_; }
+tt::tt_metal::DeviceAddr LazyTensor::buffer_page_size() const { return tensor_metadata_.buffer_metadata_.page_size_; }
+tt::tt_metal::DeviceAddr LazyTensor::buffer_aligned_page_size() const {
+    return tensor_metadata_.buffer_metadata_.aligned_page_size_;
+}
+tt::tt_metal::DeviceAddr LazyTensor::buffer_size() const { return tensor_metadata_.buffer_metadata_.size_; }
+tt::tt_metal::DeviceAddr LazyTensor::buffer_aligned_size() const {
+    return tensor_metadata_.buffer_metadata_.aligned_size_;
+}
+tt::tt_metal::BufferType LazyTensor::buffer_type() const { return tensor_metadata_.buffer_metadata_.buffer_type_; }
+tt::tt_metal::TensorMemoryLayout LazyTensor::buffer_layout() const {
+    return tensor_metadata_.buffer_metadata_.buffer_layout_;
+}
+bool LazyTensor::buffer_bottom_up() const { return tensor_metadata_.buffer_metadata_.bottom_up_; }
+
+const LazyTensor::LazyOperationPtr& LazyTensor::op() const { return op_; }
 LazyTensorState LazyTensor::state() const { return state_; }
 LazyTensorId LazyTensor::id() const { return id_; }
 bool LazyTensor::is_materialized() const { return state_ == LazyTensorState::EVALUATED; }
-const LazyTensor::LazyOperationPtr& LazyTensor::op() const { return op_; }
-tt::tt_metal::distributed::MeshDevice* LazyTensor::device() const { return tensor_metadata_.device_; }
-tt::tt_metal::StorageType LazyTensor::storage_type() const { return tensor_metadata_.storage_type_; }
-const LazyTensor::BufferMetadata& LazyTensor::buffer_metadata() const { return tensor_metadata_.buffer_metadata_; }
 
 void LazyTensor::evaluate() {
     if (state_ == LazyTensorState::EVALUATED || state_ == LazyTensorState::SCHEDULED) {
@@ -140,9 +154,34 @@ void LazyTensor::set_state(LazyTensorState state) { state_ = state; }
 void LazyTensor::set_op_inputs(const std::vector<std::shared_ptr<LazyTensor>>& new_inputs) { op_inputs_ = new_inputs; }
 void LazyTensor::set_op(const LazyOperationPtr& new_op) { op_ = new_op; }
 
-// ======================= LazyTensor::BufferMetadata =======================
+// ======================= LazyTensor::TensorMetadata =======================
+LazyTensor::TensorMetadata::TensorMetadata(
+    const TensorSpec& tensor_spec,
+    tt::tt_metal::distributed::MeshDevice* device,
+    tt::tt_metal::StorageType storage_type) :
+    tensor_spec_(tensor_spec), device_(device), storage_type_(storage_type) {
+    buffer_metadata_ = Buffer(tensor_spec, tensor_spec.memory_config());
+}
 
-LazyTensor::BufferMetadata::BufferMetadata(
+LazyTensor::TensorMetadata::TensorMetadata(
+    const TensorSpec& tensor_spec, const std::vector<std::shared_ptr<LazyTensor>>& op_inputs) :
+    tensor_spec_(tensor_spec) {
+    // Inherit device and storage_type from first input tensor
+    // TODO: Is this correct though?
+    if (!op_inputs.empty() && op_inputs[0]) {
+        device_ = op_inputs[0]->device();
+        storage_type_ = op_inputs[0]->storage_type();
+    } else {
+        // Default values when no inputs
+        device_ = nullptr;
+        storage_type_ = tt::tt_metal::StorageType::DEVICE;
+    }
+
+    buffer_metadata_ = Buffer(tensor_spec, tensor_spec.memory_config());
+}
+
+// ======================= LazyTensor::TensorMetadata::BufferMetadata =======================
+LazyTensor::TensorMetadata::Buffer::Buffer(
     const tt::tt_metal::TensorSpec& tensor_spec, const tt::tt_metal::MemoryConfig& memory_config) :
     buffer_type_(memory_config.buffer_type()),
     buffer_layout_(memory_config.memory_layout()),
@@ -165,53 +204,4 @@ LazyTensor::BufferMetadata::BufferMetadata(
     }
 }
 
-LazyTensor::BufferMetadata::BufferMetadata(const tt::tt_metal::Buffer* buffer) {
-    TT_FATAL(buffer != nullptr, "Cannot create BufferMetadata from null buffer");
-
-    // Extract properties directly from buffer
-    buffer_type_ = buffer->buffer_type();
-    buffer_layout_ = buffer->buffer_layout();
-    if (buffer->has_shard_spec()) {
-        // Note: ShardSpecBuffer contains ShardSpec, need to extract it
-        shard_spec_ = buffer->shard_spec().tensor_shard_spec;
-    }
-
-    size_ = buffer->size();
-    page_size_ = buffer->page_size();
-    element_size_ = page_size_;  // Approximate - we don't have dtype info in buffer
-
-    alignment_ = buffer->alignment();
-    aligned_page_size_ = buffer->aligned_page_size();
-    aligned_size_ = buffer->aligned_size();
-
-    bottom_up_ = buffer->bottom_up();
-}
-
-// ======================= LazyTensor::TensorMetadata =======================
-LazyTensor::TensorMetadata::TensorMetadata(
-    const TensorSpec& tensor_spec,
-    tt::tt_metal::distributed::MeshDevice* device,
-    tt::tt_metal::StorageType storage_type) :
-    tensor_spec_(tensor_spec), device_(device), storage_type_(storage_type) {
-    buffer_metadata_ = BufferMetadata(tensor_spec, tensor_spec.memory_config());
-}
-
-LazyTensor::TensorMetadata::TensorMetadata(
-    const TensorSpec& tensor_spec, const std::vector<std::shared_ptr<LazyTensor>>& op_inputs) :
-    tensor_spec_(tensor_spec) {
-    // Inherit device and storage_type from first input tensor
-    // TODO: Is this correct though?
-    if (!op_inputs.empty() && op_inputs[0]) {
-        device_ = op_inputs[0]->device();
-        storage_type_ = op_inputs[0]->storage_type();
-    } else {
-        // Default values when no inputs
-        device_ = nullptr;
-        storage_type_ = tt::tt_metal::StorageType::DEVICE;
-    }
-
-    buffer_metadata_ = BufferMetadata(tensor_spec, tensor_spec.memory_config());
-}
-
-//
 }  // namespace ttnn::experimental::lazy
