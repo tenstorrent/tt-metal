@@ -625,3 +625,45 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
             util_str = f"{math_util:.1f}"
 
         print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(1024, 512, 1536), (1024, 512, 512), (1024, 2048, 512)],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(1, 1, 1, 1, 1)],
+)
+def test_linear_vit(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    torch_input = torch.randn((M, K))
+    weight_input = torch.randn((K, N))
+    bias_input = torch.randn((1, N))
+
+    # Prepare TT tensors
+    tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_input = ttnn.to_memory_config(
+        tt_input,
+        ttnn.create_sharded_memory_config(
+            [M, K],
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_weight = ttnn.from_torch(weight_input, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_bias = ttnn.from_torch(bias_input, device=device, layout=ttnn.TILE_LAYOUT)
+    run_test_linear_impl(
+        device=device,
+        torch_input=torch_input,
+        weight_input=weight_input,
+        bias_input=bias_input,
+        tt_input=tt_input,
+        tt_weight=tt_weight,
+        tt_bias=tt_bias,
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+    )
