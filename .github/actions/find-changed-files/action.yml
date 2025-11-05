@@ -27,9 +27,11 @@ outputs:
   docs-changed:
     value: ${{ steps.find-changed-files.outputs.docs-changed }}
   model-charts-changed:
-   value: ${{ steps.find-changed-files.outputs.model-charts-changed }}
+    value: ${{ steps.find-changed-files.outputs.model-charts-changed }}
   models-changed:
     value: ${{ steps.find-changed-files.outputs.models-changed }}
+  build-workflows-changed:
+    value: ${{ steps.find-changed-files.outputs.build-workflows-changed }}
 
 runs:
   using: "composite"
