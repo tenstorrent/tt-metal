@@ -75,7 +75,10 @@ void SGDFusedDeviceOperation::validate_on_program_cache_miss(
     const auto use_momentum = (momentum > 0.0F);
     if (use_momentum) {
         TT_FATAL(
-            momentum_buffer.has_value(), "Momentum buffer must be provided when using momentum. Got: {}", momentum);
+            momentum_buffer.has_value(),
+            "Momentum buffer must be provided when using momentum. Got momentum value: {}. Please set momentum to "
+            "zero or pass momentum buffer.",
+            momentum);
     }
 }
 
