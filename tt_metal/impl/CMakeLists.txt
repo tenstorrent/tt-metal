@@ -65,6 +65,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_parser.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/data.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/inspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/logger.cpp
