@@ -121,14 +121,15 @@ Each keypoint includes (x, y, visibility) values.
 
 ## Troubleshooting
 
-1. **Server won't start**: Check TTNN device availability
-2. **Client can't connect**: Ensure server is running on port 8000 and accessible from client machine
-3. **Remote server connection fails**: Verify server is bound to `0.0.0.0` and firewall allows port 8000
-4. **No detections**: Check confidence threshold and lighting conditions
-5. **Performance issues**: Reduce frame processing rate in client code
-6. **Network timeout**: Check network connectivity between client and server machines
-7. **WebRTC/camera errors**: Try Chrome browser, refresh page, or check camera permissions
-8. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
+1. **Python 3.13 compatibility**: Some packages may not support Python 3.13. Use Python 3.11-3.12 or conda for installation
+2. **Server won't start**: Check TTNN device availability
+3. **Client can't connect**: Ensure server is running on port 8000 and accessible from client machine
+4. **Remote server connection fails**: Verify server is bound to `0.0.0.0` and firewall allows port 8000
+5. **No detections**: Check confidence threshold and lighting conditions
+6. **Performance issues**: Reduce frame processing rate in client code
+7. **Network timeout**: Check network connectivity between client and server machines
+8. **WebRTC/camera errors**: Try Chrome browser, refresh page, or check camera permissions
+9. **"Cannot set properties of undefined"**: Browser compatibility issue - use Chrome/Firefox
 
 ## Comparison with Object Detection Demo
 
