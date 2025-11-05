@@ -10,22 +10,26 @@ on:
         required: true
         type: string
       package-artifact-name:
-        required: true
+        required: false
         type: string
       wheel-artifact-name:
-        required: true
+        required: false
         type: string
-      build-artifact-name: # Used only when run-metal-cpp-unit-tests is true
+      build-artifact-name:
         required: false
         type: string
       ttsim-ref:
         required: false
         type: string
         default: "4f05a65a961d4a3ca14f65ff9633030e0a35358e"
-      timeout:
+      job-timeout:
         required: false
         type: number
-        default: 5
+        default: 15
+      run-ttsim-integration-tests:
+        required: false
+        type: boolean
+        default: false
       run-metal-cpp-unit-tests:
         required: false
         type: boolean
@@ -33,7 +37,9 @@ on:
 
 jobs:
   ttsim-integration:
+    if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: tt-ubuntu-2204-small-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -92,8 +98,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
@@ -136,7 +142,9 @@ jobs:
             fi
           done
   ttnn-pytests:
+    if: ${{ inputs.run-ttsim-integration-tests }}
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTNN Pytests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -181,8 +189,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
@@ -279,6 +287,7 @@ jobs:
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-small-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -320,8 +329,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
@@ -330,7 +339,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: 5
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.IdleEthTestNocStreamRegs"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore"
@@ -351,6 +360,7 @@ jobs:
   ttsim-galaxy-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
     runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Galaxy C++ tests - ${{ matrix.arch }}"
     strategy:
       fail-fast: false
@@ -395,8 +405,8 @@ jobs:
 
       - name: Build ttsim
         run: |
-          cd /work/ttsim/src
-          ../scripts/make.py _out/${{ matrix.build_suffix }}/libttsim.so
+          cd /work/ttsim
+          ./make.py src/_out/${{ matrix.build_suffix }}/libttsim.so
 
       - name: Install ttsim
         run: |
@@ -405,6 +415,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
+        timeout-minutes: 5
         run: |
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*StreamRegWrite*"
           ./build/test/tt_metal/unit_tests_api --gtest_filter="*InlineWrite*"

@@ -263,6 +263,73 @@ void bind_ternary_lerp(py::module& module, const ternary_operation_t& operation,
 }
 
 template <typename ternary_operation_t>
+void bind_ternary_addcmul(py::module& module, const ternary_operation_t& operation, const std::string& description) {
+    auto doc = fmt::format(
+        R"doc(
+            {2}
+
+        Args:
+            input_a (ttnn.Tensor): the first input tensor.
+            input_b (ttnn.Tensor): the second input tensor.
+            input_c (ttnn.Tensor): the third input tensor.
+
+        Keyword Args:
+            value (float, optional): scalar value to multiply with input_b * input_c. Defaults to 1.0.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE
+                 - 2, 3, 4
+
+            Only TTT (tensor-tensor-tensor) variant is supported.
+
+        Example:
+            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor3 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor1, tensor2, tensor3)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        description);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& input_a,
+               const Tensor& input_b,
+               const Tensor& input_c,
+               float value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor) {
+                return self(input_a, input_b, input_c, value, memory_config, output_tensor);
+            },
+            py::arg("input_a"),
+            py::arg("input_b"),
+            py::arg("input_c"),
+            py::kw_only(),
+            py::arg("value") = 1.0f,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
+}
+
+template <typename ternary_operation_t>
 void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, const std::string& description) {
     auto doc = fmt::format(
         R"doc(
@@ -339,11 +406,8 @@ void bind_ternary_mac(py::module& module, const ternary_operation_t& operation, 
 
 void py_module(py::module& module) {
     // new imported
-    bind_ternary_composite_float(
-        module,
-        ttnn::addcmul,
-        R"doc(Computes Addcmul on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_ternary_addcmul(
+        module, ttnn::addcmul, R"doc(Computes addcmul: output = input_a + value * input_b * input_c)doc");
 
     bind_ternary_composite_float(
         module,
