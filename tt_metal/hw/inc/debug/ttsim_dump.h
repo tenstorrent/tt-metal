@@ -9,7 +9,7 @@
 #include "debug/dprint_buffer.h"
 
 #define TTSIM_DUMP_DST true
-#define TTSIM_TENSIX_DUMP(title, dump_dst) UNPACK(ttsim_tensix_dump(title, dump_dst))
+#define TTSIM_TENSIX_DUMP(...) UNPACK(ttsim_tensix_dump_wrapper(__VA_ARGS__))
 
 void ttsim_tensix_dump(const char* title, bool dump_dst) {
     if (title != nullptr && strlen(title) > 0) {
@@ -37,7 +37,12 @@ void ttsim_tensix_dump(const char* title, bool dump_dst) {
         __asm__ volatile(".word 0x000000FF");
     }
 }
+
+inline void ttsim_tensix_dump_wrapper() { ttsim_tensix_dump("", false); }
+inline void ttsim_tensix_dump_wrapper(const char* title) { ttsim_tensix_dump(title, false); }
+inline void ttsim_tensix_dump_wrapper(bool dump_dst) { ttsim_tensix_dump("", dump_dst); }
+inline void ttsim_tensix_dump_wrapper(const char* title, bool dump_dst) { ttsim_tensix_dump(title, dump_dst); }
 #else
 #define TTSIM_DUMP_DST
-#define TTSIM_TENSIX_DUMP(title, dump_dst)
+#define TTSIM_TENSIX_DUMP(...)
 #endif

@@ -11,9 +11,9 @@ void MAIN {
     UNPACK((llk_unpack_untilize_init(0)));
     TTSIM_TENSIX_DUMP("AFTER llk_unpack_untilize_init(0)", TTSIM_DUMP_DST);
 
-    TTSIM_TENSIX_DUMP("BEFORE llk_unpack_untilize_uninit(0)", false);
+    TTSIM_TENSIX_DUMP("BEFORE llk_unpack_untilize_uninit(0)");
     UNPACK((llk_unpack_untilize_uninit(0)));
-    TTSIM_TENSIX_DUMP("AFTER llk_unpack_untilize_uninit(0)", false);
+    TTSIM_TENSIX_DUMP("AFTER llk_unpack_untilize_uninit(0)");
 }
 
 }  // namespace NAMESPACE
