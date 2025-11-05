@@ -1055,18 +1055,31 @@ class UnarySFPUGolden:
         return torch.max(input_tensor, torch.tensor(threshold)).item()
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
-        input_tensor = untilize(x, self.data_format).flatten().view(32, 32)
+        """Reduce columns across tiles, computing sum or average."""
+        x_tensor = to_tensor(x, self.data_format)
+        num_tiles = x_tensor.numel() // ELEMENTS_PER_TILE
 
-        # Sum along columns (dim=0) to get a 1x32 result
-        column_sums = torch.sum(input_tensor, dim=0)  # Shape: [32]
+        results = []
+        for i in range(num_tiles):
+            tile_data = x_tensor[i * ELEMENTS_PER_TILE : (i + 1) * ELEMENTS_PER_TILE]
 
-        if reduce_pool == ReducePool.Average:
-            # Divide each column sum by 32 individually
-            column_averages = column_sums // 32  # Element-wise division by 32
-            return column_averages.tolist()
+            # Untilize and reshape to 32x32, then sum along columns (dim=0)
+            tile_2d = (
+                untilize(tile_data, self.data_format)
+                .flatten()
+                .view(TILE_SIZE, TILE_SIZE)
+            )
+            column_sums = torch.sum(tile_2d, dim=0)
 
-        # Return only the column sums, not a full 1024-element tensor
-        return column_sums.tolist()
+            # Apply averaging if needed
+            column_results = (
+                column_sums / TILE_SIZE
+                if reduce_pool == ReducePool.Average
+                else column_sums
+            )
+            results.extend(column_results.tolist())
+
+        return results
 
 
 @register_golden
