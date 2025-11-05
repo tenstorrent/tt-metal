@@ -23,9 +23,7 @@ pytest --disable-warnings tests/nightly/single_card/vit/test_ttnn_optimized_shar
 ```
 
 ### Demo
-
--  For overall runtime inference (end-2-end), use the following command to run the demo:
-- Model runtime (end-2-end) is `~3700` FPS (**On P150**)
+- Model runtime (end-2-end) is `~3700` FPS (**On P150**):
 ```sh
 pytest --disable-warnings models/demos/blackhole/vit/tests/test_demo_vit_ttnn_inference_perf_e2e_2cq_trace.py
 ```

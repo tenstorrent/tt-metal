@@ -93,7 +93,6 @@ class TtnnResnet34:
             dilation=[self.maxpool_args.dilation, self.maxpool_args.dilation],
         )
 
-        # Use blackhole-optimized 8x6 grid (48 cores, same as wormhole)
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(

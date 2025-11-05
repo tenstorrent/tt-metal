@@ -23,9 +23,14 @@ Use the following command to run the model:
 
 #### Single Device (BS=1):
 - end-2-end perf is `551` FPS (**On P150**)
-
   ```
   pytest --disable-warnings models/demos/blackhole/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant
+  ```
+
+#### Multi Device (DP=2):
+- end-2-end perf:
+  ```
+  pytest --disable-warnings models/demos/blackhole/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant_dp
   ```
 
 ### Performant Demo with Trace+2CQ
@@ -35,6 +40,12 @@ Use the following command to run the model:
 
   ```
   pytest --disable-warnings models/demos/blackhole/ufld_v2/demo/demo.py::test_ufld_v2_demo
+  ```
+
+#### Multi Device (DP=2):
+- Use the following command to run the DP performant Demo with Trace+2CQs:
+  ```
+  pytest --disable-warnings models/demos/blackhole/ufld_v2/demo/demo.py::test_ufld_v2_demo_dp
   ```
 
 ### To run the demo on your data:
@@ -52,6 +63,13 @@ Use the following command to run the model:
 - Use the following command to run the performant data evaluation with Trace+2CQs:
   ```
   pytest --disable-warnings models/demos/blackhole/ufld_v2/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference
+  ```
+
+#### Multi Device (DP=2):
+
+- Use the following command to run the performant data evaluation with Trace+2CQs:
+  ```
+  pytest --disable-warnings models/demos/blackhole/ufld_v2/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference_dp
   ```
 
 

@@ -31,11 +31,10 @@ class TtnnUFLDv2:
         self.pool = TtnnUFLDV2Conv2D(conv_args.pool, conv_pth.pool, activation=None, device=device)
 
     def __call__(self, input, batch_size=1, grid_size=(8, 8), tile_size=32):
-        # Use blackhole-optimized ResNet34 with default shard height
+        # Use default shard height
         fea = self.res_model(input, batch_size=batch_size)
         fea, out_h, out_w = self.pool(fea)
 
-        # Using the same logic as wormhole - simple direct shard height calculation
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -54,7 +53,7 @@ class TtnnUFLDv2:
         fea = ttnn.to_memory_config(fea, mem_config)
         fea = ttnn.permute(fea, (0, 1, 3, 2))
         fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
-        compute_config = ttnn.WormholeComputeKernelConfig(
+        compute_config = ttnn.BlackholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,

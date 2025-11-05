@@ -27,10 +27,21 @@ pytest --disable-warnings models/demos/blackhole/sentence_bert/tests/pcc/test_tt
 pytest --disable-warnings models/demos/blackhole/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
 ```
 
+#### Multi Device (DP=2):
+- End-to-end performance with mean-pooling post-processing:
+```
+pytest --disable-warnings models/demos/blackhole/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_dp
+```
+
 ### Performant Demo with Trace+2CQ
 #### Single Device (BS=8):
 ```
 pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference
+```
+
+#### Multi Device (DP=2):
+```
+pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference_dp
 ```
 
 ### Performant Interactive Demo with Trace+2CQ
@@ -44,6 +55,11 @@ pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/demo.py::tes
 pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference
 ```
 
+#### Multi Device (DP=2):
+```
+pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference_dp
+```
+
 ## Testing
 ### Performant Dataset evaluation with Trace+2CQ
 - dataset source: [STSb Turkish](https://github.com/emrecncelik/sts-benchmark-tr) (Semantic textual similarity dataset for the Turkish language)
@@ -52,6 +68,11 @@ pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/interactive_
 #### Single Device (BS=8):
 ```
 pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval
+```
+
+#### Multi Device (DP=2):
+```
+pytest --disable-warnings models/demos/blackhole/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval_dp
 ```
 
 ##  Details

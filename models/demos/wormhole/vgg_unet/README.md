@@ -16,11 +16,6 @@ The VGG-UNet model performs brain tumor segmentation on MRI images. It takes an 
 pytest models/demos/wormhole/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
 ```
 
-### Inference pipeline with trained weights:
-```sh
-pytest models/demos/wormhole/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
-```
-
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=1):
 Use the following command to run the e2e perf with trace 2cq:
