@@ -11,7 +11,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs, LlamaOptimizations
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
+from models.common.tt_sampling import TTSampling
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.common.utility_functions import skip_for_blackhole
 
