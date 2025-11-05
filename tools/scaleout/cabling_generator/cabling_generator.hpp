@@ -14,10 +14,6 @@
 #include <board/board.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
-namespace tt::scaleout_tools::fsd::proto {
-    class FactorySystemDescriptor;
-}
-
 namespace tt::scaleout_tools {
 
 // Strong types to prevent mixing with other uint32_t values
@@ -99,11 +95,8 @@ CableLength calc_cable_length(
 
 class CablingGenerator {
 public:
-    // Constructor with full deployment descriptor (includes physical location info)
+    // Constructor
     CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
-
-    // Constructor with just hostnames (no physical location info)
-    CablingGenerator(const std::string& cluster_descriptor_path, const std::vector<std::string>& hostnames);
 
     // Getters for all data
     const std::vector<Host>& get_deployment_hosts() const;
@@ -111,9 +104,6 @@ public:
 
     // Method to emit factory system descriptor
     void emit_factory_system_descriptor(const std::string& output_path) const;
-
-    // Method to generate factory system descriptor as protobuf object
-    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generate_factory_system_descriptor() const;
 
     // Method to emit cabling guide CSV
     void emit_cabling_guide_csv(const std::string& output_path, bool loc_info = true) const;
