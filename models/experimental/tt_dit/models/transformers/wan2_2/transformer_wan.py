@@ -249,9 +249,7 @@ class WanTransformerBlock:
                 spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
         # NOTE: Cannot set core_grid for FF or you get L1 OOM. Needs to be fixed.
-        spatial_ff_1BND = self.ff(
-            spatial_normed_1BND, core_grid=None, compute_kernel_config=self.ff_compute_kernel_config
-        )
+        spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
 
         spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
 
@@ -583,9 +581,7 @@ class WanTransformer3DModel:
 
         spatial_norm_1BND = spatial_norm_1BND * (1 + scale_11BD) + shift_11BD
 
-        proj_out_1BNI = self.proj_out(
-            spatial_norm_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
-        )
+        proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
 
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
 

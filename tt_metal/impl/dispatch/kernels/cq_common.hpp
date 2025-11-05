@@ -206,7 +206,8 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
 
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
-        noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_ndvb, CQ_NOC_wait, send>(noc, dst_addr, val, be);
+        noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_ndvb, CQ_NOC_wait, send>(
+            noc, dst_addr, val, be);
     }
 #endif
 }
@@ -257,61 +258,49 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
-template <uint32_t sem_id>
-FORCE_INLINE void cb_wait_all_pages(uint32_t n, uint32_t& additional_count) {
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+template <uint32_t my_sem_id, uint8_t noc_idx, uint32_t downstream_noc_xy, uint32_t downstream_sem_id>
+class CBWriter {
+public:
+    FORCE_INLINE void acquire_pages(uint32_t n) {
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
 
-    // Downstream component sets the MSB as a terminate bit
-    // Mask that off to avoid a race between the sem count and terminate
-    n &= 0x7fffffff;
+        // Ensure last sem_inc has landed
+        noc_async_atomic_barrier();
 
-    WAYPOINT("TAPW");
-    do {
-        invalidate_l1_cache();
-    } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
-    WAYPOINT("TAPD");
-}
+        WAYPOINT("DAPW");
+        // Use a wrapping compare here to compare distance
+        // Required for trace which steals downstream credits and may make the value negative
+        uint32_t heartbeat = 0;
+        do {
+            invalidate_l1_cache();
+            IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+        } while (wrap_gt(n, additional_count + *sem_addr));
+        WAYPOINT("DAPD");
+        additional_count -= n;
+    }
+    FORCE_INLINE void wait_all_pages(uint32_t n) {
+        volatile tt_l1_ptr uint32_t* sem_addr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(my_sem_id));
 
-template <uint32_t noc_xy, uint32_t sem_id>
-void cb_acquire_pages(uint32_t n) {
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
+        // Downstream component sets the MSB as a terminate bit
+        // Mask that off to avoid a race between the sem count and terminate
+        n &= 0x7fffffff;
 
-    // Ensure last sem_inc has landed
-    noc_async_atomic_barrier();
+        WAYPOINT("TAPW");
+        do {
+            invalidate_l1_cache();
+        } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
+        WAYPOINT("TAPD");
+    }
 
-    WAYPOINT("DAPW");
-    // Use a wrapping compare here to compare distance
-    // Required for trace which steals downstream credits and may make the value negative
-    uint32_t heartbeat = 0;
-    do {
-        invalidate_l1_cache();
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-    } while (wrap_gt(n, *sem_addr));
-    WAYPOINT("DAPD");
-    noc_semaphore_inc(get_noc_addr_helper(noc_xy, (uint32_t)sem_addr), -n);
-}
+    FORCE_INLINE void release_pages(uint32_t n) {
+        noc_semaphore_inc(
+            get_noc_addr_helper(downstream_noc_xy, get_semaphore<fd_core_type>(downstream_sem_id)), n, noc_idx);
+    }
 
-template <uint32_t noc_xy, uint32_t sem_id>
-void cb_acquire_pages(uint32_t n, uint32_t& additional_count) {
-    volatile tt_l1_ptr uint32_t* sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(sem_id));
-
-    // Ensure last sem_inc has landed
-    noc_async_atomic_barrier();
-
-    WAYPOINT("DAPW");
-    // Use a wrapping compare here to compare distance
-    // Required for trace which steals downstream credits and may make the value negative
-    uint32_t heartbeat = 0;
-    do {
-        invalidate_l1_cache();
-        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-    } while (wrap_gt(n, additional_count + *sem_addr));
-    WAYPOINT("DAPD");
-    additional_count -= n;
-}
+    uint32_t additional_count{0};
+};
 
 template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages(uint32_t n) {
