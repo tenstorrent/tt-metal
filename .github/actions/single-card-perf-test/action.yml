@@ -14,7 +14,7 @@ inputs:
   summary_pattern:
     required: false
     # Focus on short test summary info section: header, test results, and final summary line
-    default: "(.*=+.*short test summary.*=+)|(.*\\b(PASSED|FAILED|SKIPPED|ERROR)\\b)|(.*=+.*[0-9]+.*(passed|failed|skipped|error).*=*)"
+    default: "(.*=+.*short test summary info.*=+)|(.*\\b(PASSED|FAILED|SKIPPED|ERROR)\\b)|(.*=+.*[0-9]+.*(passed|failed|skipped|error).*=*)"
     description: "EGREP regex for lines to keep in the compact summary"
   summary_context:
     required: false
