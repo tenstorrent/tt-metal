@@ -49,12 +49,18 @@ inline void llk_math_reduce_init(
         within_face_16x16_transpose);
 }
 
-// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
 /**
  * Initializes specialized reduce_max_row operation for single tile processing.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native llk_math_reduce_init LLK.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole tile operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native llk_math_reduce_init LLK.
  * Use the standard llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
@@ -62,12 +68,18 @@ inline void llk_math_reduce_max_row_init() {
     _llk_math_reduce_max_row_init_<is_fp32_dest_acc_en>();
 }
 
-// OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
 /**
  * Performs specialized reduce_max_row operation on a single tile.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native llk_math_reduce LLK.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole tile operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native llk_math_reduce LLK.
  * Use the standard llk_math_reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
  */
 inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max_row_(dst_index); }
@@ -76,8 +88,15 @@ inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max
 /**
  * Initializes block-based reduce_max_row operation for processing multiple tiles.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native llk_math_reduce_init LLK.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole block operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native llk_math_reduce_init LLK.
  * Use the standard llk_math_reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * llk_math_reduce() calls in a loop for general-purpose block reduction.
  */
@@ -89,8 +108,15 @@ inline void llk_math_reduce_block_max_row_init() {
 /**
  * Performs block-based reduce_max_row operation across multiple tiles in the width dimension.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native llk_math_reduce LLK.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole block operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native llk_math_reduce LLK.
  * Use the standard llk_math_reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */

@@ -141,10 +141,16 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
 /**
  * Specialized initialization for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
  * Provides optimized performance by using specialized unpack and math functions.
- * NOTE: OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE!
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native reduce_init/reduce_tile APIs.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole tile operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native reduce_init/reduce_tile APIs.
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
@@ -165,8 +171,15 @@ ALWI void reduce_max_row_init() {
  * Initialization for reduce_block_max_row operation. Must be called before reduce_block_max_row.
  * Processes a block of tiles in the width dimension, reducing each row across the block.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native reduce_init API.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole block operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native reduce_init API.
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
@@ -187,8 +200,15 @@ ALWI void reduce_block_max_row_init() {
  * Specialized version of reduce_tile for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
  * Provides optimized performance by eliminating compile-time conditionals.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native reduce_tile API.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole tile operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native reduce_tile API.
  * Use the standard reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
@@ -209,8 +229,15 @@ ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile,
  * Specialized math-only version of reduce_tile_math for PoolType::MAX and ReduceDim::REDUCE_ROW operations.
  * Provides optimized performance by eliminating compile-time conditionals.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native reduce_tile_math API.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole tile operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native reduce_tile_math API.
  * Use the standard reduce_tile_math<PoolType::MAX, ReduceDim::REDUCE_ROW>() for general-purpose reduction.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
@@ -227,8 +254,15 @@ ALWI void reduce_tile_max_row_math(uint32_t idst) { MATH((llk_math_reduce_max_ro
  * Reduces each row across the block of tiles and writes the result to DST register.
  * The DST register buffer must be in acquired state via acquire_dst call.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native reduce_tile API.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole block operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native reduce_tile API.
  * Use the standard reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>() with reduce_tile() in a loop
  * for general-purpose reduction across multiple tiles.
  *
@@ -252,8 +286,15 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  * Uninitializes the block-based reduce_max_row operation. Needs to be called after the last call to `reduce_block_max_row` before initializing another operation.
  * This version is for block-based reduction across multiple tiles processed together.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native reduce_uninit API.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole block operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on clear_fp32_accumulation flag
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native reduce_uninit API.
  * Use the standard reduce_uninit() for general-purpose reduction cleanup.
  *
  * | Param Type | Name | Description                                      | Type | Valid Range | Required |
@@ -277,8 +318,15 @@ ALWI void reduce_block_max_row_uninit() {
  * Uninitializes the tile-by-tile reduce_max_row operation. Needs to be called after the last call to `reduce_tile_max_row` before initializing another operation.
  * This version is for tile-by-tile reduction where each tile is processed individually.
  *
- * NOTE: This function is highly specialized for SDPA (Scaled Dot-Product Attention) use cases
- * and should NOT be used as a substitute for the native reduce_uninit API.
+ * This function works with the following assumptions:
+ * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
+ * - The scaler doesn't change for the duration of the whole tile operation
+ * - Operand and scaler data format is bfloat16_b
+ * - Operand tile size is 32x32
+ * - Can work on both 16-bit or 32-bit DEST register modes based on DST_ACCUM_MODE
+ * - Does only MAX pool on ROW dimension
+ *
+ * This function should NOT be used as a substitute for the native reduce_uninit API.
  * Use the standard reduce_uninit() for general-purpose reduction cleanup.
  *
  * | Param Type | Name | Description                                      | Type | Valid Range | Required |
