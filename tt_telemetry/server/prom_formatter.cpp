@@ -4,12 +4,14 @@
 
 #include <server/prom_formatter.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <sstream>
-#include <iomanip>
+#include <algorithm>
 #include <chrono>
-#include <stdexcept>
+#include <iomanip>
 #include <optional>
+#include <sstream>
+#include <stdexcept>
 #include <unordered_set>
+#include <string_view>
 #include <ctime>
 
 namespace tt::telemetry {
@@ -22,27 +24,33 @@ struct ParsedMetric {
     std::unordered_map<std::string, std::string> labels;
 };
 
+// Helper to extract hostname from path and return remaining path
+// Path format: hostname/rest/of/path
+// Returns: {hostname, rest/of/path}
+std::pair<std::string, std::string_view> extract_hostname_from_path(std::string_view path) {
+    size_t first_slash = path.find('/');
+    if (first_slash == std::string_view::npos) {
+        throw std::runtime_error("Metric path does not contain hostname separator: " + std::string(path));
+    }
+
+    std::string hostname(path.substr(0, first_slash));
+    std::string_view remaining = path.substr(first_slash + 1);
+    return {hostname, remaining};
+}
+
 // Parse metric path and extract labels
 // Path format: hostname/tray3/chip0/[channel5/]metric_name
 // Returns: metric_name and labels (hostname, tray, chip, channel if present)
 ParsedMetric parse_metric_path(std::string_view path) {
     ParsedMetric result;
-    std::string path_str(path);
+    auto [hostname, path_after_hostname] = extract_hostname_from_path(path);
 
-    // Extract hostname from the first component
-    size_t first_slash = path_str.find('/');
-    if (first_slash == std::string::npos) {
-        throw std::runtime_error("Metric path does not contain hostname component: " + path_str);
-    }
-
-    std::string hostname = path_str.substr(0, first_slash);
+    // Add hostname as a label
     result.labels["hostname"] = hostname;
 
-    // Remove hostname and the slash
-    path_str = path_str.substr(first_slash + 1);
-
-    // Split path into components
+    // Split remaining path into components
     std::vector<std::string> components;
+    std::string path_str(path_after_hostname);
     size_t start = 0;
     size_t end = path_str.find('/');
     while (end != std::string::npos) {
@@ -64,22 +72,34 @@ ParsedMetric parse_metric_path(std::string_view path) {
         const std::string& component = components[i];
 
         // Extract label name and value (e.g., "tray3" -> label="tray", value="3")
-        size_t digit_pos = 0;
-        while (digit_pos < component.length() && !std::isdigit(component[digit_pos])) {
-            digit_pos++;
-        }
+        auto digit_it =
+            std::find_if(component.begin(), component.end(), [](unsigned char c) { return std::isdigit(c); });
 
-        if (digit_pos == 0 || digit_pos == component.length()) {
+        if (digit_it == component.begin() || digit_it == component.end()) {
             // No label/value structure, skip or use as-is
             continue;
         }
 
-        std::string label_name = component.substr(0, digit_pos);
-        std::string label_value = component.substr(digit_pos);
+        std::string label_name = component.substr(0, std::distance(component.begin(), digit_it));
+        std::string label_value = component.substr(std::distance(component.begin(), digit_it));
         result.labels[label_name] = label_value;
     }
 
     return result;
+}
+
+// Escape special characters in Prometheus label values
+// Prometheus requires backslashes, double-quotes, and newlines to be escaped
+std::string escape_label_value(std::string_view value) {
+    std::string escaped;
+    escaped.reserve(value.size() * 2);  // Reserve extra capacity for escaped characters
+    for (char c : value) {
+        if (c == '\\' || c == '"' || c == '\n') {
+            escaped += '\\';
+        }
+        escaped += c;
+    }
+    return escaped;
 }
 
 // Helper to format a single metric in Prometheus format with labels
@@ -107,7 +127,7 @@ void format_metric(
         if (!first_label) {
             output << ",";
         }
-        output << label_name << "=\"" << label_value << "\"";
+        output << label_name << "=\"" << escape_label_value(label_value) << "\"";
         first_label = false;
     }
 
@@ -128,6 +148,7 @@ void format_metric(
 }
 
 // Template helper to process metrics with common logic
+// ValueConverter can optionally modify parsed.labels before value_str is used
 template <typename ValueType, typename ValueConverter>
 void process_metrics(
     std::stringstream& output,
@@ -143,7 +164,9 @@ void process_metrics(
         try {
             // Parse metric path to extract name and labels (including hostname)
             ParsedMetric parsed = parse_metric_path(path);
-            std::string value_str = value_converter(value);
+
+            // Convert value (converter may mutate parsed.labels for string metrics)
+            std::string value_str = value_converter(value, parsed);
 
             // Get timestamp
             uint64_t timestamp = 0;
@@ -194,7 +217,7 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
     output << "# Tenstorrent Metal Telemetry Metrics\n";
     output << "# Generated at: " << std::put_time(&tm_buf, "%c") << "\n\n";
 
-    // Process bool metrics (no units)
+    // Process bool metrics (includes system-level metrics like TelemetryRunning)
     process_metrics(
         output,
         snapshot.bool_metrics,
@@ -202,7 +225,7 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         nullptr,  // No units for bool metrics
         snapshot.metric_unit_display_label_by_code,
         "Boolean metric from Tenstorrent Metal",
-        [](bool v) { return std::to_string(v ? 1 : 0); });
+        [](bool v, ParsedMetric&) { return std::to_string(v ? 1 : 0); });
 
     // Process unsigned integer metrics (with units)
     process_metrics(
@@ -212,7 +235,7 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         &snapshot.uint_metric_units,
         snapshot.metric_unit_display_label_by_code,
         "Unsigned integer metric from Tenstorrent Metal",
-        [](uint64_t v) { return std::to_string(v); });
+        [](uint64_t v, ParsedMetric&) { return std::to_string(v); });
 
     // Process floating-point metrics (with units)
     process_metrics(
@@ -222,7 +245,21 @@ std::string format_snapshot_as_prometheus(const TelemetrySnapshot& snapshot) {
         &snapshot.double_metric_units,
         snapshot.metric_unit_display_label_by_code,
         "Floating-point metric from Tenstorrent Metal",
-        [](double v) { return std::to_string(v); });
+        [](double v, ParsedMetric&) { return std::to_string(v); });
+
+    // Process string metrics (no units) - exported as info metrics with value "1"
+    // The string value is included as a label (Prometheus info pattern)
+    process_metrics(
+        output,
+        snapshot.string_metrics,
+        snapshot.string_metric_timestamps,
+        nullptr,  // No units for string metrics
+        snapshot.metric_unit_display_label_by_code,
+        "String metric from Tenstorrent Metal (value stored in label)",
+        [](const std::string& v, ParsedMetric& parsed) {
+            parsed.labels["value"] = v;
+            return "1";
+        });
 
     return output.str();
 }

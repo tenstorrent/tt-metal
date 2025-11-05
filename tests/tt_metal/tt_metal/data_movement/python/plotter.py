@@ -44,7 +44,10 @@ class Plotter:
             # For virtual channels tests, use two plots (1x2 grid) for NOC 0 and NOC 1
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 2
-
+        if "Direct Write" in test_name:
+            # For direct write tests, use one plot (1x1 grid)
+            config["nrows_per_figure"] = 1
+            config["ncols_per_figure"] = 1
         return config
 
     def plot_dm_stats(self):
@@ -124,6 +127,10 @@ class Plotter:
                 # For Transaction ID tests, plot both data size vs bandwidth and transaction ID count vs bandwidth
                 self.plot_data_size_vs_bandwidth(axes[0], plot_data[test_id])
                 self.plot_transaction_id_count_vs_bandwidth(axes[1], plot_data[test_id])
+            elif "Direct Write Performance Comparison" in test_name:
+                self.plot_bandwidth_direct_write_performance(axes[0], plot_data[test_id])
+            elif "Direct Write Address Pattern" in test_name:
+                self.plot_bandwidth_direct_write_address_pattern(axes[0], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
@@ -326,6 +333,56 @@ class Plotter:
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Transaction ID Count vs Bandwidth")
         ax.grid()
+
+    # Direct Write: Performance test
+    def plot_bandwidth_direct_write_performance(self, ax, data):
+        x_key = "num_transactions"
+        y_key = "bandwidth"
+        series_keys = ["stateful", "posted"]
+
+        title = "Number of Transactions vs Bandwidth"
+        xlabel = "Number of Transactions"
+        ylabel = "Bandwidth (bytes/cycle)"
+
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
+            label_format=lambda combo, keys: f"{'Stateful' if combo[0] else 'Non-stateful'}, {'Posted' if combo[1] else 'Non-posted'}",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            xscale="log",
+            xbase=2,
+            add_theoretical_max_bw=False,
+        )
+
+    # Direct Write: Address pattern
+    def plot_bandwidth_direct_write_address_pattern(self, ax, data):
+        x_key = "num_transactions"
+        y_key = "bandwidth"
+        series_keys = ["stateful", "same_dest", "same_value"]
+
+        title = "Number of Transactions vs Bandwidth"
+        xlabel = "Number of Transactions"
+        ylabel = "Bandwidth (bytes/cycle)"
+
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
+            label_format=lambda combo, keys: f"{'Stateful' if combo[0] else 'Non-stateful'}, {'Same destinations' if combo[1] else 'Different destinations'}, {'Same value' if combo[2] else 'Different values'}",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            xscale="log",
+            xbase=2,
+            add_theoretical_max_bw=False,
+        )
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth
     def plot_bandwidth_multicast(self, ax, data, riscv, noc_index):

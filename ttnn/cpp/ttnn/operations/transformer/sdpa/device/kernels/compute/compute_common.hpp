@@ -101,8 +101,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_push_back(in_cb, num_tiles);
 }
 
-template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, bool write_result_inplace = true) {
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, bool write_result_inplace>
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -128,7 +128,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, bool 
             tile_regs_commit();
             tile_regs_wait();
 
-            if (write_result_inplace) {
+            if constexpr (write_result_inplace) {
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
                 }
@@ -151,7 +151,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, bool 
             PACK((llk_pack_reconfig_l1_acc(0)));
         }
     }
-    if (write_result_inplace) {
+    if constexpr (write_result_inplace) {
         cb_pop_front(in0_cb, rows * cols);
         cb_reserve_back(in0_cb, rows * cols);
         cb_push_back(in0_cb, rows * cols);

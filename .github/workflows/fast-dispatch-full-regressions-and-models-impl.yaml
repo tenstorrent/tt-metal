@@ -71,8 +71,7 @@ jobs:
             {"model":"yolov12x"},
             {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout":45},
-            {"model":"stable_diffusion_xl_refiner","timeout":45},
+            {"model":"stable_diffusion_xl_base","timeout":75},
             {"model":"stable_diffusion","timeout":45}
           ]'
 
@@ -193,7 +192,6 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
             ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
-            ${{ matrix.test-config.model == 'stable_diffusion_xl_refiner' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
             ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.

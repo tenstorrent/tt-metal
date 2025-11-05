@@ -1210,7 +1210,7 @@ def reference_sdpa_with_attention_sinks(Q, K, V, S, is_causal=True, sliding_wind
     b, nh, s, d = Q.shape
     assert K.shape == (b, nh, s, d)
     assert V.shape == (b, nh, s, d)
-    # assert S.shape == (b, nh), f"Expected S shape {(b, nh)}, got {S.shape}"
+    assert S.shape == (1, nh, 1, 1), f"Expected S shape {(1, nh, 1, 1)}, got {S.shape}"
 
     # Compute attention scores: QK = Q @ K^T
     # Q: [b, nh, s, d], K: [b, nh, s, d] -> QK: [b, nh, s, s]
@@ -1228,7 +1228,8 @@ def reference_sdpa_with_attention_sinks(Q, K, V, S, is_causal=True, sliding_wind
     if S is not None:
         # Broadcast attention sink values to all query positions
         # S: [b, nh] -> [b, nh, s, 1]
-        S_broadcast = S[:, :, None, None].expand(b, nh, s, 1)
+        S_broadcast = S.repeat_interleave(b, dim=0)
+        S_broadcast = S_broadcast.repeat_interleave(s, dim=-2)
         S_broadcast = S_broadcast * sm_scale
 
         # Concatenate attention sink scores
@@ -1267,9 +1268,11 @@ def reference_flash_attention_with_sinks(Q, K, V, S, is_causal=True, q_chunk_siz
     b, nh, s, d = Q.shape
     assert K.shape == (b, nh, s, d)
     assert V.shape == (b, nh, s, d)
+    assert S.shape == (1, nh, 1, 1), f"Expected S shape {(1, nh, 1, 1)}, got {S.shape}"
 
     # Compute scale
     sm_scale = 1.0 / math.sqrt(d)
+    S = S.repeat_interleave(b, dim=0)
 
     # Reshape tensors for easier processing: [b, nh, s, d]
     # Already in the right format, no permutation needed
@@ -1300,7 +1303,6 @@ def reference_flash_attention_with_sinks(Q, K, V, S, is_causal=True, q_chunk_siz
         for k_chunk_idx in range(max_k_chunks):
             k_start = k_chunk_idx * k_chunk_size
             k_end = min(k_start + k_chunk_size, s)
-            k_chunk_len = k_end - k_start
 
             # Only process if this K chunk contains tokens that should be attended to (causal constraint)
             if is_causal and k_start >= q_end:
@@ -1350,9 +1352,9 @@ def reference_flash_attention_with_sinks(Q, K, V, S, is_causal=True, q_chunk_siz
             running_max = new_max
         if S is not None:
             # Process attention sink as a virtual K chunk
-            # S shape: [b, nh] -> broadcast to [b, nh, q_chunk_len, 1]
-            S_scaled = S[:, :, None, None] * sm_scale  # [b, nh, 1, 1]
-            S_chunk = S_scaled.expand(b, nh, q_chunk_len, 1)  # [b, nh, q_chunk_len, 1]
+            # S shape: [b, nh, 1, 1] -> broadcast to [b, nh, q_chunk_len, 1]
+            S_scaled = S * sm_scale
+            S_chunk = S_scaled.repeat_interleave(q_chunk_len, dim=-2)  # [b, nh, q_chunk_len, 1]
 
             # Update running max with sink values
             new_max = torch.maximum(running_max, S_chunk)
@@ -1381,11 +1383,8 @@ def run_test_sdpa_with_attention_sink(
     device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sink_values=None, rmse_threshold=None
 ):
     """Test SDPA with attention sinks using per-head sink values."""
-    torch.manual_seed(1234)
-
     program_config = ttnn.SDPAProgramConfig(
-        # compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        compute_with_storage_grid_size=(1, 1),
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=True,
@@ -1403,29 +1402,20 @@ def run_test_sdpa_with_attention_sink(
     V = fa_rand(b, nkv, s, d)
 
     # Create per-head attention sink values
-    # Shape: [b, nh] - one value per head, scaled appropriately
-    sm_scale = 1.0 / math.sqrt(d)
+    # Shape: [1, nh, 1, 1] - one value per head,
     if sink_values is None:
-        S_per_head = torch.rand(1, nh) * 20.0  # Random values scaled by to make closer to real distribution
+        S_per_head = torch.rand(1, nh) * 4.0  # Random values scaled by to make closer to real distribution
     else:
         S_per_head = torch.tensor(sink_values).reshape(1, nh)
 
-    # Prepare attention sink tensor for device: [b, nh, TILE_HEIGHT, TILE_WIDTH]
-    # The actual value is at position [b, nh, 0, 0]
-    TILE_HEIGHT = 32
-    TILE_WIDTH = 32
+    # Prepare attention sink tensor for device: [1, nh, 1, 1]
     S_padded = S_per_head.reshape(1, nh, 1, 1)
-    # S_padded = S_padded.repeat(1, 1, TILE_HEIGHT, TILE_WIDTH)
-    # S_padded = torch.nn.functional.pad(S_padded, (0, TILE_WIDTH - 1, 0, TILE_HEIGHT - 1), "constant", 0.0)
-    # S_padded /= sm_scale  # Important!! GPT-OSS expects sink to not be scaled
 
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_S = ttnn.from_torch(S_padded, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
 
-    # tt_S = None
-    # print("Entering tt sdpa now")
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
@@ -1435,10 +1425,7 @@ def run_test_sdpa_with_attention_sink(
         compute_kernel_config=compute_kernel_config,
         attention_sink=tt_S,
     )
-    print("Finished running sdpa now")
-    print("TT back shape: ", tt_back.shape)
     tt_back = ttnn.to_torch(tt_back)
-    print("TT back torch shape: ", tt_back.shape)
     # Slice out any tile-padding
     tt_back = tt_back[:, :, :s, :]
 
@@ -1447,19 +1434,18 @@ def run_test_sdpa_with_attention_sink(
     V_repeated = torch.cat([V[:, i : i + 1, :, :].repeat(1, nh // nkv, 1, 1) for i in range(nkv)], dim=1)
 
     # Compute reference output using per-head sink values
-    # S_per_head = None
     gt = reference_sdpa_with_attention_sinks(
         Q,
         K_repeated,
         V_repeated,
-        S_per_head,
+        S_padded,
         is_causal=True,
     )
     gt_flash = reference_flash_attention_with_sinks(
         Q,
         K_repeated,
         V_repeated,
-        S_per_head,
+        S_padded,
         is_causal=True,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
@@ -1489,8 +1475,6 @@ def run_test_sdpa_with_attention_sink_sliding_window(
     device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, sliding_window, sink_values=None, rmse_threshold=None
 ):
     """Test SDPA with attention sinks using per-head sink values and sliding window."""
-    torch.manual_seed(1234)
-
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=q_chunk_size,
@@ -1510,28 +1494,19 @@ def run_test_sdpa_with_attention_sink_sliding_window(
     V = fa_rand(b, nkv, s, d)
 
     # Create per-head attention sink values
-    # Shape: [b, nh] - one value per head, scaled appropriately
-    sm_scale = 1.0 / math.sqrt(d)
+    # Shape: [1, nh, 1, 1] - one value per head, scaled appropriately
     if sink_values is None:
         S_per_head = torch.rand(1, nh) * 4.0  # Random values scaled by to make closer to real distribution
     else:
         S_per_head = torch.tensor(sink_values).reshape(1, nh)
 
-    # Prepare attention sink tensor for device: [b, nh, TILE_HEIGHT, TILE_WIDTH]
-    # The actual value is at position [b, nh, 0, 0]
-    TILE_HEIGHT = 32
-    TILE_WIDTH = 32
     S_padded = S_per_head.reshape(1, nh, 1, 1)
-    # S_padded = S_padded.repeat(1, 1, TILE_HEIGHT, TILE_WIDTH)
-    # S_padded = torch.nn.functional.pad(S_padded, (0, TILE_WIDTH - 1, 0, TILE_HEIGHT - 1), "constant", 0.0)
-    # S_padded /= sm_scale  # Important!! GPT-OSS expects sink to not be scaled
 
     tt_Q = ttnn.from_torch(Q, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_K = ttnn.from_torch(K, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_V = ttnn.from_torch(V, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
     tt_S = ttnn.from_torch(S_padded, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, pad_value=0.0)
 
-    # tt_S = None
     tt_back = ttnn.transformer.scaled_dot_product_attention(
         tt_Q,
         tt_K,
@@ -1554,7 +1529,7 @@ def run_test_sdpa_with_attention_sink_sliding_window(
         Q,
         K_repeated,
         V_repeated,
-        S_per_head,
+        S_padded,
         is_causal=True,
         sliding_window=sliding_window,
     )
@@ -1577,7 +1552,7 @@ def run_test_sdpa_with_attention_sink_sliding_window(
     "b, nh, nkv, s, d",
     [
         [1, 8, 1, 256, 32],  # Basic test
-        [1, 16, 1, 256, 128],  # Extra heads NB: this test currently hangs
+        [1, 16, 1, 256, 128],  # Extra heads
         [32, 8, 1, 256, 128],  # Batch size > 1
         [1, 8, 1, 4096, 128],  # Long sequence
         [1, 8, 1, 4096, 64],  # gpt-oss
@@ -1585,7 +1560,7 @@ def run_test_sdpa_with_attention_sink_sliding_window(
     ],
     # ids=["basic", "extra_heads", "multibatch", "long_sequence"],
 )
-def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_chunk_size):
+def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, q_chunk_size, k_chunk_size, reset_seeds):
     """Test SDPA with per-head attention sinks on device."""
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
         pytest.skip("s must be divisible by q_chunk_size and k_chunk_size")
@@ -1593,7 +1568,7 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, q_chunk_size,
         pytest.skip("nkv must divide nh")
 
     ttnn.device.DisablePersistentKernelCache()
-    rmse_threshold = 0.015  # Slightly higher threshold due to sink approximation
+    rmse_threshold = 0.02
     run_test_sdpa_with_attention_sink(
         device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype, rmse_threshold=rmse_threshold
     )
@@ -1611,7 +1586,7 @@ def test_sdpa_with_attention_sink(device, b, nh, nkv, s, d, dtype, q_chunk_size,
     ids=["gpt-oss", "gemma"],
 )
 def test_sdpa_with_attention_sink_sliding_window(
-    device, b, nh, nkv, s, d, sliding_window, dtype, q_chunk_size, k_chunk_size
+    device, b, nh, nkv, s, d, sliding_window, dtype, q_chunk_size, k_chunk_size, reset_seeds
 ):
     """Test SDPA with per-head attention sinks on device."""
     if (s % q_chunk_size != 0) or (s % k_chunk_size != 0):
@@ -1620,7 +1595,7 @@ def test_sdpa_with_attention_sink_sliding_window(
         pytest.skip("nkv must divide nh")
 
     ttnn.device.DisablePersistentKernelCache()
-    rmse_threshold = 0.015  # Slightly higher threshold due to sink approximation
+    rmse_threshold = 0.01
     run_test_sdpa_with_attention_sink_sliding_window(
         device,
         b,

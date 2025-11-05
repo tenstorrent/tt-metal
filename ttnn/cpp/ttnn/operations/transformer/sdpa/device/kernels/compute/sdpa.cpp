@@ -215,7 +215,7 @@ void MAIN {
                      * Partial reduce_sum is used to push the final row_reduction within a tile
                      * outside of the loop over K chunks.
                      */
-                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32, true>(
                         alias_cur_max, alias_cur_sum);
 
                     cb_wait_front(cb_qk_im, qk_chunk_tiles);
@@ -310,8 +310,8 @@ void MAIN {
                     mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                     // 4. Compute exp((attention_sink - cur_max) * scale) and accumulate in cur_sum
                     //    This adds the attention sink's contribution to the softmax denominator
-                    sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, 1, scale_fp32>(
-                        alias_cur_max, alias_cur_sum, false);
+                    sub_exp_block_bcast_cols_inplace<cb_attention_sink, Sq_chunk_t, 1, scale_fp32, false>(
+                        alias_cur_max, alias_cur_sum);
 
                     // 5. Add rescaled previous sum to current sum: cur_sum += prev_sum
                     add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
@@ -338,7 +338,9 @@ void MAIN {
                 // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
                 }
-                cb_pop_front(cb_attention_sink, Sq_chunk_t);
+                if constexpr (use_attention_sink) {
+                    cb_pop_front(cb_attention_sink, Sq_chunk_t);
+                }
             }
         }
     }
