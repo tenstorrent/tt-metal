@@ -187,8 +187,8 @@ jobs:
           </details>
 
           ### 🏗️ Architecture Impact
-          $(if [ "$SHOULD_RUN_WH" = "true" ]; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit tests"; fi)
-          $(if [ "$SHOULD_RUN_BH" = "true" ]; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit tests"; fi)
+          $(if [ "$SHOULD_RUN_WH" = "true" ]; then echo "- ⚠️ **Wormhole** changes detected - will trigger all-post-commit and tt-metal-l2-nightly tests"; fi)
+          $(if [ "$SHOULD_RUN_BH" = "true" ]; then echo "- ⚠️ **Blackhole** changes detected - will trigger blackhole-post-commit and tt-metal-l2-nightly tests"; fi)
           $(if [ "$SHOULD_RUN_WH" = "false" ] && [ "$SHOULD_RUN_BH" = "false" ]; then echo "- ℹ️ No architecture-specific changes detected"; fi)
 
           <!-- WORKFLOW_DECISIONS:should-run-wormhole=$SHOULD_RUN_WH,should-run-blackhole=$SHOULD_RUN_BH -->
