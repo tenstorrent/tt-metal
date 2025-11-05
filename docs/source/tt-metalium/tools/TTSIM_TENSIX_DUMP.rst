@@ -6,7 +6,7 @@ The demo kernel code is present in
 `compute_llk_ttsim_tensix_dump.cpp <../../../../tt_metal/programming_examples/llk_init_uninit_ttsim_tensix_dump/kernels/compute_llk_ttsim_tensix_dump.cpp>`_.
 
 To build and execute, you may use the following commands:
-.. code-block:: bash
+.. code-block:: shell
 
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
