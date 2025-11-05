@@ -1076,8 +1076,11 @@ std::map<ChipId, std::set<OpAnalysisData>> GetLatestOpsPerfData() {
     std::map<ChipId, std::set<OpAnalysisData>> latest_ops_perf_data;
 
     for (const auto& [device_id, device_ops_perf_analyses] : profiler_state_manager->device_ops_perf_analyses_map) {
-        TT_ASSERT(!device_ops_perf_analyses.empty());
-        latest_ops_perf_data[device_id] = device_ops_perf_analyses.back();
+        if (device_ops_perf_analyses.empty()) {
+            latest_ops_perf_data[device_id] = {};
+        } else {
+            latest_ops_perf_data[device_id] = device_ops_perf_analyses.back();
+        }
     }
 
     return latest_ops_perf_data;

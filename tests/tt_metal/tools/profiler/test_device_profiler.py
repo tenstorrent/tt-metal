@@ -22,6 +22,7 @@ from tracy.common import (
     PROFILER_SCRIPTS_ROOT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_LOGS_DIR,
+    PROFILER_CPP_DEVICE_OPS_PERF_REPORT,
     clear_profiler_runtime_artifacts,
 )
 
@@ -894,22 +895,56 @@ def test_sub_device_profiler():
     )
 
 
+def validate_ops_perf_durations(perf_data):
+    cpp_ops_perf_report = pd.read_csv(PROFILER_LOGS_DIR / PROFILER_CPP_DEVICE_OPS_PERF_REPORT).reset_index(drop=True)
+
+    for snapshot in perf_data:
+        for device in snapshot:
+            device_id = device["device"]
+            device_ops_analysis_data = device["ops_analysis_data"]
+            for op_analysis_data in device_ops_analysis_data:
+                runtime_id = op_analysis_data["op_id"]["runtime_id"]
+                op_analyses_results = op_analysis_data["op_analyses_results"]
+                for analysis_type in op_analyses_results:
+                    analysis_result = op_analyses_results[analysis_type]
+                    if analysis_result["duration"] == 0:
+                        continue
+
+                    row = cpp_ops_perf_report.loc[
+                        (cpp_ops_perf_report["GLOBAL CALL COUNT"] == runtime_id)
+                        & (cpp_ops_perf_report["DEVICE ID"] == device_id)
+                    ]
+
+                    assert row[analysis_type].values[0] == analysis_result["duration"]
+
+
 def test_get_ops_perf_data():
+    # Op IDs and the number of ops are validated in the test_get_ops_perf_data gtests
+    # In this file, we validate the durations of the ops
+
     run_gtest_profiler_test(
-        "./build/test/ttnn/tracy/cpp/test_get_ops_perf_data",
+        "./build/test/ttnn/tracy/test_get_ops_perf_data",
         "GetOpsPerfDataFixture.TestGetOpsPerfDataBeforeReadMeshDeviceProfilerResultsCall",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
+    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_latest.json")))
+    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
+
     run_gtest_profiler_test(
-        "./build/test/ttnn/tracy/cpp/test_get_ops_perf_data",
+        "./build/test/ttnn/tracy/test_get_ops_perf_data",
         "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterSingleReadMeshDeviceProfilerResultsCall",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
+    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_latest.json")))
+    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
+
     run_gtest_profiler_test(
-        "./build/test/ttnn/tracy/cpp/test_get_ops_perf_data",
+        "./build/test/ttnn/tracy/test_get_ops_perf_data",
         "GetOpsPerfDataFixture.TestGetOpsPerfDataAfterMultipleReadMeshDeviceProfilerResultsCalls",
         do_mid_run_dump=True,
         do_cpp_post_process=True,
     )
+    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_latest.json")))
+    validate_ops_perf_durations(json.load(open(PROFILER_LOGS_DIR / "test_get_ops_perf_data_all.json")))
