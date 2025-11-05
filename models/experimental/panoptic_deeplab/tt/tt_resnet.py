@@ -145,11 +145,27 @@ class TtResNet(LightweightModule):
             else:
                 x = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            # Reshape if flattened [1, 1, H*W, C] -> [1, H, W, C]
+            # Reshape if flattened [1, 1, NHW, C] -> [1, H, W, C]
+            # For res2 and res3, specific convs output flattened format that needs reshaping
             expected_h, expected_w = spatial_dims[layer_name]
-            if x.shape[1] == 1 and x.shape[2] == expected_h * expected_w:
-                logger.debug(f"{layer_name}: Reshaping from {x.shape} to [1, {expected_h}, {expected_w}, {x.shape[3]}]")
-                x = ttnn.reshape(x, (1, expected_h, expected_w, x.shape[3]))
+            if x.shape[1] == 1 and x.shape[2] > 1:
+                # Check if it's the expected flattened size
+                if x.shape[2] == expected_h * expected_w:
+                    # Exact match with expected dimensions
+                    logger.debug(
+                        f"{layer_name}: Reshaping from {x.shape} to [1, {expected_h}, {expected_w}, {x.shape[3]}]"
+                    )
+                    x = ttnn.reshape(x, (1, expected_h, expected_w, x.shape[3]))
+                elif layer_name in ["res2", "res3"]:
+                    # For res2 and res3, handle flattened format [1,1,NHW,C] where W=2*H
+                    NHW = x.shape[2]
+                    C = x.shape[3]
+                    # W = 2*H, so NHW = N*H*W = 1*H*2*H = 2*H^2, therefore H = sqrt(NHW/2)
+                    H = int((NHW // 2) ** 0.5)
+                    W = 2 * H
+                    if H * W == NHW:
+                        logger.debug(f"{layer_name}: Reshaping from {x.shape} to [1, {H}, {W}, {C}]")
+                        x = ttnn.reshape(x, (1, H, W, C))
 
             # Clone the output to store independently (backbone outputs are shared between heads)
             # This prevents deallocation in subsequent stages from affecting stored outputs
