@@ -167,7 +167,10 @@ def read_wait_globals(
     last_wait_count = _read_symbol_value(kernel_elf, "last_wait_count", loc_mem_access)
     last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access)
     last_event = _read_symbol_value(kernel_elf, "last_event", loc_mem_access)
-    circular_buffer_fence = _read_symbol_value(kernel_elf, "cb_fence", loc_mem_access)
+    try:
+        circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence
+    except:
+        circular_buffer_fence = None
     command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access)
 
     def get_const_value(name: str) -> int | None:
@@ -235,6 +238,10 @@ def read_wait_globals(
 
 def run(args, context: Context):
     """Entry point for triage framework."""
+    from triage import set_verbose_level
+    # Set verbose level from -v count (controls which columns are displayed)
+    verbose_level = args["-v"]
+    set_verbose_level(verbose_level)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
