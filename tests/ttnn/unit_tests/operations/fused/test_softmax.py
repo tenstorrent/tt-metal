@@ -81,7 +81,9 @@ def run_softmax_stable_with_program_cache(
     attention_mask = (attention_mask > 0.5).float()
     attention_mask = attention_mask.masked_fill(attention_mask == 0, torch.tensor(float("-inf"), dtype=torch.bfloat16))
     attention_mask = attention_mask.masked_fill(attention_mask == 1, 0)
+    device.disable_program_cache()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    device.enable_program_cache()
 
     torch_input_tensor = torch_random((batch_size, 1, h, w), -1000, 1000, dtype=torch.bfloat16)
     if not skip_scale_mask:
@@ -90,7 +92,9 @@ def run_softmax_stable_with_program_cache(
         torch_output_tensor = torch_input_tensor
     torch_output_tensor = F.softmax(torch_output_tensor, dim=-1, dtype=torch.bfloat16)
 
+    device.disable_program_cache()
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    device.enable_program_cache()
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -130,6 +134,7 @@ def test_softmax_stable_with_program_cache(
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        device.disable_program_cache()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -137,6 +142,7 @@ def test_softmax_stable_with_program_cache(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        device.enable_program_cache()
     assert device.num_program_cache_entries() == 1
 
 

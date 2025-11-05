@@ -710,6 +710,8 @@ def run_matmul_2d_tiny_tile(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    device.disable_program_cache()
     in0_t = ttnn.from_torch(
         in0,
         tile=ttnn.Tile((tile_h, 32)),
@@ -726,11 +728,13 @@ def run_matmul_2d_tiny_tile(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    device.enable_program_cache()
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        device.disable_program_cache()
         bias_t = ttnn.from_torch(
             bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
@@ -739,6 +743,7 @@ def run_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        device.enable_program_cache()
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
