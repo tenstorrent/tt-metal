@@ -15,6 +15,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -98,6 +99,14 @@ inline void verify_payload_words(const std::vector<uint32_t>& rx, const std::vec
 PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
     namespace Dist = tt::tt_metal::distributed;
+
+    // Check if fabric is 2D and create defines map
+    const auto& fabric_context = cp.get_fabric_context();
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
+    std::map<std::string, std::string> defines = {};
+    if (is_2d_fabric) {
+        defines["FABRIC_2D"] = "1";
+    }
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
     tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
@@ -223,7 +232,9 @@ Notes:
         std::string(KDIR) + "unicast_rx_addrgen.cpp",
         receiver_core,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
@@ -250,7 +261,8 @@ Notes:
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = reader_cta});
+            .compile_args = reader_cta,
+            .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
     // Writer kernel (CB->Fabric->dst + final sem INC)
@@ -266,7 +278,8 @@ Notes:
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = writer_cta});
+            .compile_args = writer_cta,
+            .defines = defines});
 
     // Resolve forwarding and append fabric connection args
     uint32_t link_idx = 0;

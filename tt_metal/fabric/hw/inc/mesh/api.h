@@ -1849,7 +1849,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
     // Call base _with_state with UpdateMask::All to update destination address and size
     // The route should already be set by _set_state for optimal performance
     // Note: dst_dev_id/dst_mesh_id are kept for API symmetry but not used by base _with_state
-    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::All>(
+    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
         client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
 }
 
@@ -1879,7 +1879,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
     auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
 
-    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
+    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
         packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
 }
 

@@ -3,149 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <type_traits>
 #include "dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "tt_metal/fabric/hw/inc/addrgen_api_common.h"
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
 #include "accessor/tensor_accessor.h"
 #include "accessor/tensor_accessor_args.h"
 
 using namespace tt;
 using namespace tt::tt_fabric;
-
-// UpdateMask enum for stateful variants (from mesh/api.h)
-enum class UnicastWriteUpdateMask : uint8_t {
-    None = 0,
-    WriteDstAddr = 1 << 0,
-    PayloadSize = 1 << 1,
-    All = WriteDstAddr | PayloadSize
-};
-
-// Inline the base function and addrgen overload to avoid including full mesh/api.h which has incompatible dependencies
-template <typename FabricSenderType>
-FORCE_INLINE void fabric_unicast_noc_unicast_write(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint32_t src_addr,
-    uint32_t size,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
-    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
-    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
-
-// Addrgen overload that uses TensorAccessor
-template <typename FabricSenderType, typename AddrGenType>
-FORCE_INLINE void fabric_unicast_noc_unicast_write(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint32_t offset = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    // Call the base fabric_unicast_noc_unicast_write function
-    fabric_unicast_noc_unicast_write(
-        client_interface,
-        packet_header,
-        dst_dev_id,
-        dst_mesh_id,
-        src_addr,
-        page_size,
-        tt::tt_fabric::NocUnicastCommandHeader{noc_address});
-}
-
-// Helper function to populate unicast write fields (needed for _set_state base function)
-template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT>
-FORCE_INLINE void populate_unicast_write_fields(
-    volatile PACKET_HEADER_TYPE* packet_header, uint16_t packet_size_bytes, CommandHeaderT command_header) {
-    if constexpr ((static_cast<uint8_t>(UpdateMask) & static_cast<uint8_t>(UnicastWriteUpdateMask::PayloadSize)) != 0) {
-        packet_header->payload_size_bytes = packet_size_bytes;
-    }
-    if constexpr (
-        (static_cast<uint8_t>(UpdateMask) & static_cast<uint8_t>(UnicastWriteUpdateMask::WriteDstAddr)) != 0) {
-        if constexpr (!std::is_same_v<CommandHeaderT, std::nullptr_t>) {
-            packet_header->to_noc_unicast_write(command_header, packet_header->payload_size_bytes);
-        }
-    }
-}
-
-// Base _set_state function (needed by addrgen overload)
-template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
-FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    CommandHeaderT command_header = nullptr,
-    uint16_t packet_size_bytes = 0) {
-    fabric_set_unicast_route(packet_header, dst_dev_id, dst_mesh_id);
-    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
-}
-
-// Addrgen overload for _set_state (matches mesh/api.h)
-template <typename AddrGenType>
-FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint32_t offset = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::All>(
-        packet_header, dst_dev_id, dst_mesh_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
-}
-
-// Base _with_state function (needed by addrgen overload)
-template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType>
-FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint32_t src_addr,
-    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header = {},
-    uint16_t packet_size_bytes = 0) {
-    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
-    client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(
-        src_addr, packet_header->payload_size_bytes);
-    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-}
-
-// Addrgen overload for _with_state (matches mesh/api.h)
-template <typename FabricSenderType, typename AddrGenType>
-FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
-    tt_l1_ptr FabricSenderType* client_interface,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint8_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint32_t src_addr,
-    const AddrGenType& addrgen,
-    uint32_t page_id,
-    uint32_t offset = 0) {
-    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
-    auto noc_address = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id, offset);
-
-    // Call base _with_state with UpdateMask::All to update destination address and size
-    // The route should already be set by _set_state for optimal performance
-    // Note: dst_dev_id/dst_mesh_id are kept for API symmetry but not used by base _with_state
-    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::All>(
-        client_interface, packet_header, src_addr, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
-}
+using namespace tt::tt_fabric::mesh::experimental;
 
 //
 // Writer (fabric sender) kernel — sends pages from CB c_0 to the dst device.
