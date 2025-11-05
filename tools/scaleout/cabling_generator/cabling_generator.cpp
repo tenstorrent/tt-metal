@@ -192,7 +192,7 @@ HostId resolve_path_from_proto(
 
 // Builds a resolved graph instance from a graph instance and deployment descriptor.
 // deployment_descriptor is optional - if nullptr, no validation is performed.
-static std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
+std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
     const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
     const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor* deployment_descriptor,
