@@ -82,7 +82,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
 #ifdef TRISC_MATH
 /**
- * recip_tile on only the columsn 0:8 of a face
+ * recip_tile on only the columns 0:8 of a face
  */
 template <bool legacy_compat = true>
 void calculate_recip_first_column() {
@@ -367,7 +367,7 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
 
 #ifdef TRISC_MATH
 /**
- * exp_tile on only the columsn 0:8 of a face
+ * exp_tile on only the columns 0:8 of a face
  */
 template <bool SDPA_EXP_APPROX_MODE>
 void calculate_exponential_first_column(int scale_bf16) {
@@ -500,7 +500,7 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
 
 #ifdef TRISC_MATH
 /**
- * softplus_tile on only the columsn 0:8 of a face
+ * softplus_tile on only the columns 0:8 of a face
  */
 template <bool SDPA_EXP_APPROX_MODE>
 void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
@@ -510,7 +510,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
     vFloat threshold = ckernel::sfpu::Converter::as_float(param2);
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         ckernel::sfpu::calculate_softplus_body<APPROX>(beta, beta_reciprocal, threshold);
-        dst_reg += 2;
+        sfpi::dst_reg += 2;
     }
 }
 
