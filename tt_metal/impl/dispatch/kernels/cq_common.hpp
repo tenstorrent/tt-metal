@@ -344,9 +344,7 @@ public:
 
     // Return availabe space (in bytes) after data_ptr. This data will always be contiguous in memory and will never
     // wrap around.
-    uint32_t available_bytes(uint32_t data_ptr) const {
-        return cb_fence_ - data_ptr;
-    }
+    uint32_t available_bytes(uint32_t data_ptr) const { return cb_fence_ - data_ptr; }
 
 protected:
     FORCE_INLINE void init() {
@@ -359,7 +357,6 @@ protected:
         this->cb_fence_ = cb_base;
         this->rd_block_idx_ = 0;
     }
-
 
     // Advance the block to the next index, wrapping around if necessary.
     FORCE_INLINE void move_rd_to_next_block() {
@@ -394,7 +391,6 @@ protected:
 
         return usable;
     }
-
 
     // Byte address fence delimiting the end of currently usable data (do not process beyond this address).
     uint32_t cb_fence_{0};
@@ -450,7 +446,7 @@ public:
 
     // Get new CB pages. If getting new pages would require switching the the next block, this will call on_boundary to
     // handle the orphan data that would otherwise be lost and will then release old pages to writer.
-    // 
+    //
     // The argument to on_boundary is whether the next block is the first block in the circular buffer (in which case
     // cmd_ptr is set to the base address after on_boundary is called).  noc_nonposted_writes_num_issued[noc_index] must
     // be updated before on_boundary returns.
@@ -467,7 +463,6 @@ public:
         }
         return this->acquire_pages();
     }
-
 
     FORCE_INLINE void release_all_pages(uint32_t curr_ptr) {
         release_block_pages();

@@ -402,26 +402,22 @@ void relay_to_next_cb(uint32_t data_ptr, uint64_t wlength) {
             }
             // Get a page if needed
             if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
-                dispatch_cb_reader.get_cb_page_and_release_pages(
-                    data_ptr,
-                    [&](bool will_wrap) {
-                        uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
-                        if (orphan_size != 0) {
-                            relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
-                                data_ptr,
-                                get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr),
-                                orphan_size);
-                            length -= orphan_size;
-                            xfer_size -= orphan_size;
-                            downstream_cb_data_ptr += orphan_size;
-                            if (downstream_cb_data_ptr == downstream_cb_end) {
-                                downstream_cb_data_ptr = downstream_cb_base;
-                            }
-                            if (!will_wrap) {
-                                data_ptr += orphan_size;
-                            }
+                dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+                    if (orphan_size != 0) {
+                        relay_client.write<my_noc_index, true, NCRISC_WR_CMD_BUF>(
+                            data_ptr, get_noc_addr_helper(downstream_noc_xy, downstream_cb_data_ptr), orphan_size);
+                        length -= orphan_size;
+                        xfer_size -= orphan_size;
+                        downstream_cb_data_ptr += orphan_size;
+                        if (downstream_cb_data_ptr == downstream_cb_end) {
+                            downstream_cb_data_ptr = downstream_cb_base;
                         }
-                    });
+                        if (!will_wrap) {
+                            data_ptr += orphan_size;
+                        }
+                    }
+                });
             }
 
             relay_client.write_atomic_inc_any_len<
@@ -630,24 +626,22 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
             // Check for block completion and issue orphan writes for this block
             // before proceeding to next block
             uint32_t orphan_size = 0;
-            dispatch_cb_reader.get_cb_page_and_release_pages(
-                data_ptr,
-                [&](bool will_wrap) {
-                    orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
-                    if (os != 0) {
-                        wait_for_barrier();
-                        cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, os, num_dests);
-                        writes++;
-                        mcasts += num_dests;
-                        if (!will_wrap) {
-                            data_ptr += os;
-                        }
+            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+                if (os != 0) {
+                    wait_for_barrier();
+                    cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, os, num_dests);
+                    writes++;
+                    mcasts += num_dests;
+                    if (!will_wrap) {
+                        data_ptr += os;
                     }
-                    noc_nonposted_writes_num_issued[noc_index] += writes;
-                    noc_nonposted_writes_acked[noc_index] += mcasts;
-                    writes = 0;
-                    mcasts = 0;
-                });
+                }
+                noc_nonposted_writes_num_issued[noc_index] += writes;
+                noc_nonposted_writes_acked[noc_index] += mcasts;
+                writes = 0;
+                mcasts = 0;
+            });
 
             // This is done here so the common case doesn't have to restore the pointers
             if (orphan_size != 0) {
@@ -758,14 +752,12 @@ void process_write_packed_large(uint32_t* l1_cache) {
         while (length != 0) {
             // More data needs to be written, but we've exhausted the CB. Acquire more pages.
             if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
-                dispatch_cb_reader.get_cb_page_and_release_pages(
-                    data_ptr,
-                    [&](bool /*will_wrap*/) {
-                        // Block completion - account for all writes issued for this block before moving to next
-                        noc_nonposted_writes_num_issued[noc_index] += writes;
-                        mcasts += num_dests * writes;
-                        writes = 0;
-                    });
+                dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
+                    // Block completion - account for all writes issued for this block before moving to next
+                    noc_nonposted_writes_num_issued[noc_index] += writes;
+                    mcasts += num_dests * writes;
+                    writes = 0;
+                });
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
             uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
@@ -808,13 +800,11 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
         // Handle padded size and potential wrap
         if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(
-                data_ptr,
-                [&](bool will_wrap) {
-                    if (will_wrap) {
-                        pad_size -= orphan_size;
-                    }
-                });
+            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                if (will_wrap) {
+                    pad_size -= orphan_size;
+                }
+            });
         }
         data_ptr += pad_size;
 
@@ -1162,8 +1152,8 @@ re_run_command:
             break;
 
         default:
-            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr) << " "
-                   << dispatch_cb_base << " " << dispatch_cb_end << " "
+            DPRINT << "dispatcher_d invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr)
+                   << " " << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
@@ -1204,7 +1194,8 @@ static inline bool process_cmd_h(uint32_t& cmd_ptr) {
             break;
 
         default:
-            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr) << " "
+            DPRINT << "dispatcher_h invalid command:" << cmd_ptr << " " << dispatch_cb_reader.available_bytes(cmd_ptr)
+                   << " "
                    << " " << dispatch_cb_base << " " << dispatch_cb_end << " "
                    << "xx" << ENDL();
             DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
