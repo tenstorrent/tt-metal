@@ -16,19 +16,19 @@ namespace py = pybind11;
 
 void bind_repeat_interleave(py::module& module) {
     auto doc = R"doc(
-Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
+        Repeats elements of a :attr:`tensor` in the given :attr:`dim`.
 
-Args:
-    input_tensor (ttnn.Tensor): the input tensor.
-    repeats (number): he number of repetitions for each element. repeats is broadcasted to fit the shape of the given axis.
-    dim (number): the dimension to expand with the repetitions.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            repeats (number): he number of repetitions for each element. repeats is broadcasted to fit the shape of the given axis.
+            dim (number): the dimension to expand with the repetitions.
 
-Keyword args:
-    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+        Keyword args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-Returns:
-    ttnn.Tensor: the output tensor.
-)doc";
+        Returns:
+            ttnn.Tensor: the output tensor.
+    )doc";
 
     ttnn::bind_registered_operation(
         module,

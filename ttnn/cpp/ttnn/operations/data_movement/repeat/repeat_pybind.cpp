@@ -36,18 +36,18 @@ void bind_repeat(py::module& module, const data_movement_operation_t& operation,
 
 void py_bind_repeat(py::module& module) {
     auto doc = R"doc(
-Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
+        Returns a new tensor filled with repetition of input :attr:`input_tensor` according to number of times specified in :attr:`shape`.
 
-Args:
-    input_tensor (ttnn.Tensor): the input tensor.
-    repetition_vector (SmallVector): The number of repetitions for each dimension.
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            repetition_vector (SmallVector): The number of repetitions for each dimension.
 
-Keyword Args:
-    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
-Returns:
-    ttnn.Tensor: the output tensor.
-)doc";
+        Returns:
+            ttnn.Tensor: the output tensor.
+    )doc";
 
     detail::bind_repeat(module, ttnn::repeat, doc);
 }

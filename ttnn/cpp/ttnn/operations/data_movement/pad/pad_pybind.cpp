@@ -16,21 +16,21 @@ namespace py = pybind11;
 
 void bind_pad(py::module& module) {
     auto doc = R"doc(
-Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
-Any rank of tensor is supported, however tensors with rank > 4 can only apply padding to the lower 3 dimensions.
+        Returns a padded tensor, with a specified value at the specified location. If the input tensor is on host, the pad will be performed on host, and if its on device it will be performed on device.
+        Any rank of tensor is supported, however tensors with rank > 4 can only apply padding to the lower 3 dimensions.
 
-Args:
-    * :attr:`input_tensor`: (ttnn.Tensor): the input tensor.
-    * :attr:`padding`: (list[Tuple[int,int]]): padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
-    * :attr:`value`: (Union[float,int]): value to pad with.
+        Args:
+            * :attr:`input_tensor`: (ttnn.Tensor): the input tensor.
+            * :attr:`padding`: (list[Tuple[int,int]]): padding to apply. Each element of padding should be a tuple of 2 integers, with the first integer specifying the number of values to add before the tensor and the second integer specifying the number of values to add after the tensor. Mutually exclusive to output_tensor_shape and input_tensor_start.
+            * :attr:`value`: (Union[float,int]): value to pad with.
 
-Keyword Args:
-    * :attr:`use_multicore`: (Optional[bool]) switch to use multicore implementation
-    * :attr:`memory_config`: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to `None`.
+        Keyword Args:
+            * :attr:`use_multicore`: (Optional[bool]) switch to use multicore implementation
+            * :attr:`memory_config`: (Optional[ttnn.MemoryConfig]): Memory configuration for the operation. Defaults to `None`.
 
-Returns:
-    List of ttnn.Tensor: the output tensor.
-)doc";
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+    )doc";
 
     using OperationType = decltype(ttnn::pad);
     ttnn::bind_registered_operation(
