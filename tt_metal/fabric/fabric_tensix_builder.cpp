@@ -364,42 +364,42 @@ bool FabricTensixDatamoverConfig::is_core_id_active(FabricTensixCoreType core_id
 }
 
 size_t FabricTensixDatamoverConfig::get_local_flow_control_semaphore_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const {
+    uint32_t channel_id, FabricTensixCoreType core_id) const {
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return config->get_flow_control_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_connection_semaphore_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const {
+    uint32_t channel_id, FabricTensixCoreType core_id) const {
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return config->get_connection_handshake_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_worker_conn_info_base_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const {
+    uint32_t channel_id, FabricTensixCoreType core_id) const {
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return config->get_connection_info_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_buffer_index_semaphore_address(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const {
+    uint32_t channel_id, FabricTensixCoreType core_id) const {
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return config->get_buffer_index_address(channel_type, channel_id);
 }
 
 size_t FabricTensixDatamoverConfig::get_channel_credits_stream_id(
-    ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const {
+    uint32_t channel_id, FabricTensixCoreType core_id) const {
     auto config = get_config(core_id);
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
     return config->get_channel_credits_stream_id(channel_type, channel_id);
 }
 
 std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_address_and_signal(
-    ChipId device_id, uint32_t eth_chan_id, FabricTensixCoreType core_id) const {
+    FabricTensixCoreType core_id) const {
     TT_FATAL(
         is_core_id_active(core_id), "Core type {} is not active in fabric tensix config", static_cast<int>(core_id));
 

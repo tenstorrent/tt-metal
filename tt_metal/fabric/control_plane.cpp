@@ -2101,8 +2101,6 @@ void fill_tensix_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,
     const CoreCoord& mux_core_virtual,
     const tt::tt_fabric::FabricTensixDatamoverConfig& tensix_config,
-    ChipId physical_chip_id,
-    chan_id_t eth_channel_id,
     uint32_t sender_channel,
     tt::tt_fabric::FabricTensixCoreType core_id) {
     connection_info.edm_noc_x = static_cast<uint8_t>(mux_core_virtual.x);
@@ -2111,13 +2109,12 @@ void fill_tensix_connection_info_fields(
     connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
     connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
     connection_info.edm_connection_handshake_addr =
-        tensix_config.get_connection_semaphore_address(physical_chip_id, eth_channel_id, sender_channel, core_id);
+        tensix_config.get_connection_semaphore_address(sender_channel, core_id);
     connection_info.edm_worker_location_info_addr =
-        tensix_config.get_worker_conn_info_base_address(physical_chip_id, eth_channel_id, sender_channel, core_id);
+        tensix_config.get_worker_conn_info_base_address(sender_channel, core_id);
     connection_info.buffer_index_semaphore_id =
-        tensix_config.get_buffer_index_semaphore_address(physical_chip_id, eth_channel_id, sender_channel, core_id);
-    connection_info.worker_free_slots_stream_id =
-        tensix_config.get_channel_credits_stream_id(physical_chip_id, eth_channel_id, sender_channel, core_id);
+        tensix_config.get_buffer_index_semaphore_address(sender_channel, core_id);
+    connection_info.worker_free_slots_stream_id = tensix_config.get_channel_credits_stream_id(sender_channel, core_id);
 }
 
 void ControlPlane::populate_fabric_connection_info(
@@ -2167,13 +2164,7 @@ void ControlPlane::populate_fabric_connection_info(
             (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) ? 0 : sender_channel;
 
         fill_tensix_connection_info_fields(
-            tensix_connection_info,
-            mux_core_virtual,
-            tensix_config,
-            physical_chip_id,
-            eth_channel_id,
-            tensix_sender_channel,
-            core_id);
+            tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
     } else {
         dispatcher_connection_info = worker_connection_info;
     }
