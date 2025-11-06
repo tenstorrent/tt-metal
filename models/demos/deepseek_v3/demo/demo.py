@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
-from models.demos.deepseek_v3.tt.generator_bp import DeepseekGenerator as DeepseekGeneratorBP
+from models.demos.deepseek_v3.tt.generator_bp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
@@ -93,7 +93,7 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--generator",
         choices=["pp", "bp"],
-        default="pp",
+        default="bp",
         help="Select generator implementation: default (pipeline parallel), bp (batch parallel).",
     )
     return p
@@ -210,7 +210,7 @@ def run_demo(
     reference_file: str | Path | None = None,
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
-    generator: str = "pp",
+    generator: str = "bp",
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -266,7 +266,7 @@ def run_demo(
             from models.demos.deepseek_v3.demo.token_accuracy import TokenAccuracy
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
-        if generator == "pp":
+        if generator == "bp":
             gen = DeepseekGenerator(
                 mesh_device=mesh_device,
                 model_path=Path(model_path),
@@ -277,8 +277,8 @@ def run_demo(
                 override_num_layers=(1 if random_weights else None),
                 single_layer=(single_layer if random_weights else None),
             )
-        else:  # generator == "bp"
-            gen = DeepseekGeneratorBP(
+        else:  # generator == "pp"
+            gen = DeepseekGeneratorPP(
                 mesh_device=mesh_device,
                 model_path=Path(model_path),
                 cache_dir=Path(cache_dir),
