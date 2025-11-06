@@ -738,49 +738,93 @@ jobs:
         shell: bash
         run: |
           python - <<'PY' > /tmp/matrix.json
-          import os, json, math, sys
+          import os, json, sys
           d = '/tmp/vectors'
           modules = sorted([f[:-5] for f in os.listdir(d) if f.endswith('.json')])
 
-          # Modules that need to be split by suite due to long execution times
-          suite_split_modules = {
-              'conv2d.full.conv2d_sliding_window': [
-                  'sliding_window_suite_0',
-                  'sliding_window_suite_1',
-                  'sliding_window_suite_2',
-                  'sliding_window_suite_3',
-                  'sliding_window_suite_4',
-                  'sliding_window_suite_5',
-                  'sliding_window_suite_6'
-              ]
-          }
+          # Helper for chunking modules into batches
+          def chunk_modules(items, size):
+              return [",".join(items[i:i+size]) for i in range(0, len(items), size)] if items else []
 
-          # Remove suite-split modules from regular processing
-          regular_modules = [m for m in modules if m not in suite_split_modules.keys()]
+          ccl_modules = [m for m in modules if m.startswith('ccl.')]
+
+          schedule_expr = "${{ github.event.schedule }}"
+          event_name = "${{ github.event_name }}"
+          sweep_name = "${{ github.event.inputs.sweep_name }}"
+          measure_device_perf = "${{ github.event.inputs.measure_device_perf }}"
 
           # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
           # Also use smaller batch size when device performance measurement is enabled to avoid timeouts
           # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
-          device_perf_enabled = "${{ github.event_name }}" == "schedule" or "${{ github.event.inputs.measure_device_perf }}" == "true"
-          if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" or device_perf_enabled:
+          device_perf_enabled = event_name == "schedule" or measure_device_perf == "true"
+          if schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)" or device_perf_enabled:
               BATCH_SIZE = 3  # Smaller batches for comprehensive runs or when device performance measurement is enabled (must stay under 256 total batches due to GitHub Actions limit)
           else:
               BATCH_SIZE = 10  # Larger batches for nightly runs
 
-          # Create batches for regular modules
-          batches = [",".join(regular_modules[i:i+BATCH_SIZE]) for i in range(0, len(regular_modules), BATCH_SIZE)]
+          # Create batches for all modules
+          regular_batches = chunk_modules(modules, BATCH_SIZE)
 
-          # Add suite-split modules as individual suite batches
-          for module_name, suites in suite_split_modules.items():
-              if module_name in modules:  # Only add if the module exists
-                  for suite in suites:
-                      batches.append(f"{module_name}:{suite}")
+          # Maintain backwards-compatible batch list output
+          batches = list(regular_batches)
+
+          # Generate CCL-only batches for dedicated runners
+          ccl_batches = chunk_modules(ccl_modules, BATCH_SIZE)
+
+          is_schedule = event_name == "schedule"
+          is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
+          wormhole_suite_name = "nightly" if not is_comprehensive else None
+          should_add_n300 = is_schedule and schedule_expr == "0 4 * * 1,2,4,5"
+
+          include_entries = []
+
+          wormhole_template = {
+              "test_group_name": "wormhole-n150-sweeps",
+              "arch": "wormhole_b0",
+              "runs_on": "tt-ubuntu-2204-n150-stable",
+              "tt_smi_cmd": "tt-smi -r",
+          }
+
+          for batch in regular_batches:
+              include_entries.append({
+                  **wormhole_template,
+                  "module_selector": batch,
+                  "batch_display": batch,
+                  "suite_name": wormhole_suite_name,
+              })
+
+          if should_add_n300 and ccl_batches:
+              n300_template = {
+                  "test_group_name": "n300-llmbox-ccl",
+                  "arch": "wormhole_b0",
+                  "runs_on": "tt-ubuntu-2204-n300-llmbox-viommu-stable",
+                  "tt_smi_cmd": "tt-smi -r",
+              }
+              for batch in ccl_batches:
+                  include_entries.append({
+                      **n300_template,
+                      "module_selector": batch,
+                      "batch_display": f"ccl:{batch}",
+                      "suite_name": "generality_suite_fabric_1d",
+                  })
 
           total_batches = len(batches)
           if total_batches > 256:
               print(f"Total batch count ({total_batches}) exceeds GitHub Actions matrix limit of 256. Please adjust BATCH_SIZE or reduce the number of modules.", file=sys.stderr)
               sys.exit(1)
-          print(json.dumps({"module": modules, "batches": batches}))
+
+          total_matrix_entries = len(include_entries)
+          if total_matrix_entries > 256:
+              print(f"Total matrix entry count ({total_matrix_entries}) exceeds GitHub Actions matrix limit of 256. Please adjust batching logic or reduce modules.", file=sys.stderr)
+              sys.exit(1)
+
+          result = {
+              "module": modules,
+              "batches": batches,
+              "ccl_batches": ccl_batches,
+              "include": include_entries,
+          }
+          print(json.dumps(result))
           PY
           echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
   ttnn-run-single-sweep:
@@ -885,7 +929,7 @@ jobs:
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
   ttnn-run-sweeps-parallel:
-    name: Run sweeps in parallel (${{ matrix.test-group.name }}, ${{ matrix.batch }})
+    name: Run sweeps in parallel (${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
     needs:
       - ttnn-generate-sweeps
       - build-artifact
@@ -897,34 +941,19 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        test-group:
-          [
-            {
-              name: "wormhole-n150-sweeps",
-              arch: wormhole_b0,
-              runs-on: tt-ubuntu-2204-n150-stable,
-              tt-smi-cmd: "tt-smi -r"
-            },
-            # {
-            #   name: "Wormhole N300 Sweeps",
-            #   arch: wormhole_b0,
-            #   runs-on: tt-ubuntu-2204-n300-stable,
-            #   tt-smi-cmd: "tt-smi-metal -r 0"
-            # }
-          ]
-        batch: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).batches }}
+        include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).include }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ matrix.test-group.arch }}
+        ARCH_NAME: ${{ matrix.arch }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
-        TT_SMI_RESET_COMMAND: ${{ matrix.test-group.tt-smi-cmd }}
+        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -936,7 +965,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 720
-    runs-on: ${{ matrix.test-group.runs-on }}
+    runs-on: ${{ matrix.runs_on }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
@@ -950,10 +979,12 @@ jobs:
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│              Parallel Sweeps Configuration                  │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Run Mode:             Parallel Execution (${{ matrix.test-group.name }})"
-          echo "│ Batch:                ${{ matrix.batch }}"
-          echo "│ Architecture:         ${{ matrix.test-group.arch }}"
-          echo "│ Runner:               ${{ matrix.test-group.runs-on }}"
+          echo "│ Run Mode:             Parallel Execution (${{ matrix.test_group_name }})"
+          echo "│ Batch:                ${{ matrix.batch_display }}"
+          echo "│ Module Selector:      ${{ matrix.module_selector }}"
+          echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
+          echo "│ Architecture:         ${{ matrix.arch }}"
+          echo "│ Runner:               ${{ matrix.runs_on }}"
           echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == true && 'true' || 'false') }}"
           echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == true && 'true' || 'false') }}"
           echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == true && 'true' || 'false') }}"
@@ -966,7 +997,8 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (batch)
         run: |
-          BATCH="${{ matrix.batch }}"
+          MODULE_SELECTOR="${{ matrix.module_selector }}"
+          SUITE_NAME="${{ matrix.suite_name }}"
 
           # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
           SKIP_ON_TIMEOUT_FLAG=""
@@ -986,29 +1018,44 @@ jobs:
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
-          # Check if batch contains colon (suite-specific execution)
-          if [[ "$BATCH" == *":"* ]]; then
-            MODULE_NAME="${BATCH%:*}"
-            SUITE_NAME="${BATCH#*:}"
-            # Suite-specific execution doesn't need nightly restriction
-            python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
-          else
-            # Regular batch execution
-            if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
-            else
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG $DEVICE_PERF_FLAG
-            fi
+          CMD=(
+            python3 tests/sweep_framework/sweeps_runner.py
+            --module-name "$MODULE_SELECTOR"
+            --vector-source vectors_export
+            --result-dest results_export
+            --tag ci-main
+            --summary
+          )
+
+          if [[ -n "$SKIP_ON_TIMEOUT_FLAG" ]]; then
+            CMD+=("$SKIP_ON_TIMEOUT_FLAG")
           fi
+
+          if [[ -n "$DEVICE_PERF_FLAG" ]]; then
+            CMD+=("$DEVICE_PERF_FLAG")
+          fi
+
+          if [[ -n "$SUITE_NAME" ]]; then
+            CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          "${CMD[@]}"
       - name: Compute artifact suffix
         shell: bash
         run: |
-          echo "BATCH_SUFFIX=$(echo -n '${{ matrix.batch }}' | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
+          DISPLAY_LABEL="${{ matrix.batch_display }}"
+          SUITE_LABEL="${{ matrix.suite_name }}"
+          GROUP_LABEL="${{ matrix.test_group_name }}"
+          FINGERPRINT="$GROUP_LABEL|$DISPLAY_LABEL"
+          if [[ -n "$SUITE_LABEL" ]]; then
+            FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
+          fi
+          echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: sweeps-results-${{ matrix.test-group.name }}-batch-${{ env.BATCH_SUFFIX }}
+          name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
   ttnn-homogenize-run-result:
