@@ -187,12 +187,29 @@ def apply_vgg_backbone(
     """
     Apply VGG backbone layers to input tensor using TTNN operations.
     """
+    from loguru import logger
+
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    # DEBUG: Verify input tensor shape before conversion
+    if isinstance(input_tensor, torch.Tensor):
+        expected_shape = (1, 3, 512, 512)
+        if input_tensor.shape != expected_shape:
+            logger.error(
+                f"ERROR in apply_vgg_backbone: Input tensor shape mismatch! "
+                f"Expected {expected_shape}, got {input_tensor.shape}. "
+                f"This may cause L1 issues if image is not 512x512."
+            )
+            raise ValueError(
+                f"Input tensor shape mismatch in VGG backbone: expected {expected_shape}, got {input_tensor.shape}"
+            )
+        logger.info(f"DEBUG: VGG backbone input tensor shape: {input_tensor.shape} (NCHW format)")
 
     # Convert input to TTNN format if it's a torch tensor
     if isinstance(input_tensor, torch.Tensor):
         x_torch = input_tensor.permute(0, 2, 3, 1)  # NCHW -> NHWC
+        logger.info(f"DEBUG: VGG backbone input after permute to NHWC: {x_torch.shape}")
         x = ttnn.from_torch(
             x_torch,
             device=device,
@@ -200,6 +217,7 @@ def apply_vgg_backbone(
             layout=ttnn.TILE_LAYOUT,
             memory_config=memory_config,
         )
+        logger.info(f"DEBUG: VGG backbone input after ttnn.from_torch: {x.shape if hasattr(x, 'shape') else 'N/A'}")
     else:
         x = input_tensor
 
@@ -208,12 +226,34 @@ def apply_vgg_backbone(
         input_height = input_tensor.shape[2]  # H from NCHW
         input_width = input_tensor.shape[3]  # W from NCHW
         current_channels = input_tensor.shape[1]  # C from NCHW
+        logger.info(
+            f"DEBUG: VGG backbone extracted dimensions: H={input_height}, W={input_width}, C={current_channels}"
+        )
+
+        # Verify dimensions are 512x512
+        if input_height != 512 or input_width != 512:
+            logger.error(
+                f"ERROR in apply_vgg_backbone: Image dimensions are not 512x512! "
+                f"Got H={input_height}, W={input_width}. This will cause L1 issues!"
+            )
+            raise ValueError(f"Image dimensions must be 512x512, got {input_height}x{input_width}")
     else:
         shape = x.shape
         batch_size = 1
         input_height = shape[1]
         input_width = shape[2]
         current_channels = shape[3]
+        logger.info(
+            f"DEBUG: VGG backbone TTNN tensor dimensions: H={input_height}, W={input_width}, C={current_channels}"
+        )
+
+        # Verify dimensions are 512x512
+        if input_height != 512 or input_width != 512:
+            logger.error(
+                f"ERROR in apply_vgg_backbone: TTNN tensor dimensions are not 512x512! "
+                f"Got H={input_height}, W={input_width}. This will cause L1 issues!"
+            )
+            raise ValueError(f"TTNN tensor dimensions must be 512x512, got {input_height}x{input_width}")
 
     current_h = input_height
     current_w = input_width
@@ -310,27 +350,35 @@ def apply_vgg_backbone(
                         math_approx_mode=False,  # Disable math approximation for maximum precision
                     )
 
-                output_tensor, [output_height, output_width] = ttnn.conv2d(
-                    input_tensor=x,
-                    weight_tensor=weight,
-                    bias_tensor=bias,
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
-                    dilation=dilation,
-                    groups=groups,
-                    batch_size=batch_size,
-                    input_height=input_height,
-                    input_width=input_width,
-                    device=device,
-                    return_output_dim=True,
-                    return_weights_and_bias=False,
-                    dtype=dtype,
-                    memory_config=memory_config,
-                    compute_config=compute_config,  # HiFi4 with fp32 accumulator for higher precision
-                )
+                # For DRAM operations, don't pass memory_config to conv2d as it's not supported
+                # The output will always be DRAM Interleaved for DRAM operations
+                conv2d_kwargs = {
+                    "input_tensor": x,
+                    "weight_tensor": weight,
+                    "bias_tensor": bias,
+                    "in_channels": in_channels,
+                    "out_channels": out_channels,
+                    "kernel_size": kernel_size,
+                    "stride": stride,
+                    "padding": padding,
+                    "dilation": dilation,
+                    "groups": groups,
+                    "batch_size": batch_size,
+                    "input_height": input_height,
+                    "input_width": input_width,
+                    "device": device,
+                    "return_output_dim": True,
+                    "return_weights_and_bias": False,
+                    "dtype": dtype,
+                    "compute_config": compute_config,  # HiFi4 with fp32 accumulator for higher precision
+                }
+
+                # Only pass memory_config if it's not DRAM (e.g., L1)
+                # DRAM conv2d doesn't support memory_config parameter
+                if memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                    conv2d_kwargs["memory_config"] = memory_config
+
+                output_tensor, [output_height, output_width] = ttnn.conv2d(**conv2d_kwargs)
 
             # Reshape output to proper dimensions
             x = output_tensor.reshape([batch_size, output_height, output_width, out_channels])

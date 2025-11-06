@@ -8,14 +8,14 @@ from models.experimental.SSD512.tt.layers.vgg_backbone import (
     build_vgg_backbone,
     apply_vgg_backbone,
 )
-from models.experimental.SSD512.tt.layers.extras_backbone import (
+from models.experimental.SSD512.tt.layers.tt_extras_backbone import (
     build_extras_backbone,
 )
 from models.experimental.SSD512.tt.layers.multibox_heads import (
     build_multibox_heads,
     apply_multibox_head,
 )
-from models.experimental.SSD512.tt.layers.l2norm import TtL2Norm
+from models.experimental.SSD512.tt.layers.tt_l2norm import TtL2Norm
 from models.common.utility_functions import tt_to_torch_tensor
 
 

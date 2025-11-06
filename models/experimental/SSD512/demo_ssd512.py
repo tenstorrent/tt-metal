@@ -42,6 +42,15 @@ def load_image(image_path, size=512):
     # Resize directly to 512x512 (no aspect ratio preservation, matching original demo)
     x = cv2.resize(image_bgr, (size, size)).astype(np.float32)
 
+    # Verify image is resized to 512x512
+    resized_height, resized_width = x.shape[:2]
+    if resized_height != size or resized_width != size:
+        logger.error(
+            f"ERROR: Image resize failed! Expected {size}x{size}, got {resized_height}x{resized_width}. "
+            f"Original size: {original_height}x{original_width}"
+        )
+        raise ValueError(f"Image resize failed: expected {size}x{size}, got {resized_height}x{resized_width}")
+
     # Subtract BGR mean (SSD standard: [104, 117, 123] for BGR channels)
     x -= (104.0, 117.0, 123.0)
 
@@ -54,10 +63,72 @@ def load_image(image_path, size=512):
     # Add batch dimension
     img_tensor = img_tensor.unsqueeze(0)
 
+    # Verify tensor shape is [1, 3, 512, 512]
+    expected_shape = (1, 3, size, size)
+    if img_tensor.shape != expected_shape:
+        logger.error(
+            f"ERROR: Tensor shape mismatch! Expected {expected_shape}, got {img_tensor.shape}. "
+            f"Image may not be properly resized."
+        )
+        raise ValueError(f"Tensor shape mismatch: expected {expected_shape}, got {img_tensor.shape}")
+
     # Store original dimensions for later box scaling
     original_img.original_size = (original_width, original_height)
 
     return img_tensor, original_img
+
+
+def filter_top_detections(detections, max_detections=2, min_score=0.1):
+    """Filter detections to keep only top N by confidence score.
+
+    Args:
+        detections: List of detection dictionaries, each with 'boxes', 'scores', 'labels'
+        max_detections: Maximum number of detections to keep (default: 2)
+        min_score: Minimum confidence score to keep (default: 0.1)
+
+    Returns:
+        Filtered list of detection dictionaries
+    """
+    if len(detections) == 0:
+        return detections
+
+    # Get first image detections
+    det = detections[0]
+    boxes = det["boxes"]
+    scores = det["scores"]
+    labels = det["labels"]
+
+    if len(boxes) == 0:
+        return detections
+
+    # Filter by minimum score first
+    score_mask = scores >= min_score
+    if not score_mask.any():
+        # If no detections meet minimum score, return top max_detections anyway
+        score_mask = torch.ones_like(scores, dtype=torch.bool)
+
+    filtered_boxes = boxes[score_mask]
+    filtered_scores = scores[score_mask]
+    filtered_labels = labels[score_mask]
+
+    if len(filtered_boxes) == 0:
+        return detections
+
+    # Sort by confidence score (descending)
+    sorted_indices = torch.argsort(filtered_scores, descending=True)
+
+    # Keep only top max_detections
+    keep_indices = sorted_indices[:max_detections]
+
+    filtered_detections = [
+        {
+            "boxes": filtered_boxes[keep_indices],
+            "scores": filtered_scores[keep_indices],
+            "labels": filtered_labels[keep_indices],
+        }
+    ]
+
+    return filtered_detections
 
 
 def draw_detections(image, detections, output_path, model_name):
@@ -136,7 +207,6 @@ def draw_detections(image, detections, output_path, model_name):
 
     # Save image
     image.save(output_path)
-    logger.info(f"Saved {model_name} output to: {output_path}")
 
 
 def generate_prior_boxes(cfg, device=None):
@@ -154,52 +224,18 @@ def generate_prior_boxes(cfg, device=None):
     return priors
 
 
-def run_pytorch_detection(model, image_tensor, priors, conf_thresh=0.01, nms_thresh=0.45, top_k=200):
-    """Run PyTorch model and get detections."""
-    model.eval()
-    with torch.no_grad():
-        output = model(image_tensor)
-
-        batch_size = output.shape[0]
-        detections = []
-
-        for b in range(batch_size):
-            boxes_list = []
-            scores_list = []
-            labels_list = []
-
-            for cls_idx in range(1, model.num_classes):
-                cls_output = output[b, cls_idx]  # [top_k, 5]
-                j = 0
-                while j < top_k and cls_output[j, 0] >= conf_thresh:
-                    score = cls_output[j, 0].item()
-                    box = cls_output[j, 1:5]  # [x1, y1, x2, y2] in [0,1] normalized
-
-                    box = torch.clamp(box, 0.0, 1.0)
-
-                    boxes_list.append(box.unsqueeze(0))
-                    scores_list.append(score)
-                    labels_list.append(cls_idx)
-                    j += 1
-
-            if len(boxes_list) > 0:
-                detections.append(
-                    {
-                        "boxes": torch.cat(boxes_list, 0),
-                        "scores": torch.tensor(scores_list),
-                        "labels": torch.tensor(labels_list, dtype=torch.long),
-                    }
-                )
-            else:
-                detections.append(
-                    {"boxes": torch.zeros((0, 4)), "scores": torch.zeros(0), "labels": torch.zeros(0, dtype=torch.long)}
-                )
-
-        return detections
-
-
 def run_ttnn_detection(model, image_tensor, priors, device, conf_thresh=0.01, nms_thresh=0.45, top_k=200):
     """Run TTNN model and get detections."""
+    # Verify image tensor shape before sending to backbone
+    expected_shape = (1, 3, 512, 512)
+    if image_tensor.shape != expected_shape:
+        logger.error(
+            f"ERROR: Image tensor shape mismatch before TTNN model! "
+            f"Expected {expected_shape}, got {image_tensor.shape}. "
+            f"This may cause L1 issues if image is not 512x512."
+        )
+        raise ValueError(f"Image tensor shape mismatch: expected {expected_shape}, got {image_tensor.shape}")
+
     # Synchronize and clear memory before forward pass
     if device is not None:
         ttnn.synchronize_device(device)
@@ -258,14 +294,20 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./models/experimental/SSD512/ssd512_outputs",
-        help="Directory to save output images (default: ./models/experimental/SSD512/ssd512_outputs)",
+        default="./models/experimental/SSD512/resources/ssd512_outputs",
+        help="Directory to save output images (default: ./models/experimental/SSD512/resources/ssd512_outputs)",
     )
     parser.add_argument(
-        "--conf_thresh", type=float, default=0.01, help="Confidence threshold for detections (default: 0.01)"
+        "--conf_thresh",
+        type=float,
+        default=0.1,
+        help="Confidence threshold for detections (default: 0.1, lower for random weights)",
     )
     parser.add_argument("--nms_thresh", type=float, default=0.45, help="NMS IoU threshold (default: 0.45)")
-    parser.add_argument("--top_k", type=int, default=200, help="Top K detections per class (default: 200)")
+    parser.add_argument("--top_k", type=int, default=5, help="Top K detections per class (default: 5)")
+    parser.add_argument(
+        "--max_detections", type=int, default=2, help="Maximum total detections across all classes (default: 2)"
+    )
     parser.add_argument("--device_id", type=int, default=0, help="TTNN device ID (default: 0)")
     parser.add_argument(
         "--restart_device",
@@ -273,7 +315,10 @@ def main():
         help="Restart device between images to free all memory (slower but avoids OOM)",
     )
     parser.add_argument(
-        "--l1_small_size", type=int, default=None, help="L1 small size in bytes (default: device default)"
+        "--l1_small_size",
+        type=int,
+        default=98304,
+        help="L1 small size in bytes (default: 98304, matching test_ssd.py). Use 0 to use device default",
     )
 
     args = parser.parse_args()
@@ -284,13 +329,11 @@ def main():
     # Get VOC configuration
     voc_cfg = voc["SSD512"]
 
-    # Build PyTorch model (only need to do this once)
-    logger.info("Building PyTorch model...")
+    # Build PyTorch model (only need to do this once for weight loading)
     torch_model = build_ssd("test", size=512, num_classes=21)
     torch_model.eval()
 
     # Initialize with random weights (xavier uniform)
-    logger.info("Initializing random weights...")
     for m in torch_model.modules():
         if isinstance(m, torch.nn.Conv2d):
             torch.nn.init.xavier_uniform_(m.weight)
@@ -306,28 +349,23 @@ def main():
         nonlocal device, ttnn_model
 
         if device is not None:
-            logger.info("Closing existing device...")
             ttnn.close_device(device)
             import gc
 
             gc.collect()
 
         # Initialize TTNN device
-        logger.info("Initializing TTNN device...")
-        if args.l1_small_size is not None:
-            logger.info(f"  Using l1_small_size={args.l1_small_size} bytes")
-            device = ttnn.open_device(device_id=args.device_id, l1_small_size=args.l1_small_size)
-        else:
+        if args.l1_small_size == 0:
             device = ttnn.open_device(device_id=args.device_id)
+        else:
+            l1_size = args.l1_small_size
+            device = ttnn.open_device(device_id=args.device_id, l1_small_size=l1_size)
 
         # Build TTNN model
-        logger.info("Building TTNN model...")
         ttnn_model = build_ssd512(num_classes=21, device=device)
 
         # Load weights from PyTorch to TTNN (same random weights)
         # Use device=None (host) for weights to avoid OOM - conv2d will prepare them correctly
-        logger.info("Loading weights from PyTorch to TTNN...")
-        logger.info("  Using device=None (host) for weights to avoid L1 memory issues...")
         ttnn_model.load_weights_from_torch(torch_model, weight_device=None)
 
         # Synchronize device after weight loading to ensure weights are ready
@@ -344,8 +382,7 @@ def main():
 
     try:
         # Generate prior boxes
-        logger.info("Generating prior boxes...")
-        priors_torch = generate_prior_boxes(voc_cfg, device=device)
+        priors_torch = generate_prior_boxes(voc_cfg)
 
         # Get image files
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
@@ -358,152 +395,37 @@ def main():
             logger.error(f"No images found in {args.input_dir}")
             return
 
-        logger.info(f"Found {len(image_files)} images to process")
+        logger.info(f"Processing {len(image_files)} images...")
 
         # Process each image
         for img_idx, img_path in enumerate(image_files):
-            logger.info(f"\nProcessing image {img_idx+1}/{len(image_files)}: {img_path.name}")
+            logger.info(f"Processing image {img_idx+1}/{len(image_files)}: {img_path.name}")
 
             # Restart device if requested (frees all memory including L1)
             if args.restart_device and img_idx > 0:
-                logger.info("  Restarting device to free all memory...")
                 device, ttnn_model = init_device_and_model()
 
             # Load and preprocess image
             image_tensor, original_img = load_image(str(img_path))
 
-            # Run PyTorch detection
-            logger.info("Running PyTorch model...")
-            torch_detections = run_pytorch_detection(
-                torch_model,
-                image_tensor,
-                priors_torch,
-                conf_thresh=args.conf_thresh,
-                nms_thresh=args.nms_thresh,
-                top_k=args.top_k,
-            )
-
-            if len(torch_detections) > 0:
-                det = torch_detections[0]
-                boxes = det["boxes"]
-                scores = det["scores"]
-                labels = det["labels"]
-
-                class_counts = {}
-                train_detections = []
-                for i, (box, score, label) in enumerate(zip(boxes, scores, labels)):
-                    class_idx = label.item()
-                    class_name = VOC_CLASSES[class_idx] if class_idx < len(VOC_CLASSES) else f"Class {class_idx}"
-                    class_counts[class_name] = class_counts.get(class_name, 0) + 1
-                    if class_name == "train":
-                        train_detections.append((i, score.item(), box))
-
-            base_name = img_path.stem
-            torch_output_path = os.path.join(args.output_dir, f"{base_name}_pytorch.jpg")
-            display_thresh = 0.6
-            train_thresh = 0.01
-            max_detections_per_class = 5
-            torch_detections_display = []
-            if len(torch_detections) > 0:
-                det = torch_detections[0]
-                train_class_idx = VOC_CLASSES.index("train") if "train" in VOC_CLASSES else None
-
-                mask = det["scores"] >= display_thresh
-                if train_class_idx is not None:
-                    train_mask = (det["labels"] == train_class_idx) & (det["scores"] >= train_thresh)
-                    mask = mask | train_mask
-
-                if mask.any():
-                    filtered_boxes = det["boxes"][mask]
-                    filtered_scores = det["scores"][mask]
-                    filtered_labels = det["labels"][mask]
-
-                    from torchvision.ops import nms
-
-                    unique_labels = filtered_labels.unique()
-                    final_boxes = []
-                    final_scores = []
-                    final_labels = []
-
-                    for label in unique_labels:
-                        label_mask = filtered_labels == label
-                        if not label_mask.any():
-                            continue
-                        label_boxes = filtered_boxes[label_mask]
-                        label_scores = filtered_scores[label_mask]
-
-                        keep = nms(label_boxes, label_scores, 0.4)
-
-                        if label.item() == train_class_idx:
-                            max_for_class = max(max_detections_per_class, len(keep))
-                        else:
-                            max_for_class = max_detections_per_class
-
-                        if len(keep) > max_for_class:
-                            # Sort by score and keep top-K
-                            sorted_indices = torch.argsort(label_scores[keep], descending=True)
-                            keep = keep[sorted_indices[:max_for_class]]
-
-                        if len(keep) > 0:
-                            final_boxes.append(label_boxes[keep])
-                            final_scores.append(label_scores[keep])
-                            final_labels.append(torch.full((len(keep),), label.item(), dtype=torch.long))
-
-                    if len(final_boxes) > 0:
-                        torch_detections_display.append(
-                            {
-                                "boxes": torch.cat(final_boxes, 0),
-                                "scores": torch.cat(final_scores, 0),
-                                "labels": torch.cat(final_labels, 0),
-                            }
-                        )
-                    else:
-                        torch_detections_display.append(
-                            {
-                                "boxes": torch.zeros((0, 4)),
-                                "scores": torch.zeros(0),
-                                "labels": torch.zeros(0, dtype=torch.long),
-                            }
-                        )
-                else:
-                    torch_detections_display.append(
-                        {
-                            "boxes": torch.zeros((0, 4)),
-                            "scores": torch.zeros(0),
-                            "labels": torch.zeros(0, dtype=torch.long),
-                        }
-                    )
-            else:
-                torch_detections_display = torch_detections
-
-            draw_detections(original_img.copy(), torch_detections_display, torch_output_path, "PyTorch")
-            logger.info(f"  Saved PyTorch output to: {torch_output_path}")
-            logger.info(
-                f"  Total detections: {len(torch_detections[0]['boxes']) if len(torch_detections) > 0 else 0}, "
-                f"Displayed (>= {display_thresh}): {len(torch_detections_display[0]['boxes']) if len(torch_detections_display) > 0 else 0}"
-            )
-
             # Run TTNN detection
-            logger.info("Running TTNN model...")
             ttnn.synchronize_device(device)
             import gc
 
             gc.collect()
             # Try to deallocate all buffers to free L1 memory
             try:
-                # This may not be available in all TTNN versions, so wrap in try-except
                 if hasattr(ttnn, "deallocate_buffers"):
                     ttnn.deallocate_buffers(device)
-            except Exception as e:
-                logger.debug(f"  Could not deallocate buffers: {e}")
+            except Exception:
+                pass
 
             # Additional synchronization to ensure all operations complete
             ttnn.synchronize_device(device)
             gc.collect()
             ttnn.synchronize_device(device)
 
-            # NOTE: OOM may occur with real images due to L1 memory constraints during weight preparation
-            # This is a known limitation - the device may need more L1 memory or weights need different handling
+            # Run TTNN detection
             try:
                 ttnn_detections = run_ttnn_detection(
                     ttnn_model,
@@ -515,8 +437,8 @@ def main():
                     top_k=args.top_k,
                 )
             except RuntimeError as e:
-                if "Out of Memory" in str(e) or "L1" in str(e):
-                    logger.error(f"OOM error on image {img_path.name}.")
+                if str(e) != "":
+                    logger.error(f"Error on image {img_path.name}: {e}")
                     continue
                 else:
                     raise
@@ -526,29 +448,25 @@ def main():
             gc.collect()
             ttnn.synchronize_device(device)
 
+            # Filter to top detections
+            ttnn_detections = filter_top_detections(ttnn_detections, max_detections=args.max_detections, min_score=0.1)
+
             # Save TTNN output
+            base_name = img_path.stem
             ttnn_output_path = os.path.join(args.output_dir, f"{base_name}_ttnn.jpg")
             draw_detections(original_img.copy(), ttnn_detections, ttnn_output_path, "TTNN")
-            logger.info(f"  Saved TTNN output to: {ttnn_output_path}")
 
-            # Log detection counts
-            if len(torch_detections) > 0:
-                torch_count = len(torch_detections[0]["boxes"])
-                logger.info(f"  PyTorch detections: {torch_count}")
-            else:
-                logger.info("  PyTorch detections: 0")
-
+            # Log detection count
             if len(ttnn_detections) > 0:
                 ttnn_count = len(ttnn_detections[0]["boxes"])
-                logger.info(f"  TTNN detections: {ttnn_count}")
+                logger.info(f"  Detections: {ttnn_count}")
             else:
-                logger.info("  TTNN detections: 0")
+                logger.info("  Detections: 0")
 
-        logger.info(f"\n✓ All images processed. Outputs saved to: {args.output_dir}")
+        logger.info(f"All images processed. Outputs saved to: {args.output_dir}")
 
     finally:
         # Close device
-        logger.info("Closing TTNN device...")
         ttnn.close_device(device)
 
 

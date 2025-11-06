@@ -1,9 +1,13 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 from models.experimental.SSD512.reference.layers import *
 from models.experimental.SSD512.reference.data import voc
+from loguru import logger
 import os
 
 
@@ -138,7 +142,6 @@ def vgg(cfg, i=3, batch_norm=False):
     conv6 = nn.Conv2d(512, 1024, kernel_size=3, padding=6, dilation=6)
     conv7 = nn.Conv2d(1024, 1024, kernel_size=1)
     layers += [pool5, conv6, nn.ReLU(inplace=True), conv7, nn.ReLU(inplace=True)]
-    print("VGG base:", layers)
     return layers
 
 
@@ -156,9 +159,7 @@ def add_extras(cfg, i, batch_norm=False):
             flag = not flag
         in_channels = v
     if len(cfg) == 13:
-        print("input channels:", in_channels)
         layers += [nn.Conv2d(in_channels, 256, kernel_size=4, padding=1)]  # Fix padding to match Caffe version (pad=1).
-    print("extras layers:", layers)
     return layers
 
 
@@ -166,10 +167,6 @@ def multibox(vgg, extra_layers, cfg, num_classes):
     loc_layers = []
     conf_layers = []
     vgg_source = [21, -2]  # Conv4_3  Conv7
-    print("VGG16 output size:", len(vgg))
-    print("extra layer size:", len(extra_layers))
-    for i, layer in enumerate(extra_layers):
-        print("extra layer {} : {}".format(i, layer))
     for k, v in enumerate(vgg_source):
         loc_layers += [nn.Conv2d(vgg[v].out_channels, cfg[k] * 4, kernel_size=3, padding=1)]
         conf_layers += [nn.Conv2d(vgg[v].out_channels, cfg[k] * num_classes, kernel_size=3, padding=1)]
@@ -193,17 +190,15 @@ mbox = {
 }
 
 
-def build_ssd(phase, size=300, num_classes=21):
+def build_ssd(phase, size=512, num_classes=21):
     if phase != "test" and phase != "train":
-        print("ERROR: Phase: " + phase + " not recognized")
+        logger.error("ERROR: Phase: " + phase + " not recognized")
         return
-    if size not in [300, 512]:
-        print(
-            "ERROR: You specified size " + repr(size) + ". However, " + "currently only SSD300 and SSD512 is supported!"
-        )
+    if size not in [512]:
+        logger.error("ERROR: specified size " + repr(size) + " is not supported. Currently only SSD512 are supported!")
         return
     base_, extras_, head_ = multibox(
         vgg(base[str(size)], 3), add_extras(extras[str(size)], 1024), mbox[str(size)], num_classes
     )
-    print("Begin to build SSD-VGG...\n")
+    logger.info("Begin to build SSD-VGG...\n")
     return SSD(phase, size, base_, extras_, head_, num_classes)

@@ -30,7 +30,7 @@ class TtDetect:
         self.nms_thresh = nms_thresh
         self.device = device
 
-    def _decode_boxes(self, loc_data: ttnn.Tensor, priors: ttnn.Tensor) -> ttnn.Tensor:
+    def _decode_boxes(self, loc_data: ttnn.Tensor, priors: ttnn.Tensor) -> torch.Tensor:
         """Decode predicted loc/bbox to actual box coordinates using prior boxes.
 
         Center form: (cx, cy, w, h)
@@ -40,22 +40,38 @@ class TtDetect:
             priors: Prior box coordinates [num_priors, 4]
 
         Returns:
-            Decoded box coordinates [batch_size, num_priors, 4]
+            Decoded box coordinates [batch_size, num_priors, 4] as torch.Tensor
         """
+        # Convert TTNN tensors to torch for easier manipulation
+        # TTNN tensors don't support item assignment, so we convert early
+        loc_torch = tt_to_torch_tensor(loc_data)
+        priors_torch = tt_to_torch_tensor(priors)
+
         # Get variances for decoding
         variances = [0.1, 0.2]
 
-        boxes = ttnn.zeros_like(loc_data)
+        # Ensure priors are broadcastable with loc_data
+        # priors: [num_priors, 4] -> [1, num_priors, 4] to match loc_data: [batch_size, num_priors, 4]
+        if priors_torch.dim() == 2:
+            priors_torch = priors_torch.unsqueeze(0)  # [1, num_priors, 4]
 
-        # Decode center coordinates
-        boxes[..., :2] = priors[..., :2] + loc_data[..., :2] * variances[0] * priors[..., 2:]
+        # Decode center coordinates (cx, cy)
+        # boxes[..., :2] = priors[..., :2] + loc_data[..., :2] * variances[0] * priors[..., 2:]
+        center_pred = priors_torch[..., :2] + loc_torch[..., :2] * variances[0] * priors_torch[..., 2:]
 
-        # Decode width and height
-        boxes[..., 2:] = priors[..., 2:] * ttnn.exp(loc_data[..., 2:] * variances[1])
+        # Decode width and height (w, h)
+        # boxes[..., 2:] = priors[..., 2:] * exp(loc_data[..., 2:] * variances[1])
+        size_pred = priors_torch[..., 2:] * torch.exp(loc_torch[..., 2:] * variances[1])
+
+        # Combine center and size predictions
+        boxes = torch.cat([center_pred, size_pred], dim=-1)  # [batch_size, num_priors, 4]
 
         # Convert to corner form (x1, y1, x2, y2)
-        boxes[..., :2] = boxes[..., :2] - boxes[..., 2:] / 2
-        boxes[..., 2:] = boxes[..., :2] + boxes[..., 2:]
+        # First compute x1, y1 = center - size/2
+        x1y1 = boxes[..., :2] - boxes[..., 2:] / 2
+        # Then compute x2, y2 = x1, y1 + size (using the updated x1, y1)
+        x2y2 = x1y1 + boxes[..., 2:]
+        boxes = torch.cat([x1y1, x2y2], dim=-1)  # [batch_size, num_priors, 4]
 
         return boxes
 
@@ -121,11 +137,10 @@ class TtDetect:
         batch_size = loc_data.padded_shape[0]
         num_priors = loc_data.padded_shape[1]
 
-        # Decode boxes
+        # Decode boxes (already returns torch.Tensor)
         boxes = self._decode_boxes(loc_data, prior_data)
 
-        # Convert to PyTorch for NMS
-        boxes = tt_to_torch_tensor(boxes)
+        # Convert conf to PyTorch for NMS
         conf = tt_to_torch_tensor(conf_data)
 
         # Lists to store output detections for batch
