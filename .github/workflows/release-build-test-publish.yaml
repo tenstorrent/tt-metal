@@ -136,6 +136,8 @@ jobs:
     needs: build-artifact
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Push dev docker image to GHCR with release tag
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
