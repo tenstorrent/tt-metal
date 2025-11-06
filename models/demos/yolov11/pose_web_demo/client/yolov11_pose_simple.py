@@ -29,27 +29,27 @@ class VideoProcessor(VideoProcessorBase):
         img = np.copy(bgr_img)
         height, width = img.shape[:2]
 
-        # Skeleton connections (COCO format)
+        # Skeleton connections (COCO format) - 17 keypoints (0-16)
         skeleton = [
-            [16, 14],
-            [14, 12],
-            [17, 15],
-            [15, 13],
-            [12, 13],
-            [6, 12],
-            [7, 13],
-            [6, 7],
-            [6, 8],
-            [7, 9],
-            [8, 10],
-            [9, 11],
-            [2, 3],
-            [1, 2],
-            [1, 3],
-            [2, 4],
-            [3, 5],
-            [4, 6],
-            [5, 7],
+            [15, 13],  # left ankle -> left knee
+            [13, 11],  # left knee -> left hip
+            [16, 14],  # right ankle -> right knee
+            [14, 12],  # right knee -> right hip
+            [11, 12],  # left hip -> right hip
+            [5, 11],  # left shoulder -> left hip
+            [6, 12],  # right shoulder -> right hip
+            [5, 6],  # left shoulder -> right shoulder
+            [5, 7],  # left shoulder -> left elbow
+            [6, 8],  # right shoulder -> right elbow
+            [7, 9],  # left elbow -> left wrist
+            [8, 10],  # right elbow -> right wrist
+            [1, 2],  # left eye -> right eye
+            [0, 1],  # nose -> left eye
+            [0, 2],  # nose -> right eye
+            [1, 3],  # left eye -> left ear
+            [2, 4],  # right eye -> right ear
+            [3, 5],  # left ear -> left shoulder
+            [4, 6],  # right ear -> right shoulder
         ]
 
         # Colors for keypoints and skeleton
