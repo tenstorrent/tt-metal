@@ -282,7 +282,7 @@ jobs:
         needs.find-changes.outputs.cmake-changed == 'true' ||
         needs.find-changes.outputs.any-code-changed == 'true'
       }}
-    needs: [ build-asan, find-changes ]
+    needs: [ build, find-changes ]
     strategy:
       fail-fast: false
       matrix:
@@ -291,10 +291,10 @@ jobs:
         ]
     uses: ./.github/workflows/triage.yaml
     with:
-      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-asan.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-asan.outputs.wheel-artifact-name }}
       runner-label: ${{ matrix.platform }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       timeout: 11
 
   # GitHub has so many design limitations it's not even funny.
