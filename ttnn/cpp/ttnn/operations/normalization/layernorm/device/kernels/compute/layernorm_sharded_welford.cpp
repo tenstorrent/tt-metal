@@ -163,6 +163,12 @@ void MAIN {
     const uint32_t num_reduce_tiles_per_block_h = get_arg_val<uint32_t>(0);
     const uint32_t partial_reduce_W = (num_reduce_tiles_per_block_h - 1) * tile_width + last_tile_w;
 
+    // We split the Welford calls into full tiles and a final partial tile (if any)
+    const bool all_full_tiles = partial_reduce_W % tile_width == 0;
+    const uint32_t num_full_welford_tiles =
+        all_full_tiles ? num_reduce_tiles_per_block_h : num_reduce_tiles_per_block_h - 1;
+    const uint32_t partial_welford_tile_w = all_full_tiles ? 0 : last_tile_w;
+
     // This is the number of tile rows to process
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
 
@@ -258,14 +264,18 @@ void MAIN {
         tile_regs_acquire();
         welford_clear_previous_mean_and_m2();
         uint32_t num_cols_processed = 0;
-        for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+        // Do the full Welford tiles
+        for (uint32_t w = 0; w < num_full_welford_tiles; w++) {
             transpose_wh_tile(cb_in, w + index_h_offset, welford_input_dst);
             auto num_cols_in_tile = std::min(tile_width, partial_reduce_W - num_cols_processed);
-            welford_partial_tile<per_core_recip_lut_size>(
-                welford_input_dst, num_cols_processed, 0, num_cols_in_tile, *p_reciprocals);
+            welford_tile<per_core_recip_lut_size>(welford_input_dst, num_cols_processed, *p_reciprocals);
             num_cols_processed += num_cols_in_tile;
-            // welford_tile<welford_input_dst, welford_mean_dst, welford_var_dst, true, per_core_recip_lut_size>(
-            //     w * tile_width, partial_reduce_W, 0, *p_reciprocals);
+        }
+        // Do the partial Welford tile, if any
+        if (partial_welford_tile_w > 0) {
+            transpose_wh_tile(cb_in, block_wt - 1, welford_input_dst);
+            welford_partial_tile<per_core_recip_lut_size>(
+                welford_input_dst, num_cols_processed, 0, partial_welford_tile_w, *p_reciprocals);
         }
         welford_store_mean_var_to_dst_row<per_core_recip_lut_size>(
             welford_mean_dst, partial_reduce_W - 1, *p_reciprocals);
