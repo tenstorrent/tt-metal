@@ -295,8 +295,6 @@ private:
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     std::unordered_set<dev_msgs::AddressableCoreType> virtualized_core_types_;
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
-    size_t tensix_eth_static_tlb_size_{};
-    size_t dram_static_tlb_size_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
@@ -388,8 +386,6 @@ public:
     uint32_t get_eth_fw_mailbox_arg_count() const;
     uint32_t get_eth_fw_mailbox_address(int mailbox_index) const;
     HalTensixHarvestAxis get_tensix_harvest_axis() const { return tensix_harvest_axis_; }
-    size_t get_tensix_eth_static_tlb_size() const { return tensix_eth_static_tlb_size_; }
-    size_t get_dram_static_tlb_size() const { return dram_static_tlb_size_; }
     uint32_t get_programmable_core_type_count() const;
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
