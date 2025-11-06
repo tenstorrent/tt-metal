@@ -275,6 +275,39 @@ class CCLManager:
 
         return tensor
 
+    def reduce_scatter_persistent_buffer(
+        self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
+    ) -> ttnn.Tensor:
+        if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
+            return tensor
+
+        rank = len(tensor.shape)
+        if dim < 0:
+            dim += rank
+
+        if rank < 4:
+            shape = [1] * (4 - rank) + list(tensor.shape)
+            tensor = ttnn.reshape(tensor, shape)
+            dim += 4 - rank
+
+        tensor = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=self.get_rs_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            dim=dim,
+            multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
+            num_links=self.num_links,
+            memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            topology=self.topology,
+            cluster_axis=mesh_axis,
+            **self.get_rs_hyperparams(tensor.shape),
+        )
+
+        if rank < 4:
+            shape = list(tensor.shape)[4 - rank :]
+            tensor = ttnn.reshape(tensor, shape)
+
+        return tensor
+
     def get_ag_hyperparams(self, shape):
         if shape[2] > 512:
             return {

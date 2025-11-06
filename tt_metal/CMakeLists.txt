@@ -1,3 +1,5 @@
+add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
+
 add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
@@ -88,6 +90,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/program.hpp
     api/tt-metalium/program_cache.hpp
     api/tt-metalium/program_descriptors.hpp
+    api/tt-metalium/queue_id.hpp
     api/tt-metalium/routing_table_generator.hpp
     api/tt-metalium/runtime_args_data.hpp
     api/tt-metalium/shape.hpp

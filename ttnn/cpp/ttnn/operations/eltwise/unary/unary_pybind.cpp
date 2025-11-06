@@ -49,8 +49,10 @@ void bind_unary_clamp(py::module& module, const unary_operation_t& operation) {
 
                * - Dtypes
                  - Layouts
+                 - Ranks
                * - BFLOAT16, BFLOAT8_B, INT32, FLOAT32
                  - TILE
+                 - 2, 3, 4
 
             INT32 is supported only for Tensor-scalar-scalar version.
 
@@ -266,6 +268,73 @@ void bind_unary_operation(
             },
             py::arg("input_tensor"),
             py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
+}
+
+template <typename unary_operation_t>
+void bind_unary_sqrt_operation(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& info_doc = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            fast_approx_mode (bool, optional): use the fast and approximate mode. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {2}
+                 - TILE
+                 - 2, 3, 4
+
+            {3}
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.rand([2, 2], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> output = {1}(tensor)
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        supported_dtype,
+        info_doc);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const bool fast_approx_mode,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
+                return self(input_tensor, fast_approx_mode, memory_config, output_tensor);
+            },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg("fast_approx_mode") = false,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt});
 }
@@ -1404,6 +1473,9 @@ void bind_unary_composite(
         R"doc(
         {2}
 
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i)
+
         Args:
             input_tensor (ttnn.Tensor): the input tensor. {3}
 
@@ -1469,6 +1541,9 @@ void bind_unary_composite_int_with_default(
     auto doc = fmt::format(
         R"doc(
         {5}
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -1678,6 +1753,9 @@ void bind_unary_threshold(
         R"doc(
         {6}
 
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|, \verb|{4}|)
+
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
             {2} (float): {3}.
@@ -1748,6 +1826,9 @@ void bind_unary_composite_float_with_default(
     auto doc = fmt::format(
         R"doc(
         Performs {0} function on :attr:`input_tensor`, :attr:`{2}`.
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{input\_tensor}}}}_i, \verb|{2}|)
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -1900,9 +1981,9 @@ void py_module(py::module& module) {
     bind_unary_composite(
         module,
         ttnn::atanh,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|atanh|(\mathrm{{input\_tensor}}_i))doc",
+        R"doc(Performs atanh function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16, BFLAOT8_B, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::cos,
@@ -2106,18 +2187,7 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
-        ttnn::sqrt,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|sqrt|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
-        ttnn::rsqrt,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|rsqrt|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+
     bind_unary_operation(
         module,
         ttnn::square,
@@ -2194,10 +2264,14 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     //  Unaries with fast_and_approximate_mode
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::sqrt, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::rsqrt, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erf, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::log, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode(
         module, ttnn::log10, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
@@ -2240,11 +2314,7 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16)doc",
         R"doc(System memory is not supported.)doc");
     bind_unary_operation_with_float_parameter(
-        module,
-        ttnn::rpow,
-        "exponent",
-        "exponent value. Non-positive values are not supported.",
-        R"doc(Performs rpow function on :attr:`input_tensor`, :attr:`exponent`.)doc");
+        module, ttnn::rpow, "exponent", "exponent value. Non-positive values are not supported.", "");
     bind_unary_operation_with_float_parameter_default(
         module,
         ttnn::celu,

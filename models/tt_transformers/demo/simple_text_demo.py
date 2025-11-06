@@ -8,6 +8,7 @@ import math
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import List
 
 import pytest
 import requests
@@ -204,6 +205,7 @@ def prepare_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    num_layers,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -232,6 +234,7 @@ def prepare_generator_args(
             paged_attention_config=paged_attention_config,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
+            num_layers=num_layers,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -262,11 +265,17 @@ def prepare_generator_args(
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
-#
+# ci_only (bool): Whether to run the demo in CI only mode
+# data_parallel (int): Number of data parallel groups to use
+# token_accuracy (bool): Whether to compute token accuracy
+# stress_test (bool): Whether to run the demo in stress test mode
+# enable_trace (bool): Whether to enable tracing
+# num_layers (int): Number of layers to use
+# mode (str): Mode to run the demo in (full, prefill, decode), full will run both prefill and decode
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test, enable_trace, num_layers, mode",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -277,13 +286,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -294,13 +305,19 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {
+                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": torch.arange(1, 33).tolist(),  # 1 to 32 inclusive
+            },  # sampling_params (non-uniform)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -311,13 +328,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -328,13 +347,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -345,13 +366,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
@@ -365,13 +388,15 @@ def prepare_generator_args(
                 "page_block_size": 32,
                 "page_max_num_blocks_per_dp": 1024,
             },  # page_params  # TODO This will be serviced by vLLM
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -382,13 +407,15 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -399,13 +426,15 @@ def prepare_generator_args(
             1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
             True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # DP-4-b1 - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -416,13 +445,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # DP-8-b1 - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -433,13 +464,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -450,13 +483,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -467,13 +502,15 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             4,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -484,13 +521,15 @@ def prepare_generator_args(
             4096,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             8,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -501,13 +540,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             16,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -518,13 +559,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             32,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 50000 times
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -535,13 +578,15 @@ def prepare_generator_args(
             50000,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             True,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -552,13 +597,15 @@ def prepare_generator_args(
             500,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
             True,  # token_accuracy
             False,  # stress_test
             False,  # enable_trace -> Teacher forcing does not work if it is on
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-eval-1 - 6 repeat batches with output comparison
             "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
@@ -569,13 +616,15 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
         ),
         (  # ci-eval-32 - 32 users with 3 repeat batches and shifting prompts
             "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_batch32.json",  # input_prompts
@@ -586,13 +635,34 @@ def prepare_generator_args(
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
             False,  # stress_test
             True,  # enable_trace
+            None,  # num_layers, if None -> defaults to all layers
+            "full",  # performs both prefill and decode
+        ),
+        (  # device-perf - Measures device performance of a prefill or decode run (by default runs prefill but test_device_perf uses args to override defaults)
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            False,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            2,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08, "top_k": 32},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+            10,  # num_layers, if None -> defaults to all layers
+            "prefill",  # mode
         ),
     ],
     ids=[
@@ -615,6 +685,7 @@ def prepare_generator_args(
         "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
         "ci-eval-1",  # CI 6 repeat batches with output comparison
         "ci-eval-32",  # CI batch 32 with 3 repeat batches and output comparison
+        "device-perf",  # Device perf
     ],
 )
 @pytest.mark.parametrize(
@@ -641,6 +712,7 @@ def prepare_generator_args(
             "P300": (1, 2),
             "P150x4": (1, 4),
             "P150x8": (1, 8),
+            "BHGLX": (8, 4),
         }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
@@ -667,7 +739,8 @@ def test_demo_text(
     token_accuracy,
     stress_test,
     enable_trace,
-    model_location_generator,
+    num_layers,
+    mode,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -706,6 +779,8 @@ def test_demo_text(
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
     enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    num_layers = request.config.getoption("--num_layers") or num_layers
+    mode = request.config.getoption("--mode") or mode
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -798,6 +873,7 @@ def test_demo_text(
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
+        num_layers=num_layers,
     )
 
     # Skip ci-eval tests on P100 devices
@@ -869,29 +945,40 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
-        logger.info("Starting prefill warmup...")
-        profiler.start(f"compile_prefill", iteration=batch_idx)
+        if mode == "prefill" or mode == "full":
+            logger.info("Starting prefill warmup...")
+            profiler.start(f"compile_prefill", iteration=batch_idx)
 
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        profiler.end(f"compile_prefill", iteration=batch_idx)
-        logger.info("Finished prefill warmup")
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+            )
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            logger.info("Finished prefill warmup")
 
-        logger.info(f"Starting prefill...")
-        profiler.start(f"inference_prefill", iteration=batch_idx)
-        logits = generator.prefill_forward_text(
-            input_tokens_prefill_pt,
-            page_table=page_table,
-            kv_cache=tt_kv_cache,
-            prompt_lens=decoding_pos,
-        )
-        prefilled_token = torch.argmax(logits, dim=-1)
-        profiler.end(f"inference_prefill", iteration=batch_idx)
-        logger.info(f"Prefill finished")
+            logger.info(f"Starting prefill...")
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            logits = generator.prefill_forward_text(
+                input_tokens_prefill_pt,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                prompt_lens=decoding_pos,
+            )
+            prefilled_token = torch.argmax(logits, dim=-1)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info(f"Prefill finished")
+        else:
+            # CI expects profiler to have these measurement keys so
+            # they must be inserted regardless of whether we run prefill or not
+            profiler.start(f"compile_prefill", iteration=batch_idx)
+            profiler.end(f"compile_prefill", iteration=batch_idx)
+            profiler.start(f"inference_prefill", iteration=batch_idx)
+            profiler.end(f"inference_prefill", iteration=batch_idx)
+            logger.info(f"Skipping prefill forward pass when decode mode is enabled")
+
+            prefilled_token = torch.zeros(global_batch_size, 1, 1)
 
         # Keep track of generated outputs to print out every iteration
         all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(global_batch_size)]
@@ -901,15 +988,24 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # Currently only supporting greedy decoding (temperature=0) on device
-        argmax_on_device = sampling_params["temperature"] == 0
-        if argmax_on_device:
-            device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
-        else:
-            device_sampling_params = None
+        # Use device sampling for all cases when supported
+
+        device_sampling_params = (
+            SamplingParams(
+                temperature=sampling_params["temperature"],
+                top_k=sampling_params["top_k"],
+                top_p=sampling_params["top_p"],
+            )
+            if model[0]._supports_on_device_sampling
+            else None
+        )
+        if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
+            # host sampling only supports single sample param for all users in a batch
+            sampling_params["temperature"] = sampling_params["temperature"][0]
+            sampling_params["top_p"] = sampling_params["top_p"][0]
 
         # Initial positions
-        current_pos = torch.tensor([decoding_pos[b] for b in range(global_batch_size)])
+        current_pos = torch.tensor([decoding_pos[b] if mode == "full" else 0 for b in range(global_batch_size)])
 
         # Start decoding
         iteration = 0
@@ -921,7 +1017,17 @@ def test_demo_text(
 
         # Log total inference (accounting for compile_decode as well)
         profiler.start(f"inference_decode", iteration=batch_idx)
-        while users_decoding:
+
+        if mode == "prefill":
+            # CI expects profiler to have these measurement keys so
+            # they must be inserted regardless of whether we run decode or not
+            profiler.start(f"compile_decode", iteration=batch_idx)
+            profiler.end(f"compile_decode", iteration=batch_idx)
+            profiler.start(f"inference_decode_time_{1}", iteration=batch_idx)
+            profiler.end(f"inference_decode_time_{1}", iteration=batch_idx)
+            logger.info(f"Skipping decode forward pass when prefill mode is enabled")
+
+        while users_decoding and mode != "prefill":
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
             else:
@@ -963,7 +1069,7 @@ def test_demo_text(
             # Print perf after every iteration (skip in CI to avoid performance overhead)
             tokens_per_second_per_user = 1 / decode_iteration_time
             logger.debug(
-                f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
+                f"Iteration {iteration}: {1000 * decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size * tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
             if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
@@ -1054,7 +1160,7 @@ def test_demo_text(
         if token_accuracy:
             acc = token_acc.compute_accuracy()
             logger.info(f"=== Top1 and Top5 Token Accuracy ===")
-            logger.info(f" Top1 Accuracy: {acc[0]*100:.2f}%, Top5 Accuracy: {acc[1]*100:.2f}%")
+            logger.info(f" Top1 Accuracy: {acc[0] * 100:.2f}%, Top5 Accuracy: {acc[1] * 100:.2f}%")
 
         profiler.end(f"inference_decode", iteration=batch_idx)
 
@@ -1062,23 +1168,30 @@ def test_demo_text(
     profiler.end("run")
 
     # Prepare profile benchmark metrics for the first repeat batch only
-    compile_prefill_time = profiler.get_duration("compile_prefill")
-    compile_decode_time = profiler.get_duration("compile_decode")
+    compile_prefill_time = profiler.get_duration("compile_prefill") if mode != "decode" else 0
+    compile_decode_time = profiler.get_duration("compile_decode") if mode != "prefill" else 0
 
-    total_inference_prefill_time = profiler.get_duration("inference_prefill")
+    total_inference_prefill_time = profiler.get_duration("inference_prefill") if mode != "decode" else 0
     total_inference_decode_time = 0
     for i in range(1, num_tokens_generated_decode[0]):  # Iteration 0 is the compile time
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
     avg_time_to_first_token = total_inference_prefill_time / global_batch_size
-    # Average decode time per batch iteration
-    avg_decode_iteration_time = total_inference_decode_time / (num_tokens_generated_decode[0] - 1)
 
-    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size
-    decode_tok_s_user = (num_tokens_generated_decode[0] - 1) / total_inference_decode_time  # Remove the compile time
+    # Average decode time per batch iteration
+    avg_decode_iteration_time = (
+        total_inference_decode_time / (num_tokens_generated_decode[0] - 1) if iteration > 1 else 0
+    )
+
+    prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * global_batch_size if mode != "decode" else 0
+    decode_tok_s_user = (
+        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time if mode != "prefill" and iteration > 1 else 0
+    )  # Remove the compile time
     decode_tok_s = (
-        (num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size
+        ((num_tokens_generated_decode[0] - 1) / total_inference_decode_time * global_batch_size)
+        if mode != "prefill" and iteration > 1
+        else 0
     )  # Remove the compile time
 
     measurements = {
@@ -1097,7 +1210,9 @@ def test_demo_text(
     }
 
     # Decode performance for some specific tokens
-    tok_1_perf = profiler.get_duration(f"inference_decode_time_{1}")  # Iteration 0 is compile time
+    tok_1_perf = (
+        profiler.get_duration(f"inference_decode_time_{1}") if 1 < num_tokens_generated_decode[0] else 0
+    )  # Iteration 0 is compile time
     tok_128_perf = profiler.get_duration(f"inference_decode_time_{127}") if 127 < num_tokens_generated_decode[0] else 0
     tok_1024_perf = (
         profiler.get_duration(f"inference_decode_time_{1023}") if 1023 < num_tokens_generated_decode[0] else 0
@@ -1111,20 +1226,21 @@ def test_demo_text(
 
     logger.info("")
     logger.info(f"=== Performance metrics ===")
-    logger.info(
-        f"1st token decode time: {tok_1_perf*1000:.2f}ms [{round(1/tok_1_perf, 2)} t/s/u, {round((1/tok_1_perf)*global_batch_size, 2)} t/s]"
-    )
+    if tok_1_perf > 0:
+        logger.info(
+            f"1st token decode time: {tok_1_perf * 1000:.2f}ms [{round(1 / tok_1_perf, 2)} t/s/u, {round((1 / tok_1_perf) * global_batch_size, 2)} t/s]"
+        )
     if tok_128_perf > 0:
         logger.info(
-            f"128th token decode time: {tok_128_perf*1000:.2f}ms [{round(1/tok_128_perf, 2)} t/s/u, {round((1/tok_128_perf)*global_batch_size, 2)} t/s]"
+            f"128th token decode time: {tok_128_perf * 1000:.2f}ms [{round(1 / tok_128_perf, 2)} t/s/u, {round((1 / tok_128_perf) * global_batch_size, 2)} t/s]"
         )
     if tok_1024_perf > 0:
         logger.info(
-            f"1024th token decode time: {tok_1024_perf*1000:.2f}ms [{round(1/tok_1024_perf, 2)} t/s/u, {round((1/tok_1024_perf)*global_batch_size, 2)} t/s]"
+            f"1024th token decode time: {tok_1024_perf * 1000:.2f}ms [{round(1 / tok_1024_perf, 2)} t/s/u, {round((1 / tok_1024_perf) * global_batch_size, 2)} t/s]"
         )
     if tok_4096_perf > 0:
         logger.info(
-            f"4096th token decode time: {tok_4096_perf*1000:.2f}ms [{round(1/tok_4096_perf, 2)} t/s/u, {round((1/tok_4096_perf)*global_batch_size, 2)} t/s]"
+            f"4096th token decode time: {tok_4096_perf * 1000:.2f}ms [{round(1 / tok_4096_perf, 2)} t/s/u, {round((1 / tok_4096_perf) * global_batch_size, 2)} t/s]"
         )
 
     # Print some of the perf metrics
@@ -1139,7 +1255,7 @@ def test_demo_text(
 
     # Benchmark targets
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
-    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
+    supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "BHGLX", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
     model_name = model_args[0].base_model_name
@@ -1263,6 +1379,7 @@ def test_demo_text(
             ml_model_type="llm",
             num_layers=model_args[0].n_layers,
             batch_size=global_batch_size,
+            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
@@ -1283,7 +1400,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": (95, 1.20),  # (value, high_tolerance_ratio)
                 # T3K targets
-                "T3K_Llama-3.1-70B": 228,
+                "T3K_Llama-3.1-70B": 240,
                 "T3K_Qwen2.5-72B": (290, 1.35),  # (value, high_tolerance_ratio)
                 "T3K_Qwen2.5-Coder-32B": (215, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen3-32B": 230,  # Issue: Perf regression being tracked on issue #29834
@@ -1353,7 +1470,7 @@ def test_demo_text(
 
         # Compare paired batches (A<->A, B<->B, C<->C)
         comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
-        comparison_names = [f"Batch{i//2+1}<->Batch{i//2+1}" for i in range(0, repeat_batches, 2)]
+        comparison_names = [f"Batch{i // 2 + 1}<->Batch{i // 2 + 1}" for i in range(0, repeat_batches, 2)]
 
         all_matches = True
         for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
@@ -1362,14 +1479,14 @@ def test_demo_text(
 
             if output1 == output2:
                 logger.info(
-                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx+1} and {batch2_idx+1} outputs match"
+                    f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs match"
                 )
             else:
                 logger.warning(
-                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx+1} and {batch2_idx+1} outputs differ"
+                    f"{comparison_names[i]} comparison FAILED: Batches {batch1_idx + 1} and {batch2_idx + 1} outputs differ"
                 )
-                logger.info(f"  Batch {batch1_idx+1} output: {output1[:100]}...")
-                logger.info(f"  Batch {batch2_idx+1} output: {output2[:100]}...")
+                logger.info(f"  Batch {batch1_idx + 1} output: {output1[:100]}...")
+                logger.info(f"  Batch {batch2_idx + 1} output: {output2[:100]}...")
                 all_matches = False
 
         assert all_matches, "Repeat batch outputs should be identical"
