@@ -108,25 +108,28 @@ SoftmaxBackwardProgramFactory::cached_program_t SoftmaxBackwardProgramFactory::c
     // Two-pass streaming algorithm: Pass 1 computes sum, Pass 2 computes output
     // Input data is read twice (once per pass), but eliminates L1 overflow
 
-    auto c_in0_config = CircularBufferConfig(tiles_per_block * input_tile_size, {{src0_cb_index, input_data_format}})
-                            .set_page_size(src0_cb_index, input_tile_size);
+    auto c_in0_config =
+        CircularBufferConfig(tiles_per_block * input_tile_size * 2, {{src0_cb_index, input_data_format}})
+            .set_page_size(src0_cb_index, input_tile_size);
     CreateCircularBuffer(program, all_cores, c_in0_config);
 
-    auto c_in1_config = CircularBufferConfig(tiles_per_block * input_tile_size, {{src1_cb_index, input_data_format}})
-                            .set_page_size(src1_cb_index, input_tile_size);
+    auto c_in1_config =
+        CircularBufferConfig(tiles_per_block * input_tile_size * 2, {{src1_cb_index, input_data_format}})
+            .set_page_size(src1_cb_index, input_tile_size);
     CreateCircularBuffer(program, all_cores, c_in1_config);
 
     auto c_scaler_config = CircularBufferConfig(1 * intermed_tile_size, {{ones_cb_index, intermed_data_format}})
                                .set_page_size(ones_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_scaler_config);
 
-    auto c_out_config = CircularBufferConfig(tiles_per_block * output_tile_size, {{out_cb_index, output_data_format}})
-                            .set_page_size(out_cb_index, output_tile_size);
+    auto c_out_config =
+        CircularBufferConfig(tiles_per_block * output_tile_size * 2, {{out_cb_index, output_data_format}})
+            .set_page_size(out_cb_index, output_tile_size);
     CreateCircularBuffer(program, all_cores, c_out_config);
 
     // intermed0: block-sized temporary buffer for y * grad products
     auto c_intermed0_config =
-        CircularBufferConfig(tiles_per_block * intermed_tile_size, {{intermed0_cb_index, intermed_data_format}})
+        CircularBufferConfig(tiles_per_block * intermed_tile_size * 2, {{intermed0_cb_index, intermed_data_format}})
             .set_page_size(intermed0_cb_index, intermed_tile_size);
     CreateCircularBuffer(program, all_cores, c_intermed0_config);
 

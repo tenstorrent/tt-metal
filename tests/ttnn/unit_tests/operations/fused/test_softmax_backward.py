@@ -6,12 +6,31 @@ import os
 import torch
 import pytest
 import ttnn
+from loguru import logger
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range_dtype
 
 
 def reference_softmax_backward_output(y: torch.Tensor, grad: torch.Tensor, axis: int) -> torch.Tensor:
     dot = (y * grad).sum(dim=axis, keepdim=True)
     return y * (grad - dot)
+
+
+def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
+    x = tensor1.to(torch.float32).reshape(-1)
+    y = tensor2.to(torch.float32).reshape(-1)
+    x_mean = torch.mean(x)
+    y_mean = torch.mean(y)
+    vx = x - x_mean
+    vy = y - y_mean
+    num = torch.sum(vx * vy)
+    den = torch.sqrt(torch.sum(vx * vx) * torch.sum(vy * vy)) + 1e-12
+    return (num / den).item()
+
+
+def assert_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor, pcc_threshold: float = 0.999) -> None:
+    pcc_value = compute_pcc(tensor1, tensor2)
+    logger.info(f"  PCC: {pcc_value:.6f} (threshold: {pcc_threshold})")
+    assert pcc_value >= pcc_threshold, f"PCC {pcc_value:.6f} < threshold {pcc_threshold}"
 
 
 def dump_tensors_to_files(pt_output_tensor_fused: torch.Tensor, pt_output_tensor_reference: torch.Tensor) -> None:
@@ -42,13 +61,18 @@ def print_tolerance_metrics(tensor1: torch.Tensor, tensor2: torch.Tensor, dtype_
         max_rel_diff = torch.max(rel_diff).item()
         mean_rel_diff = torch.mean(rel_diff).item()
 
-        print(f"\nTolerance metrics for {dtype_name} and range {range}:")
-        print(f"  Max absolute difference: {max_abs_diff:.6e}")
-        print(f"  Mean absolute difference: {mean_abs_diff:.6e}")
-        print(f"  Max relative difference: {max_rel_diff:.6e}")
-        print(f"  Mean relative difference: {mean_rel_diff:.6e}")
+        # Pearson correlation coefficient (PCC)
+        pcc = compute_pcc(tensor1, tensor2)
+
+        logger.info(f"\nTolerance metrics for {dtype_name} and range {range}:")
+        logger.info(f"  Max absolute difference: {max_abs_diff:.6e}")
+        logger.info(f"  Mean absolute difference: {mean_abs_diff:.6e}")
+        logger.info(f"  Max relative difference: {max_rel_diff:.6e}")
+        logger.info(f"  Mean relative difference: {mean_rel_diff:.6e}")
+        logger.info(f"  PCC: {pcc:.6f}")
 
 
+PCC_THRESHOLD = 0.987
 BATCH_SIZE = 1
 SEED = 77
 
@@ -102,7 +126,7 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
     if dtype in [ttnn.bfloat16, ttnn.float32]:
         relative_tolerance = 3e05
         absolute_tolerance = 6e-3
-        print(f"  Required rtol: {relative_tolerance}, atol: {absolute_tolerance}")
+        logger.info(f"  Required rtol: {relative_tolerance}, atol: {absolute_tolerance}")
 
         # Debug output (enable with TTNN_PRINT_TOLERANCES=1 environment variable)
         print_tolerance_metrics(
@@ -118,6 +142,8 @@ def test_bw_softmax(input_shapes, dtype, range, dim, device):
             rtol=relative_tolerance,
             atol=absolute_tolerance,
         )
+
+        assert_pcc(pt_output_tensor_fused, pt_output_tensor_reference, PCC_THRESHOLD)
 
 
 @pytest.mark.parametrize(
@@ -161,9 +187,9 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
 
     tt_grad_tensor = ttnn.Tensor(grad_data, dtype).pad_to_tile(float("nan")).to(ttnn.TILE_LAYOUT).to(device)
 
-    print(f"\nOriginal shape: {input_shapes}")
-    print(f"Padded shape: {tt_softmax_tensor.shape}")
-    # print(f"Logical shape: {tt_softmax_tensor.logical_shape()}")
+    logger.info(f"\nOriginal shape: {input_shapes}")
+    logger.info(f"Padded shape: {tt_softmax_tensor.shape}")
+    # logger.info(f"Logical shape: {tt_softmax_tensor.logical_shape()}")
 
     # Run softmax backward on padded tensors
     tt_output_tensor_fused = ttnn.softmax_backward(tt_softmax_tensor, tt_grad_tensor, dim=dim)
@@ -178,7 +204,7 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
     if dtype in [ttnn.bfloat16, ttnn.float32]:
         relative_tolerance = 3e05
         absolute_tolerance = 6e-3
-        print(f"  Required rtol: {relative_tolerance}, atol: {absolute_tolerance}")
+        logger.info(f"  Required rtol: {relative_tolerance}, atol: {absolute_tolerance}")
 
         print_tolerance_metrics(
             pt_output_tensor_fused,
@@ -199,3 +225,6 @@ def test_bw_softmax_padded(input_shapes, dtype, range, dim, device):
             rtol=relative_tolerance,
             atol=absolute_tolerance,
         ), f"Padded tensor output does not match reference! This means padding corrupted the reduction."
+
+        # PCC assertion
+        assert_pcc(pt_output_tensor_fused, pt_output_tensor_reference, PCC_THRESHOLD)
