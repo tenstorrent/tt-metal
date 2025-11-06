@@ -548,7 +548,7 @@ class Operation:
                     latest_tensor = ttnn.database.query_latest_tensor(ttnn.CONFIG.report_path)
                     if latest_tensor is not None:
                         tensor_id = latest_tensor.tensor_id + 1
-                        ttnn.set_tensor_id(tensor_id)
+                        ttnn._ttnn.set_tensor_id(tensor_id)
 
                 operation_id = ttnn._ttnn.get_python_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
