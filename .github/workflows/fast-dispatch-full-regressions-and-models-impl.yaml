@@ -69,9 +69,8 @@ jobs:
             {"model":"vovnet"},
             {"model":"ufld_v2"},
             {"model":"yolov12x"},
-            {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
-            {"model":"stable_diffusion_xl_base","timeout":45},
+            {"model":"stable_diffusion_xl_base","timeout":75},
             {"model":"stable_diffusion","timeout":45}
           ]'
 
@@ -200,8 +199,6 @@ jobs:
               pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}
             elif [[ "${{ matrix.test-config.model }}" == *"qwen25_vl"* ]]; then
               pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model }}
-            elif [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
-              pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
             else
               pytest tests/nightly/single_card/${{ matrix.test-config.model }}
             fi

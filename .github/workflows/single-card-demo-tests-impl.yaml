@@ -54,6 +54,7 @@ jobs:
             { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "swin_s", runner-label: "N150", performance: false, cmd: run_swin_s_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga (HariniMohan0102)
+            { name: "vit", runner-label: "N150", performance: false, cmd: run_vit_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga
             { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
             { name: "yolov8x", runner-label: "N150", performance: false, cmd: run_yolov8x_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "yolov8s", runner-label: "N150", performance: false, cmd: run_yolov8s_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
@@ -70,6 +71,7 @@ jobs:
             { name: "swin_v2", runner-label: "N150", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
             { name: "yolov5x", runner-label: "N150", performance: false, cmd: "pytest models/demos/yolov5x/demo/demo.py", owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "swin_s", runner-label: "N300", performance: false, cmd: run_swin_s_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga (HariniMohan0102)
+            { name: "vit", runner-label: "N300", performance: false, cmd: run_vit_demo, owner_id: U088413NP0Q, civ2-compatible: true}, # Ashai Reddy Ginuga
             { name: "falcon7b", runner-label: "N300", performance: false, cmd: run_falcon7b_func, owner_id: U05RWH3QUPM}, # Salar Hosseini
             { name: "llama3", runner-label: "N300", performance: false, cmd: run_llama3_func, owner_id: U03PUAKE719}, # Miguel Tairum
             { name: "vgg", runner-label: "N300", performance: false, cmd: run_vgg_func, owner_id: U06Q7ESTFEV}, # Borys Bradel
@@ -234,11 +236,19 @@ jobs:
           source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' && matrix.test-group.name != 'mobilenetv2' }}
+        id: save-environment-data
+        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() }}
         shell: bash
-        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
       - name: Upload benchmark data
-        if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' && matrix.test-group.name != 'mobilenetv2' }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

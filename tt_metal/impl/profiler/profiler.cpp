@@ -48,6 +48,11 @@
 #include <tt-metalium/device_pool.hpp>
 #include "tt_cluster.hpp"
 
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
+
 namespace tt {
 
 namespace tt_metal {
@@ -1050,7 +1055,7 @@ void DeviceProfiler::issueFastDispatchReadFromL1DataBuffer(
 }
 
 void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
-    IDevice* device, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
+    IDevice* /*device*/, const CoreCoord& worker_core, std::vector<uint32_t>& core_l1_data_buffer) {
     ZoneScoped;
 
     const Hal& hal = MetalContext::instance().hal();
@@ -1676,7 +1681,7 @@ void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; 
 
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
 
-DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) :
+DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[maybe_unused]]) :
     device_arch(device->arch()),
     device_id(device->id()),
     device_core_frequency(tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id)) {
@@ -1803,7 +1808,7 @@ void DeviceProfiler::readResults(
     const std::vector<CoreCoord>& virtual_cores,
     const ProfilerReadState state,
     const ProfilerDataBufferSource data_source,
-    const std::optional<ProfilerOptionalMetadata>& metadata) {
+    const std::optional<ProfilerOptionalMetadata>& /*metadata*/) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     if (!getDeviceProfilerState()) {
@@ -2145,3 +2150,7 @@ bool getDeviceProfilerState() { return tt::tt_metal::MetalContext::instance().rt
 }  // namespace tt_metal
 
 }  // namespace tt
+
+#if !defined(TRACY_ENABLE) && defined(__clang__)
+#pragma clang diagnostic pop
+#endif
