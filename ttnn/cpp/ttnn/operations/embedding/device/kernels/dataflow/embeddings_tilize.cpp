@@ -47,13 +47,13 @@ void kernel_main() {
             cb_reserve_back(cb_id_in0, tiles_per_chunk);
             uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
+            // Calculate the chunk size and offset within the embedding vector
+            uint32_t weight_chunk_size = weight_block_size / num_chunks;
+            uint32_t weight_chunk_offset = chunk * weight_chunk_size;
+
             for (uint32_t k = 0; k < tile_height; ++k) {
                 input_token_t token = input_l1_ptr[k];
                 uint64_t src_noc_addr = get_token_noc_addr(token, weights);
-
-                // Calculate the chunk size and offset within the embedding vector
-                uint32_t weight_chunk_size = weight_block_size / num_chunks;
-                uint32_t weight_chunk_offset = chunk * weight_chunk_size;
 
                 noc_async_read(src_noc_addr + weight_chunk_offset, l1_write_addr, weight_chunk_size);
                 l1_write_addr += weight_chunk_size;

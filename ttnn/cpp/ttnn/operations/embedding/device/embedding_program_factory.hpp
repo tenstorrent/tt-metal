@@ -179,7 +179,7 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         // Use original non-chunked approach for smaller embeddings
         tiles_per_chunk = num_tiles_per_block;
         num_chunks = 1;
-        buffering = 2;
+        buffering = num_tiles_per_block > max_double_buffer_tiles ? 1 : 2;
     }
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
