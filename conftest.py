@@ -959,18 +959,22 @@ def _ensure_watchdog_started(config):
 
     # Clean up stale process reference if present
     if process is not None and not process.is_alive():
+        logger.warning(f"Stale watchdog process found, joining and cleaning up")
         try:
-            process.join(timeout=0.1)
+            process.join(timeout=1)
         except Exception:
             pass
 
     try:
         cmd_queue = multiprocess.Queue()
+        time.sleep(1)
         process = multiprocess.Process(target=_watchdog_main, args=(parent_pid, cmd_queue), daemon=True)
         process.start()
+        time.sleep(1)
         config.stash[watchdog_cmd_queue_key] = cmd_queue
         config.stash[watchdog_process_key] = process
         logger.info(f"Watchdog[{worker_id}] started: watchdog_pid={process.pid} parent_pid={parent_pid}")
+        time.sleep(1)
         return cmd_queue
     except Exception as e:
         logger.error(f"Failed to start watchdog for parent={parent_pid}: {e}")
