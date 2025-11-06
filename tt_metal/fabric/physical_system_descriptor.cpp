@@ -263,7 +263,7 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
         // As part of live discovery, we create a new cluster descriptor to query the latest state from UMD.
         // Otherwise, we use the existing cluster descriptor, which may be stale with respect to the state of
         // the hardware.
-        cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor("", umd::IODeviceType::PCIe);
+        cluster_desc_ = tt::umd::Cluster::create_cluster_descriptor();
     }
     const auto& chip_unique_ids = cluster_desc_->get_chip_unique_ids();
     const auto& eth_connections = cluster_desc_->get_ethernet_connections();
