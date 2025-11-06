@@ -290,6 +290,10 @@ def get_updated_device_params(device_params):
                     "ROW dispatch requires both fabric and tensix config, using DispatchCoreAxis.COL instead."
                 )
                 dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+        elif fabric_config and fabric_tensix_config:
+            logger.warning(
+                f"Blackhole with fabric_config and fabric_tensix_config enabled, using fabric_tensix_config={fabric_tensix_config}"
+            )
 
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis, fabric_tensix_config)
     new_device_params["dispatch_core_config"] = dispatch_core_config
