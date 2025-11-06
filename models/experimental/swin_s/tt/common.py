@@ -56,6 +56,9 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
+        # Enabling kernel stride folding lands in to matmul where it fails because of
+        # dimensionality mismatch. Disabling it to avoid the issue. Once #31313 is fixed, this can be re-enabled.
+        conv_config.enable_kernel_stride_folding = False
         [output_tensor, [_out_height, _out_width], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
