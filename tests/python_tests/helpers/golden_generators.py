@@ -630,7 +630,7 @@ class ScalarBroadcastGolden:
     """
     Golden generator for scalar broadcast operations.
     Takes the first element of the input tensor and broadcasts it across the entire output tile.
-    Output size = num_faces * 256 elements, all with the same scalar value.
+    Output size = num_faces * (face_r_dim * 16) elements, all with the same scalar value.
     """
 
     def __call__(
@@ -639,6 +639,7 @@ class ScalarBroadcastGolden:
         data_format,
         num_faces: int = 4,
         input_dimensions: list[int] = [32, 32],
+        face_r_dim: int = 16,  # Default to 16 for backward compatibility
     ):
         torch_format = format_dict[data_format]
 
@@ -649,8 +650,8 @@ class ScalarBroadcastGolden:
         # Take the first element as the scalar value to broadcast
         scalar_value = operand1.flatten()[0]
 
-        # Calculate output size based on num_faces
-        elements_per_tile = ELEMENTS_PER_FACE * num_faces
+        # Calculate output size based on variable face dimensions
+        elements_per_tile = face_r_dim * FACE_DIM * num_faces
 
         # Create output tensor with scalar value replicated across all elements
         result = torch.full((elements_per_tile,), scalar_value, dtype=torch_format)
@@ -665,9 +666,9 @@ class ColumnBroadcastGolden:
     Hardware behavior: Faces 0-1 use Face 0's column, Faces 2-3 use Face 2's column
     (See llk_math_eltwise_binary_broadcast.h lines 136-141)
 
-    For a 16x16 face: input has 16 unique values (one per row),
+    For a face_r_dim x 16 face: input has face_r_dim unique values (one per row),
     each value is replicated 16 times across its row.
-    Output pattern: [row0_val]*16, [row1_val]*16, ..., [row15_val]*16
+    Output pattern: [row0_val]*16, [row1_val]*16, ..., [row(face_r_dim-1)_val]*16
     """
 
     def __call__(
@@ -676,6 +677,7 @@ class ColumnBroadcastGolden:
         data_format,
         num_faces: int = 4,
         input_dimensions: list[int] = [32, 32],
+        face_r_dim: int = 16,  # Default to 16 for backward compatibility
     ):
         torch_format = format_dict[data_format]
 
@@ -686,14 +688,13 @@ class ColumnBroadcastGolden:
             # Direct conversion avoids intermediate tensor
             input_flat = torch.tensor(operand1, dtype=torch_format).flatten()
 
-        # Each face is 16x16 = 256 elements
-        face_size = ELEMENTS_PER_FACE
-        face_dim = FACE_DIM
+        # Each face is face_r_dim x 16 elements
+        face_size = face_r_dim * FACE_DIM
 
         # Process face 0 (used by faces 0-1)
         source_face_0 = input_flat[:face_size]
-        col_values_0 = source_face_0[::face_dim]
-        face_0_broadcast = col_values_0.repeat_interleave(face_dim)
+        col_values_0 = source_face_0[::FACE_DIM]
+        face_0_broadcast = col_values_0.repeat_interleave(FACE_DIM)
 
         # Handle different face counts efficiently
         if num_faces == 1:
@@ -704,8 +705,8 @@ class ColumnBroadcastGolden:
         else:  # num_faces == 4
             # Process face 2 (used by faces 2-3)
             source_face_2 = input_flat[2 * face_size : 3 * face_size]
-            col_values_2 = source_face_2[::face_dim]
-            face_2_broadcast = col_values_2.repeat_interleave(face_dim)
+            col_values_2 = source_face_2[::FACE_DIM]
+            face_2_broadcast = col_values_2.repeat_interleave(FACE_DIM)
 
             # Concatenate: face0, face0, face2, face2
             output = torch.cat(
@@ -717,7 +718,7 @@ class ColumnBroadcastGolden:
 
 @register_golden
 class RowBroadcastGolden:
-    """Golden generator for row broadcast operations."""
+    """Golden generator for row broadcast operations with variable face dimensions."""
 
     def __call__(
         self,
@@ -725,6 +726,7 @@ class RowBroadcastGolden:
         data_format,
         num_faces: int = 4,
         input_dimensions: list[int] = [32, 32],
+        face_r_dim: int = 16,  # Default to 16 for backward compatibility
     ):
         torch_format = format_dict[data_format]
 
@@ -735,19 +737,19 @@ class RowBroadcastGolden:
             # Direct conversion avoids intermediate tensor
             input_flat = torch.tensor(operand1, dtype=torch_format).flatten()
 
-        face_size = ELEMENTS_PER_FACE
-        face_dim = FACE_DIM
+        # Each face is face_r_dim x 16 elements
+        face_size = face_r_dim * FACE_DIM
 
         # Process face 0: take first row and repeat to fill face
-        face_0_row = input_flat[:face_dim]
-        face_0_broadcast = face_0_row.repeat(face_dim)
+        face_0_row = input_flat[:FACE_DIM]
+        face_0_broadcast = face_0_row.repeat(face_r_dim)
 
         if num_faces == 1:
             output = face_0_broadcast
         elif num_faces in (2, 4):
             # Extract and repeat face 1 row
-            face_1_row = input_flat[face_size : face_size + face_dim]
-            face_1_broadcast = face_1_row.repeat(face_dim)
+            face_1_row = input_flat[face_size : face_size + FACE_DIM]
+            face_1_broadcast = face_1_row.repeat(face_r_dim)
 
             if num_faces == 2:
                 output = torch.cat([face_0_broadcast, face_1_broadcast])
@@ -772,14 +774,23 @@ class DataCopyGolden:
         data_format,
         num_faces: int = 4,
         input_dimensions: list[int] = [32, 32],
+        face_r_dim: int = 16,  # Default to 16 for backward compatibility
     ):
         torch_format = format_dict[data_format]
 
         height, width = input_dimensions[0], input_dimensions[1]
-        tile_cnt = (height // 32) * (width // 32)
-        tile_size = height * width // tile_cnt
-        # Depending on the value of 'num_faces' (1, 2, 4), select the first 1, 2 or all 4 faces of a tile
-        elements_per_tile_needed = (tile_size // 4) * num_faces
+
+        # Handle partial faces (face_r_dim < 16) as single tiles
+        if face_r_dim < 16:
+            tile_cnt = 1
+            tile_size = height * width
+        else:
+            tile_cnt = (height // 32) * (width // 32)
+            tile_size = height * width // tile_cnt
+
+        # Calculate elements based on variable face dimensions
+        # Each face is face_r_dim × 16, and we have num_faces
+        elements_per_tile_needed = face_r_dim * FACE_DIM * num_faces
 
         # Convert input to tensor if needed
         if not isinstance(operand1, torch.Tensor):
