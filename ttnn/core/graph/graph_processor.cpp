@@ -284,7 +284,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
     if (tensor_id == tt::tt_metal::Tensor::INVALID_TENSOR_ID) {
         log_debug(
             tt::LogAlways,
-            "Tensor doesn't have tensor_id (sentinel value is 0), generating new one. Ideally this should not happen. "
+            "Tensor doesn't have tensor_id (sentinel value is INVALID_TENSOR_ID), generating new one. Ideally this should not happen. "
             "Please set tensor_id "
             "for this tensor ahead of time.");
         tensor_id = tt::tt_metal::Tensor::next_tensor_id();
