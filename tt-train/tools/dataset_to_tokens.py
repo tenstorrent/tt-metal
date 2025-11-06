@@ -39,17 +39,6 @@ def tokenize_text_data(tokenizer_file, text_data):
     tokenized_data = tokenizer.encode(text_data).ids
     return tokenized_data
 
-
-def save_to_msgpack(data, output_file):
-    """
-    Saves the tokenized data as a flat NumPy array in MessagePack format.
-    """
-    np_data = np.array(data, dtype=np.int32)
-    with open(output_file, "wb") as file:
-        msgpack.pack(np_data, file, default=m.encode)
-    print(f"Saved tokenized data as MessagePack to {output_file}")
-
-
 def save_to_csv(data, output_file):
     """
     Saves the tokenized data as a single space-separated line in a CSV file.
@@ -78,7 +67,7 @@ def main():
     parser.add_argument(
         "--output_file",
         type=str,
-        default="tokenized_data",
+        default=f"{os.environ['TT_METAL_HOME']}/tt-train/data/tokenized_data",
         help="Base path to save the tokenized data (extension will be added based on format).",
     )
 
@@ -100,7 +89,7 @@ def main():
         tokenized_data.extend(tokenized_data_split)
 
     # Save tokenized data
-    save_to_csv(tokenized_data, args.output_file)
+    save_to_csv(tokenized_data, f"{args.output_file}.csv")
 
 
 if __name__ == "__main__":
