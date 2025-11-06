@@ -73,6 +73,11 @@ on:
         type: string
         default: ""
         description: 'Commit SHA to test (default: HEAD)'
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Workflow run ID to download artifacts from (skips build)"
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -91,13 +96,13 @@ on:
         value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
-        value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
+        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.packages-artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.packages-artifact-name || '') }}
       build-artifact-name:
         description: "Name of the published build artifact"
-        value: ${{ jobs.build-artifact.outputs.build_artifact_name }}
+        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.build_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.build-artifact-name || '') }}
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-wheel.outputs.wheel_artifact_name }}
+        value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.wheel_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.wheel-artifact-name || '') }}
 
   workflow_dispatch:
     inputs:
@@ -158,7 +163,58 @@ jobs:
       version: ${{ inputs.version }}
       architecture: ${{ inputs.architecture }}
 
+  download-artifacts:
+    if: ${{ inputs.use-artifacts-from-run != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      build-artifact-name: ${{ steps.download.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ steps.download.outputs.wheel-artifact-name }}
+      packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts from workflow run
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/download-artifacts-from-run
+        with:
+          workflow_run_id: ${{ inputs.use-artifacts-from-run }}
+          working-directory: ${{ github.workspace }}/artifacts
+          tracy: ${{ inputs.tracy }}
+
+      - name: Upload build artifact for downstream jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.download.outputs.build-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload wheel artifact
+        if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.download.outputs.wheel-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/*.whl
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Upload packages artifact
+        if: ${{ steps.download.outputs.packages-artifact-name != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.download.outputs.packages-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/*.deb
+          if-no-files-found: ignore
+          retention-days: 1
+
   build-artifact:
+    if: ${{ inputs.use-artifacts-from-run == '' }}
     name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
     timeout-minutes: 100
@@ -329,7 +385,7 @@ jobs:
           compression-level: 0
 
   build-wheel:
-    if: ${{ inputs.build-wheel }}
+    if: ${{ inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
     name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     needs: build-docker-image
     timeout-minutes: 30
