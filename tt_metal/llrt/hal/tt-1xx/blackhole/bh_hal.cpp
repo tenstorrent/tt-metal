@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
+#include <umd/device/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
@@ -132,8 +133,14 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
-        if (blackhole::is_2_erisc_mode() && params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
-            defines.push_back("ENABLE_2_ERISC_MODE");
+        // Push back the physical erisc id
+        if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            if (blackhole::is_2_erisc_mode()) {
+                defines.push_back("ENABLE_2_ERISC_MODE");
+                defines.push_back("PHYSICAL_AERISC_ID=" + std::to_string(params.processor_id));
+            } else {
+                defines.push_back("PHYSICAL_AERISC_ID=1");
+            }
         }
         return defines;
     }
@@ -398,15 +405,15 @@ void Hal::initialize_bh() {
 
     this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>();
 
-    this->verify_eth_fw_version_func_ = [](tt::umd::tt_version fw_version) {
+    this->verify_eth_fw_version_func_ = [](tt::umd::semver_t fw_version) {
         if (blackhole::is_2_erisc_mode()) {
-            tt::umd::tt_version min_version(1, 7, 0);
+            tt::umd::semver_t min_version(1, 7, 0);
             if (!(fw_version >= min_version)) {
                 log_critical(
                     tt::LogLLRuntime,
                     "In 2-erisc mode, the minimum supported ethernet firmware version is {}. Detected version is {}",
-                    min_version.str(),
-                    fw_version.str());
+                    min_version.to_string(),
+                    fw_version.to_string());
             }
         }
     };

@@ -24,11 +24,22 @@ runs:
         tmp_file="$(mktemp)"
         printf '%s' "$REGRESSED_RAW" > "$tmp_file"
         if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
-          echo "payload={\"text\":\"Failed to parse regression list\"}" >> "$GITHUB_OUTPUT"
+          echo "⚠️ Failed to parse regression list JSON. Skipping Slack notification."
+          echo "has_regressions=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
-        # This part is unchanged: it generates the main regression text
+        # Check if there are any regressions
+        REGRESSION_COUNT=$(jq -r 'if (type=="array") then length else 0 end' "$tmp_file")
+        if [ "$REGRESSION_COUNT" -eq 0 ]; then
+          echo "✅ No regressions detected. Skipping Slack notification (only posting when there are regressions)."
+          echo "has_regressions=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        echo "📊 Found $REGRESSION_COUNT regression(s). Preparing Slack notification..."
+        echo "has_regressions=true" >> "$GITHUB_OUTPUT"
+
+        # Generate the main regression text with detailed information
         TEXT=$(jq -r '
           def mentionOwners(owners):
             if (owners | type) == "array" and (owners | length) > 0 then
@@ -54,9 +65,7 @@ runs:
               " (failed " + (item.failing_jobs | join(", ")) + ")"
             else "" end;
 
-          if (type=="array" and length==0) then
-            "✅ No new regressions."
-          elif (type=="array") then
+          if (type=="array" and length > 0) then
             "❌ *Regressions (Pass → Fail):*\n" + (map(
               "- " + .name
               + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
@@ -68,43 +77,56 @@ runs:
             "Malformed regressions payload"
           end' "$tmp_file")
 
-        # MINIMAL CHANGE: Define message parts and build a Block Kit payload
-        # 1. Define the components of the message as separate variables
-        HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
-        ALERT=$(printf '%b' "$ALERT_RAW") # Safely interprets newlines like \n
+        # Count total failing workflows from alert_all_message
+        # The alert message format is: "*Alerts: failing workflows on main*\n• Workflow Name <url|open> mentions jobs"
+        # We count lines starting with "• " to get the total number of failing workflows
+        FAILING_WORKFLOWS_COUNT_MESSAGE=""
+        if [ -n "$ALERT_RAW" ]; then
+          # Decode the alert message and count workflow lines
+          decoded_alert=$(printf '%b' "$ALERT_RAW")
+          total_failing_count=$(echo "$decoded_alert" | grep -E '^• ' | wc -l | tr -d ' ')
 
-        # 2. Build the payload using blocks for guaranteed line breaks, with text fallback
+          # Subtract regressions (already shown in detail) to get "other" failing workflows
+          other_failing_count=$((total_failing_count - REGRESSION_COUNT))
+
+          # Format the message (singular vs plural)
+          if [ "$other_failing_count" -gt 0 ]; then
+            if [ "$other_failing_count" -eq 1 ]; then
+              FAILING_WORKFLOWS_COUNT_MESSAGE="1 other pipeline is failing"
+            else
+              FAILING_WORKFLOWS_COUNT_MESSAGE="$other_failing_count other pipelines are failing"
+            fi
+          fi
+        fi
+
+        # Build the payload using blocks for guaranteed line breaks, with text fallback
+        HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
+
         PAYLOAD=$(jq -cn \
           --arg header "$HEADER" \
           --arg body "$TEXT" \
-          --arg alert "$ALERT" \
+          --arg failing_count_msg "$FAILING_WORKFLOWS_COUNT_MESSAGE" \
           '
-          def chunk_lines(lines; size):
-            if (lines|length) == 0 then []
-            else [ (lines[0:size] | join("\n")) ] + chunk_lines(lines[size:]; size)
-            end;
-
-          ($alert | split("\n")) as $alert_lines |
-          (
-            [
+          {
+            "text": ($header + "\n" + $body + (if ($failing_count_msg | length > 0) then "\n\n" + $failing_count_msg else "" end)),
+            "blocks": ([
               { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
               { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
-            ]
-            + (if ($alert | length > 0) then
-                 [ { "type": "divider" } ]
-                 + (chunk_lines($alert_lines; 15)
-                    | map({ "type": "section", "text": { "type": "mrkdwn", "text": . } }))
-               else [] end)
-          ) as $blocks
-          | {
-              text: ($header + "\n" + $body + (if $alert == "" then "" else "\n\n" + $alert end)),
-              blocks: $blocks
-            }
+            ] + (if ($failing_count_msg | length > 0) then
+              [ { "type": "section", "text": { "type": "mrkdwn", "text": $failing_count_msg } } ]
+            else [] end))
+          }
         ')
 
         echo "payload=$PAYLOAD" >> "$GITHUB_OUTPUT"
 
-    - name: Report Github Pipeline Status Slack Action
+    - name: Skip Slack notification (no regressions)
+      if: steps.build.outputs.has_regressions != 'true'
+      shell: bash
+      run: echo "ℹ️ Skipping Slack notification because there are no regressions to report."
+
+    - name: Report GitHub Pipeline Status Slack Action
+      if: steps.build.outputs.has_regressions == 'true'
       uses: slackapi/slack-github-action@v1.26.0
       with:
         payload: ${{ steps.build.outputs.payload }}

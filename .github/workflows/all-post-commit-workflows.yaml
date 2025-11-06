@@ -34,6 +34,10 @@ on:
         default: false
         type: boolean
         description: "Re-run failed jobs (max 3)"
+      force-test-everything:
+        default: true
+        type: boolean
+        description: "Force test everything regardless of file changes"
   push:
     branches: ["main"]
 
@@ -59,9 +63,57 @@ jobs:
       tracy: true
       version: ${{ inputs.version || '22.04' }}
       skip-tt-train: false
+
+  find-changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
+      clang-tidy-config-changed: ${{ steps.find-changes.outputs.clang-tidy-config-changed }}
+      tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
+      tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
+      tt-metalium-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-tests-changed }}
+      tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-nn-tests-changed }}
+      tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
+      tools-changed: ${{ steps.find-changes.outputs.tools-changed }}
+      submodule-changed: ${{ steps.find-changes.outputs.submodule-changed }}
+      any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
+      docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
+      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
+      models-changed: ${{ steps.find-changes.outputs.models-changed }}
+      test-metalium: ${{ steps.set-test-metalium.outputs.test-metalium }}
+      test-ttnn: ${{ steps.set-test-ttnn.outputs.test-ttnn }}
+      test-tt-train: ${{ steps.set-test-tt-train.outputs.test-tt-train }}
+      test-everything: ${{ steps.set-test-everything.outputs.test-everything }}
+    steps:
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@blozano-apc-savior
+      - id: set-test-metalium
+        run: |
+          echo "test-metalium=${{ github.event_name != 'workflow_dispatch' ||
+                                 (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
+                                 steps.find-changes.outputs['cmake-changed'] == 'true' ||
+                                 steps.find-changes.outputs['submodule-changed'] == 'true' ||
+                                 steps.find-changes.outputs['tt-metalium-changed'] == 'true' ||
+                                 steps.find-changes.outputs['tt-metalium-tests-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
+      - id: set-test-ttnn
+        run: |
+          echo "test-ttnn=${{ steps.set-test-metalium.outputs['test-metalium'] == 'true' ||
+                              steps.find-changes.outputs['tt-nn-changed'] == 'true' ||
+                              steps.find-changes.outputs['tt-nn-tests-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
+      - id: set-test-tt-train
+        run: |
+          echo "test-tt-train=${{ steps.set-test-ttnn.outputs['test-ttnn'] == 'true' ||
+                                  steps.find-changes.outputs['tt-train-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
+      - id: set-test-everything
+        run: |
+          echo "test-everything=${{ github.event_name != 'workflow_dispatch' ||
+                                  (github.event_name == 'workflow_dispatch' && inputs.force-test-everything) ||
+                                  steps.find-changes.outputs['any-code-changed'] == 'true' }}" >> "$GITHUB_OUTPUT"
+
   # Fabric Unit Tests
   fabric-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, find-changed-files]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -69,6 +121,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 },
         ]
+    if: ${{ needs.find-changed-files.outputs.test-metalium == 'true' }}
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -78,7 +131,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, find-changed-files]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -86,6 +139,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N300 }
         ]
+    if: ${{ needs.find-changed-files.outputs.test-ttnn == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -96,7 +150,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, find-changed-files]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -105,6 +159,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
+    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -113,7 +168,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, find-changed-files]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -122,6 +177,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
+    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -131,7 +187,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       gtest_filter: "*-*NIGHTLY_*"
   tt-train-cpp-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, find-changed-files]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -140,6 +196,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
+    if: ${{ needs.find-changed-files.outputs.test-tt-train == 'true' }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -149,7 +206,7 @@ jobs:
       gtest_filter: "*-*NIGHTLY_*"
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, find-changed-files]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -159,15 +216,16 @@ jobs:
           { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
+    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-
   run-profiler-regression:
-    needs: [build-artifact]
+    needs: [build-artifact, find-changed-files]
+
     strategy:
       fail-fast: false
       matrix:
@@ -175,6 +233,7 @@ jobs:
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
+    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
@@ -184,8 +243,8 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   t3000-apc-fast-tests:
-    if: ${{ github.event.pull_request.head.repo.fork == false }}
-    needs: build-artifact
+    if: ${{ needs.find-changed-files.outputs.test-everything == 'true' }}
+    needs: [build-artifact, find-changed-files]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
@@ -193,7 +252,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   build-docs:
-    needs: build-artifact
+    needs: [build-artifact, find-changed-files]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
