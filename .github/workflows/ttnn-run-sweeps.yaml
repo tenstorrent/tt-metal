@@ -1063,7 +1063,7 @@ jobs:
     needs:
       - build-artifact
       - ttnn-run-sweeps-parallel
-    if: ${{ always() && needs.ttnn-run-sweeps-parallel.result != 'skipped' }}
+    if: ${{ !cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled' }}
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -1111,7 +1111,7 @@ jobs:
     needs:
       - ttnn-homogenize-run-result
       - ttnn-run-single-sweep
-    if: ${{ always() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
+    if: ${{ !cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' || needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
