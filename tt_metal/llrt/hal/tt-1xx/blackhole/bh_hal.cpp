@@ -408,9 +408,10 @@ void Hal::initialize_bh(bool enable_2_erisc_mode) {
         if (enable_2_erisc_mode) {
             tt::umd::semver_t min_version(1, 7, 0);
             if (!(fw_version >= min_version)) {
-                log_critical(
+                log_warning(
                     tt::LogLLRuntime,
-                    "In 2-erisc mode, the minimum supported ethernet firmware version is {}. Detected version is {}",
+                    "Blackhole multi erisc mode requires ethernet firmware version {} or higher, but detected version "
+                    "{}. Automatically falling back to single erisc mode for compatibility.",
                     min_version.to_string(),
                     fw_version.to_string());
                 return false;

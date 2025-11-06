@@ -324,7 +324,7 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (getenv("TT_METAL_DISABLE_MULTI_AERISC")) {
-        log_info(tt::LogMetal, "Disabling multi-erisc mode");
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with TT_METAL_DISABLE_MULTI_AERISC");
         this->enable_2_erisc_mode = false;
     }
 

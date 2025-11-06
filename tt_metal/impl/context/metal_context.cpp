@@ -264,6 +264,13 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
+void MetalContext::teardown_base_objects() {
+    // Teardown in backward order of dependencies to avoid dereferencing uninitialized objects
+    distributed_context_.reset();
+    cluster_.reset();
+    hal_.reset();
+}
+
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
@@ -289,10 +296,7 @@ MetalContext::MetalContext() {
     // during the first init
     if (!cluster_->verify_eth_fw_capability()) {
         rtoptions_.set_enable_2_erisc_mode(false);
-        // Reset in backward order
-        distributed_context_.reset();
-        cluster_.reset();
-        hal_.reset();
+        teardown_base_objects();
         initialize_objects();
     }
 
@@ -311,11 +315,7 @@ std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_di
     return distributed_context_;
 }
 
-MetalContext::~MetalContext() {
-    distributed_context_.reset();
-    cluster_.reset();
-    hal_.reset();
-}
+MetalContext::~MetalContext() { teardown_base_objects(); }
 
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
