@@ -44,6 +44,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <umd/device/cluster.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
 #include "tt_stl/small_vector.hpp"
@@ -123,10 +124,17 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
 
-UbbId get_ubb_id(ChipId chip_id) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    const auto bus_id = cluster.get_bus_id(chip_id);
+uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
+    // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
+    auto cluster_desc = cluster.get_cluster_description();
+    uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
+    return bus_id;
+}
+
+UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
+    auto cluster_desc = cluster.get_cluster_description();
+    const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
+    const auto bus_id = get_bus_id(cluster, chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
         auto ubb_asic_id = bus_id & 0x0F;
