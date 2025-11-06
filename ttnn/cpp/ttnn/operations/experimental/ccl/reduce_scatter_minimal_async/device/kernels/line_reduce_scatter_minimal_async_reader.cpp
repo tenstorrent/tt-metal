@@ -160,7 +160,7 @@ void kernel_main() {
 
         // Iterate over the slices in the direction we are going.
         // In forwards direction, count down from slice (ring_size -1) down to (my_chip_id+1), inclusive
-        // In backwards cirection, count up from slice 0 to (my_chip_id-1), inclusive
+        // In backwards direction, count up from slice 0 to (my_chip_id-1), inclusive
         // After doing all partial reductions and send, there's a final reduction step.
         // If we are not the first device in the direction, do the final reduction.
         // If this device has both FWD and BWD neighbors, the FWD reader will do final reduction first

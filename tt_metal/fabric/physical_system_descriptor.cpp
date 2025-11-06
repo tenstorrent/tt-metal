@@ -893,24 +893,20 @@ std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) con
     return asic_descriptors_.at(asic_id).host_name;
 }
 
-UID PhysicalSystemDescriptor::get_u_id(const std::string& hostname) {
+UID PhysicalSystemDescriptor::get_u_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host UID requires the Cable Spec which is not currently supported.");
 }
 
-RackID PhysicalSystemDescriptor::get_rack_id(const std::string& hostname) {
+RackID PhysicalSystemDescriptor::get_rack_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Rack ID requires the Cable Spec which is not currently supported.");
 }
 
-AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
+AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Aisle ID requires the Cable Spec which is not currently supported.");
 }
 
-HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
+HallID PhysicalSystemDescriptor::get_hall_id(const std::string& /*hostname*/) {
     TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
-}
-
-bool PhysicalSystemDescriptor::is_using_mock_cluster() const {
-    return target_device_type_ == TargetDevice::Mock || target_device_type_ == TargetDevice::Simulator;
 }
 
 }  // namespace tt::tt_metal

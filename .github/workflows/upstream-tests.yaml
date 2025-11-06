@@ -22,6 +22,7 @@ env:
   BLACKHOLE_LOUDBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-loudbox
   BLACKHOLE_P300_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-p300
   BLACKHOLE_QB_GE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-qb-ge
+  BLACKHOLE_GLX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
 
 jobs:
   build-artifact:
@@ -47,6 +48,7 @@ jobs:
       bh-loudbox-image-tag: ${{ steps.set-image-tags.outputs.bh-loudbox-image-tag }}
       bh-p300-image-tag: ${{ steps.set-image-tags.outputs.bh-p300-image-tag }}
       bh-qb-ge-image-tag: ${{ steps.set-image-tags.outputs.bh-qb-ge-image-tag }}
+      bh-glx-image-tag: ${{ steps.set-image-tags.outputs.bh-glx-image-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,6 +69,7 @@ jobs:
           echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-glx-image-tag=${{ env.BLACKHOLE_GLX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
@@ -136,6 +139,13 @@ jobs:
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_qb_ge
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_glx
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
@@ -214,6 +224,27 @@ jobs:
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+  test-bh-glx-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - arch-blackhole
+      - topology-6u
+      - in-service
+      - pipeline-functional
+    steps:
+      # TODO -likely need to put this into a script which can be parameterized on the build number
+      # and whether to only pull
+      - name: Pull image
+        timeout-minutes: 10
+        run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+      - name: Run image
+        timeout-minutes: 90
+        env:
+          HF_MODEL: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
   test-bh-multicard-image:
     needs:
       - get-image-tags
@@ -224,22 +255,28 @@ jobs:
         bh-config:
           - runner-label: BH-LLMBox
             image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+            extra-tag: pipeline-perf
           - runner-label: BH-DeskBox
             image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+            extra-tag: pipeline-functional
           - runner-label: BH-LoudBox
             image-name: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
+            extra-tag: pipeline-perf
           - runner-label: BH-QB-GE
             image-name: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
+            extra-tag: pipeline-perf
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - in-service
-      - pipeline-perf
+      - ${{ matrix.bh-config.extra-tag }}
     steps:
       - name: Run image
         timeout-minutes: 30
         env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+          # For different environments, BH VLAN vs. cloud
+          HF_MODEL: ${{ matrix.bh-config.extra-tag == 'pipeline-perf' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: ${{ matrix.bh-config.extra-tag == 'pipeline-perf' && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -262,8 +299,9 @@ jobs:
       - name: Run image
         timeout-minutes: 60
         env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run --network none --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
+          HF_MODEL: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run --network none --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -283,11 +321,12 @@ jobs:
       - pipeline-functional
     steps:
       - name: Run image
-        timeout-minutes: 30
+        timeout-minutes: 40
         env:
           # For different environments, yyz BH VLAN vs. cloud
-          LLAMA_DIR: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-image-tag }}
+          HF_MODEL: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+          TT_CACHE_PATH: ${{ contains(runner.name, 'gh') && '/localdev/blackhole_demos/huggingface_data' || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH ${{ needs.get-image-tags.outputs.bh-image-tag }}
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
@@ -299,6 +338,7 @@ jobs:
       - test-bh-image
       - test-bh-p300-image
       - test-bh-multicard-image
+      - test-bh-glx-image
     runs-on: ubuntu-latest
     outputs:
       images-to-push: ${{ steps.calculate-images.outputs.images-to-push }}
@@ -333,6 +373,7 @@ jobs:
             ["bh-loudbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}"
             ["bh-p300-image-tag"]="${{ needs.get-image-tags.outputs.bh-p300-image-tag }}"
             ["bh-qb-ge-image-tag"]="${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}"
+            ["bh-glx-image-tag"]="${{ needs.get-image-tags.outputs.bh-glx-image-tag }}"
           )
 
           # Get test job results
@@ -341,6 +382,7 @@ jobs:
             ["test-wh-6u-image"]="${{ needs.test-wh-6u-image.result }}"
             ["test-bh-multicard-image"]="${{ needs.test-bh-multicard-image.result }}"
             ["test-bh-p300-image"]="${{ needs.test-bh-p300-image.result }}"
+            ["test-bh-glx-image"]="${{ needs.test-bh-glx-image.result }}"
           )
 
           # Initialize array for images to push (optimized approach)
