@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#ifdef TTSIM_ENABLED
 #include <cstring>
 #include "debug/dprint.h"
 #include "debug/dprint_buffer.h"
@@ -32,9 +31,9 @@ void ttsim_tensix_dump(const char* title, bool dump_dst) {
 #endif
     }
     if (dump_dst) {
-        __asm__ volatile(".word 0x800000FF");
+        __asm__ volatile(".word 0x00100033");
     } else {
-        __asm__ volatile(".word 0x000000FF");
+        __asm__ volatile(".word 0x00000033");
     }
 }
 
@@ -42,7 +41,3 @@ inline void ttsim_tensix_dump_wrapper() { ttsim_tensix_dump("", false); }
 inline void ttsim_tensix_dump_wrapper(const char* title) { ttsim_tensix_dump(title, false); }
 inline void ttsim_tensix_dump_wrapper(bool dump_dst) { ttsim_tensix_dump("", dump_dst); }
 inline void ttsim_tensix_dump_wrapper(const char* title, bool dump_dst) { ttsim_tensix_dump(title, dump_dst); }
-#else
-#define TTSIM_DUMP_DST
-#define TTSIM_TENSIX_DUMP(...)
-#endif
