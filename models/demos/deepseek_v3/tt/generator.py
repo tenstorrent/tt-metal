@@ -547,8 +547,6 @@ class DeepseekGenerator:
         teacher_forcing=None,
         early_print_first_user: bool = True,
         repeat_batches: int = 1,
-        validate_against_ref: bool = False,
-        reference_texts: dict[str, str] | None = None,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -573,9 +571,6 @@ class DeepseekGenerator:
         profiler.start("preparing_decode_config")
         self._prepare_run_configs("decode")
         profiler.end("preparing_decode_config")
-
-        if validate_against_ref:
-            assert reference_texts is not None, "reference_texts must be provided when validate_against_ref=True"
 
         # Tokenize using HF chat template
         profiler.start("tokenizing")
@@ -662,25 +657,15 @@ class DeepseekGenerator:
 
             profiler.end("inference_decode")
 
+            if teacher_forcing is not None:
+                acc = teacher_forcing.compute_accuracy()
+                logger.info(
+                    f"[Teacher-Forced Accuracy] top1={acc.get('top1', 0.0)*100:.2f}% "
+                    f"top5={(acc.get('top5')*100 if acc.get('top5') is not None else float('nan')):.2f}%"
+                )
+
             if early_print_first_user:
                 logger.info("\n===== Done =====")
-
-            # Fast validation against reference text -- less strict version to be added later
-            # if validate_against_ref:
-            #     for i, prompt in enumerate(prompts):
-            #         gen_text = self.tokenizer.decode(generations[i], skip_special_tokens=True)
-            #         ref_text = reference_texts.get(prompt)
-            #         if ref_text is None:
-            #             continue
-
-            #         ok, report = _compare_texts(gen_text, ref_text)
-            #         if not ok:
-            #             msg = (
-            #                 f"[FAST-VALIDATE] Mismatch at run {run_idx+1}, prompt idx {i}\n"
-            #                 f"Prompt: {prompt!r}\n{report}"
-            #             )
-            #             logger.error(msg)
-            #             raise AssertionError(msg)
 
             # Per-run statistics collection
             prefill_time = profiler.get_duration("inference_prefill")
@@ -740,6 +725,12 @@ class DeepseekGenerator:
             "decode_t/s": avg_decode_tps,
             "Full demo runtime": profiler.get_duration("run") / denom,
         }
+
+        # Add teacher forcing accuracy to statistics if applicable
+        if teacher_forcing is not None:
+            final_acc = teacher_forcing.compute_accuracy()
+            statistics["token_accuracy_top1"] = final_acc.get("top1")
+            statistics["token_accuracy_top5"] = final_acc.get("top5")
 
         return generations, statistics
 

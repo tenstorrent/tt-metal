@@ -121,8 +121,6 @@ def run_demo(
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     repeat_batches: int = 1,
-    validate_against_ref: bool = False,
-    reference_texts: dict[str, str] | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -210,8 +208,6 @@ def run_demo(
             teacher_forcing=token_acc,
             early_print_first_user=early_print_first_user,
             repeat_batches=repeat_batches,
-            validate_against_ref=validate_against_ref,
-            reference_texts=reference_texts,
         )
 
         # Process all generations
