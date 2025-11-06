@@ -109,7 +109,7 @@ struct IntImgComputeCTAs {
     const uint32_t cumsum_stage_0_cb;   // `block_size` tiles
     const uint32_t cumsum_stage_1_cb;   // `block_size` tiles
     const uint32_t cumsum_stage_2_cb;   // `block_size` tiles
-    const uint32_t cumsum_stage_3_cb;   // `block_size` tiles
+    // const uint32_t cumsum_stage_3_cb;   // `block_size` tiles
     const uint32_t output_cb;           // 2 tiles
     const uint32_t axis_2_buffer_cb;    // 2 tiles: covers entire propagation
     const uint32_t axis_3_buffer_0_cb;  // `block_size` tiles: each tile is spawned from broadcasting the last row of
@@ -145,7 +145,7 @@ FORCE_INLINE constexpr IntImgComputeCTAs get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17),
+        // get_compile_time_arg_val(17),
     };
 }
 
@@ -371,8 +371,9 @@ void MAIN {
     //     ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the
     //     regular
     //                                            // 32x32 tile's width/height size)
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_row = 1;
+    // constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
 
     // for (uint32_t channels_block_i = 0; channels_block_i < num_slices_along_channels; ++channels_block_i) {
     for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {

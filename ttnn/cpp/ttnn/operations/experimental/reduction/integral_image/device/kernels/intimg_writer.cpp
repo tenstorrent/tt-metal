@@ -120,11 +120,12 @@ void kernel_main() {
     constexpr auto ctas = get_ctas();
     using output_number_type = std_type_t<get_dataformat(ctas.output_cb)>;
     const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr, get_tile_size(ctas.output_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(
-        ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
-                                               // 32x32 tile's width/height size, that is, 32)
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_slices_along_channels =
+        block_depth_ceil(ctas.num_channels, 32);  // block_depth is expected to be a power of 2 (the default is the
+                                                  // regular 32x32 tile's width/height size, that is, 32)
+    // constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_row = 1;
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();

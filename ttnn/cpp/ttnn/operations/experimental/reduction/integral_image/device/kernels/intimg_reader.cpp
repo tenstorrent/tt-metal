@@ -10,7 +10,7 @@
 
 namespace {
 
-void zero_buffer(uint32_t write_addr, int bytes) {
+FORCE_INLINE void zero_buffer(uint32_t write_addr, int bytes) {
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     while (bytes > 0) {
         uint32_t curr_bytes = std::min(bytes, MEM_ZEROS_SIZE);
@@ -55,8 +55,7 @@ FORCE_INLINE void send_block(
     uint32_t num_blocks_in_row,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
-    uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
+    uint32_t block_depth) {
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t read_tile_id = get_tile_id(
             num_blocks_in_row,
@@ -67,7 +66,7 @@ FORCE_INLINE void send_block(
             row_chunk_i,
             column_block_i,
             // block_depth,
-            generic_block_depth);
+            block_depth);
         load_to_cb(cb_input, input_addr_gen, read_tile_id);
         // DPRINT << "inner_tile_stride/block_depth: " << inner_tile_stride << "/" << block_depth << ENDL();
         // DPRINT << "sending tile id " << read_tile_id << ENDL();
@@ -81,11 +80,12 @@ void kernel_main() {
     constexpr auto ctas = get_ctas();
     using input_number_type = std_type_t<get_dataformat(ctas.input_cb)>;
     const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_base_addr, get_tile_size(ctas.input_cb));
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(
-        ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
-                                               // 32x32 tile's width/height size, that is, 32)
-    constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
-    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
+    constexpr uint32_t num_slices_along_channels =
+        block_depth_ceil(ctas.num_channels, 32);  // block_depth is expected to be a power of 2 (the default is the
+                                                  // regular 32x32 tile's width/height size, that is, 32)
+    constexpr uint32_t num_blocks_in_row = 1;
+    // constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
+    constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, 32);
 
     const auto core_x = get_absolute_logical_x();
     const auto core_y = get_absolute_logical_y();
@@ -110,8 +110,8 @@ void kernel_main() {
                     num_blocks_in_row,
                     num_blocks_in_column,
                     num_slices_along_channels,
-                    block_depth,
-                    ctas.block_depth);
+                    block_depth);
+                // ctas.block_depth);
             }
         }
         // }

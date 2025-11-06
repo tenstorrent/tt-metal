@@ -110,8 +110,8 @@ FORCE_INLINE uint32_t get_tile_id(
     uint32_t channels_slice_i,
     uint32_t row_block_i,
     uint32_t column_block_i,
-    // uint32_t block_depth,
-    uint32_t generic_block_depth = 32) {
+    // uint32_t block_depth
+    uint32_t generic_block_depth = 48) {
     const uint32_t tensor_face_block_size = channels_blocks_num * height_blocks_num;
     const uint32_t tensor_face_thickness = tensor_face_block_size * generic_block_depth;
     const uint32_t block_first_tile_id =
@@ -136,7 +136,7 @@ struct IntImgCTAs {
     const uint32_t cumsum_stage_0_cb;   // `block_size` tiles
     const uint32_t cumsum_stage_1_cb;   // `block_size` tiles
     const uint32_t cumsum_stage_2_cb;   // `block_size` tiles
-    const uint32_t cumsum_stage_3_cb;   // `block_size` tiles
+    // const uint32_t cumsum_stage_3_cb;   // `block_size` tiles
     const uint32_t output_cb;           // 2 tiles
     const uint32_t axis_2_buffer_cb;    // 2 tiles: covers entire propagation
     const uint32_t axis_3_buffer_0_cb;  // `block_size` tiles: each tile is spawned from broadcasting the last row of
@@ -156,7 +156,8 @@ struct IntImgCTAs {
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto input_args = TensorAccessorArgs<18>();
+    // constexpr auto input_args = TensorAccessorArgs<18>();
+    constexpr auto input_args = TensorAccessorArgs<17>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     return IntImgCTAs<decltype(input_args), decltype(output_args)>{
         get_compile_time_arg_val(0),
@@ -176,7 +177,7 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
         get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17),
+        // get_compile_time_arg_val(17),
         input_args,
         output_args,
     };

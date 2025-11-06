@@ -29,7 +29,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
     auto& output_tensor{tensor_return_value};
     const auto& input_shape{input_tensor.padded_shape()};
 
-    constexpr uint32_t block_depth = 32;
+    constexpr uint32_t block_depth = 48;
 
     Program program{};
 
@@ -45,23 +45,23 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
-    const auto core_range_set = CoreRangeSet{{{0, 0}, {2, 4}}};
+    const auto core_range_set = CoreRangeSet{{{0, 0}, {1, 3}}};
     create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, 4);
     create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, 4);
     create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, 4);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, 32);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, 32);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, 32);
-    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_3, core_range_set, 32);
+    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_0, core_range_set, 48);
+    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_1, core_range_set, 48);
+    create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_2, core_range_set, 48);
+    // create_cb(program, input_tensor.dtype(), IntImgCB::CUMSUM_STAGE_3, core_range_set, 32);
     create_cb(
         program,
         input_tensor.dtype(),
         IntImgCB::OUTPUT,
         core_range_set,
-        32);  // TODO(jbbieniekTT): temporary change from 2t to 32t
+        48);  // TODO(jbbieniekTT): temporary change from 2t to 32t
     create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_2_BUFFER, core_range_set, 4);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_0, core_range_set, 32);
-    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, 32);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_0, core_range_set, 48);
+    create_cb(program, input_tensor.dtype(), IntImgCB::AXIS_3_BUFFER_1, core_range_set, 48);
 
     std::vector<uint32_t> compute_compile_time_args{
         static_cast<uint32_t>(IntImgCB::START),
@@ -70,7 +70,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
         static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_0),
         static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_1),
         static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_2),
-        static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_3),
+        // static_cast<uint32_t>(IntImgCB::CUMSUM_STAGE_3),
         static_cast<uint32_t>(IntImgCB::OUTPUT),
         static_cast<uint32_t>(IntImgCB::AXIS_2_BUFFER),
         static_cast<uint32_t>(IntImgCB::AXIS_3_BUFFER_0),
