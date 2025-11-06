@@ -45,15 +45,8 @@ jobs:
           echo "PR title: $PR_TITLE"
           echo "Branch name: $BRANCH_NAME"
 
-          # Remove common prefixes/suffixes that GitHub might add
-          CLEAN_BRANCH_NAME=$(echo "$BRANCH_NAME" | sed 's|^feature/||; s|^bugfix/||; s|^hotfix/||; s|^fix/||; s|-$||')
-
-          # Check if title matches branch name (case insensitive, allowing for spaces/hyphens)
-          NORMALIZED_TITLE=$(echo "$PR_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
-          NORMALIZED_BRANCH=$(echo "$CLEAN_BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
-
-          if [[ "$NORMALIZED_TITLE" == "$NORMALIZED_BRANCH" ]]; then
-            echo "PR title appears to be the default branch name. Adding comment to request title change."
+          if [[ "$PR_TITLE" == "$BRANCH_NAME" ]]; then
+            echo "PR title matches branch name. Adding comment to request title change."
             gh pr comment ${{ github.event.pull_request.number }} --body "🤖 It looks like this PR is using the default title (branch name). Please update the PR title to describe what this change does."
           else
             echo "PR title does not match branch name"
