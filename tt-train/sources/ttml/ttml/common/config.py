@@ -122,9 +122,13 @@ class TransformerConfig:
         self.max_sequence_length = int(yaml_config.get("max_sequence_length", 128))
 
         # Llama-specific
-        self.intermediate_dim = yaml_config.get("intermediate_dim", None)
-        self.theta = yaml_config.get("theta", None)
-        self.num_groups = yaml_config.get("num_groups", 3)
+        intermediate_dim_val = yaml_config.get("intermediate_dim", None)
+        self.intermediate_dim = (
+            int(intermediate_dim_val) if intermediate_dim_val is not None else None
+        )
+        theta_val = yaml_config.get("theta", None)
+        self.theta = float(theta_val) if theta_val is not None else None
+        self.num_groups = int(yaml_config.get("num_groups", 3))
 
         # RoPE
         self.rope = yaml_config.get("rope_scaling", None)
@@ -157,9 +161,13 @@ class TransformerConfig:
             tc.get("max_sequence_length", self.max_sequence_length)
         )
 
-        self.intermediate_dim = tc.get("intermediate_dim", self.intermediate_dim)
-        self.theta = tc.get("theta", self.theta)
-        self.num_groups = tc.get("num_groups", self.num_groups)
+        intermediate_dim_val = tc.get("intermediate_dim", self.intermediate_dim)
+        self.intermediate_dim = (
+            int(intermediate_dim_val) if intermediate_dim_val is not None else None
+        )
+        theta_val = tc.get("theta", self.theta)
+        self.theta = float(theta_val) if theta_val is not None else None
+        self.num_groups = int(tc.get("num_groups", self.num_groups))
 
         if "rope_scaling" in tc:
             self.rope = tc.get("rope_scaling", self.rope)

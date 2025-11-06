@@ -107,10 +107,11 @@ class TransformerModelFactory:
         lcfg.dropout_prob = self.transformer_config.dropout_prob
 
         # Optional fields
-        if self.transformer_config.intermediate_dim:
-            lcfg.intermediate_dim = self.transformer_config.intermediate_dim
-        if self.transformer_config.theta:
-            lcfg.theta = self.transformer_config.theta
+        if self.transformer_config.intermediate_dim is not None:
+            # Ensure it's a native Python int, not numpy or other types
+            lcfg.intermediate_dim = int(self.transformer_config.intermediate_dim)
+        if self.transformer_config.theta is not None:
+            lcfg.theta = float(self.transformer_config.theta)
 
         # Runner type (simple mapping like GPT2)
         lcfg.runner_type = map_runner_type(self.transformer_config.runner_type)
