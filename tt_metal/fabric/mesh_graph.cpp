@@ -300,6 +300,11 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         const auto& mesh_desc = std::get<const proto::MeshDescriptor*>(mesh_instance.desc);
 
         MeshId mesh_id(mesh_instance.local_id);
+
+        // Set intra-mesh relaxed policy based on channels policy from MGD
+        bool is_relaxed = (mesh_desc->channels().policy() == proto::Policy::RELAXED);
+        this->intra_mesh_relaxed_policy_[mesh_id] = is_relaxed;
+
         MeshShape mesh_shape(mesh_desc->device_topology().dims().at(0), mesh_desc->device_topology().dims().at(1));
 
         // Build intra-mesh connectivity based on FabricConfig override (if provided) or MGD's fabric type
