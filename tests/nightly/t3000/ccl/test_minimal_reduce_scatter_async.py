@@ -254,6 +254,29 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype, use_new, enable_trace, num_iters, use_barrier, use_persistent_buffers",
     [
+        # Dim 0 tests
+        (
+            [16, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            True,
+            10,
+            True,
+            True,
+        ),  # perf, barrier_with_persistent
+        (
+            [8, 2, 128, 128],
+            0,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            False,
+            1,
+            True,
+            False,
+        ),  # check, barrier_without_persistent
         # Dim 1 tests
         (
             [2, 24, 256, 256],
@@ -469,6 +492,8 @@ def run_reduce_scatter_impl(
         ),  # perf, barrier_with_persistent
     ],
     ids=[
+        "scatter_dim_0_test_one-perf-barrier_with_persistent",
+        "scatter_dim_0_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_one-perf-barrier_with_persistent",
         "scatter_dim_1_test_two-check-barrier_without_persistent",
         "scatter_dim_1_test_three-perf-no_barrier_with_persistent",
