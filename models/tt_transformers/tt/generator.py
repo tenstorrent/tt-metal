@@ -44,12 +44,13 @@ class SamplingParams:
 
 # Split lists into chunks
 def split_list(lst, n):
-    """Split list into n equal parts"""
-    chunk_size = len(lst) // n
+    """Split list into n nearly equal parts"""
+    k, m = divmod(len(lst), n)
     chunks = []
     start = 0
     for i in range(n):
-        chunks.append(list(lst[start : start + chunk_size]))  # Convert to list explicitly
+        end = start + k + (1 if i < m else 0)
+        chunks.append(list(lst[start:end]))  # Convert to list explicitly
         start = end
     return chunks
 
