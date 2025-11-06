@@ -83,25 +83,19 @@ public:
         return translated_dispatch_mux_cores_;
     }
 
-    // Wrapper APIs for config access - takes device_id, eth_chan_id, channel_id, and core_id
+    // Wrapper APIs for config access - takes channel_id and core_id
     // Callers must explicitly specify which core type (MUX or RELAY) they want to access
-    size_t get_local_flow_control_semaphore_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
+    size_t get_local_flow_control_semaphore_address(uint32_t channel_id, FabricTensixCoreType core_id) const;
 
-    size_t get_connection_semaphore_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
+    size_t get_connection_semaphore_address(uint32_t channel_id, FabricTensixCoreType core_id) const;
 
-    size_t get_worker_conn_info_base_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
+    size_t get_worker_conn_info_base_address(uint32_t channel_id, FabricTensixCoreType core_id) const;
 
-    size_t get_buffer_index_semaphore_address(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
+    size_t get_buffer_index_semaphore_address(uint32_t channel_id, FabricTensixCoreType core_id) const;
 
-    size_t get_channel_credits_stream_id(
-        ChipId device_id, uint32_t eth_chan_id, uint32_t channel_id, FabricTensixCoreType core_id) const;
+    size_t get_channel_credits_stream_id(uint32_t channel_id, FabricTensixCoreType core_id) const;
 
-    std::pair<uint32_t, uint32_t> get_termination_address_and_signal(
-        ChipId device_id, uint32_t eth_chan_id, FabricTensixCoreType core_id) const;
+    std::pair<uint32_t, uint32_t> get_termination_address_and_signal(FabricTensixCoreType core_id) const;
 
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
