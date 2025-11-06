@@ -126,11 +126,6 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
     request_count += 1
 
     print(f"DEBUG: Received pose estimation request #{request_count}")
-    # Check if we're getting different images
-    import hashlib
-
-    image_hash = hashlib.md5(contents).hexdigest()[:8]
-    print(f"DEBUG: Processing image with hash: {image_hash}, size: {len(contents)} bytes")
 
     # Lazy loading of TTNN model
     if model is None:
@@ -175,6 +170,12 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         # Read and process the uploaded image
         contents = await file.read()
         print(f"DEBUG: File size: {len(contents)} bytes")
+
+        # Check if we're getting different images
+        import hashlib
+
+        image_hash = hashlib.md5(contents).hexdigest()[:8]
+        print(f"DEBUG: Processing image with hash: {image_hash}, size: {len(contents)} bytes")
 
         # Load image with PIL first
         try:
