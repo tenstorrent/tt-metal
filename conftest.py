@@ -1069,10 +1069,13 @@ def pytest_timeout_set_timer(item, settings):
     using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
 
     needs_watchdog = metal_timeout_enabled is not None or using_xdist
-    cmd_queue = item.config.stash.get(watchdog_cmd_queue_key, None)
 
     if needs_watchdog:
-        if cmd_queue is None:
+        cmd_queue = _ensure_watchdog_started(item.config)
+        process = item.config.stash.get(watchdog_process_key, None)
+
+        if process is not None and not process.is_alive():
+            logger.warning("Watchdog process not alive; restarting")
             cmd_queue = _ensure_watchdog_started(item.config)
 
         if cmd_queue is None:
