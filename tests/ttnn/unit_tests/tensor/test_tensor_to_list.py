@@ -8,7 +8,24 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
-ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
+
+def get_types_from_binding_framwork():
+    if hasattr(ttnn.DataType, "__entries"):
+        # pybind
+        ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
+    elif hasattr(ttnn.DataType, "_member_map_"):
+        # nanobind
+        ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
+    else:
+        raise Exception(
+            "test_tensor_to_list.py: ttnn.DataType has unexpected way of holding values. Not matching pybind/nanobind."
+        )
+
+    return ALL_TYPES
+
+
+ALL_TYPES = get_types_from_binding_framwork()
+
 TEST_SHAPES = [(5, 5), (32, 32), (50, 50), (16, 16, 16), (16, 16, 16, 16), (16, 16, 16, 16, 16)]
 
 

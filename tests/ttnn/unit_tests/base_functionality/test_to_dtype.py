@@ -23,8 +23,24 @@ def is_ttnn_float_type(tt_dtype) -> bool:
             return False
 
 
-ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
-FLOAT_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if is_ttnn_float_type(dtype)]
+def get_types_from_binding_framwork():
+    if hasattr(ttnn.DataType, "__entries"):
+        # pybind
+        ALL_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if dtype != ttnn.DataType.INVALID]
+        FLOAT_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if is_ttnn_float_type(dtype)]
+    elif hasattr(ttnn.DataType, "_member_map_"):
+        # nanobind
+        ALL_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if dtype != ttnn.DataType.INVALID]
+        FLOAT_TYPES = [dtype for _, dtype in ttnn.DataType._member_map_.items() if is_ttnn_float_type(dtype)]
+    else:
+        raise Exception(
+            "test_to_dtype.py: ttnn.DataType has unexpected way of holding values. Not matching pybind/nanobind."
+        )
+
+    return ALL_TYPES, FLOAT_TYPES
+
+
+ALL_TYPES, FLOAT_TYPES = get_types_from_binding_framwork()
 
 
 @pytest.mark.parametrize("height", [32])
