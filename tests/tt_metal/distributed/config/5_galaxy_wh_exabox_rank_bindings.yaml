@@ -1,9 +1,9 @@
 rank_bindings:
   - rank: 0
-    mesh_id: 0
+    mesh_id: 1
     mesh_host_rank: 0
   - rank: 1
-    mesh_id: 1
+    mesh_id: 0
     mesh_host_rank: 0
   - rank: 2
     mesh_id: 2
@@ -14,4 +14,4 @@ rank_bindings:
   - rank: 4
     mesh_id: 4
     mesh_host_rank: 0
-mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd.yaml"
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd2.textproto"

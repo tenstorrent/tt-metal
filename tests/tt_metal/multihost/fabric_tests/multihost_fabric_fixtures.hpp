@@ -51,6 +51,18 @@ inline const std::vector<EthCoord>& get_eth_coords_for_2x4_t3k() {
     return t3k_2x4_eth_coords;
 }
 
+inline const std::vector<EthCoord>& get_eth_coords_for_8x4_galaxy() {
+    static const std::vector<EthCoord> galaxy_8x4_eth_coords = {
+        {0, 0, 0, 0, 0}, {0, 1, 0, 0, 0}, {0, 2, 0, 0, 0}, {0, 3, 0, 0, 0}, {0, 4, 0, 0, 0}, {0, 5, 0, 0, 0},
+        {0, 6, 0, 0, 0}, {0, 7, 0, 0, 0}, {0, 0, 1, 0, 0}, {0, 1, 1, 0, 0}, {0, 2, 1, 0, 0}, {0, 3, 1, 0, 0},
+        {0, 4, 1, 0, 0}, {0, 5, 1, 0, 0}, {0, 6, 1, 0, 0}, {0, 7, 1, 0, 0}, {0, 0, 2, 0, 0}, {0, 1, 2, 0, 0},
+        {0, 2, 2, 0, 0}, {0, 3, 2, 0, 0}, {0, 4, 2, 0, 0}, {0, 5, 2, 0, 0}, {0, 6, 2, 0, 0}, {0, 7, 2, 0, 0},
+        {0, 0, 3, 0, 0}, {0, 1, 3, 0, 0}, {0, 2, 3, 0, 0}, {0, 3, 3, 0, 0}, {0, 4, 3, 0, 0}, {0, 5, 3, 0, 0},
+        {0, 6, 3, 0, 0}, {0, 7, 3, 0, 0}};
+
+    return galaxy_8x4_eth_coords;
+}
+
 inline const std::vector<EthCoord>& get_eth_coords_for_1x8_t3k() {
     static const std::vector<EthCoord> t3k_1x8_eth_coords = {
         {0, 0, 0, 0, 0},
@@ -252,24 +264,47 @@ using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDevic
 using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
 
-// Fixture for Exabox systems using Fabric
+// Fixture for Exabox systems using Fabric (5 galaxies x 32 chips each = 8x4 mesh per galaxy)
 class IntermeshExaboxFabricFixture : public BaseFabricFixture {
 public:
     // This test fixture closes/opens devices on each test
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
     void SetUp() override {
-        if (not system_supported()) {
-            GTEST_SKIP() << "Skipping since this is not a supported system.";
-        }
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        bool has_devices = cluster.user_exposed_chip_ids().size() > 0;
 
-        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        // Only configure control plane and fabric for ranks with devices
+        // validate_and_setup_control_plane_config tries to map eth coords to physical chips
+        // which will fail for ranks without devices
+        if (has_devices) {
+            validate_and_setup_control_plane_config(this);
+            this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        }
     }
 
     void TearDown() override {
-        if (system_supported()) {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        bool has_devices = cluster.user_exposed_chip_ids().size() > 0;
+
+        // Only teardown if we set up (i.e., if we have devices)
+        if (has_devices) {
             BaseFabricFixture::DoTearDownTestSuite();
         }
+    }
+
+    std::string get_path_to_mesh_graph_desc() {
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/5_galaxy_wh_exabox_mgd2.textproto";
+        -
+    }
+
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() {
+        return {
+            get_eth_coords_for_8x4_galaxy(),
+            get_eth_coords_for_8x4_galaxy(),
+            get_eth_coords_for_8x4_galaxy(),
+            get_eth_coords_for_8x4_galaxy(),
+            get_eth_coords_for_8x4_galaxy()};
     }
 
     // The derived fixture must infer if the current system is suitable for the requested
@@ -277,9 +312,16 @@ public:
     bool system_supported() {
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
-        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
-                   mesh_graph.get_mesh_ids().size() &&
-               cluster.get_board_type(0) == BoardType::UBB;
+        bool rank_count_matches = *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) ==
+                                  mesh_graph.get_mesh_ids().size();
+
+        // If this rank has no devices, just check rank count
+        if (cluster.user_exposed_chip_ids().empty()) {
+            return rank_count_matches;
+        }
+
+        // Otherwise also check board type
+        return rank_count_matches && cluster.get_board_type(0) == BoardType::UBB;
     }
 };
 
