@@ -19,6 +19,9 @@ struct SliceDeviceOperation {
     const ttnn::Shape slice_end;
     const ttnn::Shape step;
     const tt::tt_metal::MemoryConfig output_mem_config;
+    const bool use_tensor_args = false;
+    const std::optional<uint32_t> slice_dim = std::nullopt;
+    const std::optional<uint32_t> num_devices = std::nullopt;
 
     void validate_with_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
