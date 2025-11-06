@@ -10,7 +10,7 @@ namespace tt::tt_fabric {
 // 1D routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    uint16_t /*src_chip_id*/, uint16_t num_chips, uint16_t ew_dim) {
+    uint16_t /*src_chip_id*/, uint16_t num_chips, uint16_t /*ew_dim*/) {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
     for (uint16_t hops = 1; hops < num_chips; ++hops) {
