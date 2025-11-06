@@ -100,6 +100,13 @@ HalCoreInfoType create_idle_eth_mem_map() {
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
         },
     };
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
+        // DM
+        {
+            {"ER", "ERISC"},
+        },
+    };
+
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
@@ -108,6 +115,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
         std::move(mem_map_bases),
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
+        std::move(processor_classes_names),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
         idle_eth_dev_msgs::create_factory()};

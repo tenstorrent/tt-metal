@@ -59,6 +59,7 @@ public:
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
+    uint64_t get_build_key() const { return build_key_; }
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};
@@ -78,6 +79,8 @@ private:
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+
+    std::uint64_t build_key_{};
 };
 
 // All the state used for a build in an abstract base class
@@ -86,10 +89,9 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
 protected:
     const JitBuildEnv& env_;
 
-    int core_id_;
-    int is_fw_;
-    uint32_t dispatch_message_addr_;
+    bool is_fw_;
     bool process_defines_at_compile_{};
+    uint32_t dispatch_message_addr_;
 
     std::string out_path_;
     std::string target_name_;
