@@ -45,7 +45,7 @@ IntImgProgramFactory::cached_program_t IntImgProgramFactory::create(
 
     const auto tile_spec = input_tensor.tensor_spec().tile();
 
-    const auto core_range_set = CoreRangeSet{{{0, 0}, {0, 0}}};
+    const auto core_range_set = CoreRangeSet{{{0, 0}, {2, 4}}};
     create_cb(program, input_tensor.dtype(), IntImgCB::START, core_range_set, 4);
     create_cb(program, input_tensor.dtype(), IntImgCB::INPUT, core_range_set, 4);
     create_cb(program, input_tensor.dtype(), IntImgCB::ACC, core_range_set, 4);
@@ -119,11 +119,21 @@ void IntImgProgramFactory::override_runtime_arguments(
 
     auto input_buffer_address = tensor_args.input_tensor.buffer()->address();
     auto output_buffer_address = tensor_return_value.buffer()->address();
-    const auto core = CoreCoord{0, 0};
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-    reader_runtime_args[0] = input_buffer_address;
-    writer_runtime_args[0] = output_buffer_address;
+    for (uint32_t x = 0; x < 2; ++x) {
+        for (uint32_t y = 0; y < 4; ++y) {
+            const auto core = CoreCoord{x, y};
+            auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+            auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+
+            reader_runtime_args[0] = input_buffer_address;
+            writer_runtime_args[0] = output_buffer_address;
+        }
+    }
+    // const auto core = CoreCoord{0, 0};
+    // auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+    // auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+    // reader_runtime_args[0] = input_buffer_address;
+    // writer_runtime_args[0] = output_buffer_address;
 }
 
 CBHandle IntImgProgramFactory::create_cb(

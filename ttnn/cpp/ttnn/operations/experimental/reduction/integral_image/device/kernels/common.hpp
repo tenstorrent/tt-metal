@@ -1,7 +1,5 @@
 #pragma once
 
-#include <cmath>
-
 constexpr uint32_t ONE_TILE{1};
 constexpr uint32_t FIRST_TILE{0};
 constexpr uint32_t WORKING_REG{0};
@@ -95,22 +93,6 @@ FORCE_INLINE void load_to_cb(
     uint32_t l1_write_addr{get_write_ptr(cb)};
     noc_async_read_tile(read_tile_id, addr_gtor, l1_write_addr);
     noc_async_read_barrier();
-}
-
-FORCE_INLINE uint32_t portable_ilogb(uint32_t x) {
-    // using std::isinf;
-    // using std::isnan;
-    using std::frexp;
-
-    // if (isnan(x))  return FP_ILOGBNAN;                     // NaN
-    // if (isinf(x))  return std::numeric_limits<int>::max(); // +/-inf
-    // if (x == uint32_t(0)) return FP_ILOGB0;                       // +/-0
-
-    int exp = 0;
-    // frexp: x = m * 2^(exp), with 0.5 <= |m| < 1 (if x!=0)
-    // ilogb (base 2) = exp - 1
-    (void)frexp(x > uint32_t(0) ? x : -x, &exp);
-    return exp - 1;
 }
 
 FORCE_INLINE uint32_t get_coord_from_tile_xy(uint32_t read_i, uint32_t write_i) {

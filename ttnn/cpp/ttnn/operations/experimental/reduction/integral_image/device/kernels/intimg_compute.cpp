@@ -23,8 +23,6 @@
 #include "debug/dprint.h"
 #include "debug/dprint_tensix.h"
 
-#include <cmath>
-
 namespace {
 
 constexpr uint32_t ONE_TILE{1};
@@ -369,17 +367,18 @@ namespace NAMESPACE {
 void MAIN {
     constexpr auto ctas{get_ctas()};
 
-    constexpr uint32_t num_slices_along_channels = block_depth_ceil(
-        ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the regular
-                                               // 32x32 tile's width/height size)
+    // constexpr uint32_t num_slices_along_channels = block_depth_ceil(
+    //     ctas.num_channels, ctas.block_depth);  // block_depth is expected to be a power of 2 (the default is the
+    //     regular
+    //                                            // 32x32 tile's width/height size)
     constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
     constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
 
-    for (uint32_t channels_block_i = 0; channels_block_i < num_slices_along_channels; ++channels_block_i) {
-        for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
-            perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
-        }
+    // for (uint32_t channels_block_i = 0; channels_block_i < num_slices_along_channels; ++channels_block_i) {
+    for (uint32_t rows_block_i = 0; rows_block_i < num_blocks_in_column; ++rows_block_i) {
+        perform_intimg_along_row_chunk(ctas, num_blocks_in_row, rows_block_i);
     }
+    // }
 }
 
 }  // namespace NAMESPACE

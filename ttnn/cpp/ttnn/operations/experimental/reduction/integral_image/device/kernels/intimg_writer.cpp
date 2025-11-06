@@ -8,8 +8,6 @@
 
 #include "common.hpp"
 
-#include <cmath>
-
 namespace {
 
 // template <typename addr_gen_t>
@@ -128,46 +126,50 @@ void kernel_main() {
     constexpr uint32_t num_blocks_in_row = block_depth_ceil(ctas.input_depth, ctas.block_depth);
     constexpr uint32_t num_blocks_in_column = block_depth_ceil(ctas.input_height, ctas.block_depth);
 
+    const auto core_x = get_absolute_logical_x();
+    const auto core_y = get_absolute_logical_y();
+    const uint32_t my_channel = core_y * 2 + core_x;
+
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
                        // terms of num_batches > 1
-        for (uint32_t channels_slice_i = 0; channels_slice_i < num_slices_along_channels; ++channels_slice_i) {
-            for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
-                for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
-                    const uint32_t block_depth =
-                        std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
-                    if (row_chunk_i > 0) {
-                        receive_upper_block(
-                            output_addr_gtor,
-                            ctas.axis_3_buffer_0_cb,
-                            channels_slice_i,
-                            column_block_i,
-                            row_chunk_i - 1,
-                            num_blocks_in_row,
-                            num_blocks_in_column,
-                            num_slices_along_channels,
-                            block_depth,
-                            ctas.block_depth);
-                        broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
-                            output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
-                        // DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
-                        //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
-                    }
-                    output_block(
+        // for (uint32_t channels_slice_i = 0; channels_slice_i < num_slices_along_channels; ++channels_slice_i) {
+        for (uint32_t row_chunk_i = 0; row_chunk_i < num_blocks_in_column; ++row_chunk_i) {
+            for (uint32_t column_block_i = 0; column_block_i < num_blocks_in_row; ++column_block_i) {
+                const uint32_t block_depth =
+                    std::min(ctas.input_depth - column_block_i * ctas.block_depth, ctas.block_depth);
+                if (row_chunk_i > 0) {
+                    receive_upper_block(
                         output_addr_gtor,
-                        ctas.output_cb,
-                        channels_slice_i,
+                        ctas.axis_3_buffer_0_cb,
+                        my_channel,
                         column_block_i,
-                        row_chunk_i,
+                        row_chunk_i - 1,
                         num_blocks_in_row,
                         num_blocks_in_column,
                         num_slices_along_channels,
                         block_depth,
                         ctas.block_depth);
-                    // DPRINT << "AFTER OUTPUTTING A BLOCK: channel/row/column/depth: " << channels_slice_i << "/"
+                    broadcast_last_row_to_all_rows_in_cube<output_number_type, decltype(output_addr_gtor)>(
+                        output_addr_gtor, ctas.axis_3_buffer_0_cb, ctas.axis_3_buffer_1_cb, block_depth);
+                    // DPRINT << "AFTER BROADCAST: channel/row/column/depth: " << channels_slice_i << "/"
                     //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
                 }
+                output_block(
+                    output_addr_gtor,
+                    ctas.output_cb,
+                    my_channel,
+                    column_block_i,
+                    row_chunk_i,
+                    num_blocks_in_row,
+                    num_blocks_in_column,
+                    num_slices_along_channels,
+                    block_depth,
+                    ctas.block_depth);
+                // DPRINT << "AFTER OUTPUTTING A BLOCK: channel/row/column/depth: " << channels_slice_i << "/"
+                //        << row_chunk_i << "/" << column_block_i << "/" << block_depth << ENDL();
             }
         }
+        // }
     }
 }
