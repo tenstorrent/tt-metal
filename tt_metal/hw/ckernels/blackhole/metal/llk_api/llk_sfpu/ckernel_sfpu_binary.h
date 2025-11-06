@@ -270,6 +270,7 @@ template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_f
 inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     if constexpr (BINOP == BinaryOp::POW) {
         if constexpr (is_fp32_dest_acc_en) {
+#pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
                 // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
                 constexpr uint dst_tile_size_sfpi = 32;
@@ -282,6 +283,7 @@ inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index
                 sfpi::dst_reg++;
             }
         } else {
+#pragma GCC unroll 8
             for (int d = 0; d < ITERATIONS; d++) {
                 // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
                 constexpr uint dst_tile_size_sfpi = 32;
