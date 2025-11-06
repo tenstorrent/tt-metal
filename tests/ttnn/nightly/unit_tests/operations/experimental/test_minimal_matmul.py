@@ -42,6 +42,7 @@ def run_test_linear_impl(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     core_grid=None,
+    memory_config=None,
 ):
     core_grid = core_grid or device.compute_with_storage_grid_size()
 
@@ -82,6 +83,7 @@ def run_test_linear_impl(
         fused_activation=activation_fn,
         compute_kernel_config=compute_config,
         config=matmul_config,
+        memory_config=memory_config,
     )
     tt_output = ttnn.to_torch(tt_output)
     check_result = assert_quality(torch_output, tt_output)
@@ -642,14 +644,21 @@ def test_linear_vit(device, M, K, N, M_block_size, K_block_size, N_block_size, s
 
     # Prepare TT tensors
     tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [M, K],
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
     tt_input = ttnn.to_memory_config(
         tt_input,
-        ttnn.create_sharded_memory_config(
-            [M, K],
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            strategy=ttnn.ShardStrategy.BLOCK,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        ),
+        sharded_memory_config,
+    )
+    sharded_memory_config2 = ttnn.create_sharded_memory_config(
+        [M, N],
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
     tt_weight = ttnn.from_torch(weight_input, device=device, layout=ttnn.TILE_LAYOUT)
     tt_bias = ttnn.from_torch(bias_input, device=device, layout=ttnn.TILE_LAYOUT)
@@ -666,4 +675,5 @@ def test_linear_vit(device, M, K, N, M_block_size, K_block_size, N_block_size, s
         N_block_size=N_block_size,
         subblock_h=subblock_h,
         subblock_w=subblock_w,
+        memory_config=sharded_memory_config2,
     )

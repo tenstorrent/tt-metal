@@ -9,6 +9,7 @@ from ttnn.dot_access import DotAccessDict
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
+from models.experimental.tt_dit.utils.matmul import get_matmul_config
 
 
 def update_model_config(config, batch_size, sequence_size):
@@ -206,6 +207,41 @@ def update_model_config(config, batch_size, sequence_size):
     )
 
 
+def run_minimal_matmul(
+    device,
+    tt_input,
+    tt_weight,
+    tt_bias,
+    activation=None,
+    memory_config=None,
+):
+    B, M, K, N = (
+        tt_input.padded_shape[0],
+        tt_input.padded_shape[-2],
+        tt_input.padded_shape[-1],
+        tt_weight.padded_shape[-1],
+    )
+    core_grid = device.compute_with_storage_grid_size()
+    matmul_config = get_matmul_config(M * B, K, N, core_grid)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    tt_output = ttnn.experimental.minimal_matmul(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        config=matmul_config,
+        fused_activation=activation,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=memory_config,
+    )
+    return tt_output
+
+
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py
 
 
@@ -227,7 +263,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
     if unittest_check:
         parameters = parameters.vit.embeddings.patch_embeddings
 
-    patch_embedding_output = ttnn.linear(
+    patch_embedding_output = ttnn_linear(
         folded_pixel_values,
         parameters.projection.weight,
         bias=parameters.projection.bias,
@@ -264,6 +300,34 @@ def vit_embeddings(
     return embedding_output
 
 
+def ttnn_linear(*args, **kwargs):
+    if True:
+        batch, M, K, N = (
+            args[0].padded_shape[0],
+            args[0].padded_shape[-2],
+            args[0].padded_shape[-1],
+            args[1].padded_shape[-1],
+        )
+        core_grid = ttnn.CoreGrid(y=8, x=8)
+        sharded_memory_config = ttnn.create_sharded_memory_config(
+            [M * batch, N],
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        output = run_minimal_matmul(
+            device=args[0].device(),
+            tt_input=args[0],
+            tt_weight=args[1],
+            tt_bias=kwargs.get("bias", args[2] if len(args) > 2 else None),
+            activation=None,
+            memory_config=sharded_memory_config,
+        )
+    else:
+        output = ttnn.linear(*args, **kwargs)
+    return output
+
+
 def vit_attention(
     config,
     hidden_states,
@@ -273,7 +337,7 @@ def vit_attention(
     *_, hidden_size = hidden_states.shape
     head_size = hidden_size // num_heads
 
-    query_key_value = ttnn.linear(
+    query_key_value = ttnn_linear(
         hidden_states,
         parameters.attention.query_key_value.weight,
         bias=parameters.attention.query_key_value.bias,
@@ -473,8 +537,7 @@ def vit_attention(
     # workaround for issue #22640, once fixed first call can be removed
     context_layer = ttnn.to_memory_config(context_layer, ttnn.DRAM_MEMORY_CONFIG)
     context_layer = ttnn.to_memory_config(context_layer, block_sharded_config_64_cores)
-
-    self_output = ttnn.linear(
+    self_output = ttnn_linear(
         context_layer,
         parameters.output.dense.weight,
         bias=parameters.output.dense.bias,
@@ -495,7 +558,7 @@ def vit_intermediate(
     *,
     parameters,
 ):
-    output = ttnn.linear(
+    output = ttnn_linear(
         hidden_states,
         parameters.dense.weight,
         bias=parameters.dense.bias,
@@ -515,7 +578,7 @@ def vit_output(
     *,
     parameters,
 ):
-    output = ttnn.linear(
+    output = ttnn_linear(
         hidden_states,
         parameters.dense.weight,
         bias=parameters.dense.bias,
@@ -524,7 +587,8 @@ def vit_output(
         program_config=config.program_configs["ff2_matmul_program_config"],
     )
     ttnn.deallocate(hidden_states)
-
+    if residual.memory_config().shard_spec != output.memory_config().shard_spec:
+        residual = ttnn.to_memory_config(residual, output.memory_config())
     output = ttnn.add(output, residual, memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(residual)
 
@@ -564,6 +628,8 @@ def vit_layer(
     )
 
     multi_head_attention_output = ttnn.unsqueeze(multi_head_attention_output, 1)
+    if multi_head_attention_output.memory_config().shard_spec != hidden_states.memory_config().shard_spec:
+        multi_head_attention_output = ttnn.to_memory_config(multi_head_attention_output, hidden_states.memory_config())
     multi_head_attention_output = ttnn.add(
         multi_head_attention_output,
         hidden_states,
@@ -660,7 +726,7 @@ def vit(
     output = ttnn.reshard(output, block_sharded_config_48_cores)
 
     # Classifier
-    classifier_output = ttnn.linear(
+    classifier_output = ttnn_linear(
         output,
         parameters.classifier.weight,
         bias=parameters.classifier.bias,
