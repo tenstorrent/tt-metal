@@ -6,22 +6,52 @@
 
 #include "dataflow_api.h"
 
-// Compile-time recursively calculates floor(log2(n))
-constexpr int log2(uint32_t n) { return (n <= 1) ? 0 : 1 + log2(n >> 1); }
-
 // This function is templated to choose the pointer data-type based on 'val' size
 // to avoid unaligned addresses and out-of-bounds access.
+//
+// Performance optimization:
+// Reduces loop iterations by writing 4Bytes at a time regardless of 'val' size.
+// And then uses a separate loop if address is unaligned to 4Bytes.
+//
+// Assumption:
+// If 'val' size is < 4Bytes, multiple vals should be packed into a single
+// uint32_t 'val'. Ex: two bfloat16 vals in upper 16 bits and lower 16 bits.
 template <uint32_t val_size>
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n_bytes, uint32_t val) {
+FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
     static_assert(val_size == 2 || val_size == 4, "Unsupported val_size");
     using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
 
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(begin_addr);
-    IntType val_ = static_cast<IntType>(val);
-    constexpr uint32_t val_size_log2 = log2(val_size);
-    uint32_t n = n_bytes >> val_size_log2;  // = n_bytes / sizeof(val)
-    for (uint32_t i = 0; i < n; ++i) {
-        ptr[i] = val_;
+    uint32_t end_addr = start_addr + n_bytes;
+    uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;  // ceil(address aligned to 4Bytes)
+    uint32_t end_addr_4B = end_addr & 0xFFFFFFFC;              // floor(address aligned to 4Bytes)
+
+    // Write 4Bytes at a time
+    {
+        // Write from start_addr_4B to end_addr_4B
+        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
+        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
+        for (auto* ptr = start_ptr_4B; ptr < end_ptr_4B; ++ptr) {
+            *ptr = val;
+        }
+    }
+
+    // For data-types smaller than 4Bytes, handle unaligned address
+    if constexpr (val_size < 4) {
+        auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
+        auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
+        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
+        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
+        IntType val_ = static_cast<IntType>(val);
+
+        // Write from start_addr to start_addr_4B, if start_addr is unaligned to 4Bytes
+        for (auto* ptr = start_ptr; ptr < start_ptr_4B; ++ptr) {
+            *ptr = val_;
+        }
+
+        // Write from end_addr_4B to end_addr, if end_addr is unaligned to 4Bytes
+        for (auto* ptr = end_ptr_4B; ptr < end_ptr; ++ptr) {
+            *ptr = val_;
+        }
     }
 }
 
