@@ -168,7 +168,7 @@ def read_wait_globals(
     last_wait_stream = _read_symbol_value(kernel_elf, "last_wait_stream", loc_mem_access)
     last_event = _read_symbol_value(kernel_elf, "last_event", loc_mem_access)
     try:
-        circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence
+        circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
     except:
         circular_buffer_fence = None
     command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access)
