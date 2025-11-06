@@ -50,6 +50,6 @@ The tt-triage is a collection of Python scripts for analyzing and debugging Meta
 .. toctree::
     :maxdepth: 1
 
-    TT-SMI
+    tt-smi
 
 TT-SMI is a command line utility to interact with all Tenstorrent devices on host.
