@@ -248,15 +248,20 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
 
         print(f"DEBUG: bbox shape: {bbox.shape}, conf shape: {conf.shape}, keypoints shape: {keypoints.shape}")
 
+        # Debug: Show confidence statistics
+        max_conf = conf.max().item()
+        mean_conf = conf.mean().item()
+        print(f"DEBUG: Confidence stats - Max: {max_conf:.6f}, Mean: {mean_conf:.6f}")
+
         # Apply confidence threshold
-        conf_threshold = 0.6
+        conf_threshold = 0.5
         conf_mask = conf[0, :] > conf_threshold
         valid_indices = torch.where(conf_mask)[0]
 
         print(f"DEBUG: Found {len(valid_indices)} detections above confidence threshold {conf_threshold}")
 
         # Limit detections to prevent server hang
-        max_detections = 10
+        max_detections = 5  # Reduced for debugging
         if len(valid_indices) > max_detections:
             # Sort by confidence and take top N
             conf_values = conf[0, valid_indices]

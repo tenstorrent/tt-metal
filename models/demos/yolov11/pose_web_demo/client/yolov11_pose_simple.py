@@ -165,6 +165,7 @@ class VideoProcessor(VideoProcessorBase):
 
         # Process detections
         detections = output.get("detections", [])
+        print(f"DEBUG: Client received {len(detections)} detections from server")
 
         # Use original frame size for display (like working YOLOv11 client)
         bgr_display = frame.to_ndarray(format="bgr24")
