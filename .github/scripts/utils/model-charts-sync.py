@@ -99,7 +99,7 @@ def parse_featured_models(md_file_path):
                     for cell in table_lines[row_idx].strip("|").split("|")
                 ]
                 if len(header_cells) != len(value_cells):
-                    table_start_line = i + 2 + (row_idx - 1)  # Adjust line number for the specific row
+                    table_start_line = i + row_idx  # Correct line number for the specific row
                     errors.append(
                         f"ERROR: Malformed attributes chart under '{model_name}' at line {table_start_line} (header/value cell count mismatch)"
                     )
