@@ -118,10 +118,8 @@ def _stats_pack_isolate(data: ProfilerData) -> pd.DataFrame:
 
 def _stats_l1_congestion(data: ProfilerData) -> pd.DataFrame:
     stats = [
-        _stats_thread(
-            f"{PerfRunType.UNPACK_ISOLATE.name}[UNPACK]", data.unpack().raw()
-        ),
-        _stats_thread(f"{PerfRunType.PACK_ISOLATE.name}[PACK]", data.pack().raw()),
+        _stats_thread(f"{PerfRunType.L1_CONGESTION.name}[UNPACK]", data.unpack().raw()),
+        _stats_thread(f"{PerfRunType.L1_CONGESTION.name}[PACK]", data.pack().raw()),
     ]
 
     return pd.concat(stats, ignore_index=True)
