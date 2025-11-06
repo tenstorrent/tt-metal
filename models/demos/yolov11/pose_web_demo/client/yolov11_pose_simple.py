@@ -120,15 +120,24 @@ class VideoProcessor(VideoProcessorBase):
 
                 # Check if response is successful
                 if response.status_code == 200:
-                    # Parse JSON response - server returns list directly
+                    # Parse JSON response
                     output = response.json()
-                    print(
-                        f"DEBUG: Server returned: {type(output)}, length: {len(output) if hasattr(output, '__len__') else 'N/A'}"
-                    )
-                    if isinstance(output, list) and len(output) > 0:
-                        print(f"DEBUG: First detection sample: {output[0][:5] if len(output[0]) > 5 else output[0]}")
-                    # Wrap in expected format for processing
-                    output = {"detections": output}
+                    print(f"DEBUG: Server returned: {output.keys() if isinstance(output, dict) else type(output)}")
+
+                    if "raw_output" in output:
+                        # Server returned raw model output for debugging
+                        print(f"DEBUG: Raw output shape: {output['shape']}")
+                        print(
+                            f"DEBUG: Raw output sample: {output['raw_output'][:2] if output['raw_output'] else 'empty'}"
+                        )
+                        # For now, return empty detections to avoid client crash
+                        output = {"detections": []}
+                    elif isinstance(output, list):
+                        # Server returned processed detections
+                        output = {"detections": output}
+                    else:
+                        print(f"DEBUG: Unexpected response format: {output}")
+                        return None
                 else:
                     print(f"Request failed with status code {response.status_code}")
                     print(f"Response text: {response.text}")

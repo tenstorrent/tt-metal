@@ -9,8 +9,73 @@ import torch
 from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
+# Global model variable
+model = None
+device_global = None
+
+# Import postprocessing functions from the working demo
+import sys
+
 # Import TTNN here so it's available for the model
 import ttnn
+
+sys.path.insert(0, "/home/ubuntu/pose/tt-metal")
+from ttnn_raw_output_demo import apply_pytorch_postprocessing
+
+
+def apply_simple_nms(detections, iou_threshold=0.5):
+    """Apply simple non-maximum suppression to remove overlapping detections"""
+    if len(detections) <= 1:
+        return detections
+
+    # Sort by confidence (highest first)
+    detections = sorted(detections, key=lambda x: x[4], reverse=True)
+
+    keep = []
+    for i, det in enumerate(detections):
+        if i in keep:
+            continue
+
+        keep.append(i)
+        x1, y1, w1, h1 = det[:4]
+
+        for j in range(i + 1, len(detections)):
+            if j in keep:
+                continue
+
+            x2, y2, w2, h2 = detections[j][:4]
+
+            # Calculate IoU
+            iou = calculate_iou(x1, y1, w1, h1, x2, y2, w2, h2)
+            if iou > iou_threshold:
+                keep.remove(j) if j in keep else None
+
+    return [detections[i] for i in sorted(keep)]
+
+
+def calculate_iou(x1, y1, w1, h1, x2, y2, w2, h2):
+    """Calculate intersection over union for two bounding boxes"""
+    # Convert to x2, y2 coordinates
+    x1_max = x1 + w1
+    y1_max = y1 + h1
+    x2_max = x2 + w2
+    y2_max = y2 + h2
+
+    # Calculate intersection
+    inter_x1 = max(x1, x2)
+    inter_y1 = max(y1, y2)
+    inter_x2 = min(x1_max, x2_max)
+    inter_y2 = min(y1_max, y2_max)
+
+    inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+
+    # Calculate union
+    area1 = w1 * h1
+    area2 = w2 * h2
+    union_area = area1 + area2 - inter_area
+
+    return inter_area / union_area if union_area > 0 else 0
+
 
 app = FastAPI(
     title="YOLOv11 pose estimation",
@@ -35,50 +100,10 @@ async def root():
 @app.on_event("startup")
 async def startup():
     global model
-    try:
-        print("=== STEP 1: TTNN IMPORT ===")
-        import ttnn
-
-        print("✓ TTNN imported successfully")
-
-        print("=== STEP 2: DEVICE CREATION ===")
-        device_id = 0
-        # Use the correct L1 size like the tests (24576 instead of 8192)
-        from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
-
-        device = ttnn.CreateDevice(
-            device_id, l1_small_size=YOLOV11_L1_SMALL_SIZE, trace_region_size=6434816, num_command_queues=2
-        )
-        print("✓ Device created successfully")
-
-        print("=== STEP 3: PROGRAM CACHE ===")
-        device.enable_program_cache()
-        print("✓ Program cache enabled")
-
-        print("=== STEP 4: MODEL LOADING ===")
-        from models.demos.yolov11.runner.performant_runner_pose import YOLOv11PosePerformantRunner
-
-        model = YOLOv11PosePerformantRunner(device)
-        print("✓ YOLOv11 pose model loaded successfully")
-
-        print("=== STEP 5: TRACE CAPTURE ===")
-        model._capture_yolov11_pose_trace_2cqs()
-        print("✓ Trace capture completed successfully")
-
-        # Store device for later use
-        global device_global
-        device_global = device
-
-        print("=== TTNN FULL SETUP COMPLETE ===")
-        print("Ready for optimized pose detection!")
-
-    except Exception as e:
-        print(f"=== TTNN SETUP FAILED ===")
-        print(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
-        model = None
+    print("=== FASTAPI SERVER STARTUP ===")
+    print("TTNN model will be loaded on first pose request")
+    print("✓ Server ready to accept requests")
+    model = None  # Will be loaded lazily
 
 
 @app.on_event("shutdown")
@@ -94,75 +119,202 @@ async def shutdown():
 
 @app.post("/pose_estimation_v2")
 async def pose_estimation_v2(file: UploadFile = File(...)):
+    global model, device_global
+
+    # Lazy loading of TTNN model
     if model is None:
-        return {"error": "TTNN model not loaded - check server startup logs"}
+        try:
+            print("=== LAZY LOADING TTNN MODEL ===")
+
+            print("Creating device...")
+            device_id = 0
+            # Use the exact same configuration as the working ttnn_raw_output_demo.py
+            device_global = ttnn.open_device(device_id=device_id, l1_small_size=32768)
+
+            print("Loading TTNN model...")
+            # Use EXACTLY the same approach as the working ttnn_raw_output_demo.py
+            from models.demos.yolov11.reference.yolov11_pose_correct import YoloV11Pose
+            from models.demos.yolov11.tt.model_preprocessing_pose import create_yolov11_pose_model_parameters
+            from models.demos.yolov11.tt.ttnn_yolov11_pose_model import TtnnYoloV11Pose
+
+            # Load PyTorch model (same as working demo)
+            torch_model = YoloV11Pose()
+
+            # Create sample input for preprocessing (same as working demo)
+            img_tensor_batched = torch.randn(1, 3, 640, 640)  # Add batch dimension
+            parameters = create_yolov11_pose_model_parameters(torch_model, img_tensor_batched, device=device_global)
+
+            # Create TTNN model (same as working demo)
+            model = TtnnYoloV11Pose(device=device_global, parameters=parameters)
+
+            print("✓ TTNN model loaded successfully")
+
+        except Exception as e:
+            print(f"TTNN model loading failed: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {"error": f"TTNN model loading failed: {str(e)}"}
 
     try:
         print(f"DEBUG: Received pose request for file: {file.filename}")
+        print(f"DEBUG: File object type: {type(file)}")
+
+        print("DEBUG: Reading image file...")
         # Read and process the uploaded image
         contents = await file.read()
-        image = Image.open(BytesIO(contents)).convert("RGB")
-        image_array = np.array(image)
+        print(f"DEBUG: File size: {len(contents)} bytes")
 
-        # Convert to torch tensor
-        if len(image_array.shape) == 3:  # HWC format
-            image_tensor = torch.from_numpy(image_array).float().div(255.0).unsqueeze(0)
-        else:
-            return {"error": "Invalid image format"}
+        # Load image with PIL first
+        try:
+            image = Image.open(BytesIO(contents)).convert("RGB")
+            print(f"DEBUG: PIL image loaded, size: {image.size}")
+        except Exception as e:
+            print(f"DEBUG: PIL image loading failed: {e}")
+            return {"error": f"Image loading failed: {str(e)}"}
 
-        # Permute to CHW format
-        image_tensor = torch.permute(image_tensor, (0, 3, 1, 2))
+        # Use same preprocessing as working demo
+        import cv2
 
-        # Run inference
-        response = model.run(image_tensor)
-        response = ttnn.to_torch(response)
+        # Convert PIL image to numpy array
+        try:
+            image_array = np.array(image)
+            print(f"DEBUG: Image shape: {image_array.shape}")
+        except Exception as e:
+            print(f"DEBUG: Numpy conversion failed: {e}")
+            return {"error": f"Image conversion failed: {str(e)}"}
 
-        # Postprocess for pose estimation
-        from models.demos.utils.common_demo_utils import postprocess_pose
+        # Preprocess like working demo: resize and pad to 640x640
+        orig_h, orig_w = image_array.shape[:2]
+        target_size = (640, 640)
+        scale = min(target_size[0] / orig_w, target_size[1] / orig_h)
+        new_w, new_h = int(orig_w * scale), int(orig_h * scale)
 
-        results = postprocess_pose(response, image_tensor, [image_array], [file.filename], ["person"])[0]
+        # Resize image
+        resized_img = cv2.resize(image_array, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
-        # Format results
-        output = []
-        conf_thresh = 0.6
+        # Create padded image
+        padded_img = np.zeros((target_size[1], target_size[0], 3), dtype=np.uint8)
+        padded_img[:new_h, :new_w] = resized_img
 
-        if results.boxes is not None and len(results.boxes) > 0:
-            # boxes shape: [num_detections, 6] - (x1,y1,x2,y2,conf,class)
-            boxes_tensor = results.boxes.cpu().numpy()
+        # Convert to tensor: CHW format, normalized
+        image_tensor = torch.from_numpy(padded_img).float().permute(2, 0, 1) / 255.0
+        print(f"DEBUG: Preprocessed tensor shape: {image_tensor.shape}")
 
-            for i, box in enumerate(boxes_tensor):
-                x1, y1, x2, y2, conf, class_id = box
-                if conf > conf_thresh:
-                    # Normalize box coordinates to [0,1]
-                    normalized_box = [x1 / 640.0, y1 / 640.0, x2 / 640.0, y2 / 640.0]
+        # Keep padded image shape for postprocessing
+        padded_shape = padded_img.shape
 
-                    # Process keypoints
-                    keypoints_data = []
-                    if hasattr(results, "keypoints") and results.keypoints is not None and len(results.keypoints) > i:
-                        # keypoints shape: [num_detections, 51] - (17 points × 3 values: x,y,conf)
-                        kpt_data = results.keypoints[i].cpu().numpy()  # [51]
+        print("DEBUG: Starting TTNN model inference...")
+        print(f"DEBUG: Model type: {type(model)}")
 
-                        # Reshape to [17, 3] - (x, y, confidence) for each keypoint
-                        kpt_reshaped = kpt_data.reshape(17, 3)
+        # Convert input to TTNN format (same as working demo: add batch dimension)
+        image_tensor_batched = image_tensor.unsqueeze(0)  # Add batch dimension
+        print(f"DEBUG: Input tensor shape: {image_tensor_batched.shape}")
+        tt_input = ttnn.from_torch(image_tensor_batched, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        print(f"DEBUG: TTNN input created")
+        tt_input = ttnn.to_device(tt_input, device_global)
+        print(f"DEBUG: TTNN input moved to device")
 
-                        # Normalize x,y coordinates to [0,1] (confidence stays as-is)
-                        kpt_reshaped[:, 0] = kpt_reshaped[:, 0] / 640.0  # x coordinates
-                        kpt_reshaped[:, 1] = kpt_reshaped[:, 1] / 640.0  # y coordinates
+        # Run TTNN inference (core model only) - returns [batch, 56, num_anchors]
+        try:
+            response = model(tt_input)
+            print("DEBUG: TTNN inference completed successfully")
+        except Exception as e:
+            print(f"DEBUG: TTNN inference failed: {e}")
+            import traceback
 
-                        # Flatten to list: [x,y,confidence] for each of 17 points
-                        keypoints_data = kpt_reshaped.flatten().tolist()
-                    else:
-                        # No keypoints available, fill with zeros
-                        keypoints_data = [0.0] * (17 * 3)  # 17 keypoints * 3 values each
+            traceback.print_exc()
+            return {"error": f"TTNN inference failed: {str(e)}"}
 
-                    # Format: [x1,y1,x2,y2,conf,class,keypoints...]
-                    detection = normalized_box + [float(conf), float(class_id)] + keypoints_data
-                    output.append(detection)
+        # Convert back to torch (output is in TILE_LAYOUT from DRAM)
+        raw_output = ttnn.to_torch(response)
+        print(f"DEBUG: TTNN raw output shape: {raw_output.shape}")
 
-        print(f"DEBUG: Returning {len(output)} detections")
-        if len(output) > 0:
-            print(f"DEBUG: First detection has {len(output[0])} values")
-        return output
+        print("DEBUG: Applying postprocessing like offline demo...")
+        # Apply postprocessing like the offline demo does
+        # Create anchors_per_stride like the offline demo
+        anchors_per_stride = None  # Will be created in apply_pytorch_postprocessing
+
+        processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
+        print(f"DEBUG: Processed output shape: {processed_output.shape}")
+
+        # Extract components from processed output
+        bbox = processed_output[0, :4, :]  # [4, num_anchors] - x, y, w, h
+        conf = processed_output[0, 4:5, :]  # [1, num_anchors] - confidence
+        keypoints = processed_output[0, 5:, :]  # [51, num_anchors] - 17 keypoints * 3 values each
+
+        print(f"DEBUG: bbox shape: {bbox.shape}, conf shape: {conf.shape}, keypoints shape: {keypoints.shape}")
+
+        # Apply confidence threshold
+        conf_threshold = 0.6
+        conf_mask = conf[0, :] > conf_threshold
+        valid_indices = torch.where(conf_mask)[0]
+
+        print(f"DEBUG: Found {len(valid_indices)} detections above confidence threshold {conf_threshold}")
+
+        # Extract valid detections
+        detections = []
+        print(f"DEBUG: Processing {len(valid_indices)} valid detections")
+        for idx in valid_indices:
+            # Get bbox in 640x640 coordinate system
+            x, y, w, h = bbox[:, idx].tolist()
+            confidence = conf[0, idx].item()
+
+            # Get keypoints (17 keypoints × 3 values each = 51 values) in 640x640 coordinate system
+            kpt_data = keypoints[:, idx]  # [51]
+
+            # Convert coordinates from 640x640 back to original image coordinates
+            # First, undo the padding and scaling
+            orig_h, orig_w = image_array.shape[:2]
+
+            # Calculate scaling and padding that was applied
+            scale = min(640 / orig_w, 640 / orig_h)
+            new_w, new_h = int(orig_w * scale), int(orig_h * scale)
+            pad_left = (640 - new_w) // 2
+            pad_top = (640 - new_h) // 2
+
+            # Convert bbox from 640x640 coords back to original image coords, then normalize
+            x_orig = (x - pad_left) / scale
+            y_orig = (y - pad_top) / scale
+            w_orig = w / scale
+            h_orig = h / scale
+
+            # Normalize to [0,1]
+            x_norm = x_orig / orig_w
+            y_norm = y_orig / orig_h
+            w_norm = w_orig / orig_w
+            h_norm = h_orig / orig_h
+
+            # Convert keypoints from 640x640 coords back to original image coords, then normalize
+            kpt_normalized = []
+            for i in range(17):  # 17 keypoints
+                base_idx = i * 3
+                kx_640 = float(kpt_data[base_idx])
+                ky_640 = float(kpt_data[base_idx + 1])
+                kv = float(kpt_data[base_idx + 2])
+
+                # Convert back to original coordinates
+                kx_orig = (kx_640 - pad_left) / scale
+                ky_orig = (ky_640 - pad_top) / scale
+
+                # Normalize to [0,1]
+                kx_norm = kx_orig / orig_w
+                ky_norm = ky_orig / orig_h
+
+                kpt_normalized.extend([kx_norm, ky_norm, kv])
+
+            # Combine: [x, y, w, h, conf, kpt_x1, kpt_y1, kpt_conf1, ...]
+            detection = [x_norm, y_norm, w_norm, h_norm, confidence] + kpt_normalized
+            detections.append(detection)
+
+        # Apply NMS to remove overlapping detections
+        if len(detections) > 1:
+            detections = apply_simple_nms(detections, iou_threshold=0.5)
+
+        print(f"DEBUG: Final detections after NMS: {len(detections)}")
+
+        print(f"DEBUG: Returning {len(detections)} detections")
+        return {"detections": detections}
 
     except Exception as e:
         logging.error(f"Error in pose estimation: {e}")
