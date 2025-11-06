@@ -162,12 +162,6 @@ void test_send_recv_async(
     distributed::multihost::Rank sender_rank,
     distributed::multihost::Rank receiver_rank,
     uint32_t seed) {
-    // print input shape
-    printf("tensor shape: ");
-    for (auto i = 0; i < tensor_spec.logical_shape().rank(); i++) {
-        printf("%d ", tensor_spec.logical_shape()[i]);
-    }
-    printf("\n");
     switch (tensor_spec.data_type()) {
         case tt::tt_metal::DataType::BFLOAT16:
             test_send_recv_async_<bfloat16>(
