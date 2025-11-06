@@ -339,23 +339,6 @@ def pcie_devices(request, device_params):
     ttnn.CloseDevices(devices)
 
 
-@pytest.fixture(scope="function")
-def all_devices(request, device_params):
-    import ttnn
-
-    num_devices = ttnn.GetNumAvailableDevices()
-    device_ids = [i for i in range(num_devices)]
-    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids]
-
-    # Get only physical devices
-    updated_device_params = get_updated_device_params(device_params)
-    devices = ttnn.CreateDevices(device_ids, **updated_device_params)
-
-    yield [devices[i] for i in range(num_devices)]
-
-    ttnn.CloseDevices(devices)
-
-
 # Reset fabric config to DISABLED if not None, and do nothing otherwise
 # Temporarily require previous state to be passed in as even setting it to DISABLED might be unstable
 # This is to ensure that we don't propagate the instability to the rest of CI
@@ -446,11 +429,25 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
+    try:
+        for submesh in mesh_device.get_submeshes():
+            try:
+                ttnn.close_mesh_device(submesh)
+            except Exception as e:
+                logger.warning(f"Failed to close submesh: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to get submeshes: {e}")
 
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
+    try:
+        ttnn.close_mesh_device(mesh_device)
+    except Exception as e:
+        logger.warning(f"Failed to close mesh_device: {e}")
+
+    try:
+        reset_fabric(fabric_config)
+    except Exception as e:
+        logger.warning(f"Failed to reset fabric: {e}")
+
     del mesh_device
 
 
@@ -638,9 +635,13 @@ def clear_compile_cache():
 
 
 @pytest.fixture(autouse=True)
-def reset_default_device():
+def reset_default_device(request):
     import ttnn
 
+    # Skip applying the fixture logic for this test
+    if "no_reset_default_device" in request.keywords:
+        yield
+        return
     device = ttnn.GetDefaultDevice()
     yield
     ttnn.SetDefaultDevice(device)
@@ -649,8 +650,6 @@ def reset_default_device():
 def get_devices(request):
     if "device" in request.fixturenames:
         devices = [request.getfixturevalue("device")]
-    elif "all_devices" in request.fixturenames:
-        devices = request.getfixturevalue("all_devices")
     elif "pcie_devices" in request.fixturenames:
         devices = request.getfixturevalue("pcie_devices")
     elif "mesh_device" in request.fixturenames:

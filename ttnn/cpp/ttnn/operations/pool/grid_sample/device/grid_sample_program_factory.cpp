@@ -319,15 +319,13 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
                 .defines = get_defines(pool::Pool2DType::AVG_POOL2D)});
     };
 
-    tt::tt_metal::KernelHandle compute_kernel_group_1 = 0, compute_kernel_group_2 = 0;
     if (is_sharded || core_group_1.num_cores() > 0) {
-        compute_kernel_group_1 = create_compute_kernel(
+        create_compute_kernel(
             is_sharded ? all_cores : core_group_1,
             grid_batching_factor * (is_sharded ? grid_nsticks_per_core : num_sticks_per_core_group_1));
     }
     if (!is_sharded && core_group_2.num_cores() > 0) {
-        compute_kernel_group_2 =
-            create_compute_kernel(core_group_2, grid_batching_factor * num_sticks_per_core_group_2);
+        create_compute_kernel(core_group_2, grid_batching_factor * num_sticks_per_core_group_2);
     }
 
     // Writer kernel (interleaved only)

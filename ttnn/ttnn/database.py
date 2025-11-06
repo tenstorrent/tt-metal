@@ -248,13 +248,15 @@ def insert_devices(report_path, devices):
     sqlite_connection = ttnn.database.get_or_create_sqlite_db(report_path)
     cursor = sqlite_connection.cursor()
 
-    for device in devices:
-        if device.id() in DEVICE_IDS_IN_DATABASE:
+    # Use C++ helper to get all physical devices info from mesh devices
+    all_devices_info = ttnn._ttnn.reports.get_all_devices_info(list(devices))
+
+    for device_id, device_info in all_devices_info:
+        if device_id in DEVICE_IDS_IN_DATABASE:
             continue
-        device_info = ttnn._ttnn.reports.get_device_info(device)
         cursor.execute(
             f"""INSERT INTO devices VALUES (
-                {device.id()},
+                {device_id},
                 {device_info.num_y_cores},
                 {device_info.num_x_cores},
                 {device_info.num_y_compute_cores},
@@ -275,7 +277,7 @@ def insert_devices(report_path, devices):
             )"""
         )
         sqlite_connection.commit()
-        DEVICE_IDS_IN_DATABASE.add(device.id())
+        DEVICE_IDS_IN_DATABASE.add(device_id)
 
 
 def optional_value(value, text=False):
@@ -332,12 +334,38 @@ def insert_tensor(report_path, tensor):
         device_id = tensor.device().id()
         memory_config = ttnn.get_memory_config(tensor)
         buffer_type = memory_config.buffer_type.value
-        device_tensors.append(
-            {
-                "device_id": tensor.device().id(),
-                "address": tensor.buffer_address(),
-            }
-        )
+
+        # For distributed tensors, get device info for all physical devices
+        mesh_device = tensor.device()
+        try:
+            # Try to get all physical devices from the mesh
+            all_devices_info = ttnn._ttnn.reports.get_all_devices_info([mesh_device])
+            if len(all_devices_info) > 1:
+                # This is a multi-device mesh - record each physical device
+                # Note: We approximate the address, actual per-device addresses may vary
+                for physical_device_id, _ in all_devices_info:
+                    device_tensors.append(
+                        {
+                            "device_id": physical_device_id,
+                            "address": address,  # Base address, may be same across devices
+                        }
+                    )
+            else:
+                # Single device or unit mesh
+                device_tensors.append(
+                    {
+                        "device_id": device_id,
+                        "address": address,
+                    }
+                )
+        except:
+            # Fallback to original behavior
+            device_tensors.append(
+                {
+                    "device_id": device_id,
+                    "address": address,
+                }
+            )
 
     cursor.execute(
         f"""
@@ -569,7 +597,17 @@ def convert_arguments_to_strings(function_args, function_kwargs):
     def recursive_preprocess_golden_function_inputs(object):
         nonlocal index
         if isinstance(object, (ttnn.Tensor, torch.Tensor)):
-            output = f"{object}"
+            try:
+                output = f"{object}"
+            except RuntimeError as e:
+                if "trace capture" in str(e):
+                    # Cannot read tensor during trace capture, use basic info
+                    if isinstance(object, ttnn.Tensor):
+                        output = f"ttnn.Tensor(shape={object.shape}, dtype={object.dtype}, layout={object.layout})"
+                    else:
+                        output = f"torch.Tensor(shape={object.shape}, dtype={object.dtype})"
+                else:
+                    raise
             index += 1
             return output
         elif isinstance(object, (list, tuple)):

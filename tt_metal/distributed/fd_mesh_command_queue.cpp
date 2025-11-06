@@ -128,6 +128,25 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
+    // If trace capture is still active during cleanup, end it gracefully
+    // This can happen during test failures or early exits
+    if (trace_id_.has_value()) {
+        log_warning(
+            LogMetal,
+            "Trace {} was still active during FDMeshCommandQueue cleanup. Force-ending trace.",
+            trace_id_.value());
+        try {
+            this->record_end();
+        } catch (...) {
+            // If record_end fails during cleanup, just clear the state
+            trace_id_ = std::nullopt;
+            trace_ctx_ = nullptr;
+            for (auto device : mesh_device_->get_devices()) {
+                device->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
+            }
+        }
+    }
+
     if (in_use_) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits

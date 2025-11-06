@@ -7,6 +7,7 @@
 #include "tt_metal/common/thread_pool.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #include "tt_metal/impl/program/program_impl.hpp"
@@ -75,30 +76,34 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
-            auto device = mesh_device_->get_device(coord);
+            if (mesh_device_->is_local(coord)) {
+                auto device = mesh_device_->get_device(coord);
 
-            // Track CB allocations per-device for distributed workloads
-            // CBs are allocated once during compilation, but we need to track them
-            // for each device when the program runs
-            for (const auto& circular_buffer : program.impl().circular_buffers()) {
-                if (circular_buffer->globally_allocated()) {
-                    continue;
+                // Track CB allocations per-device for distributed workloads
+                // CBs are allocated once during compilation, but we need to track them
+                // for each device when the program runs
+                for (const auto& circular_buffer : program.impl().circular_buffers()) {
+                    if (circular_buffer->globally_allocated()) {
+                        continue;
+                    }
+                    uint64_t addr = circular_buffer->address();
+                    uint64_t size = circular_buffer->size();
+
+                    // Report CB allocation to tracking (each device gets its own tracking entry)
+                    tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                        circular_buffer->core_ranges(), addr, size, circular_buffer->globally_allocated(), device);
                 }
-                uint64_t addr = circular_buffer->address();
-                uint64_t size = circular_buffer->size();
 
-                // Report CB allocation to tracking (each device gets its own tracking entry)
-                tt::tt_metal::GraphTracker::instance().track_allocate_cb(
-                    circular_buffer->core_ranges(), addr, size, circular_buffer->globally_allocated(), device);
+                tt_metal::detail::LaunchProgram(device, program, false);
             }
-
-            tt_metal::detail::LaunchProgram(device, program, false);
         }
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
-            auto device = mesh_device_->get_device(coord);
-            tt_metal::detail::WaitProgramDone(device, program);
+            if (mesh_device_->is_local(coord)) {
+                auto device = mesh_device_->get_device(coord);
+                tt_metal::detail::WaitProgramDone(device, program);
+            }
         }
     }
 }
@@ -122,6 +127,11 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
+
+    // Barrier across all hosts of the mesh
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
+        mesh_device_->get_view().mesh_id());
+    distributed_context->barrier();
 }
 
 void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}

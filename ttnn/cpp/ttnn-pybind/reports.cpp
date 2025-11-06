@@ -33,6 +33,9 @@ void py_module(py::module& module) {
             "buffer_layout", [](const ttnn::reports::BufferInfo& self) { return self.buffer_layout; });
     module.def("get_buffers", &get_buffers, py::arg("devices"));
     module.def("get_buffers", [](MeshDevice* device) { return get_buffers({device}); }, py::arg("device"));
+    module.def("get_all_devices_info", &get_all_devices_info, py::arg("devices"));
+    module.def(
+        "get_all_devices_info", [](MeshDevice* device) { return get_all_devices_info({device}); }, py::arg("device"));
 
     auto py_buffer_page_info = static_cast<py::class_<ttnn::reports::BufferPageInfo>>(module.attr("BufferPageInfo"));
     py_buffer_page_info
