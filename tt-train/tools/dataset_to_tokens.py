@@ -65,13 +65,18 @@ def main():
         description="Preprocess a text dataset using a tokenizer and save all tokens as a single flat list in MessagePack or CSV format."
     )
     parser.add_argument(
-        "--text_file", type=str, required=True, help="Path to the input text dataset (e.g., merged.txt)."
+        "--text_file",
+        type=str,
+        required=True,
+        help="Path to the input text dataset (e.g., merged.txt).",
     )
     # parser.add_argument(
     #     "--tokenizer_file", type=str, required=True, help="Path to the pre-trained tokenizer.json file."
     # )
     parser.add_argument(
-        "--hf_tokenizer", type=str, help="Hugging Face tokenizer identifier (e.g., gpt2, distilgpt2)."
+        "--hf_tokenizer",
+        type=str,
+        help="Hugging Face tokenizer identifier (e.g., gpt2, distilgpt2).",
     )
     parser.add_argument(
         "--output_file",
@@ -97,7 +102,9 @@ def main():
     splits_num = 128
     tokenized_data = []
     for i in range(splits_num):
-        text_data_split = text_data[i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num]
+        text_data_split = text_data[
+            i * len(text_data) // splits_num : (i + 1) * len(text_data) // splits_num
+        ]
         tokenized_data_split = tokenizer.encode(text_data_split)
         tokenized_data.extend(tokenized_data_split)
 

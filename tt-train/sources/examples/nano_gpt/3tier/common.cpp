@@ -72,7 +72,7 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     std::string text;
     // std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
     // text = read_file_to_str(config.data_path);
-   
+
     auto tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
 
     auto sequence_length = std::visit(
