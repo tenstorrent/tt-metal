@@ -1576,7 +1576,7 @@ bool auto_enable_kernel_folding(
         }
         auto is_zero_padding = padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0;
         return (
-            (input_memory_config.is_dram() && !(input_layout == Layout::TILE && is_zero_padding)) ||
+            (input_memory_config.is_dram() && (input_layout == Layout::ROW_MAJOR || is_zero_padding)) ||
             (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
     } else {
         return enable_folding_.value();
