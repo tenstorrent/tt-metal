@@ -1911,6 +1911,33 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
         connection_manager, route_id, tt::tt_fabric::NocUnicastCommandHeader{noc_address}, page_size);
 }
 
+// Scatter Write Addrgen Overloads
+template <typename FabricSenderType, typename AddrGenType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    const AddrGenType& addrgen,
+    uint32_t page_id0,
+    uint32_t page_id1,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    auto page_size = tt::tt_fabric::addrgen_detail::get_page_size(addrgen);
+    auto noc_address0 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id0, offset0);
+    auto noc_address1 = tt::tt_fabric::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
+
+    fabric_unicast_noc_scatter_write(
+        client_interface,
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        src_addr,
+        page_size * 2,  // Total payload size (both chunks)
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+}
+
 // Fused Unicast Write + Atomic Inc Addrgen Overloads
 template <typename FabricSenderType, typename AddrGenType>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(

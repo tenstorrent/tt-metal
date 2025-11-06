@@ -21,7 +21,7 @@ struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
     void teardown() { this->TearDown(); }
 };
 
-// Parameterized test for all 6 addrgen API variants
+// Parameterized test for all addrgen API variants
 class AddrgenApiVariantTest : public ::testing::TestWithParam<tt::tt_fabric::bench::AddrgenApiVariant> {
 protected:
     Fixture fixture;
@@ -40,8 +40,8 @@ TEST_P(AddrgenApiVariantTest, Write) {
         .src_chip = 0,
         .dst_chip = 1,
         .use_dram_dst = false,
-        .tensor_bytes = 16384,  // 4 pages
-        .page_size = 4096,
+        .tensor_bytes = 4096,  // 2 pages
+        .page_size = 2048,
         .sender_core = {0, 0},
         .receiver_core = {1, 0},
         .trace_iters = 1,
@@ -52,7 +52,7 @@ TEST_P(AddrgenApiVariantTest, Write) {
     tt::tt_fabric::test::run_addrgen_write_test(&fixture, p);
 }
 
-// Instantiate with all 6 variants (3 unicast + 3 fused atomic inc)
+// Instantiate with all variants (3 unicast + 1 scatter + 3 fused atomic inc)
 INSTANTIATE_TEST_SUITE_P(
     AddrgenOverloads,
     AddrgenApiVariantTest,
@@ -60,6 +60,7 @@ INSTANTIATE_TEST_SUITE_P(
         tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite,
         tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState,
         tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState,
+        tt::tt_fabric::bench::AddrgenApiVariant::ScatterWrite,
         tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWrite,
         tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteWithState,
         tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteSetState),
@@ -68,6 +69,7 @@ INSTANTIATE_TEST_SUITE_P(
             case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWrite: return "UnicastWrite";
             case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteWithState: return "UnicastWriteWithState";
             case tt::tt_fabric::bench::AddrgenApiVariant::UnicastWriteSetState: return "UnicastWriteSetState";
+            case tt::tt_fabric::bench::AddrgenApiVariant::ScatterWrite: return "ScatterWrite";
             case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWrite: return "FusedAtomicIncWrite";
             case tt::tt_fabric::bench::AddrgenApiVariant::FusedAtomicIncWriteWithState:
                 return "FusedAtomicIncWriteWithState";
