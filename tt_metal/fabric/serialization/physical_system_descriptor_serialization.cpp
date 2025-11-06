@@ -5,6 +5,8 @@
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
+#include <tt-metalium/fabric_types.hpp>
+#include <tt_metal/llrt/tt_target_device.hpp>
 
 #include <umd/device/cluster.hpp>
 
@@ -12,6 +14,7 @@
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
 #include <sstream>
+#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal {
 
@@ -190,18 +193,22 @@ void physical_system_descriptor_to_proto(
         }
     }
 
-    // Set mock cluster flag
-    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
+    // Set target device type
+    proto_desc->set_target_device_type(static_cast<uint32_t>(descriptor.get_target_device_type()));
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
+    auto target_device_type = enchantum::cast<TargetDevice>(proto_desc.target_device_type());
+    if (!target_device_type.has_value()) {
+        throw std::runtime_error("Invalid target device type: " + std::to_string(proto_desc.target_device_type()));
+    }
     auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
         PhysicalSystemDescriptor::null_cluster,
         nullptr,
         nullptr,
-        proto_desc.mock_cluster(),
+        *target_device_type,
         false);  // Don't run discovery
 
     // Convert system graph

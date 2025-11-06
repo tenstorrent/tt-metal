@@ -31,6 +31,9 @@ let __gtestLogsIndexMap = undefined;
 // Optional other logs index mapping (runId -> directory)
 let __otherLogsIndexMap = undefined;
 
+// Optional last success timestamps mapping (workflow name -> timestamp info)
+let __lastSuccessTimestamps = undefined;
+
 
 
 /**
@@ -95,6 +98,46 @@ function getOtherLogsDirForRunId(runId) {
     return __otherLogsIndexMap.get(key);
   } catch (_) {
     return undefined;
+  }
+}
+
+function loadLastSuccessTimestamps(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return undefined;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const json = JSON.parse(raw);
+    const map = new Map();
+    if (json && typeof json === 'object' && !Array.isArray(json)) {
+      for (const [k, v] of Object.entries(json)) {
+        if (v && typeof v === 'object') map.set(String(k), v);
+      }
+      return map;
+    }
+  } catch (_) { /* ignore */ }
+  return undefined;
+}
+
+function getTimeSinceLastSuccess(workflowName) {
+  try {
+    if (!__lastSuccessTimestamps) return EMPTY_VALUE;
+    const info = __lastSuccessTimestamps.get(workflowName);
+    if (!info) return EMPTY_VALUE;
+
+    if (info.never_succeeded) {
+      return 'Never';
+    }
+
+    if (!info.timestamp) return EMPTY_VALUE;
+
+    const lastSuccessDate = new Date(info.timestamp);
+    const now = new Date();
+    const daysSince = Math.floor((now - lastSuccessDate) / (1000 * 60 * 60 * 24));
+
+    if (daysSince === 0) return 'Today';
+    if (daysSince === 1) return '1 day ago';
+    return `${daysSince} days ago`;
+  } catch (_) {
+    return EMPTY_VALUE;
   }
 }
 
@@ -804,26 +847,30 @@ function getWorkflowStats(runs) {
   for (const run of runs) {
     totalRunsIncludingRetries++;
 
-    // Calculate the original run ID by subtracting (run_attempt - 1) from the current run ID
-    const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
+    // GitHub keeps the same run ID for re-runs, only incrementing run_attempt
+    // So we group by run.id directly, not by calculating a different ID
+    const runId = run.id;
+    const currentAttempt = run.run_attempt || 1;
 
-    if (!uniqueRuns.has(originalRunId)) { // returns true if the run id is not in the map
-      uniqueRuns.set(originalRunId, { // set default values for the run
+    if (!uniqueRuns.has(runId)) {
+      // First time seeing this run ID
+      uniqueRuns.set(runId, {
         run,
-        attempts: 0,
+        attempts: 1, // Initialize to 1 since this is the first attempt
         isSuccessful: false,
         requiredRetry: false,
         succeededOnFirstTry: false,
         lastAttempt: run
       });
     } else {
-      // This is an attempt
-      const existingRun = uniqueRuns.get(originalRunId);
-      existingRun.attempts++; // this is just a re-run so increment the attempts
+      // This is a re-run (same run ID, different attempt)
+      const existingRun = uniqueRuns.get(runId);
+      existingRun.attempts++; // increment the attempts counter
 
-      // Update last attempt if this is a newer attempt
-      if (run.run_attempt > existingRun.lastAttempt.run_attempt) {
-        existingRun.lastAttempt = run; // update the last attempt to the current run
+      // Update last attempt if this is a newer attempt (higher run_attempt number)
+      const existingAttempt = existingRun.lastAttempt.run_attempt || 1;
+      if (currentAttempt > existingAttempt) {
+        existingRun.lastAttempt = run; // update to the latest attempt
       }
     }
   }
@@ -1012,9 +1059,28 @@ async function generateSummaryBox(grouped, context) {
   };
 
   for (const [name, runs] of grouped.entries()) {
-    const mainBranchRuns = runs
-      .filter(r => r.head_branch === 'main')
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // for each workflow, sort the main runs by date within the window
+    // First deduplicate by run ID, keeping highest attempt
+    const runsByID = new Map();
+    for (const run of runs.filter(r => r.head_branch === 'main')) {
+      const runId = run.id;
+      const currentAttempt = run.run_attempt || 1;
+      const existingRun = runsByID.get(runId);
+      const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+      if (!existingRun || currentAttempt > existingAttempt) {
+        runsByID.set(runId, run);
+      }
+    }
+    const mainBranchRuns = Array.from(runsByID.values())
+      .sort((a, b) => {
+        // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+        const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+        if (dateDiff !== 0) {
+          return dateDiff;
+        }
+        const attemptA = a.run_attempt || 1;
+        const attemptB = b.run_attempt || 1;
+        return attemptB - attemptA; // Prefer higher attempt number
+      });
 
     const stats = getWorkflowStats(runs); // get the workflow stats for the workflow
 
@@ -1192,6 +1258,7 @@ async function run() {
     const commitsPath = core.getInput('commits-path', { required: false }); // optional: path to commits index JSON
     const gtestLogsIndexPath = core.getInput('gtest-logs-index-path', { required: false }); // optional: path to gtest logs index JSON
     const otherLogsIndexPath = core.getInput('other-logs-index-path', { required: false }); // optional: path to other logs index JSON
+    const lastSuccessTimestampsPath = core.getInput('last-success-timestamps-path', { required: false }); // optional: path to last success timestamps JSON
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -1237,6 +1304,15 @@ async function run() {
       }
     }
 
+    if (lastSuccessTimestampsPath) {
+      __lastSuccessTimestamps = loadLastSuccessTimestamps(lastSuccessTimestampsPath);
+      if (__lastSuccessTimestamps && __lastSuccessTimestamps.size) {
+        core.info(`Loaded last success timestamps with ${__lastSuccessTimestamps.size} entries from ${lastSuccessTimestampsPath}`);
+      } else {
+        core.info(`No valid entries found in last success timestamps file at ${lastSuccessTimestampsPath}`);
+      }
+    }
+
     // Load commits index (optional)
     __commitsIndex = loadCommitsIndex(commitsPath) || [];
     core.info(`Loaded commits index entries: ${Array.isArray(__commitsIndex) ? __commitsIndex.length : 0}`);
@@ -1259,9 +1335,28 @@ async function run() {
             filteredGrouped.set(name, filteredRuns); // set the filtered runs in the filtered grouped map
 
             // Check if latest run on main is failing
-            const mainBranchRuns = filteredRuns
-              .filter(r => r.head_branch === 'main')
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // sort the runs by date within the window
+            // First deduplicate by run ID, keeping highest attempt
+            const runsByID = new Map();
+            for (const run of filteredRuns.filter(r => r.head_branch === 'main')) {
+              const runId = run.id;
+              const currentAttempt = run.run_attempt || 1;
+              const existingRun = runsByID.get(runId);
+              const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+              if (!existingRun || currentAttempt > existingAttempt) {
+                runsByID.set(runId, run);
+              }
+            }
+            const mainBranchRuns = Array.from(runsByID.values())
+              .sort((a, b) => {
+                // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+                const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+                if (dateDiff !== 0){
+                  return dateDiff;
+                }
+                const attemptA = a.run_attempt || 1;
+                const attemptB = b.run_attempt || 1;
+                return attemptB - attemptA; // Prefer higher attempt number
+              });
             if (mainBranchRuns[0]?.conclusion !== 'success') {
               failedWorkflows.push(name); // if the latest run on main is failing, add the pipeline name to the failed workflows array
             }
@@ -1311,9 +1406,28 @@ async function run() {
       // create a list of all the failing workflows with their owner information for slack messaging
       const failingItems = [];
       for (const [name, runs] of filteredGrouped.entries()) { // for each pipeline run in the filtered grouped map
-        const mainRuns = runs
-          .filter(r => r.head_branch === 'main') // filter the runs by the main branch
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); //iterate through the runs and sort them by date within the window
+        // First deduplicate by run ID, keeping highest attempt
+        const runsByID = new Map();
+        for (const run of runs.filter(r => r.head_branch === 'main')) {
+          const runId = run.id;
+          const currentAttempt = run.run_attempt || 1;
+          const existingRun = runsByID.get(runId);
+          const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+          if (!existingRun || currentAttempt > existingAttempt) {
+            runsByID.set(runId, run);
+          }
+        }
+        const mainRuns = Array.from(runsByID.values())
+          .sort((a, b) => {
+            // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+            const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+            if (dateDiff !== 0) {
+              return dateDiff;
+            }
+            const attemptA = a.run_attempt || 1;
+            const attemptB = b.run_attempt || 1;
+            return attemptB - attemptA; // Prefer higher attempt number
+          });
         if (!mainRuns[0] || mainRuns[0].conclusion === 'success') continue; // if the latest run on main is not failing, continue
         // Try to attach owners from the first failing run's label via snippets; fallback to job name
         // Use the latest failing run for snippet-based owner detection
@@ -1405,17 +1519,55 @@ async function run() {
 
     // Compute status changes vs previous and write JSON
     const computeLatestConclusion = (runs) => {
-      const mainBranchRuns = runs
-        .filter(r => r.head_branch === 'main')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      // First deduplicate by run ID, keeping highest attempt
+      const runsByID = new Map();
+      for (const run of runs.filter(r => r.head_branch === 'main')) {
+        const runId = run.id;
+        const currentAttempt = run.run_attempt || 1;
+        const existingRun = runsByID.get(runId);
+        const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+        if (!existingRun || currentAttempt > existingAttempt) {
+          runsByID.set(runId, run);
+        }
+      }
+      const mainBranchRuns = Array.from(runsByID.values())
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0){
+            return dateDiff;
+          }
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
       const latest = mainBranchRuns[0];
       if (!latest) return null;
       return latest.conclusion === 'success' ? 'success' : 'failure';
     }; // compute the latest conclusion of the pipeline run
     const computeLatestRunInfo = (runs) => {
-      const mainBranchRuns = runs
-        .filter(r => r.head_branch === 'main')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      // First deduplicate by run ID, keeping highest attempt
+      const runsByID = new Map();
+      for (const run of runs.filter(r => r.head_branch === 'main')) {
+        const runId = run.id;
+        const currentAttempt = run.run_attempt || 1;
+        const existingRun = runsByID.get(runId);
+        const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+        if (!existingRun || currentAttempt > existingAttempt) {
+          runsByID.set(runId, run);
+        }
+      }
+      const mainBranchRuns = Array.from(runsByID.values())
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0) {
+            return dateDiff;
+          }
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
       const latest = mainBranchRuns[0];
       if (!latest) return null;
       return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
@@ -1461,9 +1613,31 @@ async function run() {
     }
 
     // Helper to get main runs within the current window from a grouped collection
-    const getMainWindowRuns = (runs) => runs
-      .filter(r => r.head_branch === 'main')
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    // Deduplicates by run ID (keeping highest attempt) before sorting
+    const getMainWindowRuns = (runs) => {
+      // First deduplicate by run ID, keeping highest attempt
+      const runsByID = new Map();
+      for (const run of runs.filter(r => r.head_branch === 'main')) {
+        const runId = run.id;
+        const currentAttempt = run.run_attempt || 1;
+        const existingRun = runsByID.get(runId);
+        const existingAttempt = existingRun ? (existingRun.run_attempt || 1) : 0;
+        if (!existingRun || currentAttempt > existingAttempt) {
+          runsByID.set(runId, run);
+        }
+      }
+      return Array.from(runsByID.values())
+        .sort((a, b) => {
+          // Sort by date (newest first), then by run_attempt (highest first) as tiebreaker
+          const dateDiff = new Date(b.created_at) - new Date(a.created_at);
+          if (dateDiff !== 0) {
+            return dateDiff;
+          }
+          const attemptA = a.run_attempt || 1;
+          const attemptB = b.run_attempt || 1;
+          return attemptB - attemptA; // Prefer higher attempt number
+        });
+    };
 
     // Enrich regressions with first failing run within the window
     for (const item of regressedDetails) {
@@ -1664,6 +1838,8 @@ async function run() {
         const lines = regressedDetails.map(it => { // for each regressed pipeline, build a markdown line with details
           // Build the workflow name with optional link for the summary (use HTML anchor tag, not markdown)
           const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
+          const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
+          const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
 
           if (it.first_failed_run_url) { // if we found the first failing run in the window
             // Extract the short SHA for the first failing commit
@@ -1694,7 +1870,7 @@ async function run() {
                 : '';
               // Return a collapsible workflow with details
               const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
-              return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList,'</details>',''].join('\n');
+              return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList,'</details>',''].join('\n');
             }
 
             // If we found a success in the window, show commits between success and first failure
@@ -1713,10 +1889,10 @@ async function run() {
               : '';
             // Return the full collapsible workflow with all details
             const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`;
-            return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
+            return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
           }
           // If no first_failed_run_url, just return a collapsed workflow name
-          return ['<details>',`<summary>${workflowName}</summary>`,'','  - No failure details available','</details>',''].join('\n');
+          return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'','  - No failure details available','</details>',''].join('\n');
         });
         // Build the regressions section with header and all lines
         regressionsSection = ['', '## Regressions (Pass → Fail)', ...lines, ''].join('\n');
@@ -1728,6 +1904,8 @@ async function run() {
         const lines = stayedFailingDetails.map(it => { // for each stayed-failing pipeline, build a markdown line
           // Build the workflow name with optional link for the summary (use HTML anchor tag, not markdown)
           const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
+          const timeSinceSuccess = getTimeSinceLastSuccess(it.name);
+          const timeBadge = timeSinceSuccess !== EMPTY_VALUE ? ` <em>(Last success: ${timeSinceSuccess})</em>` : '';
 
           if (it.first_failed_run_url) { // if we found the first failing run in the window
             // Extract the short SHA for the first failing commit
@@ -1754,7 +1932,7 @@ async function run() {
                 : '';
               // Return a collapsible workflow with details
               const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
-              return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList,'</details>',''].join('\n');
+              return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList,'</details>',''].join('\n');
             }
 
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
@@ -1773,10 +1951,10 @@ async function run() {
               : '';
             // Return the full collapsible workflow with all details
             const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
-            return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
+            return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
           }
           // If no first_failed_run_url, just return a collapsed workflow name
-          return ['<details>',`<summary>${workflowName}</summary>`,'','  - No failure details available','</details>',''].join('\n');
+          return ['<details>',`<summary>${workflowName}${timeBadge}</summary>`,'','  - No failure details available','</details>',''].join('\n');
         });
         // Build the stayed-failing section with header and all lines
         stayedFailingSection = ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');

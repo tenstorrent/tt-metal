@@ -145,7 +145,6 @@ CoreCoord virtual_noc_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCo
 // Helper function to get string rep of noc target.
 string get_noc_target_str(
     tt::ChipId device_id,
-    CoreCoord virtual_coord,
     HalProgrammableCoreType programmable_core_type,
     int noc,
     dev_msgs::debug_sanitize_noc_addr_msg_t::ConstView san) {
@@ -663,47 +662,47 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             }
             break;
         case dev_msgs::DebugSanitizeNocAddrUnderflow:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address underflow).";
             break;
         case dev_msgs::DebugSanitizeNocAddrOverflow:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " address overflow).";
             break;
         case dev_msgs::DebugSanitizeNocAddrZeroLength:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (zero length transaction).";
             break;
         case dev_msgs::DebugSanitizeNocTargetInvalidXY:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
             break;
         case dev_msgs::DebugSanitizeNocMulticastNonWorker:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (multicast to non-worker core).";
             break;
         case dev_msgs::DebugSanitizeNocMulticastInvalidRange:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (multicast invalid range).";
             break;
         case dev_msgs::DebugSanitizeNocAlignment:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (invalid address alignment in NOC transaction).";
             break;
         case dev_msgs::DebugSanitizeNocMixedVirtualandPhysical:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
             break;
         case dev_msgs::DebugSanitizeInlineWriteDramUnsupported:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (inline dw writes do not support DRAM destination addresses).";
             break;
         case dev_msgs::DebugSanitizeNocAddrMailbox:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += string(san.is_target() ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
         case dev_msgs::DebugSanitizeNocLinkedTransactionViolation:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
         default:
@@ -839,7 +838,7 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     auto ring_buf_data = mbox_data_.watcher().debug_ring_buf();
-    string out = "";
+    string out;
     if (ring_buf_data.current_ptr() != DEBUG_RING_BUFFER_STARTING_INDEX) {
         // Latest written idx is one less than the index read out of L1.
         out += "\n\tdebug_ring_buffer=\n\t[";

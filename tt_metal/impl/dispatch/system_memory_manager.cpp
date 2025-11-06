@@ -74,7 +74,7 @@ void loop_and_wait_with_timeout(
 }  // namespace
 
 SystemMemoryManager::SystemMemoryManager(ChipId device_id, uint8_t num_hw_cqs) :
-    device_id(device_id), num_hw_cqs(num_hw_cqs), bypass_enable(false), bypass_buffer_write_offset(0) {
+    device_id(device_id), bypass_enable(false), bypass_buffer_write_offset(0) {
     this->completion_byte_addrs.resize(num_hw_cqs);
     this->prefetcher_cores.resize(num_hw_cqs);
     this->prefetch_q_writers.reserve(num_hw_cqs);
@@ -178,6 +178,12 @@ uint32_t SystemMemoryManager::get_next_event(const uint8_t cq_id) {
     uint32_t next_event = ++this->cq_to_event[cq_id];  // Event ids start at 1
     cq_to_event_locks[cq_id].unlock();
     return next_event;
+}
+
+// Get last issued event to Command Queue
+uint32_t SystemMemoryManager::get_last_event(const uint8_t cq_id) {
+    std::lock_guard<std::mutex> lock(cq_to_event_locks[cq_id]);
+    return this->cq_to_event[cq_id];
 }
 
 void SystemMemoryManager::reset_event_id(const uint8_t cq_id) {

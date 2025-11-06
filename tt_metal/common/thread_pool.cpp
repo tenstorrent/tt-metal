@@ -174,7 +174,7 @@ private:
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(uint32_t physical_device_id) : tasks_() {
+    NumaAwareExecutor(uint32_t physical_device_id) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() {
@@ -343,7 +343,7 @@ private:
 class PassThroughThreadPool : public ThreadPool {
 public:
     PassThroughThreadPool() = default;
-    void enqueue(std::function<void()>&& f, std::optional<uint32_t> device_idx = std::nullopt) override { f(); }
+    void enqueue(std::function<void()>&& f, std::optional<uint32_t> /*device_idx*/ = std::nullopt) override { f(); }
     void wait() override {}
 };
 

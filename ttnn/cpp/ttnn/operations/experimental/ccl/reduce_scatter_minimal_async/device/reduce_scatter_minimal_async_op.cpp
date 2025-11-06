@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_minimal_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -27,9 +28,6 @@ void reduce_scatter_common_validates(
         page_size % input_tensor.buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
 
-    TT_FATAL(
-        dim == 1 || dim == 2 || dim == 3, "reduce_scatter_minimal_async only supports scattering on dim 1, 2, or 3");
-
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
         input_tensor.buffer() != nullptr,
@@ -39,15 +37,28 @@ void reduce_scatter_common_validates(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "input_tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "input_tensor must have a buffer");
 
-    if (dim == 2 || dim == 3) {
-        const auto& input_shape = input_tensor.padded_shape();
-        uint32_t tile_size = dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
+    const auto& rank = input_tensor.logical_shape().rank();
+
+    TT_FATAL(rank > 1, "reduce_scatter currently supports rank 2 tensors at minimum");
+    TT_FATAL(dim < rank, "Invalid scatter dim {} for rank {} tensor", dim, rank);
+
+    const uint32_t normalized_dim = std::get<0>(composite_common::normalize_dim_4d(dim, rank));
+    const auto& input_shape = input_tensor.padded_shape();
+    if (normalized_dim == 2 || normalized_dim == 3) {
+        uint32_t tile_size = normalized_dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
         TT_FATAL(
             (input_shape[dim] / tile_size) % ring_size == 0,
             "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number "
             "of tiles is {} and the ring_size is {}",
             dim,
             input_shape[dim] / tile_size,
+            ring_size);
+    } else {
+        TT_FATAL(
+            input_shape[dim] % ring_size == 0,
+            "Error, input tensor dimension {} should be divisible by ring_size but is {} and the ring_size is {}",
+            dim,
+            input_shape[dim],
             ring_size);
     }
 
@@ -98,7 +109,6 @@ void reduce_scatter_common_validates(
 
         // check the output tensor size
         auto output_shape = output_tensor.padded_shape();
-        auto input_shape = input_tensor.padded_shape();
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -337,10 +347,6 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
     const std::optional<uint32_t>& num_buffers_per_channel) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
-
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
@@ -356,10 +362,6 @@ Tensor reduce_scatter_minimal_async_impl(
     }
 
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
-
-    // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     bool using_persistent_buffers = persistent_output_buffers.has_value();
 

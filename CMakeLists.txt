@@ -5,6 +5,13 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.t
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
 endif()
 
+# Clear any compile options that may have been set by consuming projects that have leaked into us.
+set_directory_properties(
+    PROPERTIES
+        COMPILE_OPTIONS
+            ""
+)
+
 ############################################
 # Project setup
 ############################################
@@ -167,15 +174,7 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
     -Wno-deprecated-declarations
-    # Vars that are used only in Asserts will appear as dead stores in builds
-    # where the preprocessor has stripped away the assert.
-    -Wno-unused-but-set-variable
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-reorder-ctor>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unused-private-field>"
-    "$<$<CXX_COMPILER_ID:Clang>:-Wno-unknown-pragmas>"
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"
@@ -184,16 +183,12 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-parentheses>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-pragmas>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-reorder>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-restrict>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-sign-compare>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-strict-aliasing>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overflow>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-stringop-overread>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-unused-local-typedefs>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-volatile>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-pessimizing-move>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
