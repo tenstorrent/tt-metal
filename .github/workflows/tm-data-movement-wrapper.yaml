@@ -23,7 +23,7 @@ jobs:
       build-wheel: true
       version: 22.04
   data-movement-unit-tests:
-    uses: ./.github/workflows/data-movement-unit-impl.yaml
+    uses: ./.github/workflows/tm-data-movement-unit-impl.yaml
     needs: build-artifact
     secrets: inherit
     strategy:
@@ -32,6 +32,7 @@ jobs:
         test-group: [
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
+          { arch: blackhole, runner-label: P150 },
         ]
     with:
         arch: ${{ matrix.test-group.arch }}
@@ -42,7 +43,7 @@ jobs:
         gtest_filter: "*-*NIGHTLY_*"
   data-movement-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run-additional-workflow == 'true' }}
-    uses: ./.github/workflows/data-movement-perf-impl.yaml
+    uses: ./.github/workflows/tm-data-movement-perf-impl.yaml
     needs: build-artifact
     secrets: inherit
     with:
