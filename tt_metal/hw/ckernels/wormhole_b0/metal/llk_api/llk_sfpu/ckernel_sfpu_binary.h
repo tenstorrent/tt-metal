@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -159,10 +160,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat x = sfpi::setexp(absbase, 127);  // set exp to exp bias (put base in range of 1-2)
 
     // 5th degree polynomial approx - REMEZ algorithm over [1,2]
-    // constexpr float coeffs[] = {-1.94046315f, 3.5271965f, -2.45830873f, 1.1286426f, -0.28807408f, 0.03101577f};
-    // sfpi::vFloat series_result = PolynomialEvaluator<6, sfpi::vFloat, float>::eval(coeffs, x);
-    sfpi::vFloat series_result =
-        x * (x * (x * (x * (x * 0.03101577f - 0.28807408f) + 1.1286426f) - 2.45830873f) + 3.5271965f) - 1.94046315f;
+    constexpr float coeffs[] = {-1.94046315f, 3.5271965f, -2.45830873f, 1.1286426f, -0.28807408f, 0.03101577f};
+    sfpi::vFloat series_result = PolynomialEvaluator<6, sfpi::vFloat, float>::eval(coeffs, x);
 
     // Convert exponent to float
     sfpi::vInt exp = sfpi::exexp(base);
@@ -217,20 +216,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
     // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
     // purely mathematical without integer-based operations.
-    // constexpr float coeffs_61f[] = {
-    //     1.0000000018f, 0.69314699f, 0.24022982f, 0.055483369f, 0.0096788315f, 0.001243946f, 0.0002170391f};
-    // sfpi::vFloat poly = PolynomialEvaluator<7, sfpi::vFloat, float>::eval(coeffs_61f, frac);
-
-    // sfpi::vFloat poly = POLYVAL7<sfpi::vFloat>(
-    //     0.0002170391f, 0.001243946f, 0.0096788315f, 0.055483369f, 0.24022982f, 0.69314699f, 1.0000000018f, frac);
-
-    sfpi::vFloat poly =
-        ((((((0.0002170391f * frac) + 0.001243946f) * frac + 0.0096788315f) * frac + 0.055483369f) * frac +
-          0.24022982f) *
-             frac +
-         0.69314699f) *
-            frac +
-        1.0000000018f;
+    constexpr float coeffs_61f[] = {
+        1.0000000018f, 0.69314699f, 0.24022982f, 0.055483369f, 0.0096788315f, 0.001243946f, 0.0002170391f};
+    sfpi::vFloat poly = PolynomialEvaluator<7, sfpi::vFloat, float>::eval(coeffs_61f, frac);
 
     // Restore exponent
     zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
