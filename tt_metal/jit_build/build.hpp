@@ -89,10 +89,9 @@ class alignas(CACHE_LINE_ALIGNMENT) JitBuildState {
 protected:
     const JitBuildEnv& env_;
 
-    int core_id_;
-    int is_fw_;
-    uint32_t dispatch_message_addr_;
+    bool is_fw_;
     bool process_defines_at_compile_{};
+    uint32_t dispatch_message_addr_;
 
     std::string out_path_;
     std::string target_name_;

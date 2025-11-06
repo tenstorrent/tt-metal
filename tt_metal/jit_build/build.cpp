@@ -288,10 +288,9 @@ void JitBuildEnv::init(
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     env_(env),
-    core_id_(build_config.processor_id),
     is_fw_(build_config.is_fw),
-    dispatch_message_addr_(build_config.dispatch_message_addr),
     process_defines_at_compile_(true),
+    dispatch_message_addr_(build_config.dispatch_message_addr),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
     cflags_(env.cflags_),
     defines_(env.defines_),
@@ -314,7 +313,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     }
 
     HalJitBuildQueryInterface::Params params{
-        this->is_fw_, build_config.core_type, build_config.processor_class, this->core_id_};
+        this->is_fw_, build_config.core_type, build_config.processor_class, build_config.processor_id};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
