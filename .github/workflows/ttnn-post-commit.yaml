@@ -26,6 +26,10 @@ on:
         required: false
         type: boolean
         default: false
+      merge-gate-call:
+        required: false
+        type: boolean
+        default: false
 
   workflow_dispatch:
     inputs:
