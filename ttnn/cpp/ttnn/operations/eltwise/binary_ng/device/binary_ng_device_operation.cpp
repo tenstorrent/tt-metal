@@ -47,7 +47,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MAXIMUM:
         case MINIMUM:
         case XLOGY:
-        case POWER: return true;
+        case POWER:
+        case WHERE_TST:
+        case WHERE_TTS: return true;
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         default: return false;
     }
@@ -156,9 +158,13 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "Input tensor B must be on device, got storage type: {}",
             input_tensor_b->storage_type());
     }
-
-    TT_FATAL(
-        input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
+    if (attributes.binary_op_type == BinaryOpType::WHERE_TST || attributes.binary_op_type == BinaryOpType::WHERE_TTS) {
+        TT_FATAL(
+            input_tensor_b.has_value() && attributes.scalar.has_value(), "Input tensor B and scalar value must be set");
+    } else {
+        TT_FATAL(
+            input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
+    }
 
     BinaryNgDeviceOperation::validate_on_program_cache_hit(attributes, tensor_args);
 
@@ -414,7 +420,8 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<bool>& fast_and_approximate_mode,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations) {
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
+    std::optional<unary::ScalarVariant> scalar_value) {
     // Validate storage type for input tensors
     TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,
@@ -437,25 +444,27 @@ BinaryNgDeviceOperation::invoke(
     bool is_sfpu_op =
         (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b, fast_and_approximate_mode.value_or(false)));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
+    bool is_where_op = (binary_op_type == BinaryOpType::WHERE_TTS || binary_op_type == BinaryOpType::WHERE_TST);
     return {
         operation_attributes_t{
             binary_op_type,
             {lhs_activations.begin(), lhs_activations.end()},
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
-            std::nullopt,
+            scalar_value,
             memory_config.value_or(
                 output_tensor.has_value()                     ? output_tensor->memory_config()
                 : input_tensor_a.memory_config().is_sharded() ? input_tensor_a.memory_config()
                                                               : input_tensor_b.memory_config()),
-            input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
-                                     // depending on which LLK is meant to be used.
+            is_where_op ? dtype_b : dtype_a,  // TODO: For mixed dtypes we need to set this value to the appropriate
+                                              // dtype depending on which LLK is meant to be used.
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
             std::nullopt,
             subtile_broadcast_type,
             is_sfpu_op,
-            is_quant_op},
+            is_quant_op,
+            is_where_op},
         tensor_args_t{input_tensor_a, input_tensor_b, output_tensor}};
 }
 
@@ -470,7 +479,8 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<bool>& fast_and_approximate_mode,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    std::optional<unary::ScalarVariant> scalar_value) {
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op =
         (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a, fast_and_approximate_mode.value_or(false)));
@@ -490,7 +500,8 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             SubtileBroadcastType::NONE,
             is_sfpu_op,
-            is_quant_op},
+            is_quant_op,
+            false},
         tensor_args_t{input_tensor_a, std::nullopt, output_tensor}};
 }
 

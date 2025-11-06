@@ -329,6 +329,20 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::WHERE_TTS:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::WHERE;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::WHERE_TST:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::WHERE;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         // sqrt(a^2 + b^2)
         case BinaryOpType::HYPOT:
             process_lhs = unary::UnaryOpType::SQUARE;
@@ -453,6 +467,16 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case GT: return {"gt_int32_tile_init();", "gt_int32_tile"};
         case GE: return {"ge_int32_tile_init();", "ge_int32_tile"};
         case LE: return {"le_int32_tile_init();", "le_int32_tile"};
+        case WHERE:
+            if (dtype == DataType::INT32) {
+                return {"where_tile_init();", "where_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"where_tile_init();", "where_uint32_tile"};
+            } else if (dtype == DataType::FLOAT32) {
+                return {"where_tile_init();", "where_fp32_tile"};
+            } else {
+                return {"where_tile_init();", "where_tile"};
+            }
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -547,20 +571,27 @@ std::map<std::string, std::string> make_dataflow_defines(
 
 bool OpConfig::is_sfpu_op() const { return std::holds_alternative<SfpuBinaryOp>(binary_op); }
 
-uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
-    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    if ((dtype == DataType::FLOAT32) || is_quant_op) {
-        return std::bit_cast<uint32_t>(scalar);
-    }
-    if (dtype == DataType::INT32) {
-        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
-    }
-    if (dtype == DataType::UINT32) {
-        return std::bit_cast<uint32_t>(scalar);
-    }
-    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    auto scalar_bf16 = bfloat16::truncate(scalar);
-    return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
+uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataType dtype, const bool is_quant_op) {
+    // std::visit([&](auto v) {
+    //     std::cout << "pack_scalar_runtime_arg: " << v << std::endl;
+    // }, scalar);
+    return std::visit(
+        [&](auto v) -> uint32_t {
+            // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
+            if ((dtype == DataType::FLOAT32) || is_quant_op) {
+                return std::bit_cast<uint32_t>(static_cast<float>(v));
+            }
+            if (dtype == DataType::INT32) {
+                return std::bit_cast<uint32_t>(static_cast<int32_t>(v));
+            }
+            if (dtype == DataType::UINT32) {
+                return static_cast<uint32_t>(v);
+            }
+            // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
+            auto scalar_bf16 = bfloat16::truncate(static_cast<float>(v));
+            return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
+        },
+        scalar);
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);

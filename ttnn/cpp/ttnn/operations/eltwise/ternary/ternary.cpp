@@ -140,7 +140,15 @@ Tensor invoke_impl(
     if (typecast_needed) {
         condition = ttnn::typecast(predicate, t_true.dtype());
     }
-
+    if (broadcast_type == TernaryBroadcastType::NONE) {
+        std::cout << "\nTTS: Broadcast type is NONE - Binary op \n" << std::endl;
+        return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
+            condition,
+            t_true,
+            scalar_false,
+            ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
+            output);
+    }
     if (is_sharded(condition) || is_sharded(t_true) || is_sharded(memory_config) || is_sharded(output) ||
         is_invalid_bcast(broadcast_type)) {
         return ternary_utils::where_impl(
@@ -177,6 +185,17 @@ Tensor invoke_impl(
     }
     auto broadcast_type =
         ttnn::operations::ternary::get_broadcast_type(condition.logical_shape(), t_false.logical_shape());
+
+    if (broadcast_type == TernaryBroadcastType::NONE) {
+        std::cout << "\nTST: Broadcast type is NONE - Binary op \n" << std::endl;
+        return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
+            condition,
+            t_false,
+            scalar_true,
+            ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
+            output);
+    }
+
     if (is_sharded(condition) || is_sharded(t_false) || is_sharded(memory_config) || is_sharded(output) ||
         is_invalid_bcast(broadcast_type)) {
         return ternary_utils::where_impl(

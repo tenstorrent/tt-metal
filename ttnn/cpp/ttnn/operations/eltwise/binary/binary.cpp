@@ -394,7 +394,8 @@ inline auto invoke_binary_ng(
             fast_and_approximate_mode,
             lhs_activations,
             rhs_activations,
-            post_activations);
+            post_activations,
+            std::nullopt);
 
         // if both inputs are in row major, convert the output to row major
         // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
@@ -420,7 +421,8 @@ inline auto invoke_binary_ng(
             fast_and_approximate_mode,
             lhs_activations,
             rhs_activations,
-            post_activations);
+            post_activations,
+            std::nullopt);
 
         return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
     }
@@ -771,6 +773,29 @@ Tensor BinaryOperationHypot<binary_op_type>::invoke(
         false);  // fast_and_approximate_mode
 }
 
+template <BinaryOpType binary_op_type>
+Tensor WhereOperationWithScalar<binary_op_type>::invoke(
+    const Tensor& condition,
+    const Tensor& true_false_tensor,
+    unary::ScalarVariant scalar_value,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
+    std::cout << "WhereOperationWithScalar: " << std::endl;
+    return ttnn::prim::binary_ng(
+        condition,
+        true_false_tensor,
+        binary_op_type,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        false,          // fast_and_approximate_mode
+        none,           // lhs_activations
+        none,           // rhs_activations
+        none,           // post_activations
+        scalar_value);  // scalar
+}
+
 template struct BinaryOperation<BinaryOpType::ADD>;
 template struct InplaceBinaryOperation<BinaryOpType::ADD>;
 template struct BinaryOperation<BinaryOpType::SUB>;
@@ -839,5 +864,8 @@ template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 // Explicit template instantiations for BinaryOperationWithFastApprox
 template struct BinaryOperationWithFastApprox<BinaryOpType::DIV>;
 template struct InplaceBinaryOperationWithFastApprox<BinaryOpType::DIV>;
+
+template struct WhereOperationWithScalar<BinaryOpType::WHERE_TST>;
+template struct WhereOperationWithScalar<BinaryOpType::WHERE_TTS>;
 
 }  // namespace ttnn::operations::binary

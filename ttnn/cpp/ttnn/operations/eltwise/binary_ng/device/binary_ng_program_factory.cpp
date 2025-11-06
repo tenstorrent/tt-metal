@@ -394,6 +394,7 @@ void set_or_update_runtime_arguments(
             is_quant_op ? std::bit_cast<uint32_t>(
                               operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
                         : 0u;
+        uint32_t compute_scalar_value = quantization_zero_point;
 
         if (b.has_value()) {
             if (has_sharding) {
@@ -406,7 +407,16 @@ void set_or_update_runtime_arguments(
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
-            std::array compute_runtime_args = {c_num_tiles, freq, counter, quantization_zero_point};
+            if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
+                operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
+                compute_scalar_value = pack_scalar_runtime_arg(
+                    operation_attributes.scalar.value(), b.has_value() ? b->dtype() : a.dtype(), false);
+            }
+            // std::visit([&](auto v) {
+            //     std::cout << "compute_scalar_value: " << v
+            //               << " aft: " << compute_scalar_value << std::endl;
+            // }, operation_attributes.scalar.value());
+            std::array compute_runtime_args = {c_num_tiles, freq, counter, compute_scalar_value};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
             const auto scalar = *operation_attributes.scalar;
@@ -428,7 +438,7 @@ void set_or_update_runtime_arguments(
                 cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, quantization_zero_point};
+            std::array compute_runtime_args = {c_num_tiles, 0u, 0u, compute_scalar_value};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         }
 
@@ -814,6 +824,20 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     } else {
         reader_defines["BCAST_LLK"] = "0";
     }
+
+    if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
+        // Add common fill defines
+        compute_kernel_defines["FILL_LLK"] = "fill_tile";
+        if (b_dtype == DataType::INT32 || b_dtype == DataType::UINT32) {
+            compute_kernel_defines["FILL_LLK"] = "fill_tile_int";
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        } else {
+            compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
+        }
+    }
+    compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
+    compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
+    std::cout << "compute_kernel " << get_kernel_file_path(compute_kernel, is_sfpu_op) << std::endl;
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(compute_kernel, is_sfpu_op),
