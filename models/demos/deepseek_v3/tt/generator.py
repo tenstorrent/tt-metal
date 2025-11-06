@@ -506,6 +506,7 @@ class DeepseekGenerator:
             user_out = self._prefill(tokens_batched[user_id], user_id=user_id)
             user_out = user_out[0, 0, -1:, :].squeeze(0)  # [ 1, 1, seq_len, V] -> [V]
             last_logits.append(user_out)
+            self.ccl.reset_sem_counters()
         last_logits = torch.stack(last_logits)
         profiler.end("inference_prefill")
 
@@ -542,7 +543,7 @@ class DeepseekGenerator:
             profiler.start(f"decode_time_{gen_idx}")
             logits = self._decode_step(next_tokens, positions, self.batch_size_per_row).squeeze(0).squeeze(0)
             profiler.end(f"decode_time_{gen_idx}")
-
+            self.ccl.reset_sem_counters()
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
                 forced = teacher_forcing.collect_predicted_tokens(int(pred_tokens[0].item()))
