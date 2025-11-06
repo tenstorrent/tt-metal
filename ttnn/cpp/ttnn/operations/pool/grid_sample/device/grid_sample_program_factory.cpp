@@ -111,8 +111,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t grid_height = grid_shape[1], grid_width = grid_shape[2];
     const uint32_t grid_hw = grid_height * grid_width;
     const uint32_t grid_batching_factor = get_grid_batching_factor(grid_tensor, use_precomputed_grid, mode);
-    bool enable_split_reader = should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid);
-    enable_split_reader = false;
+    const bool enable_split_reader = should_use_split_reader(input_tensor, grid_tensor, use_precomputed_grid);
     tt::tt_metal::CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cores, grid_nsticks_per_core, output_nsticks_per_core = 0;
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
@@ -127,8 +126,12 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     } else {
-        const uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
         const auto compute_grid_size = device->compute_with_storage_grid_size();
+        uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
+
+        if (mode == "nearest") {
+            grid_nsticks = round_up(grid_nsticks, compute_grid_size.x * compute_grid_size.y);
+        }
         auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
             tt::tt_metal::split_work_to_cores(compute_grid_size, grid_nsticks);
 
@@ -146,7 +149,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Create CBs
     const uint32_t grid_stick_size =
         is_sharded ? grid_shape[-1] * grid_tensor.element_size() : get_aligned_stick_size(grid_shape, grid_tensor);
-    const auto [grid_cb_index, grid_cb_handle] = tt::tt_metal::create_cb(
+    const auto [grid_cb_index0, grid_cb_handle0] = tt::tt_metal::create_cb(
         cb_idx++,
         program,
         all_cores,
@@ -154,6 +157,13 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         is_sharded ? grid_nsticks_per_core : 1,
         grid_cb_data_format,
         is_sharded ? grid_tensor.buffer() : nullptr);
+
+    uint32_t grid_cb_index1 = DUMMY_CB_ID;
+    tt::tt_metal::CBHandle grid_cb_handle1 = 0;
+    if (enable_split_reader && !is_sharded && mode == "nearest") {
+        std::tie(grid_cb_index1, grid_cb_handle1) =
+            tt::tt_metal::create_cb(cb_idx++, program, all_cores, grid_stick_size, 1, grid_cb_data_format, nullptr);
+    }
 
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
@@ -200,7 +210,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index_0,                            // ct_arg[0]: input_cb_index_0
-        grid_cb_index,                               // ct_arg[1]: grid_cb_index
+        grid_cb_index0,                              // ct_arg[1]: grid_cb_index
         scalar_cb_index_0,                           // ct_arg[2]: scalar_cb_index_0
         input_stick_size,                            // ct_arg[3]: input_stick_size
         grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
@@ -361,8 +371,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     } else if (mode == "nearest") {
         // Writer for nearest mode with sharded grid - matches sharded reader argument structure
         std::vector<uint32_t> writer_compile_time_args = {
-            input_cb_index_0,                            // ct_arg[0]: input_cb_index
-            grid_cb_index,                               // ct_arg[1]: grid_cb_index
+            DUMMY_CB_ID,                                 // ct_arg[0]: input_cb_index
+            grid_cb_index0,                              // ct_arg[1]: grid_cb_index
             output_cb_index,                             // ct_arg[2]: output_cb_index (replaces scalar_cb_index)
             input_stick_size,                            // ct_arg[3]: input_stick_size
             grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
@@ -402,7 +412,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
         if (enable_split_reader) {
             auto writer1_compile_time_args = writer_compile_time_args;
-            writer1_compile_time_args[0] = input_cb_index_1;  // ct_arg[0
+            writer1_compile_time_args[1] = grid_cb_index1;    // ct_arg[0
             writer1_compile_time_args[13] = 1;                // ct_arg[13]: reader_id = 1
 
             writer1_kernel_id = tt::tt_metal::CreateKernel(
@@ -496,7 +506,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             const auto& output_tensor = output_tensors[0];
 
             if (is_sharded) {
-                tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, grid_cb_handle, *grid_tensor.buffer());
+                tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, grid_cb_handle0, *grid_tensor.buffer());
                 tt::tt_metal::UpdateDynamicCircularBufferAddress(prog, output_cb_handle, *output_tensor.buffer());
                 auto kernel0_id = reader0_kernel_id;
                 auto kernel1_id = reader1_kernel_id;

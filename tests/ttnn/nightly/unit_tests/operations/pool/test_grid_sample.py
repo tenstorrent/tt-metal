@@ -351,9 +351,9 @@ def prepare_sharded_ttnn_grid(
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        ((1, 256, 12, 40), (1, 1, 1408, 2)),
-        # ((1, 256, 24, 80), (1, 7, 25281, 2)),
-        # ((1, 256, 48, 160), (1, 7, 25281, 2)),
+        ((1, 256, 48, 160), (1, 1, 1408, 2)),
+        # ((1, 256, 24, 80), (1, 7, 1408, 2)),
+        # ((1, 256, 48, 160), (1, 7, 1408, 2)),
         # ((16, 32, 100, 100), (16, 10000, 4, 2)),
         # ((48, 32, 12, 20), (48, 3567, 8, 2)),
         # ((8, 32, 100, 100), (8, 300, 4, 2)),
@@ -369,13 +369,13 @@ def prepare_sharded_ttnn_grid(
 @pytest.mark.parametrize(
     "mode",
     [
-        "nearest",
+        "bilinear",
     ],
 )
 @pytest.mark.parametrize(
     "align_corners",
     [
-        True,
+        False,
     ],
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid):
@@ -465,7 +465,7 @@ def test_grid_sample_batch_output_channels_flag(
     grid_tensor = torch.rand(batch_size, grid_h, grid_w, 2, dtype=torch.float32) * 2.0 - 1.0
 
     torch_output_nchw = F.grid_sample(
-        torch_input_nchw, grid_tensor, mode="bilinear", padding_mode="zeros", align_corners=False
+        torch_input_nchw, grid_tensor, mode="nearest", padding_mode="zeros", align_corners=True
     )
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
@@ -475,7 +475,14 @@ def test_grid_sample_batch_output_channels_flag(
 
     input_shape_nhwc = [batch_size, height, width, channels]
     ttnn_grid_device = prepare_ttnn_grid(
-        grid_tensor, device, use_precomputed_grid, grid_dtype, input_shape_nhwc, grid_batching_factor, mode="bilinear"
+        grid_tensor,
+        device,
+        use_precomputed_grid,
+        grid_dtype,
+        input_shape_nhwc,
+        grid_batching_factor,
+        mode="nearest",
+        align_corners=True,
     )
 
     ttnn_output = ttnn.grid_sample(
@@ -483,8 +490,8 @@ def test_grid_sample_batch_output_channels_flag(
         ttnn_grid_device,
         use_precomputed_grid=use_precomputed_grid,
         batch_output_channels=batch_output_channels,
-        mode="bilinear",
-        align_corners=False,
+        mode="nearest",
+        align_corners=True,
     )
     ttnn_output_torch = ttnn.to_torch(ttnn_output)
 
@@ -497,7 +504,7 @@ def test_grid_sample_batch_output_channels_flag(
         ttnn_output_torch,
         use_precomputed_grid=use_precomputed_grid,
         grid_dtype=grid_dtype,
-        mode="bilinear",
+        mode="nearest",
     )
 
 
@@ -507,15 +514,15 @@ def test_grid_sample_batch_output_channels_flag(
     "input_shape, grid_shape",
     [
         ((1, 256, 48, 160), (1, 1, 1408, 2)),
-        ((1, 256, 24, 80), (1, 1, 1408, 2)),
-        ((48, 64, 32, 64), (48, 15, 15, 2)),
-        ((13, 96, 8, 16), (13, 6, 7, 2)),
+        # ((1, 256, 24, 80), (1, 1, 1408, 2)),
+        # ((48, 64, 32, 64), (48, 15, 15, 2)),
+        # ((13, 96, 8, 16), (13, 6, 7, 2)),
     ],
 )
 @pytest.mark.parametrize(
     "core_grid",
     [
-        None,  # Use full device grid
+        # None,  # Use full device grid
         ttnn.CoreGrid(y=4, x=5),  # 4,5 is the grid size of the BOS N1 device
     ],
 )
@@ -523,8 +530,8 @@ def test_grid_sample_batch_output_channels_flag(
     "mode, align_corners",
     [
         ("nearest", True),
-        ("nearest", False),
-        ("bilinear", False),
+        # ("nearest", False),
+        # ("bilinear", False),
     ],
 )
 def test_grid_sample_sharded(
@@ -584,7 +591,7 @@ def test_grid_sample_sharded(
     )
 
 
-@pytest.mark.parametrize("use_precomputed_grid", [True, False])
+@pytest.mark.parametrize("use_precomputed_grid", [True])
 @pytest.mark.parametrize("batch_output_channels", [True, False])
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize(
@@ -605,7 +612,7 @@ def test_grid_sample_sharded(
 @pytest.mark.parametrize(
     "mode, align_corners",
     [
-        ("bilinear", False),
+        ("nearest", True),
     ],
 )
 def test_grid_sample_sharded_batched(

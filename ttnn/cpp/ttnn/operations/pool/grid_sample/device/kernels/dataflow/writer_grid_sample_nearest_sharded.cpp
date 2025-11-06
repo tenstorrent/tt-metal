@@ -44,7 +44,6 @@ ALWI void process_grid_point_nearest(
 
         nearest_h = static_cast<int32_t>(h_raw);
         nearest_w = static_cast<int32_t>(w_raw);
-        DPRINT << "Precomputed nearest coords: (" << nearest_h << ", " << nearest_w << ")" << ENDL();
     } else {
         // Each regular grid entry has 2 values: x, y coordinates - compute nearest neighbor
         float h_coord_rel, w_coord_rel;
