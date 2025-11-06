@@ -25,6 +25,7 @@ class Attention:
         transformation_mats=None,
     ):
         self.layer_idx = layer_idx
+        self.activation_dtype = ttnn.bfloat8_b
         self.use_sliding_window = self.layer_idx % 2 == 0
         if self.use_sliding_window:
             self.sliding_window = hf_config.sliding_window
@@ -408,8 +409,8 @@ class Attention:
                 tt_sdpa_out,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-
-        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=ttnn.bfloat16)
+        tt_sdpa_out = ttnn.typecast(tt_sdpa_out, ttnn.bfloat8_b)
+        tt_out = ttnn.matmul(tt_sdpa_out, self.o_proj, dtype=self.activation_dtype)
         tt_sdpa_out.deallocate(True)
         tt_out = ttnn.add(tt_out, self.o_proj_bias, output_tensor=tt_out)
 
@@ -418,9 +419,9 @@ class Attention:
         # Clean tensor parallel communication (with performance padding)
         if self.mesh_config.tp > 1:
             tt_out = ttnn.unsqueeze(tt_out, 0)
-            tt_out = self.mesh_config.allreduce(
-                tt_out, self.ccl_manager, pad_size=192 if self.mesh_config.tp == 8 else 0, axis=self.mesh_config.tp_axis
-            )
+            print(tt_out.dtype)
+            tt_out = self.mesh_config.allreduce(tt_out, self.ccl_manager, pad_size=0, axis=self.mesh_config.tp_axis)
+            print(tt_out.dtype)
             tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         return tt_out
