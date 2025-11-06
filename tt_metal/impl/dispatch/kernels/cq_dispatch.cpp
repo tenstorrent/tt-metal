@@ -643,7 +643,10 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
                 mcasts = 0;
             });
 
-            // This is done here so the common case doesn't have to restore the pointers
+            // Write the remainder of the transfer. All the remaining contents of the transfer is now available, since
+            // the size of a single transfer is at most the CB page size. This write has a different destination address
+            // than the default, so we restore the destination address to the start immediately afterwards to avoid the
+            // overhead in the common case.
             if (orphan_size != 0) {
                 uint32_t remainder_xfer_size = xfer_size - orphan_size;
                 // Creating full NOC addr not needed as we are not programming the noc coords
