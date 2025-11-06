@@ -11,7 +11,7 @@ mesh_descriptors {
 # --- Graphs ---------------------------------------------------------------
 
 graph_descriptors {
-  name: "POD"
+  name: "CLUSTER"
   type: "FABRIC"
   instances { mesh { mesh_descriptor: "LBOX" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "LBOX" mesh_id: 1 } }
@@ -19,4 +19,4 @@ graph_descriptors {
 }
 
 # --- Instantiation ----------------------------------------------------------
-top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+top_level_instance { graph { graph_descriptor: "CLUSTER" graph_id: 0 } }
