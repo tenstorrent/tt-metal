@@ -39,6 +39,7 @@ def tokenize_text_data(tokenizer_file, text_data):
     tokenized_data = tokenizer.encode(text_data).ids
     return tokenized_data
 
+
 def save_to_csv(data, output_file):
     """
     Saves the tokenized data as a single space-separated line in a CSV file.

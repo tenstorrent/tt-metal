@@ -1,6 +1,6 @@
 The C++ version of this example depends on the training dataset to be pre-tokenized; it will not work otherwise!
 
-To pre-tokenize the Shakespeare dataset (as an example), use the `dataset_to_tokens.py` script found in tt-train/tools. 
+To pre-tokenize the Shakespeare dataset (as an example), use the `dataset_to_tokens.py` script found in tt-train/tools.
 
 Example usage:
 ```
