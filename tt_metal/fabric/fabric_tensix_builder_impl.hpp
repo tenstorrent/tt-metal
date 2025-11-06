@@ -105,8 +105,6 @@ protected:
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     void append_default_stream_ids_to_ct_args(std::vector<uint32_t>& ct_args) const;
     void append_default_persistent_channel_flags_to_ct_args(std::vector<uint32_t>& ct_args) const;
-    std::vector<uint32_t> get_compile_time_main_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const;
 
     // Configuration parameters
     CoreType core_type_ = CoreType::WORKER;
@@ -177,8 +175,7 @@ public:
         size_t base_l1_address,
         CoreType core_type = CoreType::WORKER);
 
-    std::vector<uint32_t> get_compile_time_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const override;
+    std::vector<uint32_t> get_compile_time_args(const tt::tt_fabric::FabricEriscDatamoverConfig&) const override;
 };
 
 /**
@@ -233,7 +230,6 @@ private:
     uint32_t noc_x_;
     uint32_t noc_y_;
 
-    // Config
     std::shared_ptr<FabricTensixDatamoverMuxConfig> config_;
 
     // Direction for routing
@@ -284,8 +280,8 @@ public:
 
 private:
     const char* get_kernel_file_path() const;
-    std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice* device) const;
-    std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
+    std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice*) const;
+    std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program&) const;
 
     // Core and fabric configuration
     CoreCoord my_core_logical_;
