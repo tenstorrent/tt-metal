@@ -226,8 +226,6 @@ class TtnnWhisper:
             input_mesh_mapper=input_mesh_mapper,
         )
 
-        logger.info(f"input_embeds.shape: {input_embeds.shape}")
-
         # Run encoder
         encoder_hidden_states = self.encoder(
             config=config,
@@ -237,14 +235,42 @@ class TtnnWhisper:
         ttnn.synchronize_device(mesh_device)
         logger.info(f"Time to encoder states: {(time.time() - start_encode)*1000:.3f}ms")
 
-        logger.info(f"encoder_hidden_states.shape: {encoder_hidden_states.shape}")
-        # Try generation with different temperatures
-        best_output = None
-        best_quality_score = float("inf")
-
         # Handle both single temperature and temperature list/tuple
         if isinstance(temperatures, (int, float)):
             temperatures = [temperatures]
+
+        # For streaming mode, skip temperature fallback and quality checks
+        # Use only the first temperature and yield tokens immediately
+        if stream_generation:
+            temperature = temperatures[0]
+            logger.info(f"Streaming mode: using temperature {temperature}, skipping quality checks")
+
+            return self._generate_with_temperature(
+                temperature=temperature,
+                config=config,
+                start_encode=start_encode,
+                generation_config=generation_config,
+                encoder_hidden_states=encoder_hidden_states,
+                input_features=input_features,
+                parameters=parameters,
+                processor=processor,
+                ttnn_linear_weight=ttnn_linear_weight,
+                mesh_device=mesh_device,
+                input_mesh_mapper=input_mesh_mapper,
+                output_mesh_composer=output_mesh_composer,
+                kv_cache=kv_cache,
+                unpadded_batch_size=unpadded_batch_size,
+                return_perf_metrics=return_perf_metrics,
+                return_timestamps=return_timestamps,
+                audio_durations=audio_durations,
+                language=language,
+                task=task,
+                streaming=True,
+            )
+
+        # Non-streaming mode: Try generation with different temperatures
+        best_output = None
+        best_quality_score = float("inf")
 
         for temperature in temperatures:
             logger.info(f"Trying generation with temperature: {temperature}")
@@ -270,122 +296,66 @@ class TtnnWhisper:
                     audio_durations=audio_durations,
                     language=language,
                     task=task,
-                    streaming=stream_generation,
+                    streaming=False,  # Non-streaming mode for quality checks
                 )
 
-                if stream_generation:
-                    # For streaming, collect all results to check quality
-                    outputs = list(output)
-                    if return_perf_metrics:
-                        # outputs = [(texts/segments, avg_logprob, no_speech_prob, ttft, throughput), ...]
-                        result_data = [item[0] for item in outputs]
-                        # Use final avg_logprobs
-                        avg_logprobs = outputs[-1][1] if outputs else torch.zeros(unpadded_batch_size)
-                        # Use final no_speech_probs
-                        no_speech_probs = outputs[-1][2] if outputs else torch.zeros(unpadded_batch_size)
-                        ttft = outputs[0][3] if outputs else 0
-                        throughput = outputs[0][4] if outputs else 0
-                    else:
-                        # outputs = [(texts/segments, avg_logprob, no_speech_prob), ...]
-                        result_data = [item[0] for item in outputs]
-                        # Use final avg_logprobs
-                        avg_logprobs = outputs[-1][1] if outputs else torch.zeros(unpadded_batch_size)
-                        # Use final no_speech_probs
-                        no_speech_probs = outputs[-1][2] if outputs else torch.zeros(unpadded_batch_size)
-
-                    # Check quality for each result
-                    quality_scores = []
-                    for idx, data in enumerate(result_data):
-                        if return_timestamps:
-                            # For timestamps, extract text from segments for quality check
-                            text = " ".join([segment["text"] for segment in data])
-                        else:
-                            text = data
-
-                        compression_ratio = self._calculate_compression_ratio(text)
-                        # Extract per-batch-item metrics
-                        avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else DEFAULT_AVG_LOGPROB
-                        no_speech_prob = (
-                            no_speech_probs[idx].item() if idx < len(no_speech_probs) else DEFAULT_NO_SPEECH_PROB
-                        )
-
-                        is_good, reason = self._check_generation_quality(
-                            text,
-                            avg_logprob,
-                            no_speech_prob,
-                            compression_ratio,
-                            logprob_threshold,
-                            compression_ratio_threshold,
-                            no_speech_threshold,
-                        )
-
-                        if is_good:
-                            logger.info(f"Generation successful with temperature {temperature}")
-                            if return_perf_metrics:
-                                return (result_data, ttft, throughput)
-                            else:
-                                return result_data
-
-                        quality_scores.append(compression_ratio)  # Lower is better
-
-                    # Track best attempt
-                    best_quality = min(quality_scores) if quality_scores else float("inf")
-                    if best_quality < best_quality_score:
-                        best_quality_score = best_quality
-                        best_output = outputs
-
+                # Non-streaming generation - consume the generator to get the single result
+                if return_perf_metrics:
+                    result_data, avg_logprobs, no_speech_probs, ttft, throughput = next(output)
                 else:
-                    # Non-streaming generation
-                    if return_perf_metrics:
-                        result_data, avg_logprobs, no_speech_probs, ttft, throughput = output
+                    result_data, avg_logprobs, no_speech_probs = next(output)
+
+                # Check quality for each result
+                all_good = True
+                for idx, data in enumerate(result_data):
+                    if return_timestamps:
+                        # For timestamps, extract text from segments for quality check
+                        text = " ".join([segment["text"] for segment in data])
                     else:
-                        result_data, avg_logprobs, no_speech_probs = output
+                        text = data
 
-                    # Check quality for each result
-                    all_good = True
-                    for idx, data in enumerate(result_data):
-                        if return_timestamps:
-                            # For timestamps, extract text from segments for quality check
-                            text = " ".join([segment["text"] for segment in data])
-                        else:
-                            text = data
+                    compression_ratio = self._calculate_compression_ratio(text)
+                    # Extract per-batch-item metrics
+                    avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else DEFAULT_AVG_LOGPROB
+                    no_speech_prob = (
+                        no_speech_probs[idx].item() if idx < len(no_speech_probs) else DEFAULT_NO_SPEECH_PROB
+                    )
 
-                        compression_ratio = self._calculate_compression_ratio(text)
-                        # Extract per-batch-item metrics
-                        avg_logprob = avg_logprobs[idx].item() if idx < len(avg_logprobs) else DEFAULT_AVG_LOGPROB
-                        no_speech_prob = (
-                            no_speech_probs[idx].item() if idx < len(no_speech_probs) else DEFAULT_NO_SPEECH_PROB
-                        )
+                    is_good, reason = self._check_generation_quality(
+                        text,
+                        avg_logprob,
+                        no_speech_prob,
+                        compression_ratio,
+                        logprob_threshold,
+                        compression_ratio_threshold,
+                        no_speech_threshold,
+                    )
 
-                        is_good, reason = self._check_generation_quality(
-                            text,
-                            avg_logprob,
-                            no_speech_prob,
-                            compression_ratio,
-                            logprob_threshold,
-                            compression_ratio_threshold,
-                            no_speech_threshold,
-                        )
+                    if not is_good:
+                        logger.info(f"Quality check failed with temperature {temperature}: {reason}")
+                        all_good = False
+                        break
 
-                        if not is_good:
-                            logger.info(f"Quality check failed with temperature {temperature}: {reason}")
-                            all_good = False
-                            break
+                if all_good:
+                    logger.info(f"Generation successful with temperature {temperature}")
+                    if return_perf_metrics:
+                        return (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                    else:
+                        return (result_data, avg_logprobs, no_speech_probs)
 
-                    if all_good:
-                        logger.info(f"Generation successful with temperature {temperature}")
-                        return output
-
-                    # Track best attempt
-                    avg_compression = sum(
-                        self._calculate_compression_ratio(
-                            " ".join([segment["text"] for segment in data]) if return_timestamps else data
-                        )
-                        for data in result_data
-                    ) / len(result_data)
-                    if avg_compression < best_quality_score:
-                        best_quality_score = avg_compression
-                        best_output = output
+                # Track best attempt
+                avg_compression = sum(
+                    self._calculate_compression_ratio(
+                        " ".join([segment["text"] for segment in data]) if return_timestamps else data
+                    )
+                    for data in result_data
+                ) / len(result_data)
+                if avg_compression < best_quality_score:
+                    best_quality_score = avg_compression
+                    if return_perf_metrics:
+                        best_output = (result_data, avg_logprobs, no_speech_probs, ttft, throughput)
+                    else:
+                        best_output = (result_data, avg_logprobs, no_speech_probs)
 
             except Exception as e:
                 logger.warning(f"Generation failed with temperature {temperature}: {e}")
@@ -653,30 +623,36 @@ class TtnnWhisper:
                 else:
                     segments_with_timestamps.append([])
 
-            if streaming:
-                # Yield final result with timestamps
-                if return_perf_metrics:
-                    yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
-                else:
-                    yield segments_with_timestamps, avg_logprob, no_speech_probs
+            # Yield final result with timestamps (works for both streaming and non-streaming)
+            if return_perf_metrics:
+                yield segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
             else:
-                # Return final result with timestamps
-                if return_perf_metrics:
-                    return (segments_with_timestamps, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
-                else:
-                    return (segments_with_timestamps, avg_logprob, no_speech_probs)
+                yield segments_with_timestamps, avg_logprob, no_speech_probs
         else:
             if streaming:
-                # For streaming without timestamps, we've already yielded all results
-                # This should not be reached, but included for completeness
-                return
+                # For streaming without timestamps, yield final accumulated result
+                # Accumulate all tokens from output_ids
+                final_output = []
+                for batch_idx in range(unpadded_batch_size):
+                    # Collect all tokens for this batch item
+                    batch_tokens = [output_ids[i][batch_idx] for i in range(len(output_ids))]
+                    # Decode the full sequence
+                    decoded_text = processor.batch_decode(
+                        torch.tensor(batch_tokens).unsqueeze(0), skip_special_tokens=True
+                    )[0]
+                    final_output.append(decoded_text)
+
+                if return_perf_metrics:
+                    yield final_output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput
+                else:
+                    yield final_output, avg_logprob, no_speech_probs
             else:
                 # Join the collected tokens into final text
                 output = ["".join(tokens) for tokens in output]
                 if return_perf_metrics:
-                    return (output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
+                    yield (output, avg_logprob, no_speech_probs, ttft, avg_decode_throughput)
                 else:
-                    return (output, avg_logprob, no_speech_probs)
+                    yield (output, avg_logprob, no_speech_probs)
 
     def _pad_input_32(self, tensor, value):
         """Pad input to multiple of 32."""

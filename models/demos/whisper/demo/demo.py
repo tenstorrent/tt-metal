@@ -313,6 +313,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     model_repo,
     generation_params: Optional[GenerationParams] = None,
     batch_size_per_device=1,
+    stream=False,
 ):
     torch.manual_seed(0)
     # instantiate model inference pipeline
@@ -342,10 +343,34 @@ def run_demo_whisper_for_conditional_generation_inference(
             logger.info(f"Input path: {input_file_path}")
             samplerate, data = wavfile.read(input_file_path)
             current_batch.append((samplerate, data))
+
         # perform model inference
-        ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
-            current_batch, stream=False, return_perf_metrics=True
-        )
+        if stream:
+            # Handle streaming mode - iterate over generator
+            logger.info(f"Streaming mode enabled for conditional generation inference")
+            last_result = None
+            for result in model_pipeline(current_batch, stream=True, return_perf_metrics=True):
+                last_result = result
+
+            # Extract final metrics from last result
+            if last_result is not None:
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = last_result
+                print()  # New line after streaming
+            else:
+                # Fallback if no results
+                ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = (
+                    [""] * current_batch_size,
+                    None,
+                    None,
+                    0.0,
+                    0.0,
+                )
+        else:
+            # Non-streaming mode
+            ttnn_output, avg_logprob, no_speech_prob, ttft, avg_decode_throughput = model_pipeline(
+                current_batch, stream=False, return_perf_metrics=True
+            )
+
         if i >= num_warmup_runs:  # Exclude first compile run
             total_ttft += ttft
             total_decode_throughput += avg_decode_throughput
@@ -363,6 +388,7 @@ def run_demo_whisper_for_conditional_generation_dataset(
     model_repo,
     generation_params: Optional[GenerationParams] = None,
     batch_size_per_device=1,
+    stream=False,
 ):
     torch.manual_seed(0)
     # instantiate model inference pipeline
@@ -394,11 +420,28 @@ def run_demo_whisper_for_conditional_generation_dataset(
             data = sample["audio"]["array"]
             current_batch.append((samplerate, data))
             reference_sentences.append(sample["text"].lower())
-        ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
-            current_batch,
-            stream=False,
-            return_perf_metrics=False,
-        )
+
+        # Perform model inference with optional streaming
+        if stream:
+            # Handle streaming mode - iterate over generator
+            logger.info(f"Streaming mode enabled for dataset evaluation")
+            last_result = None
+            for result in model_pipeline(current_batch, stream=True, return_perf_metrics=False):
+                last_result = result
+            # Extract final result
+            if last_result is not None:
+                ttnn_output, avg_logprob, no_speech_prob = last_result
+            else:
+                ttnn_output = [""] * current_batch_size
+                avg_logprob = None
+                no_speech_prob = None
+        else:
+            # Non-streaming mode
+            ttnn_output, avg_logprob, no_speech_prob = model_pipeline(
+                current_batch,
+                stream=False,
+                return_perf_metrics=False,
+            )
         batch_start = i + 1
         batch_end = i + current_batch_size
         logger.debug(f"Dataset text (Inputs {batch_start}--{batch_end}) Sample: {reference_sentences}")
@@ -673,6 +716,10 @@ def test_demo_for_audio_classification_dataset(
         ((0.0, 0.2, 0.4, 0.6, 0.8, 1.0), 2.4, -1.0, 0.6, True),  # generation with generate_kwargs
     ],
 )
+@pytest.mark.parametrize(
+    "stream",
+    [True, False],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
 def test_demo_for_conditional_generation(
@@ -690,6 +737,7 @@ def test_demo_for_conditional_generation(
     no_speech_threshold,
     return_timestamps,
     batch_size_per_device,
+    stream,
     request,
 ):
     generation_params = GenerationParams(
@@ -709,6 +757,7 @@ def test_demo_for_conditional_generation(
         model_repo,
         generation_params,
         batch_size_per_device,
+        stream=stream,
     )
 
     if (
@@ -779,6 +828,10 @@ def test_demo_for_conditional_generation(
         ((0.0, 0.2, 0.4, 0.6, 0.8, 1.0), 2.4, -1.0, 0.6, True),  # generation with generate_kwargs
     ],
 )
+@pytest.mark.parametrize(
+    "stream",
+    [True, False],
+)
 # To run the demo with specific device configurations, provide the desired number of devices under the `mesh_device` parameter.
 def test_demo_for_conditional_generation_dataset(
     ttnn_whisper_instance,
@@ -793,6 +846,7 @@ def test_demo_for_conditional_generation_dataset(
     no_speech_threshold,
     return_timestamps,
     batch_size_per_device,
+    stream,
     request,
 ):
     if is_ci_env:
@@ -813,6 +867,7 @@ def test_demo_for_conditional_generation_dataset(
         model_repo,
         generation_params,
         batch_size_per_device,
+        stream=stream,
     )
 
 
