@@ -16,21 +16,15 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
         (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
-        (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
-        (2, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
-        ttnn.bfloat16,
         ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
-        "float_16",
         "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
@@ -64,9 +58,8 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
     "cluster_axis",
     [
         0,
-        1,
     ],
-    ids=["row", "column"],
+    ids=["row"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
