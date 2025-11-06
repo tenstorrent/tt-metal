@@ -555,11 +555,16 @@ nput tensor.
     py_conv_config.def_readwrite("enable_kernel_stride_folding", &Conv2dConfig::enable_kernel_stride_folding, R"doc(
         ===================== EXPERIMENTAL FEATURE ======================
 
-        Enables tensor folding optimization when strides match kernel dimensions.
+        Enables tensor folding optimization that transforms convolution operations by reshaping tensors
+        and adjusting stride patterns for improved computational efficiency.
 
-        This feature is under development and may change without notice.
-        Use with caution in production environments (Issue: #22378).
+        Args:
+            enable_kernel_stride_folding (Optional[bool]):
+                - None (default): Automatic enablement based on optimal conditions
+                - True: Force enable the optimization
+                - False: Disable the optimization
 
+        Behavior:
         When enabled, this optimization reshapes tensors as follows:
 
         * Input tensor (NHWC format):
@@ -569,15 +574,33 @@ nput tensor.
         * Weight tensor:
           - From: (OC, IC, kernel[0], kernel[1])
           - To: (1, 1, IC * (kernel[0] + pad_h) * (kernel[1] + pad_w), OC)
-          Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding argument,
-          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
+          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1]
 
-        Note: This optimization is currently only applied when all of the following conditions are met:
-        1. The input tensor is stored in DRAM memory.
-        2. The input tensor's height and width are divisible by the stride dimensions.
-        3. Stride values are equal to or less than the kernel dimensions.
-        4. Input tensor's padding must be zero.
-        5. Input tensor data type is not BFLOAT8_B.
+        * Stride: Becomes (1, 1) after folding
+
+        Automatic Enablement:
+        When set to None, automatically enabled when ALL conditions are met (transforms conv2d into Fold + MatMul):
+        1. Stride equals kernel size in both dimensions (stride == kernel_size)
+        2. Stride is greater than 1 in at least one dimension
+        3. No dilation applied (dilation == [1, 1])
+        4. Input height and width (after padding) are divisible by respective stride values
+        5. Input tensor memory: DRAM (all types except bfloat8_b) OR L1 Height-sharded (all types)
+
+        Manual Enablement:
+        Particularly beneficial for unaligned input channels (e.g., small channel counts like 3 RGB channels).
+
+        Requirements when forcing enable_kernel_stride_folding=True:
+        - Stride ≤ kernel size in both dimensions
+        - Input tensor supports folding (DRAM except bfloat8_b, or L1 Height-sharded)
+        - Input dimensions after padding are divisible by stride values
+
+        Example:
+        For small channel counts (like 3 RGB channels) with stride=2x2, kernel=7x7:
+        - Transforms 3 channels → 12 channels, stride 2x2 → 1x1
+        - Reduces required padding for alignment (3→12 uses alignment more efficiently)
+        - Kernel size reduces to kernel/stride (e.g., 7x7 kernel → 4x4 kernel with padding)
+
+        Note: The weight tensor padding is applied implicitly and not passed via the padding argument.
 
         ===============================================================
         )doc");

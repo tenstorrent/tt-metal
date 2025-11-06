@@ -45,6 +45,14 @@ def load_inputs(user_input, batch):
     return in_prompt
 
 
+def post_process_on_device(logits, index):
+    next_token_logits = logits[:, index, :]
+    # argmax support only ROW_MAJOR layout
+    next_token_logits = ttnn.to_layout(next_token_logits, layout=ttnn.ROW_MAJOR_LAYOUT)
+    next_tokens = ttnn.argmax(next_token_logits, dim=-1)
+    return next_tokens
+
+
 def post_process(logits, index):
     next_token_logits = logits[:, index, :]
     next_tokens = torch.argmax(next_token_logits, dim=-1)
@@ -371,12 +379,14 @@ def run_falcon_demo_kv(
             else:
                 raise ValueError("Invalid type for tt_attention_mask")
 
-        logits = tt_tensors_to_torch_tensors(tt_logits, mesh_device, concat_dim=0).squeeze(1)
+        tt_logits = ttnn.squeeze(tt_logits, 1)
+        tt_user_output_ids = post_process_on_device(tt_logits, num_input_tokens - 1)
+        user_output_ids = tt_tensors_to_torch_tensors(tt_user_output_ids, mesh_device)
+        user_output_ids = user_output_ids[:, None]
 
         tt_prefill_input_ids.deallocate()
         tt_logits.deallocate()
 
-        user_output_ids = post_processor(logits=logits, index=num_input_tokens - 1)
         output_ids[user_id::batch_size] = user_output_ids
 
         if i >= N_warmup_prefill:
@@ -539,6 +549,7 @@ def run_falcon_demo_kv(
     run_type = f"demo_perf_{num_devices}chip" if perf_mode else f"demo_generate_{num_devices}chip"
     if galaxy_type:
         run_type += f"_{galaxy_type}"
+
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=run_type,
@@ -546,7 +557,7 @@ def run_falcon_demo_kv(
         ml_model_type="llm",
         num_layers=num_layers,
         batch_size=batch_size,
-        config_params=configuration.to_dict(),
+        config_params={"data_parallel": num_devices, "tensor_parallel": 1},
         precision=f"prefill[{model_config_strs_prefill_decode[0]}]_decode[{model_config_strs_prefill_decode[1]}]",
         input_sequence_length=num_input_tokens,
         output_sequence_length=1 if perf_mode else output_token_index + 1,

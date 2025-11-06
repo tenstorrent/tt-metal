@@ -37,6 +37,7 @@ jobs:
           { name: "Galaxy Stable Diffusion 3.5 Large demo tests", arch: wormhole_b0, model: sd35, timeout: 30, owner_id: U03FJB5TM5Y}, # Colman Glagovich
           { name: "Galaxy Flux.1-dev demo tests", arch: wormhole_b0, model: flux1, timeout: 30, owner_id: U08TED0JM9D}, # Samuel Adesoye
           { name: "Galaxy GPT-OSS demo tests", arch: wormhole_b0, model: gpt-oss, timeout: 30, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "Galaxy Wan2.2 demo tests", arch: wormhole_b0, model: wan22, timeout: 25, owner_id: U03FJB5TM5Y}, # Colman Glagovich
           { name: "Galaxy Mochi demo tests", arch: wormhole_b0, model: mochi, timeout: 30, owner_id: U09ELB03XRU}, # Stephen Osborne
         ]
     name: ${{ matrix.test-group.name }}
@@ -79,11 +80,18 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy Llama3 demo tests') && !cancelled() }}
+        id: save-environment-data
+        if: ${{ !cancelled() }}
         run: |
-          python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy Llama3 demo tests') && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

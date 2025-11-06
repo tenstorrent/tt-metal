@@ -131,8 +131,7 @@ uint64_t compute_build_key(ChipId device_id, uint8_t num_hw_cqs) {
     return static_cast<uint64_t>(hash);
 }
 
-std::vector<JitBuildState> create_build_state(
-    JitBuildEnv& build_env, ChipId /*device_id*/, uint8_t num_hw_cqs, bool is_fw) {
+std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, ChipId /*device_id*/, bool is_fw) {
     // Get the dispatch message address for this device
     uint32_t dispatch_message_addr = MetalContext::instance().dispatch_mem_map().get_dispatch_message_addr_start();
 
@@ -174,14 +173,12 @@ void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
     const size_t fw_compile_hash =
         std::hash<std::string>{}(tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-
-    device_id_to_build_env_[device_id].build_key = build_key;
     device_id_to_build_env_[device_id].build_env.init(
         build_key, fw_compile_hash, tt::tt_metal::MetalContext::instance().get_cluster().arch(), device_kernel_defines);
     device_id_to_build_env_[device_id].firmware_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, true);
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, true);
     device_id_to_build_env_[device_id].kernel_build_states =
-        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, false);
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, false);
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(ChipId device_id) {
@@ -234,7 +231,7 @@ std::vector<BuildEnvInfo> BuildEnvManager::get_all_build_envs_info() {
     std::vector<BuildEnvInfo> build_env_info;
     build_env_info.reserve(device_id_to_build_env_.size());
     for (const auto& [device_id, build_env] : device_id_to_build_env_) {
-        build_env_info.emplace_back(device_id, build_env.build_key, build_env.build_env.get_out_firmware_root_path());
+        build_env_info.emplace_back(device_id, build_env.build_key(), build_env.build_env.get_out_firmware_root_path());
     }
     return build_env_info;
 }
