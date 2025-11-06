@@ -12,7 +12,6 @@ inputs:
   tracy:
     required: false
     default: "false"
-    type: boolean
     description: "Whether to look for profiler-enabled artifacts"
 
 outputs:
@@ -108,10 +107,10 @@ runs:
         fi
 
         # Find wheel artifact
-        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "eager-dist|ttnn.*\.whl" | head -1 || true)
+        WHEEL_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "eager-dist|ttnn" | head -1 || true)
 
         # Find packages artifact (optional)
-        PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-.*\.deb" | head -1 || true)
+        PACKAGES_ARTIFACT=$(echo "$ARTIFACTS" | grep -E "packages-" | head -1 || true)
 
         if [ -z "$BUILD_ARTIFACT" ]; then
           echo "ERROR: Could not find build artifact matching pattern"

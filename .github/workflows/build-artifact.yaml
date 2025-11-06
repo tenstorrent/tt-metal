@@ -99,10 +99,10 @@ on:
         value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.packages-artifact-name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.packages-artifact-name || '') }}
       build-artifact-name:
         description: "Name of the published build artifact"
-        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.build_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.build-artifact-name || '') }}
+        value: ${{ jobs.build-artifact.result == 'success' && jobs.build-artifact.outputs.build_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.build_artifact_name || '') }}
       wheel-artifact-name:
         description: "Name of the published wheel artifact"
-        value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.wheel_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.wheel-artifact-name || '') }}
+        value: ${{ jobs.build-wheel.result == 'success' && jobs.build-wheel.outputs.wheel_artifact_name || (jobs.download-artifacts.result == 'success' && jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
 
   workflow_dispatch:
     inputs:
@@ -167,8 +167,8 @@ jobs:
     if: ${{ inputs.use-artifacts-from-run != '' }}
     runs-on: ubuntu-latest
     outputs:
-      build-artifact-name: ${{ steps.download.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ steps.download.outputs.wheel-artifact-name }}
+      build_artifact_name: ${{ steps.download.outputs.build-artifact-name }}
+      wheel_artifact_name: ${{ steps.download.outputs.wheel-artifact-name }}
       packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout
