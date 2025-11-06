@@ -11,7 +11,7 @@ To build and execute, you may use the following commands:
 
 	export TT_METAL_HOME=$(pwd)
 	./build_metal.sh --build-programming-examples
-	./build/programming_examples/metal_example_llk_init_uninit_ttsim_tensix_dump
+	TT_METAL_SLOW_DISPATCH_MODE=1 ./build/programming_examples/metal_example_llk_init_uninit_ttsim_tensix_dump
 
 How to use TTSIM_TENSIX_DUMP
 ----------------------------
