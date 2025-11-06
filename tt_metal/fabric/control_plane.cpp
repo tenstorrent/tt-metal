@@ -169,7 +169,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
             const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
+            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& /*golden_link_counts*/,
             size_t& val) {
             if (skip_direction(fabric_node_id, direction)) {
                 return;
@@ -444,7 +444,8 @@ void ControlPlane::init_control_plane(
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
+    auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file, fabric_config);
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
         driver, distributed_context, &tt::tt_metal::MetalContext::instance().hal(), rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
@@ -469,9 +470,10 @@ void ControlPlane::init_control_plane(
         // o o o o
         // o o o o
         // o o o o
-        bool is_1d = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[0] == 1 ||
-                     this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1] == 1;
-        if (cluster.is_ubb_galaxy() && !is_1d) {
+        const bool is_1d = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[0] == 1 ||
+                           this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1] == 1;
+        const size_t board_size = cluster.get_unique_chip_ids().size();
+        if (cluster.is_ubb_galaxy() && !is_1d && board_size == 32) {  // Using full board size for UBB Galaxy
             int y_size = this->routing_table_generator_->mesh_graph->get_mesh_shape(MeshId{0})[1];
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 1}, FabricNodeId(MeshId{0}, 0)});
             fixed_asic_position_pinnings.push_back({AsicPosition{1, 5}, FabricNodeId(MeshId{0}, 1)});
@@ -1676,9 +1678,12 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
         (this->topology_mapper_ == nullptr)
             ? this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id)
             : this->topology_mapper_->get_chip_ids(mesh_id, host_rank_id);
-    auto mesh_shape = this->get_physical_mesh_shape(mesh_id);
+    uint16_t num_chips = MAX_CHIPS_LOWLAT_1D < local_mesh_chip_id_container.size()
+                             ? MAX_CHIPS_LOWLAT_1D
+                             : static_cast<uint16_t>(local_mesh_chip_id_container.size());
+
     intra_mesh_routing_path_t<1, false> routing_path;
-    routing_path.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), MAX_CHIPS_LOWLAT_1D);
+    routing_path.calculate_chip_to_all_routing_fields(0, num_chips);
 
     // For each source chip in the current mesh
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
@@ -1741,6 +1746,7 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
     // Get mesh shape for 2D routing calculation
     MeshShape mesh_shape = this->get_physical_mesh_shape(mesh_id);
     uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
+    uint16_t ew_dim = mesh_shape[1];  // east-west dimension
     TT_ASSERT(num_chips <= 256, "Number of chips exceeds 256 for mesh {}", *mesh_id);
     TT_ASSERT(
         mesh_shape[0] <= 16 && mesh_shape[1] <= 16,
@@ -1753,7 +1759,7 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
-        routing_path.calculate_chip_to_all_routing_fields(src_fabric_node_id, mesh_shape[0] * mesh_shape[1]);
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
         write_to_all_tensix_cores(
             &routing_path,
