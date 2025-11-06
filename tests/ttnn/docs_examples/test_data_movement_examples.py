@@ -43,3 +43,21 @@ def test_concat(device):
     # Concatenate along dimension 3
     concatenated_tensor = ttnn.concat([tensor1, tensor2], dim=3)
     print("Concatenated Tensor Shape:", concatenated_tensor.shape)  # [1, 1, 64, 64]
+
+
+def test_nonzero(device):
+    # Create a tensor with some zero and non-zero elements
+    input_tensor = torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)
+    input_tensor_ttnn = ttnn.from_torch(input_tensor, device=device)
+
+    # Find indices of non-zero elements
+    nonzero_indices = ttnn.nonzero(input_tensor_ttnn)
+
+
+def test_pad(device):
+    # Create a tensor to pad
+    input_tensor = ttnn.rand([1, 1, 4, 4], ttnn.bfloat16, device=device)
+
+    # Pad the tensor with 1 zero on all sides
+    padded_tensor = ttnn.pad(input_tensor, (1, 1, 1, 1), 0)
+    print("Padded Tensor Shape:", padded_tensor.shape)  # [1, 1, 6, 6]
