@@ -264,7 +264,7 @@ public:
 
     static std::uint64_t get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
 
-    static void set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id); }
+    static void set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
 
     static std::uint64_t fetch_and_increment_tensor_id_counter() { return tensor_id_counter.fetch_add(1); }
 
