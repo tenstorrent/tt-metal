@@ -74,7 +74,7 @@ jobs:
         default-ttnn-tests:
           [[
             { name: "ttnn example tests", cmd: "./tests/scripts/run_ttnn_examples.sh", merge_gate: true },
-            { name: "ttnn pool group", cmd: "pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m \"not disable_fast_runtime_mode\"", merge_gate: false }
+            { name: "ttnn pool group", cmd: "pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m 'not disable_fast_runtime_mode'", merge_gate: false }
           ]]
     steps:
       - name: Compute tests
