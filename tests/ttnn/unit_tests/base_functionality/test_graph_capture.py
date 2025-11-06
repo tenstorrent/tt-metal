@@ -1,11 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-# Note: Graph node indices in these tests reflect the behavior after tensor_id deduplication.
-# Tensors now get unique IDs in their constructor, allowing graph capture to properly deduplicate
-# the same tensor when it's tracked multiple times through nested operations. This reduces
-# duplicate tensor nodes in the captured graph, shifting subsequent node indices down by 1.
-
 import pathlib
 import pytest
 import torch
