@@ -1645,6 +1645,27 @@ void pytensor_module(py::module& m_tensor) {
 
                     topology = tt_tensor.tensor_topology()
             )doc")
+        .def(
+            "evaluate",
+            [](Tensor& self) { self.evaluate(); },
+            R"doc(
+                Evaluate the tensor. If tensor is already materialized, this function does nothing.
+                Otherwise, it will evaluate the tensor and materialize it if you're in lazy mode.
+
+                .. code-block:: python
+
+                    tt_tensor.evaluate()
+            )doc")
+        .def(
+            "is_materialized",
+            [](const Tensor& self) { return self.lazy()->is_materialized(); },
+            R"doc(
+                Check if the tensor is materialized.
+
+                .. code-block:: python
+
+                    is_materialized = tt_tensor.is_materialized()
+            )doc")
         .def_property(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },

@@ -434,3 +434,7 @@ if "TT_METAL_RUNTIME_ROOT" not in os.environ:
         root_dir = this_dir
 
     SetRootDir(str(root_dir))
+
+ttnn.experimental.is_lazy_enabled = ttnn._ttnn.operations.experimental.is_lazy_enabled
+ttnn.experimental.lazy_enable = ttnn._ttnn.operations.experimental.lazy_enable
+ttnn.experimental.lazy_disable = ttnn._ttnn.operations.experimental.lazy_disable

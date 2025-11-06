@@ -301,7 +301,12 @@ std::vector<Tensor> Tensor::make_lazy_tensors(
 const std::shared_ptr<LazyTensor>& Tensor::lazy() const { return lazy_tensor_; }
 
 // TODO: Rename to eval
-void Tensor::evaluate() { ttnn::experimental::lazy::evaluate(lazy_tensor_); }
+void Tensor::evaluate() {
+    if (lazy_tensor_->is_materialized()) {
+        return;
+    }
+    ttnn::experimental::lazy::evaluate(lazy_tensor_);
+}
 
 template Tensor Tensor::from_span<bfloat16>(
     tt::stl::Span<const bfloat16> buffer,

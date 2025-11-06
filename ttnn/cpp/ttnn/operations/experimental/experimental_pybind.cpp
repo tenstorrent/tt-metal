@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_pybind.hpp"
+#include "ttnn/operations/experimental/lazy/lazy_mode_pybind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
@@ -119,6 +120,9 @@ void py_module(py::module& module) {
     operations::experimental::ternary::detail::bind_where(module);
 
     minimal_matmul::detail::py_bind_minimal_matmul(module);
+
+    // Lazy mode control
+    ttnn::experimental::lazy::bind_lazy_mode(module);
 }
 
 }  // namespace ttnn::operations::experimental
