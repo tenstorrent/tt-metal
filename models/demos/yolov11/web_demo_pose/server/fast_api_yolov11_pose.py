@@ -384,20 +384,11 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: Raw output range: [{raw_output.min():.6f}, {raw_output.max():.6f}]")
         print(f"DEBUG: Raw output sample [0,:5,0]: {raw_output[0,:5,0].tolist()}")
 
-        # TEMPORARILY SKIP POST-PROCESSING TO DEBUG
-        # processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
-        # Use a simple mock processed output for testing
-        batch_size = raw_output.shape[0]
-        num_channels = 56  # Expected processed format
-        num_anchors = 8400  # Typical number
-        processed_output = (
-            torch.randn(batch_size, num_channels, num_anchors) * 100 + 320
-        )  # Mock coordinates around center
-        # Mock confidences - make them lower and more realistic
-        processed_output[:, 4:5, :] = torch.sigmoid(torch.randn(batch_size, 1, num_anchors) - 2.0)  # Lower confidence
-        print(f"DEBUG: Using mock processed output shape: {processed_output.shape}")
-        print(f"DEBUG: Mock output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
-        print(f"DEBUG: Mock output sample [0,:5,0]: {processed_output[0,:5,0].tolist()}")
+        # Apply PyTorch post-processing to convert raw output to processed format
+        processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
+        print(f"DEBUG: TTNN model output shape: {processed_output.shape}")
+        print(f"DEBUG: Model output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
+        print(f"DEBUG: Model output sample [0,:5,0]: {processed_output[0,:5,0].tolist()}")
 
         # Deallocate TTNN tensors to prevent memory/state issues
         ttnn.deallocate(response)
@@ -494,8 +485,9 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
 
                 kpt_normalized.extend([kx_norm, ky_norm, kv])
 
-            # Combine: [x, y, w, h, conf, kpt_x1, kpt_y1, kpt_conf1, ...]
-            detection = [x_norm, y_norm, w_norm, h_norm, confidence] + kpt_normalized
+            # Combine: [x, y, w, h, conf, class_id, kpt_x1, kpt_y1, kpt_conf1, ...]
+            # class_id = 0 for person
+            detection = [x_norm, y_norm, w_norm, h_norm, confidence, 0] + kpt_normalized
             detections.append(detection)
 
             # Debug: print first detection coordinates
@@ -506,7 +498,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
 
         # Apply NMS to remove overlapping detections
         if len(detections) > 1:
-            detections = apply_simple_nms(detections, iou_threshold=0.3)
+            detections = apply_simple_nms(detections, iou_threshold=0.5)
 
         print(f"DEBUG: Final detections after NMS: {len(detections)}")
 
