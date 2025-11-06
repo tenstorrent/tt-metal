@@ -36,6 +36,11 @@ bool run_atomic_semaphore_test(
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
 
+    std::cerr << "Sender core location X,Y: " << test_config.sender_core_coord.x << ","
+              << test_config.sender_core_coord.y << std::endl;
+    std::cerr << "Receiver core location X,Y: " << test_config.receiver_core_coord.x << ","
+              << test_config.receiver_core_coord.y << std::endl;
+
     /* ================ SETUP ================ */
 
     // Program
