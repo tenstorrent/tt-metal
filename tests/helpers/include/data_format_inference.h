@@ -17,11 +17,17 @@
 #elif defined(ARCH_WORMHOLE)
 constexpr bool is_blackhole = false;
 constexpr bool is_wormhole  = true;
+constexpr bool is_quasar    = false;
 #elif defined(ARCH_BLACKHOLE)
 constexpr bool is_blackhole = true;
 constexpr bool is_wormhole  = false;
+constexpr bool is_quasar    = false;
+#elif defined(ARCH_QUASAR)
+constexpr bool is_blackhole = false;
+constexpr bool is_wormhole  = false;
+constexpr bool is_quasar    = true;
 #else
-#error "You must define either ARCH_WORMHOLE or ARCH_BLACKHOLE"
+#error "You must define either ARCH_WORMHOLE or ARCH_BLACKHOLE or ARCH_QUASAR"
 #endif
 
 /**
@@ -50,6 +56,7 @@ struct FormatConfig
     }
 };
 
+#ifndef ARCH_QUASAR
 constexpr bool is_exponentB(DataFormat format)
 {
     // Return true if format has an exponentB representation i.e 8-bit exponent
@@ -253,3 +260,4 @@ constexpr std::array<FormatConfig, N> data_formats()
 
     return build_data_formats<N>(std::make_index_sequence<N> {}, intermediate_config, final_config);
 }
+#endif
