@@ -418,6 +418,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
+            // Serialize Inspector RPC data before throwing
+            log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
+            Inspector::serialize_rpc();
+
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
@@ -473,7 +477,6 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         // Serialize Inspector RPC data before throwing
         log_info(LogAlways, "Timeout detected - serializing Inspector RPC data");
         Inspector::serialize_rpc();
-        log_info(LogAlways, "Inspector RPC serialization requested");
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
