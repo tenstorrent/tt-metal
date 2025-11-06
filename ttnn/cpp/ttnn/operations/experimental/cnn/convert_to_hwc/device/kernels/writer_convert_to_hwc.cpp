@@ -67,10 +67,8 @@ void kernel_main() {
 
             uint64_t src_addr_base;
             if constexpr (is_input_in_dram) {
-                // Use bank-based addressing for DRAM reads
                 src_addr_base = get_noc_addr_from_bank_id<true>(bank_id, dram_base_read_addr);
             } else {
-                // Use NOC coordinates for L1 reads
                 src_addr_base = get_noc_addr(src_x, src_y, get_read_ptr(cb_in));
             }
 

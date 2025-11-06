@@ -248,7 +248,7 @@ def test_convert_to_hwc_dram(
             f"Not enough DRAM cores to run test case (need {requested_num_dram_cores} but have {dram_num_cores})"
         )
 
-    is_uneven = padded_sharded_dim * core_grid.num_cores() > HW
+    is_uneven = input_padded_sharded_dim * input_core_grid.num_cores() > HW
     if is_uneven and B > 1:
         pytest.skip(f"Uneven sharding is not supported when B > 1 (was {B})")
 

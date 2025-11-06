@@ -241,21 +241,44 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
             }
         }
 
-        // Calculate source offset: [B*C, padded_shard_width] layout (interleaved batch-channel)
-        // Each core physically has padded_shard_width elements, but logically may have fewer
-        uint32_t src_offset =
-            (batch_id * channels * padded_shard_width + src_hw_offset * channels) * element_size_bytes;
+        // Generate one transfer per C and B (stick-by-stick)
+        for (uint32_t c_idx = 0; c_idx < channels; c_idx++) {
+            // Calculate source offset: [B*C, padded_shard_width] layout (interleaved batch-channel)
+            // Each core physically has padded_shard_width elements, but logically may have fewer
+            uint32_t src_offset =
+                (batch_id * channels * padded_shard_width + src_hw_offset * channels + c_idx) * element_size_bytes;
 
-        // Calculate destination offset: [1, C, BHW_per_output_core] layout
-        uint32_t dst_bhw_offset = bhw_idx - dst_bhw_start;
-        uint32_t dst_offset = dst_bhw_offset * channels * element_size_bytes;
+            // Calculate destination offset: [1, C, BHW_per_output_core] layout
+            uint32_t dst_bhw_offset = bhw_idx - dst_bhw_start;
+            uint32_t dst_offset = (dst_bhw_offset * channels + c_idx) * element_size_bytes;
 
-        // Group by source core
-        if (transfers_by_src.find(src_core) == transfers_by_src.end()) {
-            transfers_by_src[src_core] = std::vector<TransferData>();
+            // Group by source core
+            if (transfers_by_src.find(src_core) == transfers_by_src.end()) {
+                transfers_by_src[src_core] = std::vector<TransferData>();
+            }
+
+            // Create one transfer per element (C and B combination)
+            transfers_by_src[src_core].emplace_back(src_offset, dst_offset, element_size_bytes);
         }
+    }
 
-        transfers_by_src[src_core].emplace_back(src_offset, dst_offset, channels * element_size_bytes);
+    // Log transfers before optimization
+    log_info(tt::LogType::LogAlways, "BEFORE OPTIMIZATION - dst_core={}, total transfers by src:", dst_core);
+    for (const auto& [src_core, transfer_list] : transfers_by_src) {
+        log_info(tt::LogType::LogAlways, "  src_core={}, num_transfers={}", src_core, transfer_list.size());
+        for (size_t i = 0; i < transfer_list.size() && i < 10; i++) {  // Limit to first 10 for readability
+            const auto& t = transfer_list[i];
+            log_info(
+                tt::LogType::LogAlways,
+                "    [{}]: src_offset={}, dst_offset={}, size={}",
+                i,
+                t.src_offset,
+                t.dst_offset,
+                t.size);
+        }
+        if (transfer_list.size() > 10) {
+            log_info(tt::LogType::LogAlways, "    ... ({} more transfers)", transfer_list.size() - 10);
+        }
     }
 
     return transfers_by_src;
@@ -335,6 +358,27 @@ std::vector<BatchTransferInstruction> optimize_transfers(
                 current_transfer.size,
                 0);  // bank_id = 0 for L1 transfers
         }
+    }
+
+    // Log transfers after optimization
+    log_info(
+        tt::LogType::LogAlways,
+        "AFTER OPTIMIZATION - dst_core={}, final instructions={}",
+        dst_core,
+        instructions.size());
+    for (size_t i = 0; i < instructions.size() && i < 20; i++) {  // Limit to first 20 for readability
+        const auto& instr = instructions[i];
+        log_info(
+            tt::LogType::LogAlways,
+            "  [{}]: src_core={}, src_offset={}, dst_offset={}, size={}",
+            i,
+            instr.src_core_idx,
+            instr.src_offset,
+            instr.dst_offset,
+            instr.transfer_size);
+    }
+    if (instructions.size() > 20) {
+        log_info(tt::LogType::LogAlways, "  ... ({} more instructions)", instructions.size() - 20);
     }
 
     return instructions;
