@@ -57,7 +57,7 @@ struct MeshScopeTestParams {
 
 const std::string kDualHostMeshDesc =
     std::filesystem::path(::tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
 
 // Define eth_coord mappings for the dual host mesh descriptor
 // This is a 2x4 mesh split between 2 hosts, where:
