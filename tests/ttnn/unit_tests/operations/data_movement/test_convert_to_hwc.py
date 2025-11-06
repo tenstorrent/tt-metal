@@ -67,6 +67,15 @@ BATCH_TEST_CASES = [1, 2, 4, 8]
             128,
         ),
         (
+            30,
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+                }
+            ),
+            32,
+        ),
+        (
             60,
             ttnn.CoreRangeSet(
                 {
@@ -101,6 +110,10 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
     requested_num_cores = core_grid.num_cores()
     if device_num_cores < requested_num_cores:
         pytest.skip(f"Not enough cores to run test case (need {requested_num_cores} but have {device_num_cores})")
+
+    is_uneven = padded_sharded_dim * core_grid.num_cores() > HW
+    if is_uneven and B > 1:
+        pytest.skip(f"Uneven sharding is not supported when B > 1 (was {B})")
 
     input_tensor = torch.concat(
         [
@@ -234,6 +247,10 @@ def test_convert_to_hwc_dram(
         pytest.skip(
             f"Not enough DRAM cores to run test case (need {requested_num_dram_cores} but have {dram_num_cores})"
         )
+
+    is_uneven = padded_sharded_dim * core_grid.num_cores() > HW
+    if is_uneven and B > 1:
+        pytest.skip(f"Uneven sharding is not supported when B > 1 (was {B})")
 
     input_tensor = torch.randn([1, 1, C, HW], dtype=torch.bfloat16)
     expected = input_tensor.transpose(2, 3)

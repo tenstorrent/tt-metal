@@ -197,9 +197,6 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
         return std::min(padded_shard_width, remaining_hw);
     };
 
-    // Helper function to get starting HW index for a given core
-    auto get_hw_start_for_core = [&](uint32_t core_idx) -> uint32_t { return core_idx * padded_shard_width; };
-
     // Check if we have uneven sharding (total logical HW < total padded capacity)
     uint32_t total_padded_capacity = input_num_cores * padded_shard_width;
     bool is_uneven_sharding = hw_total < total_padded_capacity;
@@ -207,12 +204,10 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
     uint32_t dst_bhw_start, dst_bhw_end;
 
     if (is_uneven_sharding && batch_size == 1) {
-        // For uneven sharding with B=1, output core distribution should match input core distribution
-        // Since BHW is just a flattened version of (B, HW), and with B=1, BHW index == HW index
-        uint32_t dst_hw_start = get_hw_start_for_core(dst_core);
-        uint32_t dst_hw_count = get_hw_count_for_core(dst_core);
-        dst_bhw_start = dst_hw_start;
-        dst_bhw_end = dst_bhw_start + dst_hw_count;
+        // For uneven sharding with B=1, we need to process the full padded shard width
+        // to include padding for alignment purposes
+        dst_bhw_start = dst_core * padded_shard_width;
+        dst_bhw_end = (dst_core + 1) * padded_shard_width;
     } else {
         // For even sharding or B>1, use uniform distribution
         uint32_t bhw_total = batch_size * hw_total;
@@ -222,18 +217,28 @@ std::map<uint32_t, std::vector<TransferData>> generate_transfers_for_output_core
     }
 
     for (uint32_t bhw_idx = dst_bhw_start; bhw_idx < dst_bhw_end; bhw_idx++) {
-        // Convert BHW index back to (batch_id, hw_idx)
-        uint32_t batch_id = bhw_idx / hw_total;
-        uint32_t hw_idx = bhw_idx % hw_total;
+        uint32_t src_core, src_hw_offset, batch_id, hw_idx;
 
-        // Find which input core has this hw_idx data
-        uint32_t src_core = hw_idx / padded_shard_width;
-        uint32_t src_hw_offset = hw_idx % padded_shard_width;
+        if (is_uneven_sharding && batch_size == 1) {
+            // For uneven sharding with B=1, map directly to padded shard layout
+            batch_id = 0;                             // B=1
+            hw_idx = bhw_idx;                         // Direct mapping since we're processing padded shard width
+            src_core = dst_core;                      // Same core as destination
+            src_hw_offset = bhw_idx - dst_bhw_start;  // Offset within the padded shard
+        } else {
+            // Convert BHW index back to (batch_id, hw_idx)
+            batch_id = bhw_idx / hw_total;
+            hw_idx = bhw_idx % hw_total;
 
-        // Skip if this hw_idx exceeds the logical HW range for this core
-        uint32_t src_core_hw_count = get_hw_count_for_core(src_core);
-        if (src_hw_offset >= src_core_hw_count) {
-            continue;  // This should not happen for valid logical indices
+            // Find which input core has this hw_idx data
+            src_core = hw_idx / padded_shard_width;
+            src_hw_offset = hw_idx % padded_shard_width;
+
+            // Skip if this hw_idx exceeds the logical HW range for this core
+            uint32_t src_core_hw_count = get_hw_count_for_core(src_core);
+            if (src_hw_offset >= src_core_hw_count) {
+                continue;  // Skip invalid logical indices
+            }
         }
 
         // Calculate source offset: [B*C, padded_shard_width] layout (interleaved batch-channel)
