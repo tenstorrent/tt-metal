@@ -38,11 +38,6 @@ on:
         default: true
         type: boolean
         description: "Force test everything regardless of file changes"
-      use-artifacts-from-run:
-        required: false
-        type: string
-        description: "Workflow run ID to download artifacts from (skips build)"
-
   push:
     branches: ["main"]
 
@@ -61,8 +56,6 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-      actions: read
-      contents: read
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -70,7 +63,6 @@ jobs:
       tracy: true
       version: ${{ inputs.version || '22.04' }}
       skip-tt-train: false
-      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
 
   find-changed-files:
     runs-on: ubuntu-latest
