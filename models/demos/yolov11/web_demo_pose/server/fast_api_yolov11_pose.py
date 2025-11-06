@@ -383,11 +383,19 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: Raw output range: [{raw_output.min():.6f}, {raw_output.max():.6f}]")
         print(f"DEBUG: Raw output sample [0,:5,0]: {raw_output[0,:5,0].tolist()}")
 
-        # Apply PyTorch post-processing to convert raw output to processed format
-        processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
-        print(f"DEBUG: TTNN model output shape: {processed_output.shape}")
-        print(f"DEBUG: Model output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
-        print(f"DEBUG: Model output sample [0,:5,0]: {processed_output[0,:5,0].tolist()}")
+        # TEMPORARILY SKIP POST-PROCESSING TO DEBUG
+        # processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
+        # Use a simple mock processed output for testing
+        batch_size = raw_output.shape[0]
+        num_channels = 56  # Expected processed format
+        num_anchors = 8400  # Typical number
+        processed_output = (
+            torch.randn(batch_size, num_channels, num_anchors) * 100 + 320
+        )  # Mock coordinates around center
+        processed_output[:, 4:5, :] = torch.sigmoid(torch.randn(batch_size, 1, num_anchors))  # Mock confidences
+        print(f"DEBUG: Using mock processed output shape: {processed_output.shape}")
+        print(f"DEBUG: Mock output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
+        print(f"DEBUG: Mock output sample [0,:5,0]: {processed_output[0,:5,0].tolist()}")
 
         # Deallocate TTNN tensors to prevent memory/state issues
         ttnn.deallocate(response)
@@ -410,14 +418,14 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: Confidence stats - Max: {max_conf:.6f}, Mean: {mean_conf:.6f}")
 
         # Apply confidence threshold
-        conf_threshold = 0.5
+        conf_threshold = 0.1
         conf_mask = conf[0, :] > conf_threshold
         valid_indices = torch.where(conf_mask)[0]
 
         print(f"DEBUG: Found {len(valid_indices)} detections above confidence threshold {conf_threshold}")
 
         # Limit detections to prevent server hang
-        max_detections = 5  # Reduced for debugging
+        max_detections = 20  # Increased for debugging
         if len(valid_indices) > max_detections:
             # Sort by confidence and take top N
             conf_values = conf[0, valid_indices]
@@ -460,11 +468,11 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
             w_orig = w / scale
             h_orig = h / scale
 
-            # Normalize to [0,1] for 640x640 display space (what client uses)
-            x_norm = x_orig / 640.0
-            y_norm = y_orig / 640.0
-            w_norm = w_orig / 640.0
-            h_norm = h_orig / 640.0
+            # Normalize to [0,1] relative to original image dimensions (what client expects)
+            x_norm = x_orig / orig_w
+            y_norm = y_orig / orig_h
+            w_norm = w_orig / orig_w
+            h_norm = h_orig / orig_h
 
             # Convert keypoints from 640x640 coords back to original image coords, then normalize
             kpt_normalized = []
@@ -478,9 +486,9 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
                 kx_orig = (kx_640 - pad_left) / scale
                 ky_orig = (ky_640 - pad_top) / scale
 
-                # Normalize to [0,1] for 640x640 display space
-                kx_norm = kx_orig / 640.0
-                ky_norm = ky_orig / 640.0
+                # Normalize to [0,1] relative to original image dimensions
+                kx_norm = kx_orig / orig_w
+                ky_norm = ky_orig / orig_h
 
                 kpt_normalized.extend([kx_norm, ky_norm, kv])
 
