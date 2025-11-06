@@ -42,7 +42,7 @@ jobs:
         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         gtest_filter: "*-*NIGHTLY_*"
   data-movement-perf-tests:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run-additional-workflow == 'true' }}
+    if: ${{ github.event.inputs.microbenchmarks == 'true' }}
     uses: ./.github/workflows/tm-data-movement-perf-impl.yaml
     needs: build-artifact
     secrets: inherit
