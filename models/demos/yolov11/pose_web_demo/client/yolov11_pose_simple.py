@@ -58,13 +58,23 @@ class VideoProcessor(VideoProcessorBase):
 
         for detection in detections:
             # Extract bbox and keypoints
-            bbox = detection[:4]  # x, y, w, h
+            bbox = detection[:4]  # x, y, w, h (normalized 0-1)
+            confidence = detection[4]
             keypoints = detection[5:]  # 51 values (17 keypoints x 3)
+
+            # Debug: print received coordinates
+            if detections.index(detection) == 0:  # Only print first detection
+                print(f"DEBUG: Client received bbox: {bbox} conf={confidence:.3f}")
 
             # Draw bounding box
             x, y, w, h = bbox
             x1, y1 = int(x * width), int(y * height)
             x2, y2 = int((x + w) * width), int((y + h) * height)
+
+            # Debug: show computed coordinates
+            if detections.index(detection) == 0:
+                print(f"DEBUG: Client computed bbox pixels: ({x1}, {y1}) to ({x2}, {y2}) on {width}x{height} frame")
+
             cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
 
             # Reshape keypoints to (17, 3) - x, y, confidence
@@ -72,7 +82,7 @@ class VideoProcessor(VideoProcessorBase):
 
             # Draw keypoints
             for i, (kx, ky, conf) in enumerate(keypoints):
-                if conf > 0.5:  # Only draw confident keypoints
+                if conf > 0.3:  # Lower threshold for keypoint visibility
                     kx_pixel = int(kx * width)
                     ky_pixel = int(ky * height)
                     cv2.circle(img, (kx_pixel, ky_pixel), 3, keypoint_color, -1)
@@ -80,7 +90,7 @@ class VideoProcessor(VideoProcessorBase):
             # Draw skeleton
             for connection in skeleton:
                 start_idx, end_idx = connection
-                if keypoints[start_idx, 2] > 0.5 and keypoints[end_idx, 2] > 0.5:
+                if keypoints[start_idx, 2] > 0.3 and keypoints[end_idx, 2] > 0.3:
                     start_x = int(keypoints[start_idx, 0] * width)
                     start_y = int(keypoints[start_idx, 1] * height)
                     end_x = int(keypoints[end_idx, 0] * width)
@@ -156,10 +166,8 @@ class VideoProcessor(VideoProcessorBase):
         # Process detections
         detections = output.get("detections", [])
 
-        # Resize frame to 640x640 for display (matches server's coordinate normalization)
-        pil_frame = frame.to_image()
-        pil_resized = pil_frame.resize((640, 640))
-        bgr_display = cv2.cvtColor(np.array(pil_resized), cv2.COLOR_RGB2BGR)
+        # Use original frame size for display (like working YOLOv11 client)
+        bgr_display = frame.to_ndarray(format="bgr24")
 
         image_final = self.plot_pose_cv2(bgr_display, detections)
 

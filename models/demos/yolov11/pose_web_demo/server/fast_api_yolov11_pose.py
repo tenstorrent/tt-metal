@@ -249,7 +249,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: bbox shape: {bbox.shape}, conf shape: {conf.shape}, keypoints shape: {keypoints.shape}")
 
         # Apply confidence threshold
-        conf_threshold = 0.5
+        conf_threshold = 0.6
         conf_mask = conf[0, :] > conf_threshold
         valid_indices = torch.where(conf_mask)[0]
 
@@ -326,6 +326,12 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
             # Combine: [x, y, w, h, conf, kpt_x1, kpt_y1, kpt_conf1, ...]
             detection = [x_norm, y_norm, w_norm, h_norm, confidence] + kpt_normalized
             detections.append(detection)
+
+            # Debug: print first detection coordinates
+            if len(detections) == 1:
+                print(
+                    f"DEBUG: First detection bbox: [{x_norm:.3f}, {y_norm:.3f}, {w_norm:.3f}, {h_norm:.3f}] conf={confidence:.3f}"
+                )
 
         # Apply NMS to remove overlapping detections
         if len(detections) > 1:
