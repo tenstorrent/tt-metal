@@ -6,6 +6,7 @@ set(SOURCES
     core/n300_utils_test.cpp
     core/scoped_test.cpp
     core/clip_grad_norm_test.cpp
+    core/random_tests.cpp
     model/linear_regression_ddp_test.cpp
     model/nano_gpt_test.cpp
     model/model_names_test.cpp
