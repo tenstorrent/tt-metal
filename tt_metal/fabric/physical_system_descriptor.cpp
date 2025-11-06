@@ -337,6 +337,8 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     }
 
     system_graph_.host_connectivity_graph[hostname] = {};
+    // Get Ethernet Firmware Version from the driver - Initialize to 0 if not available
+    ethernet_firmware_version_ = cluster_->get_ethernet_firmware_version().value_or(tt::umd::semver_t(0, 0, 0));
 }
 
 void PhysicalSystemDescriptor::run_global_discovery() {
@@ -391,6 +393,20 @@ void PhysicalSystemDescriptor::remove_unresolved_nodes() {
                    asic_descriptors_.find(exit_node.dst_exit_node) == asic_descriptors_.end();
         });
     }
+}
+
+void PhysicalSystemDescriptor::validate_eth_fw_versions(
+    const tt::umd::semver_t& peer_ethernet_firmware_version,
+    const std::string& my_host_name,
+    const std::string& peer_host_name) {
+    TT_FATAL(
+        peer_ethernet_firmware_version == ethernet_firmware_version_,
+        "Ethernet Firmware Versions are expected to be consistent across all nodes in the cluster. Hosts: {} and {} "
+        "have different Ethernet Firmware Versions: {} and {}.",
+        my_host_name,
+        peer_host_name,
+        ethernet_firmware_version_.to_string(),
+        peer_ethernet_firmware_version.to_string());
 }
 
 void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
@@ -449,6 +465,10 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                 Rank{rank},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
+            this->validate_eth_fw_versions(
+                peer_desc.get_ethernet_firmware_version(),
+                asic_descriptors_.begin()->second.host_name,
+                peer_desc.get_asic_descriptors().begin()->second.host_name);
             this->merge(std::move(peer_desc));
         }
     }
