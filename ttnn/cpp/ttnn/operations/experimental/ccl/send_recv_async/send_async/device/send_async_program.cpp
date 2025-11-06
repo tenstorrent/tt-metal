@@ -86,8 +86,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;
 
-    uint32_t num_whole_packets_per_page = 0, partial_packet_size = 0, aligned_partial_packet_size = 0,
-             socket_block_size = 0;
+    uint32_t num_whole_packets_per_page = 0, partial_packet_size = 0, socket_block_size = 0;
     if (num_pages_per_packet > 0) {
         socket_block_size = num_pages_per_packet * socket_aligned_page_size;
     } else {
@@ -150,15 +149,15 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
     std::vector<uint32_t> writer_compile_args = {
-        src0_cb_index,                // cb0_id
-        packet_header_cb_index,       // fabric_packet_header_cb_id
-        socket_block_size,            // socket_block_size
-        socket_aligned_page_size,     // socket_page_size
-        num_pages_per_packet,         // num_pages_per_packet
-        num_whole_packets_per_page,   // num_whole_packets_per_page
-        aligned_partial_packet_size,  // aligned_partial_packet_size
-        fabric_max_payload_size,      // whole_packet_size (fabric_max_payload_size)
-        socket_storage_in_dram,       // is_dram
+        src0_cb_index,               // cb0_id
+        packet_header_cb_index,      // fabric_packet_header_cb_id
+        socket_block_size,           // socket_block_size
+        socket_aligned_page_size,    // socket_page_size
+        num_pages_per_packet,        // num_pages_per_packet
+        num_whole_packets_per_page,  // num_whole_packets_per_page
+        partial_packet_size,         // partial_packet_size
+        fabric_max_payload_size,     // whole_packet_size (fabric_max_payload_size)
+        socket_storage_in_dram,      // is_dram
     };
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(

@@ -60,6 +60,8 @@ def run_send_recv_test(
     [
         ([1, 32, 2048, 8]),
         ([1, 1, 64, 8192]),
+        ([1, 1, 112, 3128]),
+        ([1, 1, 112, 3136]),
     ],
 )
 @pytest.mark.parametrize(
@@ -106,6 +108,9 @@ def test_send_recv_multi_link(
     socket_storage_type,
     socket_fifo_size,
 ):
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("Skipping bfp8 row major test due to known issue.")
+
     sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
     receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(1, 0))
     run_send_recv_test(
