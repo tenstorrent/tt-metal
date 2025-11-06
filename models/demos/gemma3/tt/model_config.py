@@ -1793,8 +1793,10 @@ class ModelArgs:
                     model = AutoModelForCausalLM.from_pretrained(
                         self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
                     )
+                    # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                     model.apply(model._init_weights)
-                except:
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
                     model = AutoModelForCausalLM.from_config(config)
 
                 state_dict = model.state_dict()
@@ -2312,8 +2314,10 @@ class ModelArgs:
                     model = AutoModel.from_pretrained(
                         self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
                     )
+                    # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                     model.apply(model._init_weights)
-                except:
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
                     model = AutoModel.from_config(config)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
@@ -2375,8 +2379,10 @@ class ModelArgs:
                     model = AutoModelForCausalLM.from_pretrained(
                         self.CKPT_DIR, config=config, torch_dtype="auto", local_files_only=True
                     )
+                    # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                     model.apply(model._init_weights)
-                except:
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
                     model = AutoModelForCausalLM.from_config(config)
             else:
                 if self.is_gemma:

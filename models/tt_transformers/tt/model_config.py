@@ -1929,8 +1929,10 @@ class ModelArgs:
                         trust_remote_code=self.trust_remote_code_hf,
                         local_files_only=True,
                     )
+                    # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                     model.apply(model._init_weights)
-                except:
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
                     model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
 
                 state_dict = model.state_dict()
@@ -2557,8 +2559,10 @@ class ModelArgs:
                         trust_remote_code=self.trust_remote_code_hf,
                         local_files_only=True,
                     )
+                    # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                     model.apply(model._init_weights)
-                except:
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
                     model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
@@ -2623,8 +2627,10 @@ class ModelArgs:
                         trust_remote_code=self.trust_remote_code_hf,
                         local_files_only=True,
                     )
+                    # model.load_state_dict({k: torch.randn_like(v) for k, v in model.state_dict().items()})
                     model.apply(model._init_weights)
-                except:
+                except Exception as e:
+                    logger.info(f"Error loading dummy weights using .from_pretrained. Using .from_config. Error: {e}")
                     model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
             else:
                 if self.cached_hf_model is None:
