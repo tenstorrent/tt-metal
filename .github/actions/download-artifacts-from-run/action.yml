@@ -11,7 +11,7 @@ inputs:
     description: "Directory to extract artifacts to"
   tracy:
     required: false
-    default: "false"
+    default: "true"
     description: "Whether to look for profiler-enabled artifacts"
 
 outputs:
