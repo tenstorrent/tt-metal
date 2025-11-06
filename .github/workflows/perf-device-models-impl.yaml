@@ -126,6 +126,14 @@ jobs:
           device_perf_model_name: "vgg"
           commands: |
             pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: vgg_unet tests
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        with:
+          device_perf_model_name: "vgg_unet"
+          commands: |
             pytest models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/vgg_unet/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && (matrix.test-info.job-set1 || matrix.test-info.job-blackhole-set1) }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
