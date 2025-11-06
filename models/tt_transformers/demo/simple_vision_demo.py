@@ -564,7 +564,6 @@ def test_multimodal_demo_text(
             ml_model_type="vlm",
             num_layers=model_args[0].n_layers,
             batch_size=max_batch_size,
-            config_params={"data_parallel": data_parallel, "tensor_parallel": num_devices // data_parallel},
             input_sequence_length=max(prefill_lens).item(),
             output_sequence_length=max_gen_len,
         )

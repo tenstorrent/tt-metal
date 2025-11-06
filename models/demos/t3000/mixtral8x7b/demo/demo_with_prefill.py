@@ -443,22 +443,17 @@ def run_mixtral_demo(user_input, batch_size, mesh_device, instruct_mode, test_pr
     # Save benchmark data for CI dashboard
     if is_ci_env:
         benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets)
-
-        data_parallel = 1
-        config_params = {
-            "data_parallel": data_parallel,
-            "tensor_parallel": mesh_device.get_num_devices() // data_parallel,
-        }
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo_with_prefill",
+            run_type=f"demo_with_prefill",
             ml_model_name="Mixtral8x7B",
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
-            config_params=config_params,
             input_sequence_length=max(prefill_lens),
             output_sequence_length=1,
+            # config_params=,
+            # precision=,
         )
 
 

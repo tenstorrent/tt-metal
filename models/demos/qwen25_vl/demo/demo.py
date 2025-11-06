@@ -809,7 +809,6 @@ def test_demo(
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,
-            config_params={"data_parallel": 1, "tensor_parallel": mesh_device.get_num_devices()},
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],
         )
