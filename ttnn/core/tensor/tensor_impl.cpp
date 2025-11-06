@@ -450,9 +450,9 @@ std::string to_string(const Tensor& tensor) {
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         } else if (tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B) {
-            return ttnn::to_layout(ttnn::to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
+            return to_layout<T>(to_dtype(tensor, DataType::FLOAT32), Layout::ROW_MAJOR);
         } else {
-            return ttnn::to_layout(tensor, Layout::ROW_MAJOR);
+            return to_layout<T>(tensor, Layout::ROW_MAJOR);
         }
     };
 
@@ -485,9 +485,10 @@ std::string to_string(const Tensor& tensor) {
                 }
 
                 auto* mesh_device = storage.mesh_buffer->device();
-                if (mesh_device->num_devices() == 1) {
-                    return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
-                }
+                // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
+                // if (mesh_device->num_devices() == 1) {
+                //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
+                // }
 
                 const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
                 const auto strides = row_major_tensor.tensor_spec().compute_strides();
