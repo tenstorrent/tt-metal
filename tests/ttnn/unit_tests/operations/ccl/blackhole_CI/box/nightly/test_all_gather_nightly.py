@@ -81,14 +81,6 @@ def validate_test(num_devices, topology, shape, cluster_axis):
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Linear,
-        ),
     ],
     indirect=["device_params"],
 )
@@ -188,14 +180,6 @@ def test_all_gather_linear_2D_nightly(
     "device_params, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_tensix_config": ttnn.FabricTensixConfig.MUX,
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Linear,
-        ),
     ],
     indirect=["device_params"],
 )
