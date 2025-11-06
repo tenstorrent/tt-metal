@@ -628,13 +628,13 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
             uint32_t orphan_size = 0;
             dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
                 orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
-                if (os != 0) {
+                if (orphan_size != 0) {
                     wait_for_barrier();
-                    cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, os, num_dests);
+                    cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, orphan_size, num_dests);
                     writes++;
                     mcasts += num_dests;
                     if (!will_wrap) {
-                        data_ptr += os;
+                        data_ptr += orphan_size;
                     }
                 }
                 noc_nonposted_writes_num_issued[noc_index] += writes;
@@ -802,6 +802,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
         if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
             dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
                 if (will_wrap) {
+                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
                     pad_size -= orphan_size;
                 }
             });
