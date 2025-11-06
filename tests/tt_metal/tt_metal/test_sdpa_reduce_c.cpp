@@ -322,10 +322,9 @@ int main(int argc, char** argv) {
     // std::vector<bool> fp32_dest_acc_ens = {false};
     // std::vector<bool> do_eltwise = {false, true};
 
-    // Test all three implementations
+    // Test both implementations
     std::vector<std::pair<std::string, std::string>> kernel_variants = {
         {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_c/compute.cpp", "reduce_c"},
-        {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_max_row/compute.cpp", "reduce_max_row"},
         {"tests/tt_metal/tt_metal/test_kernels/misc/sdpa/reduce_block_max_row/compute.cpp", "reduce_block_max_row"}};
 
     for (const auto& [kernel_path, kernel_name] : kernel_variants) {

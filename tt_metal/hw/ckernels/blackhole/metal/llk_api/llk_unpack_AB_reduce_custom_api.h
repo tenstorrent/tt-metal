@@ -24,52 +24,6 @@ using namespace ckernel::unpacker;
  *************************************************************************/
 
 /**
- * Initializes specialized unpack for reduce_row_max operation.
- *
- * This function works with the following assumptions:
- * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
- * - The scaler doesn't change for the duration of the whole tile operation
- * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
- * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
- * - Does only MAX pool on ROW dimension
- *
- * This function should NOT be used as a substitute for native llk_unpack_AB_reduce_init LLK.
- * Use the standard llk_unpack_AB_reduce_init<ReduceDim::REDUCE_ROW> for general-purpose reduction.
- */
-template <bool is_fp32_dest_acc_en = false>
-inline void llk_unpack_AB_reduce_row_max_init() {
-    _llk_unpack_AB_reduce_row_max_init_<is_fp32_dest_acc_en>();
-}
-
-/**
- * Performs specialized unpack for reduce_row_max operation.
- *
- * This function works with the following assumptions:
- * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
- * - The scaler doesn't change for the duration of the whole tile operation
- * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
- * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
- * - Does only MAX pool on ROW dimension
- *
- * This function should NOT be used as a substitute for native llk_unpack_AB LLK.
- * Use the standard llk_unpack_AB<BroadcastType::NONE> for general-purpose operations.
- */
-inline void llk_unpack_AB_reduce_row_max(
-    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t tile_index_a) {
-    std::uint32_t operandA_id = get_operand_id(operandA);
-    std::uint32_t operandB_id = get_operand_id(operandB);
-    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
-    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * tile_index_a;
-    std::uint32_t address_a = base_address_a + offset_address_a;
-    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
-
-    // Always tile index 0 for operandB
-    _llk_unpack_AB_<BroadcastType::NONE>(address_a, base_address_b);
-}
-
-/**
  * Initializes unpacker configuration for block-based reduce_max_row operations.
  * Sets up tile dimensions and saves unpacker state that will be modified during operation.
  *
