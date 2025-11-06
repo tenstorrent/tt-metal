@@ -712,6 +712,7 @@ void detail::ProgramImpl::update_runtime_info_from_descriptor(const ProgramDescr
     for (size_t kernels_idx = 0; kernels_idx < kernels_.size(); ++kernels_idx) {
         auto& kernels = kernels_[kernels_idx];
         for (auto& [id, kernel] : kernels) {
+            TT_FATAL(id < descriptor.kernels.size(), "Kernel id {} does not exist in ProgramDescriptor.", id);
             copy_runtime_args(*kernel, descriptor.kernels[id]);
         }
     }
