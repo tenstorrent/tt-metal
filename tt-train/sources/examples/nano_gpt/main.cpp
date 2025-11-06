@@ -37,7 +37,6 @@ namespace {
 constexpr auto gpt2_tokenizer_file_name = "/gpt2-tokenizer.json";
 }
 
-
 using Model = std::shared_ptr<ttml::models::BaseTransformer>;
 
 void model_to_eval(Model &model) {
@@ -302,7 +301,9 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt.yaml";
+    const char *tt_metal_home = std::getenv("TT_METAL_HOME");
+    TT_FATAL(tt_metal_home != nullptr, "TT_METAL_HOME environment variable is not set");
+    std::string config_name = std::string(tt_metal_home) + "/tt-train/configs/training_shakespeare_nanogpt.yaml";
 
     std::string run_name = "";
     bool add_time_to_name = true;
@@ -328,7 +329,6 @@ int main(int argc, char **argv) {
 
         auto distributed_ctx = ctx.get_distributed_context();
         fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
-
     }
 
     if (device_config.enable_ddp || device_config.enable_tp) {
@@ -739,6 +739,7 @@ int main(int argc, char **argv) {
     }
 
     ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);
+    ttml::autograd::ctx().close_device();
     ttml::autograd::ctx().close_profiler();
     return 0;
 }

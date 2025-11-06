@@ -104,7 +104,7 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     }
 }
 
-void validate_kernel_placement(IDevice* device, bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
     // Placement rules:
     //  Slow dispatch:
     //      - kernels cannot be on storage only cores
@@ -1397,7 +1397,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
-            validate_kernel_placement(device, force_slow_dispatch, kernel);
+            validate_kernel_placement(force_slow_dispatch, kernel);
             launch_build_step(
                 [kernel, device, this, &build_env] {
                     JitBuildOptions build_options(build_env.build_env);

@@ -361,7 +361,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
 
 // Per API command handlers.
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(EnqueueTrace) cq_id: {} tid: {} blocking: {}",
@@ -373,7 +373,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd [[maybe_unused]]) {
     log_debug(
         tt::LogMetalTrace,
         "LightMetalReplay(ReplayTrace) cq_id: {} tid: {} blocking: {}",
@@ -385,7 +385,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // Get the trace descriptor from flatbuffer and load it to device.
@@ -394,7 +394,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceComm
 }
 
 // No longer supported due to trace API deprecation. See Issue #24955
-void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
+void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd [[maybe_unused]]) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
     // ReleaseTrace(this->device_, cmd->tid());
