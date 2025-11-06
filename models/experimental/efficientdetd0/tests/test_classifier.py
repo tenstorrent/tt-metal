@@ -16,8 +16,6 @@ from models.experimental.efficientdetd0.tt.custom_preprocessor import (
     create_custom_mesh_preprocessor,
     infer_torch_module_args,
 )
-from ttnn.dot_access import make_dot_access_dict
-from ttnn.model_preprocessing import ModuleArgs
 from models.experimental.efficientdetd0.common import load_torch_model_state
 
 
@@ -67,32 +65,12 @@ def test_classifier(
         custom_preprocessor=create_custom_mesh_preprocessor(None),
         device=device,
     )
-    # module_args = infer_ttnn_module_args(
-    #     model=torch_model, run_model=lambda torch_model: torch_model(features), device=None
-    # )
     module_args = infer_torch_module_args(model=torch_model, input=features, layer_type=torch.nn.Conv2d)
-
-    i = 0
-    conv_args = {}
-    conv_args["conv_list"] = {}
-    conv_args["header_list"] = {}
-    for p_level in range(pyramid_levels):
-        conv_args["conv_list"][p_level] = {}
-        conv_args["header_list"][p_level] = {}
-        for layer in range(box_class_repeats):
-            conv_args["conv_list"][p_level][layer] = {}
-            conv_args["conv_list"][p_level][layer]["depthwise_conv"] = module_args[i]
-            conv_args["conv_list"][p_level][layer]["pointwise_conv"] = module_args[i + 1]
-            i += 2
-        conv_args["header_list"][p_level]["depthwise_conv"] = module_args[i]
-        conv_args["header_list"][p_level]["pointwise_conv"] = module_args[i + 1]
-        i += 2
-    conv_args = make_dot_access_dict(conv_args, ignore_types=(ModuleArgs,))
 
     ttnn_model = TTClassifier(
         device,
         parameters,
-        conv_args,
+        module_args,
         num_classes=num_classes,
         num_layers=box_class_repeats,
         pyramid_levels=pyramid_levels,

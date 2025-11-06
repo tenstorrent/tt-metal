@@ -6,33 +6,6 @@ import ttnn
 import math
 
 
-class BatchNorm2d:
-    def __init__(self, parameters, device, cache={}, memory_config=None, compute_kernel_config=None):
-        self.device = device
-        self.weight = parameters.weight
-        self.bias = parameters.bias
-        self.running_mean = parameters.running_mean
-        self.running_var = parameters.running_var
-        self.eps = parameters.eps
-        self.cache = cache
-        self.memory_config = memory_config
-        self.compute_kernel_config = compute_kernel_config
-
-    def __call__(self, x):
-        return ttnn.batch_norm(
-            x,
-            running_mean=self.running_mean,
-            running_var=self.running_var,
-            training=False,
-            eps=self.eps,
-            weight=self.weight,
-            bias=self.bias,
-            output=None,
-            memory_config=self.memory_config,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-
-
 class EfficientDetd0Maxpool2D:
     def __init__(
         self,
@@ -103,7 +76,6 @@ class MaxPool2dDynamicSamePadding:
         self.device = device
         self.batch = batch
         self.parameters = parameters
-        self.groups = maxpool_params.groups
         self.kernel_size = maxpool_params.kernel_size
         self.stride = maxpool_params.stride
         self.dilation = maxpool_params.dilation

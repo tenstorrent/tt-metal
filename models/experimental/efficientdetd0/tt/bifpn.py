@@ -144,23 +144,23 @@ class TtBiFPN:
             # import pdb; pdb.set_trace()
             self.p3_down_channel = Conv2dDynamicSamePadding(
                 device,
-                parameters.p3_down_channel,
+                parameters.p3_down_channel[0],
                 shard_layout,
-                conv_params.p3_down_channel,
+                conv_params.p3_down_channel[0],
                 deallocate_activation=deallocate_activation,
             )
             self.p4_down_channel = Conv2dDynamicSamePadding(
                 device,
-                parameters.p4_down_channel,
+                parameters.p4_down_channel[0],
                 shard_layout,
-                conv_params.p4_down_channel,
+                conv_params.p4_down_channel[0],
                 deallocate_activation=deallocate_activation,
             )
             self.p5_down_channel = Conv2dDynamicSamePadding(
                 device,
-                parameters.p5_down_channel,
+                parameters.p5_down_channel[0],
                 shard_layout,
-                conv_params.p5_down_channel,
+                conv_params.p5_down_channel[0],
                 deallocate_activation=deallocate_activation,
             )
 
@@ -168,9 +168,9 @@ class TtBiFPN:
             # import pdb; pdb.set_trace()
             self.p5_to_p6_conv = Conv2dDynamicSamePadding(
                 device,
-                parameters.p5_to_p6_conv,
+                parameters.p5_to_p6[0],
                 shard_layout,
-                conv_params.p5_to_p6_conv,
+                conv_params.p5_to_p6[0],
                 deallocate_activation=deallocate_activation,
             )
             self.p5_to_p6_pool = MaxPool2dDynamicSamePadding(
@@ -178,7 +178,7 @@ class TtBiFPN:
                 None,
                 # shard_layout,
                 None,
-                conv_params.p5_to_p6_pool,
+                conv_params.p5_to_p6[2],
                 deallocate_activation=deallocate_activation,
             )
 
@@ -188,7 +188,7 @@ class TtBiFPN:
                 None,
                 # shard_layout,
                 None,
-                conv_params.p6_to_p7,
+                conv_params.p6_to_p7[0],
                 deallocate_activation=deallocate_activation,
             )
 
@@ -201,16 +201,16 @@ class TtBiFPN:
             # Additional channel reduction for bottom-up path
             self.p4_down_channel_2 = Conv2dDynamicSamePadding(
                 device,
-                parameters.p4_down_channel_2,
+                parameters.p4_down_channel_2[0],
                 shard_layout,
-                conv_params.p4_down_channel_2,
+                conv_params.p4_down_channel_2[0],
                 deallocate_activation=deallocate_activation,
             )
             self.p5_down_channel_2 = Conv2dDynamicSamePadding(
                 device,
-                parameters.p5_down_channel_2,
+                parameters.p5_down_channel_2[0],
                 shard_layout,
-                conv_params.p5_down_channel_2,
+                conv_params.p5_down_channel_2[0],
                 deallocate_activation=deallocate_activation,
             )
 
