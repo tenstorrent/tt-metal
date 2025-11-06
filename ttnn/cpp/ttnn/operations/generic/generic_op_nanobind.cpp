@@ -32,7 +32,7 @@ void bind_generic_operation(nb::module_& mod) {
             ttnn.Tensor: Handle to the output tensor.
 
         Example:
-            Refer to tests/ttnn/unit_tests/operations/test_generic_op.py for usage examples
+            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
         )doc";
 
     bind_registered_operation(

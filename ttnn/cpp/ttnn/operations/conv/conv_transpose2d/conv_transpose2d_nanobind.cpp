@@ -50,33 +50,37 @@ void bind_conv_transpose2d(nb::module_& mod) {
         - H_out = (H_in - 1) * stride[0] - 2 * padding[0] + dilation[0] * (kernel_size[0] - 1) + output_padding[0] + 1
         - W_out = (W_in - 1) * stride[1] - 2 * padding[1] + dilation[1] * (kernel_size[1] - 1) + output_padding[1] + 1
 
-        :param ttnn.Tensor input_tensor:  the input tensor.
-        :param ttnn.Tensor weight_tensor: the weight tensor.
-        :param ttnn.Tensor, None bias_tensor:   optional bias tensor. Default: None
-        :param ttnn.MeshDevice device:  the device to use.
-        :param int in_channels:  number of input channels.
-        :param int out_channels:  number of output channels.
-        :param int batch_size:  batch size.
-        :param int input_height:  height of the input tensor.
-        :param int input_width:  width of the input tensor.
-        :param tuple[int  , int] kernel_size: size of the convolving kernel.
-        :param tuple[int, int] stride: stride of the cross-correlation.
-        :param tuple[int, int] or tuple[int, int, int, int]) padding: zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
-        :param tuple[int, int] dilation: spacing between kernel elements.
-        :param int groups:  number of blocked connections from input channels to output channels.
-        :param DataType, None dtype:  the data type of the output tensor. Default: None (will use the same dtype as input_tensor).
-        :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
-        :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
-        :param bool mirror_kernel: Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.
-        :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
-        :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+            weight_tensor (ttnn.Tensor): the weight tensor.
+            device (ttnn.MeshDevice): the device to use.
+            in_channels (int): number of input channels.
+            out_channels (int): number of output channels.
+            batch_size (int): batch size.
+            input_height (int): height of the input tensor.
+            input_width (int): width of the input tensor.
+            kernel_size (tuple[int, int]): size of the convolving kernel.
+            stride (tuple[int, int]): stride of the cross-correlation.
+            padding (tuple[int, int] or tuple[int, int, int, int]): zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+            dilation (tuple[int, int]): spacing between kernel elements.
+            groups (int): number of blocked connections from input channels to output channels.
 
-        :return: The output tensor, output height and width, and the preprocessed weights and bias.
+        Keyword Args:
+            bias_tensor (ttnn.Tensor, optional): optional bias tensor. Default: None
+            dtype (DataType, optional): the data type of the output tensor. Default: None (will use the same dtype as input_tensor).
+            conv_config (ttnn.Conv2dConfig, optional): configuration for convolution. Default: None
+            compute_config (ttnn.DeviceComputeKernelConfig, optional): configuration for compute kernel. Default: None
+            mirror_kernel (bool, optional): Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored. Default: False
+            return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
+            return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
-        :rtype: [ttnn.Tensor]: the output tensor, when return_output_dim = False and return_weights_and_bias = False
-        :rtype: [ttnn.Tensor, Tuple[int, int]]: the output tensor, and it's height and width, if return_output_dim = True
-        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_weights_and_bias = True
-        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
+        Returns:
+            The output tensor, output height and width, and the preprocessed weights and bias.
+
+            - ttnn.Tensor: the output tensor, when return_output_dim = False and return_weights_and_bias = False
+            - tuple[ttnn.Tensor, tuple[int, int]]: the output tensor, and its height and width, if return_output_dim = True
+            - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and its weights and biases, if return_weights_and_bias = True
+            - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and its height and width, and its weights and biases, if return_output_dim = True and return_weights_and_bias = True
         )doc",
 
         ttnn::nanobind_overload_t{

@@ -15,11 +15,23 @@
 
 namespace ttnn::operations::normalization::detail {
 
+void bind_normalization_layernorm_distributed_program_config(nb::module_& mod) {
+    nb::class_<LayerNormDistributedDefaultProgramConfig>(mod, "LayerNormDistributedDefaultProgramConfig")
+        .def(
+            nb::init<bool, bool>(),
+            nb::kw_only(),
+            nb::arg("legacy_reduction").noconvert() = false,
+            nb::arg("legacy_rsqrt").noconvert() = false)
+        .def("__repr__", [](const LayerNormDistributedDefaultProgramConfig& config) {
+            return fmt::format("{}", config);
+        });
+}
+
 void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
     ttnn::bind_registered_operation(
         mod,
         ttnn::layer_norm_pre_all_gather,
-        R"doc(layer_norm_pre_all_gather(input_tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+        R"doc(
             Compute sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension.
 
             Note:
@@ -55,6 +67,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
+            nb::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             nb::arg("memory_config") = nb::none()});
 }
 
@@ -62,7 +75,7 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
     ttnn::bind_registered_operation(
         mod,
         ttnn::layer_norm_post_all_gather,
-        R"doc(layer_norm_post_all_gather(input_tensor: ttnn.Tensor, stats: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
             Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
 
             Note:
@@ -109,10 +122,12 @@ void bind_normalization_layernorm_post_all_gather_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
+            nb::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             nb::arg("dtype") = nb::none()});
 }
 
 void bind_normalization_layernorm_distributed(nb::module_& mod) {
+    bind_normalization_layernorm_distributed_program_config(mod);
     bind_normalization_layernorm_pre_all_gather_operation(mod);
     bind_normalization_layernorm_post_all_gather_operation(mod);
 }

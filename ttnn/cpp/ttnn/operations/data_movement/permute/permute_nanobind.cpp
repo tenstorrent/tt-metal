@@ -17,8 +17,7 @@ namespace ttnn::operations::data_movement::detail {
 
 void bind_permute(nb::module_& mod) {
     auto doc =
-        R"doc(permute(input_tensor: ttnn.Tensor, dims: List[int], memory_config: Optional[MemoryConfig] = std::nullopt)) -> ttnn.Tensor
-
+        R"doc(
             Permutes the dimensions of the input tensor according to the specified permutation.
 
             Args:

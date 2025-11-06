@@ -22,22 +22,23 @@ void bind_normalization_layernorm_program_config(nb::module_& mod) {
         .def(
             nb::init<bool, bool, bool>(),
             nb::kw_only(),
-            nb::arg("legacy_reduction").noconvert() = true,
-            nb::arg("legacy_rsqrt").noconvert() = true,
+            nb::arg("legacy_reduction").noconvert() = false,
+            nb::arg("legacy_rsqrt").noconvert() = false,
             nb::arg("use_welford").noconvert() = false)
         .def("__repr__", [](const LayerNormDefaultProgramConfig& config) { return fmt::format("{}", config); });
 
     nb::class_<LayerNormShardedMultiCoreProgramConfig>(mod, "LayerNormShardedMultiCoreProgramConfig")
         .def(
-            nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool>(),
+            nb::init<CoreCoord, std::size_t, std::size_t, std::size_t, bool, bool, bool, bool>(),
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
             nb::arg("subblock_w").noconvert(),
             nb::arg("block_h").noconvert(),
             nb::arg("block_w").noconvert(),
             nb::arg("inplace").noconvert(),
-            nb::arg("legacy_reduction").noconvert() = true,
-            nb::arg("legacy_rsqrt").noconvert() = true)
+            nb::arg("legacy_reduction").noconvert() = false,
+            nb::arg("legacy_rsqrt").noconvert() = false,
+            nb::arg("use_welford").noconvert() = false)
         .def(
             "__repr__", [](const LayerNormShardedMultiCoreProgramConfig& config) { return fmt::format("{}", config); });
 }
@@ -47,18 +48,18 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
         mod,
         ttnn::layer_norm,
         R"doc(
-            Compute layer norm over :attr:`input_tensor`.
-            See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
+        Compute layer norm over :attr:`input_tensor`.
+        See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
-            .. math::
+          .. math::
 
-                \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
+              \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
 
-            Where:
-                - :math:`\mu` is the mean of the input tensor. This is computed over the last dimension of the input tensor (W).
-                - :math:`\sigma^2` is the variance of the input tensor. This is computed over the last dimension of the input tensor (W) and is biased.
-                - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
-                - :math:`\epsilon` is a small constant
+          Where:
+              - :math:`\mu` is the mean of the input tensor. This is computed over the last dimension of the input tensor (W).
+              - :math:`\sigma^2` is the variance of the input tensor. This is computed over the last dimension of the input tensor (W) and is biased.
+              - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
+              - :math:`\epsilon` is a small constant
 
 
         Args:
@@ -117,16 +118,23 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
 
                * - dtype
                  - layout
-               * - BFLOAT16, FLOAT32, BFLOAT8_B (typically matches input; PRE_ALL_GATHER produces BF16)
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
                  - TILE
+
+            Output dtype typically matches input; PRE_ALL_GATHER produces BF16
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded (L1): Block sharded
 
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
+            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
-            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
+
 
         Example:
             .. code-block:: python

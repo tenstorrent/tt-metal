@@ -17,8 +17,6 @@ namespace {
 
 void bind_grid_sample_op(nb::module_& mod) {
     const auto doc = R"doc(
-        grid_sample(input_tensor: ttnn.Tensor, grid: ttnn.Tensor, *, mode: str = "bilinear", padding_mode: str = "zeros", use_precomputed_grid: bool = False, batch_output_channels: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
         Performs grid sampling on the input tensor using the provided sampling grid.
 
         Grid sample uses bilinear interpolation to sample input values at arbitrary
@@ -137,8 +135,6 @@ void bind_prepare_grid_sample_grid(nb::module_& mod) {
         nb::arg("padding_mode") = "zeros",
         nb::arg("output_dtype") = nb::none(),
         R"doc(
-        prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, padding_mode: str = "zeros", output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-
         Precomputes grid sample data for optimized kernel execution.
 
         This function takes a normalized grid tensor and precomputes the pixel coordinates

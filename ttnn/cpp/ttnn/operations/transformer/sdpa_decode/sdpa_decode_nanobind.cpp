@@ -42,6 +42,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             scale (float, optional): Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            sliding_window_size (int, optional): The size of sliding window for sliding window attention. Defaults to `None`.
 
 
         Returns:
@@ -68,6 +69,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                const std::optional<const Tensor>& cur_pos_tensor,
                const std::optional<const Tensor>& attention_sink,
                std::optional<float> scale,
+               std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -81,6 +83,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                     cur_pos_tensor,
                     attention_sink,
                     scale,
+                    sliding_window_size,
                     memory_config,
                     program_config,
                     compute_kernel_config);
@@ -95,6 +98,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("cur_pos_tensor").noconvert() = nb::none(),
             nb::arg("attention_sink").noconvert() = nb::none(),
             nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("sliding_window_size").noconvert() = nb::none(),
             nb::arg("memory_config").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
@@ -115,6 +119,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                const std::optional<const Tensor>& cur_pos_tensor,
                const std::optional<const Tensor>& attention_sink,
                std::optional<float> scale,
+               std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -128,6 +133,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                     cur_pos_tensor,
                     attention_sink,
                     scale,
+                    sliding_window_size,
                     memory_config,
                     program_config,
                     compute_kernel_config);
@@ -142,6 +148,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("cur_pos_tensor").noconvert() = nb::none(),
             nb::arg("attention_sink").noconvert() = nb::none(),
             nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("sliding_window_size").noconvert() = nb::none(),
             nb::arg("memory_config").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
@@ -162,6 +169,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                const std::optional<const Tensor>& cur_pos_tensor,
                const std::optional<const Tensor>& attention_sink,
                std::optional<float> scale,
+               std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -175,6 +183,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                     cur_pos_tensor,
                     attention_sink,
                     scale,
+                    sliding_window_size,
                     memory_config,
                     program_config,
                     compute_kernel_config);
@@ -189,6 +198,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("cur_pos_tensor").noconvert() = nb::none(),
             nb::arg("attention_sink").noconvert() = nb::none(),
             nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("sliding_window_size").noconvert() = nb::none(),
             nb::arg("memory_config").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
@@ -209,6 +219,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                const std::optional<const Tensor>& cur_pos_tensor,
                const std::optional<const Tensor>& attention_sink,
                std::optional<float> scale,
+               std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -222,6 +233,7 @@ void bind_sdpa_decode(nb::module_& mod) {
                     cur_pos_tensor,
                     attention_sink,
                     scale,
+                    sliding_window_size,
                     memory_config,
                     program_config,
                     compute_kernel_config);
@@ -236,6 +248,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("cur_pos_tensor").noconvert() = nb::none(),
             nb::arg("attention_sink").noconvert() = nb::none(),
             nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("sliding_window_size").noconvert() = nb::none(),
             nb::arg("memory_config").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});

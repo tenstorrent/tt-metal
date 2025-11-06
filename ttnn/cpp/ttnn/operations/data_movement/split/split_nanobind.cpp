@@ -20,8 +20,6 @@ namespace ttnn::operations::data_movement::detail {
 void bind_split(nb::module_& mod) {
     auto doc =
         R"doc(
-            split(input_tensor: ttnn.Tensor, num_splits: int, dim: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
             Returns a tensor that is in num_splits ways on dim.
 
             Equivalent pytorch code:

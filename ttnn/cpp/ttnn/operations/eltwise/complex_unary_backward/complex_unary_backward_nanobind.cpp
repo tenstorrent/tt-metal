@@ -10,7 +10,7 @@
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 
-#include "cpp/ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/types.hpp"

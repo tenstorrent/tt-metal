@@ -100,6 +100,10 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
                     * - BFLOAT16
                       - TILE, ROW_MAJOR
 
+            Memory Support:
+              - Interleaved: DRAM and L1
+              - Sharded (L1): Height and Block sharded
+
             Limitations:
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
               - For the :attr:`input_tensor`, N*H*W must be a multiple of the tile size (32) and C must divide evenly into :attr:`num_groups`.
@@ -108,12 +112,12 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.
-              - Width-sharding is not supported (use height or block sharding)
+              - Width-sharding is not supported
 
             Example (Sharded Input):
                 .. code-block:: python
 
-                     N, C, H, W = 1, 64, 32, 1
+                    N, C, H, W = 1, 64, 32, 1
                     num_groups = 2
 
                     # Prepare random inputs

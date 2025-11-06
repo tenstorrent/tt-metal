@@ -110,7 +110,7 @@ void bind_normalization_softmax_operation(nb::module_& mod) {
                 \text{softmax}(x_i) = \frac{e^{x_i}}{\sum_{j=1}^{K} e^{x_j}}
 
             Args:
-                input_tensor (ttnn.Tensor): The input tensor to apply softmax to.
+                input_tensor (ttnn.Tensor): The input tensor to apply softmax to. Must be on the device.
                 dim (int, optional): The dimension along which to compute softmax. Defaults to -1 (last dimension).
 
             Keyword Args:
@@ -121,15 +121,24 @@ void bind_normalization_softmax_operation(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: Output tensor with softmax applied along the specified dimension.
 
-            Supported dtypes and layouts
+            Note:
+                The tensors support the following data types and layouts:
 
-            .. list-table::
-               :header-rows: 1
+                .. list-table::
+                    :header-rows: 1
 
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded (L1): Height sharded
+
+            Limitations:
+                * All tensors must be on-device, interleaved, and tile layout.
+                * Using the attention-optimized kernels requires a 4D input tensor and reducing on the last dimension.
 
             Example:
                 .. code-block:: python
@@ -189,25 +198,26 @@ void bind_normalization_softmax_scale_mask_operation(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: Output tensor with the fused scale-mask-softmax operation applied.
 
-            Supported dtypes and layouts:
-
-            .. list-table:: Input Tensor
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
-            .. list-table:: Mask Tensor (optional)
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE, ROW_MAJOR
-
             Note:
+                The tensors support the following data types and layouts:
+
+                .. list-table:: Input Tensor
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+                .. list-table:: Mask Tensor (optional)
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, BFLOAT8_B
+                        - TILE, ROW_MAJOR
+
+            Limitations:
                 * All tensors must be on-device.
                 * For ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor's tile width.
 
@@ -282,18 +292,19 @@ void bind_normalization_softmax_inplace_operation(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: The same tensor as input with softmax applied in-place.
 
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
             Note:
-                * The input tensor is modified in-place to save memory.
+                The tensors support the following data types and layouts:
+
+                .. list-table::
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+            Limitations:
+                * The input tensor is modified in-place to save memory. Must already be on the device.
                 * For very wide tensors, the operation may fall back to standard softmax if circular buffers would consume more than 90% of L1 memory.
                 * Supports both default and sharded multi-core program configurations.
 
@@ -369,27 +380,28 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
             Returns:
                 ttnn.Tensor: The same tensor as input with the fused scale-mask-softmax operation applied in-place.
 
-            Supported dtypes and layouts:
-
-            .. list-table:: Input Tensor
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
-            .. list-table:: Mask Tensor (optional)
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE, ROW_MAJOR
-                 - 2, 3, 4
-
             Note:
+                The tensors support the following data types and layouts:
+
+                .. list-table:: Input Tensor
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+                .. list-table:: Mask Tensor (optional)
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                        - Ranks
+                    * - BFLOAT16, BFLOAT8_B
+                        - TILE, ROW_MAJOR
+                        - 2, 3, 4
+
+            Limitations:
                 * All tensors must be on-device.
                 * For unsharded ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor.
                 * For sharded inputs: mask must be TILE layout with identical padded shape to input.
@@ -485,14 +497,8 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
             Specialized in-place operation for causal masked softmax with height-width dimension constraints.
 
             This is an optimized version of scale_mask_softmax_in_place specifically designed for transformer
-            attention patterns where the causal mask only affects the height and width dimensions. This operation
-            provides better performance for specific use cases with the following constraints:
-
-            **Requirements:**
-            * Input tensor should be sharded for optimal performance
-            * Attention mask must be interleaved and have shape [1, 1, H, W] (hw_dims_only)
-            * The mask is treated as a causal mask by design
-            * Scale parameter is typically provided for attention scaling
+            attention patterns where the causal mask only affects the height and width dimensions.
+            This operation provides better performance than general :func:`ttnn.scale_mask_softmax_in_place` for these specific constraints.
 
             The operation performs:
             1. Scales the input: ``input_tensor *= scale`` (if scale is provided)
@@ -512,29 +518,32 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
             Returns:
                 ttnn.Tensor: The same tensor as input with the specialized causal scale-mask-softmax operation applied in-place.
 
-            Supported dtypes and layouts:
-
-            .. list-table:: Input Tensor (Sharded)
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32, BFLOAT8_B
-                 - TILE
-
-            .. list-table:: Mask Tensor [1, 1, H, W]
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, BFLOAT8_B
-                 - TILE (interleaved)
-
             Note:
+                The tensors support the following data types and layouts:
+
+                .. list-table:: Input Tensor (Sharded)
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, FLOAT32, BFLOAT8_B
+                        - TILE
+
+                .. list-table:: Mask Tensor [1, 1, H, W]
+                    :header-rows: 1
+
+                    * - Dtypes
+                        - Layouts
+                    * - BFLOAT16, BFLOAT8_B
+                        - TILE (interleaved)
+
+            Limitations:
                 * This is an experimental/specialized feature optimized for specific transformer attention patterns.
+                * Inputs must be on the device.
                 * Input tensor must be sharded for optimal performance.
-                * Mask shape is constrained to [1, 1, H, W] format.
-                * Provides better performance than general scale_mask_softmax_in_place for these specific constraints.
+                * Attention mask must be interleaved and have shape [1, 1, H, W] (i.e. hw_dims_only)
+                * The mask is treated as a causal mask by design
+                * Scale parameter is typically provided for attention scaling
 
             Example:
                 .. code-block:: python

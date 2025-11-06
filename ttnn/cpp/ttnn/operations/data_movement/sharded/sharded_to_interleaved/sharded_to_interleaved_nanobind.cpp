@@ -52,8 +52,7 @@ void bind_sharded_to_interleaved(nb::module_& mod) {
     detail::bind_sharded_to_interleaved(
         mod,
         ttnn::sharded_to_interleaved,
-        R"doc(sharded_to_interleaved(input_tensor: ttnn.Tensor,  memory_config: ttnn.MemoryConfig, *) -> ttnn.Tensor
-
+        R"doc(
         Converts a tensor from sharded to interleaved memory layout
 
         Args:

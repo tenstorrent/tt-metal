@@ -131,12 +131,11 @@ void bind_max_pool2d_operation(nb::module_& mod) {
                     dtype,
                     output_layout);
 
-                // Handle variant return type
-                if (std::holds_alternative<MaxPoolWithIndicesResult>(result)) {
-                    auto mpwi_result = std::get<MaxPoolWithIndicesResult>(result);
-                    return nb::make_tuple(mpwi_result.output, mpwi_result.indices);
+                // Return single tensor or tuple based on vector size
+                if (result.size() == 1) {
+                    return nb::cast(std::move(result[0]));
                 } else {
-                    return nb::cast(std::get<ttnn::Tensor>(result));
+                    return nb::cast(std::move(result));
                 }
             },
             nb::arg("input_tensor"),
@@ -190,6 +189,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
+            compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
@@ -245,6 +245,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                std::optional<int32_t> divisor_override,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
                bool in_place_halo,
                bool deallocate_input,
                bool reallocate_halo_output,
@@ -264,6 +265,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
                     divisor_override,
                     memory_config,
                     applied_shard_scheme,
+                    compute_kernel_config,
                     in_place_halo,
                     deallocate_input,
                     reallocate_halo_output,
@@ -284,6 +286,7 @@ void bind_avg_pool2d_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("in_place_halo") = false,
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_halo_output") = true,

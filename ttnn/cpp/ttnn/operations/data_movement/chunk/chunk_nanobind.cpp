@@ -40,8 +40,7 @@ void bind_chunk(nb::module_& mod) {
     bind_chunk(
         mod,
         ttnn::chunk,
-        R"doc(chunk(input_tensor: ttnn.Tensor, chunks: int, dim: int) -> List[ttnn.Tensor]
-
+        R"doc(
         Splits a tensor into multiple chunks along a specified dimension.
 
         Args:

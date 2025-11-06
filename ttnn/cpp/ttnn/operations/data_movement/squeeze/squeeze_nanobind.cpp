@@ -45,8 +45,7 @@ void bind_squeeze(nb::module_& mod) {
     detail::bind_squeeze(
         mod,
         ttnn::squeeze,
-        R"doc(squeeze(input_tensor: ttnn.Tensor,  dim: int) -> ttnn.Tensor
-
+        R"doc(
         Returns a tensor with the specified dimensions squeezed. If `dim` is not provided, all dimensions of size 1 will be squeezed. If `dim` is an integer, only the specified dimension will be squeezed. If `dim` is a list of integers, all specified dimensions will be squeezed.
 
         If a specified dimension in `dim` does not have size 1, it will be ignored.

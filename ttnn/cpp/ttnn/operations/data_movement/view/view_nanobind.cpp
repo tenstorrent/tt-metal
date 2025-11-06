@@ -15,10 +15,10 @@
 
 namespace ttnn::operations::data_movement {
 
-namespace detail {
+namespace {
 
 template <typename data_movement_operation_t>
-void bind_view(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
+void bind_view_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -38,10 +38,10 @@ void bind_view(nb::module_& mod, const data_movement_operation_t& operation, con
         });
 }
 
-}  // namespace detail
+}  // namespace
 
 void bind_view(nb::module_& mod) {
-    detail::bind_view(
+    bind_view_op(
         mod,
         ttnn::view,
         R"doc(

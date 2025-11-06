@@ -18,7 +18,7 @@ void bind_moreh_nll_loss_operation(nb::module_& mod) {
     bind_registered_operation(
         mod,
         ttnn::moreh_nll_loss,
-        R"doc(moreh_nll_loss(input_tensor: ttnn.Tensor, target_tensor: ttnn.Tensor, reduction: string, weight_tensor: Optional[ttnn.Tensor], divisor_tensor: Optional[ttnn.Tensor], output_tensor: Optional[ttnn.Tensor], ignore_index: int, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[DeviceComputeKernelConfig]) -> ttnn.Tensor
+        R"doc(
             Compute backward for nll_loss operation with reduction set to None
         )doc",
         ttnn::nanobind_arguments_t{

@@ -15,9 +15,9 @@
 namespace ttnn::operations::data_movement {
 namespace nb = nanobind;
 
-namespace detail {
+namespace {
 template <typename data_movement_operation_t>
-void bind_repeat(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
+void bind_repeat_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     ttnn::bind_registered_operation(
         mod,
         operation,
@@ -35,7 +35,7 @@ void bind_repeat(nb::module_& mod, const data_movement_operation_t& operation, c
             nb::arg("memory_config") = nb::none()});
 }
 
-}  // namespace detail
+}  // namespace
 
 void bind_repeat(nb::module_& mod) {
     auto doc = R"doc(
@@ -62,7 +62,7 @@ void bind_repeat(nb::module_& mod) {
         [3, 4]])
             )doc";
 
-    detail::bind_repeat(mod, ttnn::repeat, doc);
+    bind_repeat_op(mod, ttnn::repeat, doc);
 }
 
 }  // namespace ttnn::operations::data_movement

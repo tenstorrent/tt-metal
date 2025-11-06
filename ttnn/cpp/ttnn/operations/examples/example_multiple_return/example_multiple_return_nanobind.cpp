@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/examples/example_multiple_return/example_multiple_return_nanobind.hpp"
+#include "example_multiple_return_nanobind.hpp"
 
-#include "cpp/ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/examples/example_multiple_return/example_multiple_return.hpp"
-
-namespace nb = nanobind;
 
 namespace ttnn::operations::examples {
 
@@ -21,7 +19,15 @@ void bind_example_multiple_return_operation(nb::module_& mod) {
     bind_registered_operation(
         mod,
         ttnn::composite_example_multiple_return,
-        R"doc(composite_example_multiple_return(input_tensor: ttnn.Tensor) -> std::vector<std::optional<Tensor>>)doc",
+        R"doc(
+        Example operation that returns multiple tensors.
+
+        Args:
+            input_tensor (ttnn.Tensor): The input tensor.
+
+        Returns:
+            List[ttnn.Tensor]: List of output tensors.
+        )doc",
         ttnn::nanobind_arguments_t{nb::arg("input_tensor"), nb::arg("return_output1"), nb::arg("return_output2")});
 }
 

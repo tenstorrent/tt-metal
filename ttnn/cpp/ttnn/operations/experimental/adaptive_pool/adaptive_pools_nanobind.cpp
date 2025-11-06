@@ -5,16 +5,19 @@
 #include "adaptive_pools_nanobind.hpp"
 
 #include <array>
+#include <variant>
 #include <cstdint>
 #include <optional>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/adaptive_pool/adaptive_pools.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/adaptive_pool/adaptive_pools.hpp"
 
 namespace ttnn::operations::experimental::adaptive_pool {
 
@@ -38,6 +41,7 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`.
+            compute_kernel_config (DeviceComputeKernelConfig, optional): the device compute kernel configuration. Defaults to `None`.
             in_place_halo (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
             reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
@@ -79,6 +83,7 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
                std::array<uint32_t, 2> output_size,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
                bool in_place_halo,
                bool deallocate_input,
                bool reallocate_output) -> ttnn::Tensor {
@@ -91,6 +96,7 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
                     output_size,
                     memory_config,
                     applied_shard_scheme,
+                    compute_kernel_config,
                     in_place_halo,
                     deallocate_input,
                     reallocate_output);
@@ -104,6 +110,7 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("applied_shard_scheme") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("in_place_halo") = false,
             nb::arg("deallocate_input") = false,
             nb::arg("reallocate_output") = true});

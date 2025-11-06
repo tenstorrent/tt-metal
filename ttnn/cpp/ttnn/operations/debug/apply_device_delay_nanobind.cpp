@@ -20,8 +20,7 @@ namespace ttnn::operations::debug {
 
 void bind_apply_device_delay(nb::module_& mod) {
     auto doc =
-        R"doc(apply_device_delay(mesh_device: ttnn.MeshDevice, delays: List[List[int]], subdevice_id: Optional[ttnn.SubDeviceId] = None) -> None
-
+        R"doc(
             Applies per-device delays by launching a single-core kernel on each device in the mesh that spins
             for the specified number of cycles. The shape of `delays` must match the mesh view shape
             (rows x cols), e.g. for an 8x4 mesh, delays.size()==8 and delays[r].size()==4.

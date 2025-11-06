@@ -16,7 +16,7 @@ namespace ttnn::operations::data_movement {
 namespace {
 
 template <typename data_movement_operation_t>
-void bind_roll(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
+void bind_roll_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -47,12 +47,10 @@ void bind_roll(nb::module_& mod, const data_movement_operation_t& operation, con
 }  // namespace
 
 void bind_roll(nb::module_& mod) {
-    bind_roll(
+    bind_roll_op(
         mod,
         ttnn::roll,
         R"doc(
-        roll(input_tensor: ttnn.Tensor, shifts: Union[int, List[int]], dim: Union[int, List[int]]) -> ttnn.Tensor
-
         Performs circular shifting of elements along the specified dimension(s).
 
         Args:

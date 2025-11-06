@@ -493,9 +493,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             [](ShardSpec* t,
                const CoreRangeSet& core_sets,
                const std::array<uint32_t, 2>& shard_shape,
-               const ShardOrientation& shard_orientation,
-               const ShardMode& shard_mode) {
-                new (t) ShardSpec(core_sets, shard_shape, shard_orientation, shard_mode);
+               const ShardOrientation& shard_orientation) {
+                new (t) ShardSpec(core_sets, shard_shape, shard_orientation);
             },
             nb::arg("grid"),
             nb::arg("shard_shape"),

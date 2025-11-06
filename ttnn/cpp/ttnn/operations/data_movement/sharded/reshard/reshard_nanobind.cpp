@@ -45,8 +45,7 @@ void bind_reshard(nb::module_& mod) {
     detail::bind_reshard(
         mod,
         ttnn::reshard,
-        R"doc(reshard(input_tensor: ttnn.Tensor,  output_memory_config: MemoryConfig *, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
-
+        R"doc(
         Converts a tensor from one sharded layout to another sharded layout
 
         Args:

@@ -16,9 +16,17 @@ void bind_example_operation(nb::module_& mod) {
     bind_registered_operation(
         mod,
         ttnn::prim::example,
-        R"doc(example(input_tensor: ttnn.Tensor) -> ttnn.Tensor)doc",
+        R"doc(
+        Example operation that demonstrates TTNN operation registration.
 
-        // Add nanobind overloads for the C++ APIs that should be exposed to python
+        Args:
+            input_tensor (ttnn.Tensor): The input tensor.
+
+        Returns:
+            ttnn.Tensor: The output tensor.
+        )doc",
+
+        // Add pybind overloads for the C++ APIs that should be exposed to python
         // There should be no logic here, just a call to `self` with the correct arguments
         // This specific function can be called from python as `ttnn.prim.example(input_tensor)` or
         // `ttnn.prim.example(input_tensor)`
@@ -33,7 +41,7 @@ void bind_example_operation(nb::module_& mod) {
         ttnn::composite_example,
         R"doc(composite_example(input_tensor: ttnn.Tensor) -> ttnn.Tensor)doc",
 
-        // Add nanobind overloads for the C++ APIs that should be exposed to python
+        // Add pybind overloads for the C++ APIs that should be exposed to python
         // There should be no logic here, just a call to `self` with the correct arguments
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::composite_example)& self, const ttnn::Tensor& input_tensor) -> ttnn::Tensor {

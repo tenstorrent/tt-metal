@@ -32,6 +32,9 @@ void bind_unary_backward_two_float(
         R"doc(
         {2}
 
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i, \verb|threshold|, \verb|value|)
+
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor (ttnn.Tensor): the input tensor.
@@ -106,6 +109,9 @@ void bind_unary_backward_op(
         R"doc(
         {2}
 
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i)
+
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
             input_tensor_a (ttnn.Tensor): the input tensor.
@@ -170,8 +176,10 @@ void bind_unary_backward_rsqrt(
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i)
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
@@ -241,6 +249,9 @@ void bind_unary_backward_op_reciprocal(
     auto doc = fmt::format(
         R"doc(
         {2}
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i)
 
         Args:
             grad_tensor (ComplexTensor or ttnn.Tensor): the input gradient tensor.
@@ -316,6 +327,9 @@ void bind_unary_backward_op_overload_abs(
     auto doc = fmt::format(
         R"doc(
         {2}
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i)
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
@@ -393,6 +407,9 @@ void bind_unary_backward_float(
     auto doc = fmt::format(
         R"doc(
         {2}
+
+        .. math::
+            \mathrm{{{{output\_tensor}}}}_i = \verb|{0}|(\mathrm{{{{grad\_tensor}}}}_i, \mathrm{{{{input\_tensor}}}}_i, \verb|{3}|)
 
         Args:
             grad_tensor (ttnn.Tensor): the input gradient tensor.
@@ -786,7 +803,7 @@ void bind_unary_backward_rdiv(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::optional<std::string> parameter_b,
+               const std::optional<std::string>& parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
@@ -1442,7 +1459,7 @@ void py_module(nb::module_& mod) {
     bind_unary_backward_op(
         mod,
         ttnn::atan_bw,
-        R"doc(Performs backward operations for inverse tangenr (atan) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(Performs backward operations for inverse tangent (atan) on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_backward_op(

@@ -29,41 +29,56 @@ void bind_reshape_view(nb::module_& mod, const data_movement_operation_t& operat
                const ttnn::Tensor& input_tensor,
                const ttnn::Shape& shape,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<PadValue>& pad_value) -> ttnn::Tensor { return self(input_tensor, shape); },
+               const std::optional<PadValue>& pad_value,
+               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
+                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+            },
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = nb::none()},
+            nb::arg("pad_value") = nb::none(),
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE)},
         ttnn::nanobind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Shape& logical_shape,
                const ttnn::Shape& padded_shape,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<PadValue>& pad_value) -> ttnn::Tensor {
-                return self(input_tensor, logical_shape, padded_shape);
+               const std::optional<PadValue>& pad_value,
+               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
+                return self(input_tensor, logical_shape, padded_shape, memory_config, pad_value, reshape_tile_mode);
             },
             nb::arg("input_tensor"),
             nb::arg("logical_shape"),
             nb::arg("padded_shape"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = nb::none()},
+            nb::arg("pad_value") = nb::none(),
+            nb::arg("reshape_tile_mode") = nb::cast(ttnn::TileReshapeMapMode::CACHE)},
         ttnn::nanobind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t>& shape,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<PadValue>& pad_value) -> ttnn::Tensor { return self(input_tensor, shape); },
+               const std::optional<PadValue>& pad_value,
+               const ttnn::TileReshapeMapMode reshape_tile_mode) -> ttnn::Tensor {
+                return self(input_tensor, shape, memory_config, pad_value, reshape_tile_mode);
+            },
             nb::arg("input_tensor"),
             nb::arg("shape"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("pad_value") = nb::none()});
+            nb::arg("pad_value") = nb::none(),
+            nb::arg("recreate_mapping_tensor") = nb::cast(ttnn::TileReshapeMapMode::CACHE)});
 }
-
 }  // namespace detail
+
+void bind_reshape_enum(nb::module_& mod) {
+    nb::enum_<ttnn::TileReshapeMapMode>(mod, "TileReshapeMapMode")
+        .value("CACHE", ttnn::TileReshapeMapMode::CACHE)
+        .value("RECREATE", ttnn::TileReshapeMapMode::RECREATE);
+}
 
 void bind_reshape_view(nb::module_& mod) {
     detail::bind_reshape_view(
@@ -82,6 +97,7 @@ void bind_reshape_view(nb::module_& mod) {
         Keyword Args:
             * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
             * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
+            * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
 
         Returns:
             ttnn.Tensor: the output tensor with the new shape.

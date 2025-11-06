@@ -15,7 +15,7 @@
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/eltwise/ternary/where/where.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::ternary {
@@ -100,9 +100,9 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
             {2}
 
         Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-            input_tensor_c (ttnn.Tensor or Number): the input tensor.
+            condition (ttnn.Tensor): the condition tensor must contain only 0's or 1's.
+            true_value (ttnn.Tensor or Number): The value selected if the corresponding element in condition is 1.
+            false_value (ttnn.Tensor or Number): The value selected if the corresponding element in condition is 0.
 
 
         Keyword Args:
@@ -119,16 +119,16 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B, FLOAT32, INT32
                  - TILE
-                 - 2, 3, 4
+                 - 1, 2, 3, 4, 5
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 0], [1, 0]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor3 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> tensor3 = ttnn.from_torch(torch.tensor([[5, 6], [8, 9]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> output = {1}(tensor1, tensor2, tensor3)
         )doc",
         operation.base_name(),
@@ -142,8 +142,40 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
         ttnn::nanobind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
-               const std::variant<float, Tensor>& true_value,
-               const std::variant<float, Tensor>& false_value,
+               const TensorScalarVariant& true_value,
+               const TensorScalarVariant& false_value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor);
+            },
+            nb::arg("predicate"),
+            nb::arg("true_value"),
+            nb::arg("false_value"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()},
+
+        ttnn::nanobind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& predicate,
+               const int32_t& true_value,
+               const int32_t& false_value,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<Tensor> output_tensor) {
+                return self(predicate, true_value, false_value, memory_config, output_tensor);
+            },
+            nb::arg("predicate"),
+            nb::arg("true_value"),
+            nb::arg("false_value"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()},
+
+        ttnn::nanobind_overload_t{
+            [](const ternary_operation_t& self,
+               const Tensor& predicate,
+               const uint32_t& true_value,
+               const uint32_t& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
                 return self(predicate, true_value, false_value, memory_config, output_tensor);
@@ -324,7 +356,7 @@ void py_module(nb::module_& mod) {
     bind_ternary_where(
         mod,
         ttnn::where,
-        R"doc(Computes Where on :attr:`input_tensor_a`, :attr:`input_tensor_b` and :attr:`input_tensor_c` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Selects elements from :attr:`true_value` or :attr:`false_value` depending on the corresponding value in :attr:`condition`. For each element, if the corresponding entry in :attr:`condition` is 1, the output element is taken from :attr:`true_value`; otherwise, it is taken from :attr:`false_value`.)doc");
 
     bind_ternary_lerp(
         mod,

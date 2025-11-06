@@ -15,10 +15,10 @@
 
 namespace ttnn::operations::data_movement {
 
-namespace detail {
+namespace {
 
 template <typename data_movement_operation_t>
-void bind_reshape(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
+void bind_reshape_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -42,13 +42,13 @@ void bind_reshape(nb::module_& mod, const data_movement_operation_t& operation, 
             nb::arg("memory_config") = nb::none()});
 }
 
-}  // namespace detail
+}  // namespace
 
 void bind_reshape(nb::module_& mod) {
-    detail::bind_reshape(
+    bind_reshape_op(
         mod,
         ttnn::reshape_on_device,
-        R"doc(reshape(input_tensor: ttnn.Tensor, W: int, Z: int, Y: int, X: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
         Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
 

@@ -67,8 +67,6 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
 void bind_tilize_with_zero_padding(nb::module_& mod) {
     auto doc =
         R"doc(
-            tilize_with_zero_padding(input_tensor: ttnn.Tensor, *, memory_config: Optional[MemoryConfig] = None, dtype: Optional[DataType] = None, use_multicore: bool = False)) -> ttnn.Tensor
-
             Changes data layout of input tensor to TILE. Pads to the nearest multiple of TILE width/height with zero value.
 
             Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 or UINT32 data type.

@@ -14,7 +14,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
-namespace detail {
+namespace {
 
 void bind_fill_pad_op(nb::module_& mod) {
     auto doc = fmt::format(
@@ -62,8 +62,8 @@ void bind_fill_pad_op(nb::module_& mod) {
             nb::arg("memory_config") = nb::none()});
 }
 
-}  // namespace detail
+}  // namespace
 
-void bind_fill_pad(nb::module_& mod) { detail::bind_fill_pad_op(mod); }
+void bind_fill_pad(nb::module_& mod) { bind_fill_pad_op(mod); }
 
 }  // namespace ttnn::operations::data_movement

@@ -13,6 +13,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "kv_cache.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/types.hpp"
 
@@ -100,8 +101,7 @@ void bind_update_cache_for_token_(nb::module_& mod, const kv_cache_operation_t& 
 template <typename update_cache_operation_t>
 void bind_update_cache(nb::module_& mod, const update_cache_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc(update_cache(cache: ttnn.Tensor, input: ttnn.Tensor, update_idx: int, batch_offset: int, *, compute_kernel_config : Optional[DeviceComputeKernelConfig] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
+        R"doc(
         Updates the cache tensor in place with the values from input at the specified update_idx. When cache has batch less than 32, input is assumed to have batch padded to 32 and [batch_offset:batch_offset+batch] from dim[-2] of input is used to update the cache.
 
         Args:
@@ -146,8 +146,7 @@ void bind_update_cache(nb::module_& mod, const update_cache_operation_t& operati
 template <typename update_cache_operation_t>
 void bind_fill_cache(nb::module_& mod, const update_cache_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc(fill_cache(cache_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, batch_idx: int, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
+        R"doc(
         Fills the cache tensor in place with the values from input at the specified batch_idx.
 
         Args:

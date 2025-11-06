@@ -14,13 +14,15 @@
 #include "rmsnorm_pre_all_gather.hpp"
 #include "rmsnorm_post_all_gather.hpp"
 
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_distributed_types.hpp"
+
 namespace ttnn::operations::normalization::detail {
 
 void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
     ttnn::bind_registered_operation(
         mod,
         ttnn::rms_norm_pre_all_gather,
-        R"doc(rms_norm_pre_all_gather(input_tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+        R"doc(
             Compute sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension.
 
             Note:
@@ -55,6 +57,7 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(nb::module_& mod) {
             nb::arg("residual_input_tensor") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
+            nb::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             nb::arg("memory_config") = nb::none(),
             nb::arg("use_2d_core_grid") = nb::none()});
 }
@@ -63,7 +66,7 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
     ttnn::bind_registered_operation(
         mod,
         ttnn::rms_norm_post_all_gather,
-        R"doc(rms_norm_post_all_gather(input_tensor: ttnn.Tensor, stats: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
             Performs the second part of a distributed RMSNorm operation normalizing the input based on the gathered statistics input.
 
             Note:
@@ -109,6 +112,7 @@ void bind_normalization_rmsnorm_post_all_gather_operation(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("program_config") = nb::none(),
+            nb::arg("distributed_program_config") = LayerNormDistributedDefaultProgramConfig{},
             nb::arg("dtype") = nb::none(),
             nb::arg("use_2d_core_grid") = nb::none()});
 }

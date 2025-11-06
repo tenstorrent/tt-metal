@@ -34,8 +34,7 @@ void bind_unsqueeze(nb::module_& mod) {
     detail::bind_unsqueeze(
         mod,
         ttnn::unsqueeze,
-        R"doc(unsqueeze(input_tensor: ttnn.Tensor,  dim: int) -> ttnn.Tensor
-
+        R"doc(
         Returns a tensor unsqueezed at the specified dimension
 
         Equivalent pytorch code:

@@ -64,8 +64,7 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
     detail::bind_interleaved_to_sharded_partial(
         mod,
         ttnn::interleaved_to_sharded_partial,
-        R"doc(interleaved_to_sharded_partial(input_tensor: ttnn.Tensor, grid: ttnn.CoreGrid,  num_slices: int, slice_index: int, shard_scheme: ttl.tensor.TensorMemoryLayout, shard_orientation: ttl.tensor.ShardOrientation,  *, output_dtype: Optional[ttnn.dtype] = None) -> ttnn.Tensor
-
+        R"doc(
         Converts a partial tensor from interleaved to sharded memory layout
 
         Args:

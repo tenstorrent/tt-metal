@@ -4,11 +4,15 @@
 
 #include "ttnn/operations/data_movement/fold/fold_nanobind.hpp"
 
+#include <array>
 #include <cstdint>
 #include <optional>
+#include <variant>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn/operations/data_movement/fold/fold.hpp"
 #include "ttnn-nanobind/decorators.hpp"
@@ -37,9 +41,7 @@ void bind_fold_operation(nb::module_& mod) {
                uint32_t stride_w,
                bool use_transpose_as_fold,
                std::optional<ttnn::Shape> output_shape,
-               uint32_t pad_c,
-               uint32_t pad_h,
-               uint32_t pad_w,
+               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
                std::optional<CoreRangeSet> grid_size,
                std::optional<MemoryConfig> override_memory_config) -> ttnn::Tensor {
                 return op(
@@ -48,9 +50,7 @@ void bind_fold_operation(nb::module_& mod) {
                     stride_w,
                     use_transpose_as_fold,
                     output_shape,
-                    pad_c,
-                    pad_h,
-                    pad_w,
+                    padding,
                     grid_size,
                     override_memory_config);
             },
@@ -59,9 +59,7 @@ void bind_fold_operation(nb::module_& mod) {
             nb::arg("stride_w"),
             nb::arg("use_transpose_as_fold") = false,
             nb::arg("output_shape") = nb::none(),
-            nb::arg("pad_c") = 0,
-            nb::arg("pad_h") = 0,
-            nb::arg("pad_w") = 0,
+            nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("grid_size") = nb::none(),
             nb::arg("override_memory_config") = nb::none()});
 }

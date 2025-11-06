@@ -17,8 +17,7 @@ namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_moe_operation(nb::module_& mod) {
     auto doc =
-        R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt) -> ttnn.Tensor
-
+        R"doc(
             Returns the weight of the zero-th MoE expert.
 
             Equivalent PyTorch code:
@@ -47,29 +46,35 @@ void bind_reduction_moe_operation(nb::module_& mod) {
                         :header-rows: 1
 
                         * - dtype
-                            - layout
+                          - layout
                         * - BFLOAT16
-                            - TILE
+                          - TILE
 
                 The output tensor will match the data type and layout of the input tensor.
 
+            Memory Support:
+                - Interleaved: DRAM and L1
+
             Limitations:
-                - Tensors must be 4D.
+                - Tensors must be 4D with shape [N, C, H, W], and must be located on the device.
                 - For the :attr:`input_tensor`, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.
                 - :attr:`k` must be exactly 32.
                 - For the :attr:`topk_mask_tensor`, H must be 32 and W must match :attr:`k` (i.e. 32).
                 - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
                 - All of the shape validations are performed on padded shapes.
+                - Sharding is not supported for this operation.
 
             Example:
-                N, C, H, W = 1, 1, 32, 64
-                k = 32
+                .. code-block:: python
 
-                input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-                expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-                topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    N, C, H, W = 1, 1, 32, 64
+                    k = 32
 
-                ttnn_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
+                    input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+                    ttnn_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
 
         )doc";
 

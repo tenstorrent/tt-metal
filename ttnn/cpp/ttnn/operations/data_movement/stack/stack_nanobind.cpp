@@ -18,7 +18,7 @@ namespace ttnn::operations::data_movement {
 namespace {
 
 template <typename data_movement_operation_t>
-void bind_stack(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
+void bind_stack_op(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -33,11 +33,10 @@ void bind_stack(nb::module_& mod, const data_movement_operation_t& operation, co
 }  // namespace
 
 void bind_stack(nb::module_& mod) {
-    bind_stack(
+    bind_stack_op(
         mod,
         ttnn::stack,
-        R"doc(stack(input_tensors: List[ttnn.Tensor], dim: int) -> ttnn.Tensor
-
+        R"doc(
         Stacks tensors along a new dimension.
 
         Args:

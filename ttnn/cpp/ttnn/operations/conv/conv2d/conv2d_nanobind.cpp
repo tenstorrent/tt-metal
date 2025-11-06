@@ -38,33 +38,38 @@ void bind_conv2d(nb::module_& mod) {
 
         For more information, refer to `this tech report. <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md>`_
 
-        :param ttnn.Tensor input_tensor:  The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
-        :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
-        :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
-        :param ttnn.MeshDevice device:  The device to use.
-        :param int in_channels:  Number of input channels.
-        :param int out_channels:  Number of output channels.
-        :param int batch_size:  Batch size.
-        :param int input_height:  Height of the input tensor.
-        :param int input_width:  Width of the input tensor.
-        :param tuple[int, int] kernel_size: Size of the convolving kernel.
-        :param tuple[int, int] stride: Stride of the cross-correlation.
-        :param tuple[int, int] or tuple[int, int, int, int]) padding: Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
-        :param tuple[int, int] dilation: Spacing between kernel elements.
-        :param int groups:  Number of blocked connections from input channels to output channels.
-        :param ttnn.DataType, None dtype:  The data type of the output tensor. Default: None (inferred from input tensor).
-        :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
-        :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
-        :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
-        :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
-        :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
+        Args:
+            input_tensor (ttnn.Tensor): The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
+            weight_tensor (ttnn.Tensor): The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width].
+            device (ttnn.MeshDevice): The device to use.
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels.
+            batch_size (int): Batch size.
+            input_height (int): Height of the input tensor.
+            input_width (int): Width of the input tensor.
+            kernel_size (tuple[int, int]): Size of the convolving kernel.
+            stride (tuple[int, int]): Stride of the cross-correlation.
+            padding (tuple[int, int] or tuple[int, int, int, int]): Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
+            dilation (tuple[int, int]): Spacing between kernel elements.
+            groups (int): Number of blocked connections from input channels to output channels.
 
-        :return: The output tensor, output height and width, and the preprocessed weights and bias.
+        Keyword Args:
+            bias_tensor (ttnn.Tensor, optional): Optional bias tensor. Default: None
+            dtype (ttnn.DataType, optional): The data type of the output tensor. Default: None (inferred from input tensor).
+            conv_config (ttnn.Conv2dConfig, optional): Configuration for convolution. Default: None
+            compute_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for compute kernel. Default: None
+            memory_config (ttnn.MemoryConfig, optional): Output Tensor's Memory Configuration. Default: None
+            slice_config (ttnn.Conv2dSliceConfig, optional): Configuration for slicing the input & output tensors when they are in DRAM. If this is set to None, and the input is in DRAM, DRAM Slicing will be automatically enabled. Default: None
+            return_output_dim (bool, optional): If true, the op also returns the height and width of the output tensor in [N, H, W, C] format. Default: False
+            return_weights_and_bias (bool, optional): If true, the op also returns the preprocessed weight and bias on device. Default: False
 
-        :rtype: [ttnn.Tensor]: The output tensor, when return_output_dim = False and return_weights_and_bias = False
-        :rtype: [ttnn.Tensor, Tuple[int, int]]: The output tensor, and it's height and width, if return_output_dim = True
-        :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_weights_and_bias = True
-        :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
+        Returns:
+            The output tensor, output height and width, and the preprocessed weights and bias.
+
+            - ttnn.Tensor: The output tensor, when return_output_dim = False and return_weights_and_bias = False
+            - tuple[ttnn.Tensor, tuple[int, int]]: The output tensor, and its height and width, if return_output_dim = True
+            - tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_weights_and_bias = True
+            - tuple[ttnn.Tensor, tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and its height and width, if return_output_dim = True and return_weights_and_bias = True
         )doc",
         ttnn::nanobind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
@@ -181,7 +186,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("input_dtype"),
         nb::arg("output_dtype") = nb::none(),
         nb::arg("conv_config") = nb::none(),
-        nb::arg("compute_config") = nb::none());
+        nb::arg("compute_config") = nb::none(),
+        nb::arg("slice_config") = nb::none());
 
     mod.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -293,8 +299,9 @@ void bind_conv2d(nb::module_& mod) {
         )doc");
 
     nb::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
-        .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
-        .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
+        .value("L1Full", Conv2dSliceConfig::SliceType::L1_FULL)
+        .value("DRAMSliceHeight", Conv2dSliceConfig::SliceType::DRAM_HEIGHT)
+        .value("DRAMSliceWidth", Conv2dSliceConfig::SliceType::DRAM_WIDTH);
 
     auto py_conv_config = nb::class_<Conv2dConfig>(
         mod,
@@ -322,12 +329,12 @@ void bind_conv2d(nb::module_& mod) {
             bool,
             bool,
             bool,
-            bool,
+            std::optional<bool>,
             bool,
             std::optional<bool>>(),
         nb::kw_only(),
         nb::arg("weights_dtype") = nb::none(),
-        nb::arg("activation") = "",
+        nb::arg("activation") = nb::none(),
         nb::arg("deallocate_activation") = false,
         nb::arg("reallocate_halo_output") = true,
         nb::arg("config_tensors_in_dram") = false,
@@ -343,7 +350,7 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("enable_weights_double_buffer") = false,
         nb::arg("full_inner_dim") = false,
         nb::arg("in_place") = false,
-        nb::arg("enable_kernel_stride_folding") = false,
+        nb::arg("enable_kernel_stride_folding") = nb::none(),
         nb::arg("enable_activation_reuse") = false,
         nb::arg("force_split_reader") = nb::none());
 

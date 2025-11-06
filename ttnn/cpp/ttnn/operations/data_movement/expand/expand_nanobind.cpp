@@ -16,7 +16,7 @@
 
 namespace ttnn::operations::data_movement {
 
-namespace detail {
+namespace {
 template <typename data_movement_operation_t>
 void bind_expand(nb::module_& mod, const data_movement_operation_t& operation, const char* doc) {
     ttnn::bind_registered_operation(
@@ -37,11 +37,11 @@ void bind_expand(nb::module_& mod, const data_movement_operation_t& operation, c
         });
 }
 
-}  // namespace detail
+}  // namespace
 
 void bind_expand(nb::module_& mod) {
     auto doc =
-        R"doc(expand(input: ttnn.Tensor, output_shape: List[int], memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
         Returns a new tensor where singleton dimensions are expanded to a larger side.
         Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.
 
@@ -58,7 +58,7 @@ void bind_expand(nb::module_& mod) {
 
         )doc";
 
-    detail::bind_expand(mod, ttnn::expand, doc);
+    bind_expand(mod, ttnn::expand, doc);
 }
 
 }  // namespace ttnn::operations::data_movement

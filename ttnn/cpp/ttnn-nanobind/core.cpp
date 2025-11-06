@@ -77,19 +77,19 @@ void py_module(nb::module_& mod) {
 
     mod.def(
         "set_printoptions",
-        [](const std::string& profile, const py::object& sci_mode, const nb::object& precision) {
+        [](const std::string& profile, const nb::object& sci_mode, const nb::object& precision) {
             ttnn::TensorPrintProfile profile_enum =
                 enchantum::cast<ttnn::TensorPrintProfile>(profile, ttsl::ascii_caseless_comp).value();
 
             ttnn::SciMode sci_mode_enum = ttnn::SciMode::Default;
             if (!sci_mode.is_none()) {
                 if (nb::isinstance<nb::bool_>(sci_mode)) {
-                    sci_mode_enum = sci_mode.cast<bool>() ? ttnn::SciMode::Enable : ttnn::SciMode::Disable;
+                    sci_mode_enum = nb::cast<bool>(sci_mode) ? ttnn::SciMode::Enable : ttnn::SciMode::Disable;
                 } else if (nb::isinstance<nb::str>(sci_mode)) {
                     auto cmp = [](const auto& a, const auto& b) -> bool {
                         return ttsl::ascii_caseless_comp(std::string_view(a), std::string_view(b));
                     };
-                    const std::string sci_mode_str = sci_mode.cast<std::string>();
+                    const std::string sci_mode_str = nb::cast<std::string>(sci_mode);
                     if (cmp(sci_mode_str, "true")) {
                         sci_mode_enum = ttnn::SciMode::Enable;
                     } else if (cmp(sci_mode_str, "false")) {
@@ -107,7 +107,7 @@ void py_module(nb::module_& mod) {
             int precision_value = 4;
             if (!precision.is_none()) {
                 if (nb::isinstance<nb::int_>(precision)) {
-                    precision_value = precision.cast<int>();
+                    precision_value = nb::cast<int>(precision);
                 } else {
                     throw std::invalid_argument("precision must be None or int");
                 }

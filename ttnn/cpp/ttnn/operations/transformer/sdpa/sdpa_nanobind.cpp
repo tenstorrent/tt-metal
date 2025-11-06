@@ -31,8 +31,8 @@ void bind_sdpa(nb::module_& mod) {
         Keyword args:
             attn_mask (ttnn.Tensor, optional): Defaults to `None`. [b x 1 x s x s]. Head broadcasting is implied.
             is_causal (bool): Defaults to `true`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             scale (float, optional): Defaults to `None`.
+            sliding_window_size (int, optional): Defaults to `None`. Size of sliding window for attention. If provided && is_causal, only attends to the last `sliding_window_size` tokens. If provided && !is_causal, attends to a window of size `sliding_window_size` centered at the current position.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
 
@@ -55,6 +55,7 @@ void bind_sdpa(nb::module_& mod) {
                std::optional<ttnn::Tensor> attn_mask,
                bool is_causal,
                std::optional<float> scale,
+               std::optional<uint32_t> sliding_window_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
@@ -65,6 +66,7 @@ void bind_sdpa(nb::module_& mod) {
                     attn_mask,
                     is_causal,
                     scale,
+                    sliding_window_size,
                     memory_config,
                     program_config,
                     compute_kernel_config);
@@ -76,6 +78,7 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("attn_mask").noconvert() = nb::none(),
             nb::arg("is_causal").noconvert() = true,
             nb::arg("scale").noconvert() = nb::none(),
+            nb::arg("sliding_window_size").noconvert() = nb::none(),
             nb::arg("memory_config").noconvert() = nb::none(),
             nb::arg("program_config").noconvert() = nb::none(),
             nb::arg("compute_kernel_config").noconvert() = nb::none()});

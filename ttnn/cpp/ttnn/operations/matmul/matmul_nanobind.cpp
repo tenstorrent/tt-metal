@@ -503,6 +503,9 @@ void py_module(nb::module_& mod) {
         - In order to leverage sharded matmul implementations we can shard both `input_tensor_a` and `input_tensor_b`. The sharding strategy used will be according
           to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be BLOCK sharded.
 
+          - For 1D sharded matmul variants (width- or height-sharded inputs), if a sharded :attr:`memory_config` is
+            provided for the output, its memory layout and buffer type must match those of :attr:`input_tensor_a`.
+
           Note: the broadcasting logic only looks at the batch dimensions when determining if the inputs
           are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
           (`j` x `1` x `n_size` x `m_size`) tensor and :attr:`input_tensor_b` is a (`k_size` x `m_size` x `p`)
@@ -532,9 +535,59 @@ void py_module(nb::module_& mod) {
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
             optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 
-
         Returns:
             ttnn.Tensor: the output tensor.
+
+        Note:
+            The input tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: input_tensor_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+        Memory Support:
+            The supported memory configurations for the two input tensors are program config dependent, as described below:
+
+            .. list-table:: Supported Memory Configurations
+                :header-rows: 1
+
+                * - Config
+                  - Input A
+                  - Input B
+                * - MatmulMultiCoreReuseProgramConfig
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+                  - Width Sharded (L1)
+                  - Width Sharded (DRAM)
+                * - MatmulMultiCoreReuseMultiCastProgramConfig
+                  - Interleaved (L1/DRAM), Block Sharded (L1)
+                  - Interleaved (L1/DRAM)
+                * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=True)
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM)
+
+
+
+            When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
 
         Example:
             >>> # matrix x matrix - no batch dimensions
@@ -631,6 +684,33 @@ void py_module(nb::module_& mod) {
 
         The limitations and behaviours are the same as for matmul.
 
+        Note:
+            The tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: input_tensor_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: bias
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
         Args:
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
             input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
@@ -722,6 +802,25 @@ void py_module(nb::module_& mod) {
             input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
             input_tensors_b (ttnn.Tensor): the second tensor vector to be multiplied. Needs to be on the device.
 
+        Note:
+            The tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: input_tensors_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
         Keyword Args:
             bias (ttnn.Tensor, optional): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
             transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
@@ -807,6 +906,33 @@ void py_module(nb::module_& mod) {
 
         - Arguments beta and alpha should be real numbers;
 
+        Note:
+            The tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: mat1_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: mat2_tensor
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                  - TILE
+
         Args:
             input_tensor (ttnn.Tensor): tensor to be added to result of matrix multiplication of mat1_tensor and mat2_tensor
             mat1_tensor (ttnn.Tensor): the first tensor to be matrix multiplied
@@ -875,54 +1001,188 @@ void py_module(nb::module_& mod) {
         mod,
         ::ttnn::sparse_matmul,
         R"doc(
-        Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.
+        Returns the matrix product of two tensors. Based on `is_input_a_sparse`, `is_input_b_sparse` and the sparsity tensor, some parts of the output computation is skipped.
+
+        The two input tensors must be be tiled and each have a rank of 4.
+        The sparsity tensor must be a rank 4 tensor in row major layout.
+
+        Based on the input tensor shapes and `is_input_a_sparse` and `is_input_b_sparse` values, the output tensor shape is computed. See the supported modes table below.
 
         Args:
-            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied containing the weights of the experts. Needs to be on the device.
-            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied, containing the tokens to be processed. Needs to be on the device.
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
         Keyword Args:
-            sparsity (ttnn.Tensor): the sparsity tensor containing the scale factor for each token for each expert. Needs to be on the device.
+            sparsity (ttnn.Tensor): the sparsity tensor containing the mask values. Needs to be on the device. The data type must be bfloat16.
+            program_config (ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig): the program configuration for the matmul operation. Only this config type is supported. ``mcast_in0`` must be set to True.
             nnz (int, optional): the number of non-zero values in the sparsity tensor. If not provided, it will be inferred from the sparsity tensor at runtime.
-            is_input_a_sparse (bool): boolean indicating whether input_tensor_a is sparse. If true, corresponding inputs in both input_tensor_a and input_tensor_b are skipped according to sparsity tensor. Defaults to `False`.
-            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
+            is_input_a_sparse (bool, optional): boolean indicating whether `input_tensor_a` is sparse. Defaults to `False`. Together with `is_input_b_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
+            is_input_b_sparse (bool, optional): boolean indicating whether `input_tensor_b` is sparse. Defaults to `True`. Together with `is_input_a_sparse`, it determines how the sparsity tensor is interpreted. See the supported modes table below.
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
             dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
-            program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
             core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
             output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of sparse_matmul is to be written. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor with sparse results.
 
+        Supported Modes
+            .. list-table::
+                :header-rows: 1
+
+                * - is_input_a_sparse
+                  - is_input_b_sparse
+                  - input_tensor_a shape
+                  - input_tensor_b shape
+                  - sparsity shape
+                  - nnz
+                  - output shape
+                * - True
+                  - True
+                  - [1, E, M, K]
+                  - [1, E, K, N]
+                  - [1, 1, 1, E]
+                  - None or 0 ≤ nnz ≤ E
+                  - [1, E, M, N]
+                * - False
+                  - True
+                  - [A, B, M, K]
+                  - [1, E, K, N]
+                  - [A, B, 1, E]
+                  - None or 0 ≤ nnz ≤ A * B * E
+                  - [A, B, 1, E, M, N]
+                * - True
+                  - False
+                  - [A, E, M, K]
+                  - [1, E, K, N]
+                  - [1, 1, A, E]
+                  - None or 0 ≤ nnz ≤ A * E
+                  - [A, E, M, N]
+                * - False
+                  - False
+                  - Invalid
+                  - --
+                  - --
+                  - --
+                  - --
+
+        Note:
+            The input tensors support the following data types and layouts:
+
+            .. list-table:: input_tensor_a
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: input_tensor_b
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32
+                  - TILE
+
+            .. list-table:: sparsity
+                :header-rows: 1
+
+                * - dtype
+                  - layout
+                * - BFLOAT16
+                  - ROW_MAJOR
+
+        Memory Support:
+            The supported memory configurations for the two input tensors are program config dependent, as described below:
+
+            .. list-table:: Supported Memory Configurations
+                :header-rows: 1
+
+                * - Config
+                  - Input A
+                  - Input B
+                * - ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig with (mcast_in0=True)
+                  - Interleaved (L1/DRAM)
+                  - Interleaved (L1/DRAM)
+
         Example:
-            >>> # Sparse matmul for 64 batch, 128 sequence, 512 hidden dimensions, 8 experts
-            >>> expert_weights = ttnn.ones([1, 8, 512, 512])
-            >>> tokens = ttnn.ones([1, 64, 128, 512])
-            >>> # Create sparsity bitmask
-            >>> sparsity_bitmask = torch.zeros([1, 64, 128, 8])
-            >>> # Set some tokens to be processed by different experts (simplified pattern)
-            >>> sparsity_bitmask[0, 0, 0, 0] = 1.0  # First token goes to expert 0
-            >>> sparsity_bitmask[0, 0, 0, 10] = 1.0  # First token goes to expert 10 as well
-            >>> sparsity_bitmask[0, 0, 1, 2] = 0.7  # Second token goes to expert 2
-            >>> sparsity_bitmask[0, 1, 0, 1] = 0.3  # Another token goes to expert 1
-            >>> # Move sparsity bitmask to device
-            >>> sparsity_bitmask = ttnn.to_device(sparsity_bitmask, device)
-            >>> # Perform sparse matmul
-            >>> output = ttnn.sparse_matmul(expert_weights, tokens, sparsity=sparsity_bitmask, nnz=4)
+            >>> config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            >>>     compute_with_storage_grid_size=ttnn.CoreCoord(1, 2),
+            >>>     in0_block_w=1,
+            >>>     out_subblock_h=1,
+            >>>     out_subblock_w=1,
+            >>>     out_block_h=1,
+            >>>     out_block_w=1,
+            >>>     per_core_M=2,
+            >>>     per_core_N=1,
+            >>>     fuse_batch=False,
+            >>>     fused_activation=None,
+            >>>     mcast_in0=True)
+            >>> nnz = 4
+            # Case 1: When `is_input_a_sparse` is True and `is_input_b_sparse` is True
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 32, 64), dtype=torch.bfloat16)), device)
+            # Create a sparsity tensor
+            >>> sparsity_bitmask = torch.zeros((1, 1, 1, 8), dtype=torch.bfloat16)
+            >>> sparsity_bitmask.view(-1)[torch.randperm(sparsity_bitmask.numel())[:nnz]] = 1.0
+            >>> sparsity_bitmask = ttnn.to_device(ttnn.from_torch(sparsity_bitmask), device)
+            >>> output = ttnn.sparse_matmul(
+            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, nnz=nnz, is_input_a_sparse=True, is_input_b_sparse=True, program_config=config)
             >>> print(output.shape)
-            [64, 128, 8, 512]
+            # [1, 8, 64, 64]
+            # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
+            >>> output = ttnn.sparse_matmul(
+            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, is_input_a_sparse=True, is_input_b_sparse=True, program_config=config)
+            >>> print(output.shape)
+            # [1, 8, 64, 64]
+            # Case 2: When `is_input_a_sparse` is False and `is_input_b_sparse` is True
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((2, 16, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 32, 64), dtype=torch.bfloat16)), device)
+            # Create a sparsity tensor
+            >>> sparsity_bitmask = torch.zeros((2, 16, 1, 8), dtype=torch.bfloat16)
+            >>> sparsity_bitmask.view(-1)[torch.randperm(sparsity_bitmask.numel())[:nnz]] = 1.0
+            >>> sparsity_bitmask = ttnn.to_device(ttnn.from_torch(sparsity_bitmask), device)
+            >>> output = ttnn.sparse_matmul(
+            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, nnz=nnz, is_input_a_sparse=False, is_input_b_sparse=True, program_config=config)
+            >>> print(output.shape)
+            # [2, 16, 1, 8, 64, 64]
+            # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
+            >>> output = ttnn.sparse_matmul(
+            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, is_input_a_sparse=False, is_input_b_sparse=True, program_config=config)
+            >>> print(output.shape)
+            # [2, 16, 1, 8, 64, 64]
+            # Case 3: When `is_input_a_sparse` is True and `is_input_b_sparse` is False
+            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.randn((4, 8, 64, 32), dtype=torch.bfloat16)), device)
+            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.randn((1, 8, 32, 64), dtype=torch.bfloat16)), device)
+            # Create a sparsity tensor
+            >>> sparsity_bitmask = torch.zeros((1, 1, 4, 8), dtype=torch.bfloat16)
+            >>> sparsity_bitmask.view(-1)[torch.randperm(sparsity_bitmask.numel())[:nnz]] = 1.0
+            >>> sparsity_bitmask = ttnn.to_device(ttnn.from_torch(sparsity_bitmask), device)
+            >>> output = ttnn.sparse_matmul(
+            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, nnz=nnz, is_input_a_sparse=True, is_input_b_sparse=False, program_config=config)
+            >>> print(output.shape)
+            # [4, 8, 64, 64]
+            # When nnz is not provided, it will be inferred from the sparsity tensor at runtime
+            >>> output = ttnn.sparse_matmul(
+            >>>     tensor1, tensor2, sparsity=sparsity_bitmask, is_input_a_sparse=True, is_input_b_sparse=False, program_config=config)
+            >>> print(output.shape)
+            # [4, 8, 64, 64]
+            # Case 4: When `is_input_a_sparse` is False and `is_input_b_sparse` is False
+            # This is invalid
         )doc",
         ttnn::nanobind_overload_t{
             [](decltype(::ttnn::sparse_matmul)& self,
                const ttnn::Tensor& input_tensor_a,
                const ttnn::Tensor& input_tensor_b,
                const ttnn::Tensor& sparsity,
+               const MatmulProgramConfig& program_config,
                const std::optional<uint32_t> nnz,
                const bool is_input_a_sparse,
+               const bool is_input_b_sparse,
                const std::optional<const ttnn::MemoryConfig>& memory_config,
                const std::optional<const DataType> dtype,
-               const std::optional<const MatmulProgramConfig>& program_config,
                const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const tt::tt_metal::Tile>& output_tile,
@@ -935,6 +1195,7 @@ void py_module(nb::module_& mod) {
                     sparsity,
                     nnz,
                     is_input_a_sparse,
+                    is_input_b_sparse,
                     memory_config,
                     dtype,
                     program_config,
@@ -949,11 +1210,12 @@ void py_module(nb::module_& mod) {
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("sparsity"),
+            nb::arg("program_config"),
             nb::arg("nnz") = nb::none(),
             nb::arg("is_input_a_sparse") = false,
+            nb::arg("is_input_b_sparse") = true,
             nb::arg("memory_config") = nb::none(),
             nb::arg("dtype") = nb::none(),
-            nb::arg("program_config") = nb::none(),
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("core_grid") = nb::none(),
             nb::arg("output_tile") = nb::none(),

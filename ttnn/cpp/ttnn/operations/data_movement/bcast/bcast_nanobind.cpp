@@ -17,8 +17,7 @@ namespace nb = nanobind;
 
 void bind_bcast(nb::module_& mod) {
     auto doc =
-        R"doc(bcast(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, math_op[ADD, SUB, MUL],  dim: Optional[int] = None, memory_config: Optional[MemoryConfig] = std::nullopt, output_tensor: Optional[Tensor]) -> ttnn.Tensor
-
+        R"doc(
             Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
 
             Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.

@@ -30,8 +30,7 @@ void bind_complex_tensor_type(nb::module_& mod) {
 
 void bind_complex_tensor(nb::module_& mod) {
     auto doc = fmt::format(
-        R"doc({0}real: ttnn.Tensor, imag: ttnn.Tensor -> ComplexTensor
-
+        R"doc(
             Create a complex tensor from real and imaginary part tensors.
 
             Args:

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn-nanobind/program_descriptors.hpp"
+#include "program_descriptors.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -21,6 +21,8 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 NB_MAKE_OPAQUE(std::vector<UnpackToDestMode>);
 
@@ -172,9 +174,10 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode,
             "Approximation mode for mathematical operations");
 
-    export_enum<tt::tt_metal::KernelDescriptor::SourceType>(mod, "SourceType");
+    // TODO_NANOBIND: do we still need this?
+    // export_enum<tt::tt_metal::KernelDescriptor::SourceType>(mod, "SourceType");
 
-    nb::class_<tt::tt_metal::KernelDescriptor>(mod, "KernelDescriptor", R"pbdoc(
+    auto kernel_descriptor_class = nb::class_<tt::tt_metal::KernelDescriptor>(mod, "KernelDescriptor", R"pbdoc(
         Descriptor for a computational kernel.
 
         Contains all the information needed to compile and execute a kernel,
@@ -182,7 +185,7 @@ void py_module_types(nb::module_& mod) {
     )pbdoc");
 
     // Bind SourceType as a nested enum within KernelDescriptor
-    py::enum_<tt::tt_metal::KernelDescriptor::SourceType>(kernel_descriptor_class, "SourceType", R"pbdoc(
+    nb::enum_<tt::tt_metal::KernelDescriptor::SourceType>(kernel_descriptor_class, "SourceType", R"pbdoc(
         Source type for kernel source code.
 
         Defines whether the kernel source is provided as a file path or inline source code.
@@ -259,8 +262,8 @@ void py_module_types(nb::module_& mod) {
         Default constructor for SemaphoreDescriptor.
     )pbdoc")
         .def(  // TODO_NANOBIND: FIX. AFFECTS BEHAVIOR!
-            nb::init<CoreType, CoreRangeSet, uint32_t>(),
-            nb::arg("core_type"),  //= nb::cast(CoreType::WORKER), // TODO_NANOBIND causes segfault when import ttnn???
+            nb::init<tt::CoreType, CoreRangeSet, uint32_t>(),
+            nb::arg("core_type") = nb::cast(tt::CoreType::WORKER),  // TODO_NANOBIND causes segfault when import ttnn???
             nb::arg("core_ranges"),
             nb::arg("initial_value"),
             R"pbdoc(

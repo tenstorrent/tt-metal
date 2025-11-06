@@ -65,6 +65,9 @@ void bind_batch_norm_operation(nb::module_& mod) {
 
             These apply for all the tensor inputs to this operation, including the optional :attr:`output` tensor.
 
+        Memory Support:
+            - Interleaved: DRAM and L1
+
         Limitations:
             - All input tensors must be tilized, interleaved, rank 4, and on-device.
 

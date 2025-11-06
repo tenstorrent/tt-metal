@@ -16,7 +16,7 @@ namespace ttnn::operations::experimental::broadcast_to::detail {
 
 void bind_broadcast_to(nb::module_& mod) {
     const auto* doc =
-        R"doc(broadcast_to(input: ttnn.Tensor, ttnn::Shape, memory_config: Optional[ttnn.MemoryConfig] = None, output: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
+        R"doc(
         Returns a new tensor where singleton dimensions are broadcasted to the given shape.
 
         Args:
