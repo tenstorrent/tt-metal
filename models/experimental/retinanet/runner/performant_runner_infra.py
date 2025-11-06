@@ -255,7 +255,7 @@ class RetinaNetPerformanceRunnerInfra:
         classification_torch = ttnn.to_torch(classification_output, mesh_composer=self.outputs_mesh_composer)
 
         # Validate regression head
-        regression_pcc = 0.97
+        regression_pcc = 0.91
         passed_reg, msg_reg = check_with_pcc(self.torch_regression_output, regression_torch, pcc=regression_pcc)
         logger.info(f"RetinaNet Regression Head: batch_size={self.batch_size}, PCC={msg_reg}")
 

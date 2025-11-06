@@ -118,15 +118,17 @@ def ttnn_retinanet_classification_head(
     # Process each FPN level
     all_cls_logits = []
     for level_idx, (feature_map, (H, W)) in enumerate(zip(feature_maps, input_shapes)):
-        logger.info(f"\n--- Processing FPN Level {level_idx} ---")
-        logger.info(f"Input shape: {feature_map.shape}, H={H}, W={W}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing FPN Level {level_idx}: H={H}, W={W}")
+        logger.info(f"{'='*60}")
 
         x = feature_map
 
         # Apply 4 conv blocks sequentially
         for i, conv_block in enumerate(conv_blocks):
-            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
-            logger.info(f"After conv block {i}: {x.shape}")
+            x = conv_block(
+                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=level_idx, conv_block_idx=i
+            )
 
         # Apply final cls_logits convolution
         # Input: (N, H, W, 256) NHWC

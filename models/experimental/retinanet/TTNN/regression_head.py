@@ -4,6 +4,7 @@ from typing import List
 from typing import Optional
 from dataclasses import dataclass
 from typing import Optional
+from loguru import logger
 
 
 @dataclass
@@ -22,14 +23,14 @@ retinanet_head_optimizations = {
             "enable_weights_double_buffer": True,
             "deallocate_activation": False,
             "reallocate_halo_output": True,
-            "act_block_h_override": 256,  # NEW: Tune this value
-            "act_block_w_div": 1,  # NEW: Tune this value
+            "act_block_h_override": 256,
+            "act_block_w_div": 1,
         },
         final_conv={
             "enable_act_double_buffer": True,
             "enable_weights_double_buffer": True,
         },
-        groupnorm_config={  # NEW: GroupNorm optimization
+        groupnorm_config={
             "use_sharded_memory": True,
             "adaptive_grid_size": True,
         },
@@ -88,6 +89,7 @@ class Conv2dNormActivation:
         self.conv_config = conv_config
         # Store parameters
         self.conv_weight = parameters["weight"]
+        self.conv_bias = parameters["bias"]
         self.norm_weight = parameters["norm_weight"]
         self.norm_bias = parameters["norm_bias"]
 
@@ -108,6 +110,8 @@ class Conv2dNormActivation:
         batch_size: int,
         input_height: int,
         input_width: int,
+        fpn_level: int = None,
+        conv_block_idx: int = None,
     ) -> ttnn.Tensor:
         """
         Forward pass: Conv2d -> GroupNorm -> ReLU
@@ -123,22 +127,39 @@ class Conv2dNormActivation:
         """
         from loguru import logger
 
-        logger.info(f"Conv2dNormActivation: Starting forward pass")
-        logger.info(f"  Input shape: {x.shape}")
-        logger.info(f"  batch_size={batch_size}, H={input_height}, W={input_width}")
+        # Create hierarchical log prefix
+        prefix = (
+            f"[FPN{fpn_level}][Conv{conv_block_idx}]"
+            if fpn_level is not None and conv_block_idx is not None
+            else "[Conv]"
+        )
+
+        logger.info(f"{prefix} Starting forward pass")
+        logger.info(f"{prefix}   Input: {x.shape}, batch={batch_size}, H={input_height}, W={input_width}")
+
+        # Weight/bias debug with prefix
+        logger.info(f"{prefix} [WEIGHT] Before conv2d:")
+        logger.info(
+            f"{prefix}   Shape: {self.conv_weight.shape}, Layout: {self.conv_weight.layout}, Storage: {self.conv_weight.storage_type()}"
+        )
+
+        logger.info(f"{prefix} [BIAS] Before conv2d:")
+        if self.conv_bias is not None:
+            logger.info(
+                f"{prefix}   Shape: {self.conv_bias.shape}, Layout: {self.conv_bias.layout}, Storage: {self.conv_bias.storage_type()}"
+            )
 
         # Conv2d operation
         logger.info(f"Conv2dNormActivation: Calling ttnn.conv2d...")
         logger.info(f"  kernel_size={list(self.kernel_size)}, stride={list(self.stride)}, padding={list(self.padding)}")
-        logger.info(f"  weight shape: {self.conv_weight.shape}")
 
-        x = ttnn.conv2d(
+        x, [H_out, W_out], [prepared_weight, prepared_bias] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.conv_weight,
             in_channels=self.in_channels,
             out_channels=self.out_channels,
             device=self.device,
-            bias_tensor=None,
+            bias_tensor=self.conv_bias,
             kernel_size=list(self.kernel_size),
             stride=list(self.stride),
             padding=list(self.padding),
@@ -148,8 +169,18 @@ class Conv2dNormActivation:
             slice_config=self.slice_config,
             compute_config=self.compute_config,
             conv_config=self.conv_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,  # ADD THIS
         )
 
+        # After conv2d
+        logger.info(f"{prefix} [WEIGHT] After conv2d:")
+        logger.info(
+            f"{prefix}   Shape: {prepared_weight.shape}, Layout: {prepared_weight.layout}, Storage: {prepared_weight.storage_type()}"
+        )
+
+        logger.info(f"{prefix} [CACHE] Updated weights/bias")
+        logger.info(f"{prefix} Output: {x.shape}")
         # Get output shape after conv
         N, H_out, W_out, C = x.shape
         logger.info(f"  After conv2d: shape={x.shape}, H_out={H_out}, W_out={W_out}")
@@ -195,9 +226,6 @@ class Conv2dNormActivation:
         # Reshape back using PRESERVED dimensions
         x = ttnn.reshape(x_normalized, (N, input_height, input_width, C))
         logger.info(f"  After reshape back: shape={x.shape}")
-        # Store original spatial dimensions
-        original_H = input_height
-        original_W = input_width
         H_out = input_height
         W_out = input_width
         # ReLU activation
@@ -246,7 +274,7 @@ def ttnn_retinanet_regression_head(
     input_mask_tensor = ttnn.create_group_norm_input_mask(in_channels, 32, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
-        dtype=model_config["ACTIVATIONS_DTYPE"],  # Was: ttnn.DataType.BFLOAT8_B
+        dtype=model_config["ACTIVATIONS_DTYPE"],
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -280,11 +308,14 @@ def ttnn_retinanet_regression_head(
 
     for level_idx, x in enumerate(feature_maps):
         H, W = input_shapes[level_idx]
-
-        # Apply 4 conv blocks (Conv2d + GroupNorm + ReLU)
-        for conv_block in conv_blocks:
-            x = conv_block(x, batch_size=batch_size, input_height=H, input_width=W)
-
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing FPN Level {level_idx}: H={H}, W={W}")
+        logger.info(f"{'='*60}")
+        # Apply 4 conv blocks
+        for conv_idx, conv_block in enumerate(conv_blocks):
+            x = conv_block(
+                x, batch_size=batch_size, input_height=H, input_width=W, fpn_level=level_idx, conv_block_idx=conv_idx
+            )
         # Final bbox_reg conv layer
         bbox_reg_slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=4)
 

@@ -32,8 +32,8 @@ class TTConv2D:
         is_reshape=True,
         enable_act_double_buffer=False,
         enable_weights_double_buffer=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
         math_approx_mode=False,
         input_channels_alignment=32,
         reshard_if_not_optimal=False,
@@ -162,7 +162,7 @@ class TTConv2D:
         logger.info(f"  - Dilation: {self.dilation}")
         logger.info(f"  - Groups: {self.groups}")
 
-        [output_tensor, [_out_height, _out_width], _] = ttnn.conv2d(
+        [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
             input_tensor=input_tensor,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
@@ -180,7 +180,7 @@ class TTConv2D:
             compute_config=compute_config,
             slice_config=self.slice_config,
             groups=self.groups,
-            return_weights_and_bias=True,
+            return_weights_and_bias=False,
             return_output_dim=True,
             dtype=self.dtype,
             memory_config=self.memory_config,
