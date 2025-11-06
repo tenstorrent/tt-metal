@@ -219,7 +219,7 @@ void completion_queue_reserve_back(uint32_t num_pages) {
     uint32_t completion_rd_ptr_and_toggle;
     uint32_t completion_rd_ptr;
     uint32_t completion_rd_toggle;
-    uint32_t available_bytes;
+    uint32_t available_space;
     do {
         invalidate_l1_cache();
         completion_rd_ptr_and_toggle = *get_cq_completion_read_ptr();
@@ -229,11 +229,11 @@ void completion_queue_reserve_back(uint32_t num_pages) {
         // so available space is distance from write ptr to read ptr
         // Toggles are equal means write ptr is ahead of read ptr
         // so available space is total space minus the distance from read to write ptr
-        available_bytes =
+        available_space =
             completion_rd_toggle != cq_write_interface.completion_fifo_wr_toggle
                 ? completion_rd_ptr - cq_write_interface.completion_fifo_wr_ptr
                 : (completion_queue_size_16B - (cq_write_interface.completion_fifo_wr_ptr - completion_rd_ptr));
-    } while (data_size_16B > available_bytes);
+    } while (data_size_16B > available_space);
 
     WAYPOINT("QRBD");
 }
