@@ -258,7 +258,7 @@ def run_demo(
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
         trace_region_size = 2789376 + int(0.20 * 2789376)  # 20% additional
-        logger.info(f"Trace region size ste to {trace_region_size}")
+        logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
@@ -304,8 +304,11 @@ def run_demo(
                 dense_layers=(1 if random_weights and single_layer else None),
                 override_num_layers=(1 if random_weights else None),
                 single_layer=(single_layer if random_weights else None),
+                enable_trace=enable_trace,
             )
         else:  # generator == "pp"
+            if enable_trace:
+                assert False, "Tracing is not supported for pp generator."
             gen = DeepseekGeneratorPP(
                 mesh_device=mesh_device,
                 model_path=Path(model_path),
