@@ -105,11 +105,10 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj)
     std::filesystem::path obj_path = std::filesystem::path(out_dir) / obj;
     std::filesystem::path dep_path = obj_path;
     dep_path.replace_extension(".d");
-    std::filesystem::path hash_path = obj_path;
-    hash_path.replace_extension(".hash");
+    auto hash_path = obj_path.string() + ".dephash";
     std::ofstream hash_file(hash_path);
     if (!hash_file.is_open()) {
-        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path.string());
+        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
         return;
     }
     std::ifstream dep_file(dep_path);
@@ -164,8 +163,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
 }
 
 bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
-    std::filesystem::path obj_path = std::filesystem::path(out_dir) / obj;
-    std::filesystem::path hash_path = obj_path.replace_extension(".hash");
+    std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
     std::ifstream hash_file(hash_path);
     if (!hash_file.is_open()) {
         log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path.string());

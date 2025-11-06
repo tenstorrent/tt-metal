@@ -344,7 +344,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
     }
-    this->lflags_ += fmt::format("-T{}{} ", env_.root_, jit_build_query.linker_script(params));
+    this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
+    this->lflags_ += fmt::format("-T{} ", this->linker_script_);
     // Source files
     {
         auto srcs = jit_build_query.srcs(params);
@@ -490,6 +491,11 @@ size_t JitBuildState::compile(const string& log_file, const string& out_dir, con
     return events.size();
 }
 
+bool JitBuildState::need_link(const string& out_dir) const {
+    std::string elf_path = out_dir + this->target_name_ + ".elf";
+    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
+}
+
 void JitBuildState::link(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -502,21 +508,34 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     // Append user args
     cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
 
+    // Elf file has dependencies other than object files:
+    // 1. Linker script
+    // 2. Weakened firmware elf (for kernels)
+    std::vector<std::string> link_deps = {{this->linker_script_}};
     if (!this->is_fw_) {
-        string weakened_elf_name =
-            env_.out_firmware_root_ + this->target_name_ + "/" + this->target_name_ + "_weakened.elf";
-        cmd += "-Wl,--just-symbols=" + weakened_elf_name + " ";
+        std::string weakened_elf = weakened_firmeware_elf_name();
+        cmd += "-Wl,--just-symbols=" + weakened_elf + " ";
+        link_deps.push_back(weakened_elf);
     }
 
     // Append common args provided by the build state
     cmd += lflags;
     cmd += this->link_objs_;
-    cmd += "-o " + out_dir + this->target_name_ + ".elf";
+    std::string elf_name = this->target_name_ + ".elf";
+    cmd += "-o " + out_dir + elf_name;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "link", cmd, log_file);
+    }
+    std::string hash_path = out_dir + elf_name + ".dephash";
+    std::ofstream hash_file(hash_path);
+    jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
+    hash_file.close();
+    if (hash_file.fail()) {
+        // Don't leave incomplete hash file
+        std::filesystem::remove(hash_path);
     }
 }
 
@@ -535,6 +554,10 @@ void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) co
     static std::string_view const strong_names[] = {"__fw_export_*", "__global_pointer$"};
     elf.WeakenDataSymbols(strong_names);
     elf.WriteImage(pathname_out);
+}
+
+std::string JitBuildState::weakened_firmeware_elf_name() const {
+    return fmt::format("{}{}/{}_weakened.elf", this->env_.out_firmware_root_, this->target_name_, this->target_name_);
 }
 
 void JitBuildState::extract_zone_src_locations(const string& log_file) const {
@@ -576,7 +599,7 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     if (fs::exists(log_file)) {
         fs::resize_file(log_file, 0);
     }
-    if (compile(log_file, out_dir, settings) > 0) {
+    if (compile(log_file, out_dir, settings) > 0 || need_link(out_dir)) {
         link(log_file, out_dir, settings);
         if (this->is_fw_) {
             weaken(log_file, out_dir);

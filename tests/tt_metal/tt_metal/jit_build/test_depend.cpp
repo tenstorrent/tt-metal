@@ -52,7 +52,7 @@ protected:
     }
 
     void create_hash(const tt::jit_build::ParsedDependencies& dependencies, const std::string& obj_file_name) const {
-        std::ofstream hash_file{(out_dir_ / obj_file_name).replace_extension(".hash")};
+        std::ofstream hash_file{(out_dir_ / (obj_file_name + ".dephash"))};
         tt::jit_build::write_dependency_hashes(dependencies, out_dir_.string(), obj_file_name, hash_file);
         hash_file.close();
         ASSERT_FALSE(hash_file.fail());

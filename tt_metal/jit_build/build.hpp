@@ -102,6 +102,7 @@ protected:
     std::string defines_;
     std::string includes_;
     std::string lflags_;
+    std::string linker_script_;
 
     vector_cache_aligned<std::string> srcs_;
     vector_cache_aligned<std::string> objs_;
@@ -124,8 +125,10 @@ protected:
         const JitBuildSettings* settings,
         const std::string& src,
         const std::string& obj) const;
+    bool need_link(const std::string& out_dir) const;
     void link(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
     void weaken(const std::string& log_file, const std::string& out_path) const;
+    std::string weakened_firmeware_elf_name() const;
     void extract_zone_src_locations(const std::string& log_file) const;
 
 public:
