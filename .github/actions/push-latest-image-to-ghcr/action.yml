@@ -59,14 +59,6 @@ runs:
     - name: Pull, tag and push image
       shell: bash
       run: |
-        # Define variables for convenience
-        REPO_NAME="${{ steps.parse-repo.outputs.repo-name }}"
-        SOURCE_TAG="${{ inputs.docker-image-tag }}"
-
-        # Tag list: latest and new version
-        #Each Docker image can have multiple tag labels pointing to the same image ID
-        for TAG in "latest" "${{ inputs.new-tag }}"; do
-            TARGET="${REPO_NAME}:${TAG}"
-            echo "Copying ${SOURCE_TAG} to ${TARGET}..."
-            regctl image copy "${SOURCE_TAG}" "${TARGET}"
-        done
+        LATEST_TAG="${{ steps.parse-repo.outputs.repo-name }}:${{ inputs.new-tag }}"
+        echo "Copying ${{ inputs.docker-image-tag }} to ${LATEST_TAG}"
+        regctl image copy ${{ inputs.docker-image-tag }} ${LATEST_TAG}
