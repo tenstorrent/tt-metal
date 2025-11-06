@@ -34,14 +34,8 @@ void kernel_main() {
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
 
-    constexpr uint32_t block_w_minus_one = block_w - 1;
-    constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t tile_w_minux_group_size = tt::constants::TILE_WIDTH - num_cols_per_group;
-
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
-    const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
@@ -60,6 +54,11 @@ void kernel_main() {
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
     constexpr uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+
+    // This is the stride between two consecutive local means/variances in the cb_ex_partial
+    constexpr uint32_t local_stride = 2;
+    constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tt::constants::TILE_HEIGHT;
+    constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
 
     const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
@@ -135,7 +134,7 @@ void kernel_main() {
             auto local_result = combine_welford_stats<
                 tt::constants::TILE_WIDTH,
                 num_channels_per_group * num_rows_per_group / tt::constants::TILE_WIDTH,
-                2>(p_local_means, p_local_vars);
+                local_stride>(p_local_means, p_local_vars);
 
             // Write this to cb_ex_global
             auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
@@ -150,8 +149,8 @@ void kernel_main() {
             noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
             noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
-            local_means_ptr += 128;
-            local_vars_ptr += 128;
+            local_means_ptr += local_stride_per_group;
+            local_vars_ptr += local_stride_per_group;
             global_means_ptr += 2 * single_tile_size_bytes;
             global_vars_ptr += 2 * single_tile_size_bytes;
         }
