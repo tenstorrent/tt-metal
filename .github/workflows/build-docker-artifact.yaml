@@ -86,10 +86,20 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Compute tags
+      - name: Compute Docker image tags
         id: tags
         run: |
-          HASH=$(cat \
+          set -euo pipefail  # Exit on error, undefined vars, and pipe failures
+          
+          echo "======================================"
+          echo "Computing Docker Image Tags"
+          echo "======================================"
+          
+          # ============================================================
+          # CI/Test/Dev Images (share same dependencies)
+          # ============================================================
+          echo "→ Computing hash for CI/Test/Dev images..."
+          CI_DEV_HASH=$(cat \
             .github/workflows/build-docker-artifact.yaml \
             dockerfile/Dockerfile \
             docs/requirements-docs.txt \
@@ -101,20 +111,49 @@ jobs:
             scripts/ttexalens_ref.txt \
             tools/triage/requirements.txt \
             | sha1sum | cut -d' ' -f1)
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-
+          
+          echo "  Hash: ${CI_DEV_HASH}"
+          
+          CI_BUILD_TAG="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${CI_DEV_HASH}"
+          CI_TEST_TAG="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${CI_DEV_HASH}"
+          DEV_TAG="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${CI_DEV_HASH}"
+          
+          echo "ci-build-tag=${CI_BUILD_TAG}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=${CI_TEST_TAG}" >> $GITHUB_OUTPUT
+          echo "dev-tag=${DEV_TAG}" >> $GITHUB_OUTPUT
+          
+          # ============================================================
+          # Basic Dev Image (minimal dependencies)
+          # ============================================================
+          echo ""
+          echo "→ Computing hash for Basic Dev image..."
           BASIC_DEV_HASH=$(cat dockerfile/Dockerfile.basic-dev | sha1sum | cut -d' ' -f1)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          echo "  Hash: ${BASIC_DEV_HASH}"
+          
+          BASIC_DEV_TAG="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}"
+          echo "basic-dev-tag=${BASIC_DEV_TAG}" >> $GITHUB_OUTPUT
+          
+          # ============================================================
+          # Basic TTNN Runtime Image (runtime dependencies)
+          # ============================================================
+          echo ""
+          echo "→ Computing hash for Basic TTNN Runtime image..."
           BASIC_TTNN_RUNTIME_HASH=$(cat \
             dockerfile/Dockerfile.basic-dev \
             install_dependencies.sh \
             tt_metal/sfpi-info.sh \
             tt_metal/sfpi-version \
             | sha1sum | cut -d' ' -f1)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
-
+          echo "  Hash: ${BASIC_TTNN_RUNTIME_HASH}"
+          
+          BASIC_TTNN_RUNTIME_TAG="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}"
+          echo "basic-ttnn-runtime-tag=${BASIC_TTNN_RUNTIME_TAG}" >> $GITHUB_OUTPUT
+          
+          # ============================================================
+          # Manylinux Image (wheel building)
+          # ============================================================
+          echo ""
+          echo "→ Computing hash for Manylinux image..."
           MANYLINUX_HASH=$(cat \
             .github/workflows/build-docker-artifact.yaml \
             dockerfile/Dockerfile.manylinux \
@@ -122,46 +161,67 @@ jobs:
             tt_metal/sfpi-info.sh \
             tt_metal/sfpi-version \
             | sha1sum | cut -d' ' -f1)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          echo "  Hash: ${MANYLINUX_HASH}"
+          
+          MANYLINUX_TAG="ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}"
+          echo "manylinux-tag=${MANYLINUX_TAG}" >> $GITHUB_OUTPUT
+          
+          # ============================================================
+          # Summary
+          # ============================================================
+          echo ""
+          echo "======================================"
+          echo "Generated Image Tags:"
+          echo "======================================"
+          echo "CI Build:           ${CI_BUILD_TAG}"
+          echo "CI Test:            ${CI_TEST_TAG}"
+          echo "Dev:                ${DEV_TAG}"
+          echo "Basic Dev:          ${BASIC_DEV_TAG}"
+          echo "Basic TTNN Runtime: ${BASIC_TTNN_RUNTIME_TAG}"
+          echo "Manylinux:          ${MANYLINUX_TAG}"
+          echo "======================================"
 
-      # Assume if dev-tag exists, the others will exist too
-      - name: Query images exist
+      - name: Check if images exist in registry
         id: images
         run: |
-          if docker manifest inspect ${{ steps.tags.outputs.dev-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.dev-tag }} exists"
+          set -euo pipefail
+          
+          echo "======================================"
+          echo "Checking Image Existence in Registry"
+          echo "======================================"
+          
+          # Helper function to check if image exists
+          check_image() {
+            local image_tag=$1
+            local output_name=$2
+            
+            echo -n "Checking ${output_name}... "
+            if docker manifest inspect "${image_tag}" > /dev/null 2>&1; then
+              echo "✅ EXISTS"
+              echo "${output_name}-exists=true" >> $GITHUB_OUTPUT
+              return 0
+            else
+              echo "❌ NOT FOUND"
+              echo "${output_name}-exists=false" >> $GITHUB_OUTPUT
+              return 1
+            fi
+          }
+          
+          # Check CI/Dev/Test images (grouped - if one exists, all should exist)
+          if check_image "${{ steps.tags.outputs.dev-tag }}" "dev"; then
             echo "ci-build-exists=true" >> $GITHUB_OUTPUT
             echo "ci-test-exists=true" >> $GITHUB_OUTPUT
-            echo "dev-exists=true" >> $GITHUB_OUTPUT
           else
-            echo "${{ steps.tags.outputs.dev-tag }} does not exist"
             echo "ci-build-exists=false" >> $GITHUB_OUTPUT
             echo "ci-test-exists=false" >> $GITHUB_OUTPUT
-            echo "dev-exists=false" >> $GITHUB_OUTPUT
           fi
-
-          if docker manifest inspect ${{ steps.tags.outputs.basic-dev-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-dev-tag }} exists"
-            echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "${{ steps.tags.outputs.basic-dev-tag }} does not exist"
-            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
-          fi
-          if docker manifest inspect ${{ steps.tags.outputs.basic-ttnn-runtime-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} exists"
-            echo "basic-ttnn-runtime-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} does not exist"
-            echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
-          fi
-
-          if docker manifest inspect ${{ steps.tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.manylinux-tag }} exists"
-            echo "manylinux-exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "${{ steps.tags.outputs.manylinux-tag }} does not exist"
-            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
-          fi
+          
+          # Check other images independently
+          check_image "${{ steps.tags.outputs.basic-dev-tag }}" "basic-dev"
+          check_image "${{ steps.tags.outputs.basic-ttnn-runtime-tag }}" "basic-ttnn-runtime"
+          check_image "${{ steps.tags.outputs.manylinux-tag }}" "manylinux"
+          
+          echo "======================================"
 
   # Assume if dev-tag does not exist, the others will not exist either
   build-docker-image:
@@ -171,17 +231,19 @@ jobs:
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
-      - name: ⬇️ Checkout
+      - name: ⬇️ Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Login to GitHub Container Registry
+      
+      - name: 🔐 Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push CI Build image
+      
+      - name: 🐳 Build and push CI Build image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
@@ -193,7 +255,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push CI Test image
+      
+      - name: 🐳 Build and push CI Test image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
@@ -205,7 +268,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Dev image
+      
+      - name: 🐳 Build and push Dev image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
@@ -217,7 +281,7 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Basic Dev image
+      - name: 🐳 Build and push Basic Dev image
         if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
         uses: docker/build-push-action@v6
         with:
@@ -229,7 +293,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push Basic TTNN runtime image
+      
+      - name: 🐳 Build and push Basic TTNN Runtime image
         if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
         uses: docker/build-push-action@v6
         with:
@@ -241,7 +306,8 @@ jobs:
           build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-to: type=inline
           pull: true
-      - name: Build and push ManyLinux image
+      
+      - name: 🐳 Build and push Manylinux image
         if: needs.check-docker-images.outputs.manylinux-exists != 'true'
         uses: docker/build-push-action@v6
         with:
