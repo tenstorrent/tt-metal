@@ -493,13 +493,17 @@ void append_fabric_mux_connection_ct_args(
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     uint32_t num_workers_per_direction,
     std::vector<uint32_t>& writer_ct_args) {
-    writer_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));  // fabric_mux_num_buffers_per_channel
-    writer_ct_args.push_back(
-        mux_kernel_config.get_buffer_size_bytes(channel_type));        // fabric_mux_channel_buffer_size_bytes
-    writer_ct_args.push_back(mux_kernel_config.get_status_address());  // fabric_mux_status_address
-    writer_ct_args.push_back(
-        mux_kernel_config.get_termination_signal_address());  // fabric_mux_termination_signal_address
-    writer_ct_args.push_back(num_workers_per_direction);      // num_mux_clients
+    constexpr auto num_ct_args = 5;
+    const std::array<uint32_t, num_ct_args> ct_args = {
+        mux_kernel_config.get_num_buffers(channel_type),        // fabric_mux_num_buffers_per_channel
+        mux_kernel_config.get_buffer_size_bytes(channel_type),  // fabric_mux_channel_buffer_size_bytes
+        mux_kernel_config.get_status_address(),                 // fabric_mux_status_address
+        mux_kernel_config.get_termination_signal_address(),     // fabric_mux_termination_signal_address
+        num_workers_per_direction                               // num_mux_clients
+    };
+
+    writer_ct_args.reserve(writer_ct_args.capacity() + num_ct_args);
+    std::copy(ct_args.begin(), ct_args.end(), std::back_inserter(writer_ct_args));
 }
 
 void append_fabric_mux_connection_rt_args(
@@ -508,34 +512,40 @@ void append_fabric_mux_connection_rt_args(
     const tt::tt_fabric::FabricMuxChannelType channel_type,
     const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
     const CoreCoord& worker_logical_core,
-    const uint32_t worker_id,
+    const uint32_t worker_per_direction_id,
     const bool is_termination_master,
     const CoreCoord termination_master_virtual_core,
     tt::tt_metal::Program& program,
     std::vector<uint32_t>& worker_rt_args) {
-    worker_rt_args.push_back(mux_connection_valid);   // mux_connection_valid
-    worker_rt_args.push_back(is_termination_master);  // is_termination_master
-    worker_rt_args.push_back(mux_virtual_core.x);     // fabric_mux_x
-    worker_rt_args.push_back(mux_virtual_core.y);     // fabric_mux_y
-    worker_rt_args.push_back(
-        mux_kernel_config.get_channel_base_address(channel_type, worker_id));  // fabric_mux_channel_base_address
-    worker_rt_args.push_back(
-        mux_kernel_config.get_connection_info_address(channel_type, worker_id));  // fabric_mux_connection_info_address
-    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(
-        channel_type, worker_id));  // fabric_mux_connection_handshake_address
-    worker_rt_args.push_back(
-        mux_kernel_config.get_flow_control_address(channel_type, worker_id));  // fabric_mux_flow_control_address
-    worker_rt_args.push_back(
-        mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address
-    worker_rt_args.push_back(
-        mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // termination_sync_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_fabric_mux_status_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_flow_control_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_teardown_address
-    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));   // local_buffer_index_address
-    worker_rt_args.push_back(termination_master_virtual_core.x);                    // termination_master_noc_x
-    worker_rt_args.push_back(termination_master_virtual_core.y);                    // termination_master_noc_y
+    constexpr auto num_rt_args = 17;
+    const std::array<uint32_t, num_rt_args> rt_args = {
+        mux_connection_valid,   // mux_connection_valid
+        is_termination_master,  // is_termination_master
+        mux_virtual_core.x,     // fabric_mux_x
+        mux_virtual_core.y,     // fabric_mux_y
+        mux_kernel_config.get_channel_base_address(
+            channel_type, worker_per_direction_id),  // fabric_mux_channel_base_address
+        mux_kernel_config.get_connection_info_address(
+            channel_type, worker_per_direction_id),  // fabric_mux_connection_info_address
+        mux_kernel_config.get_connection_handshake_address(
+            channel_type, worker_per_direction_id),  // fabric_mux_connection_handshake_address
+        mux_kernel_config.get_flow_control_address(
+            channel_type, worker_per_direction_id),  // fabric_mux_flow_control_address
+        mux_kernel_config.get_buffer_index_address(
+            channel_type, worker_per_direction_id),  // fabric_mux_buffer_index_address
+        mux_kernel_config.get_channel_credits_stream_id(
+            channel_type, worker_per_direction_id),          // fabric_mux_channel_id
+        CreateSemaphore(program, {worker_logical_core}, 0),  // termination_sync_address
+        CreateSemaphore(program, {worker_logical_core}, 0),  // local_fabric_mux_status_address
+        CreateSemaphore(program, {worker_logical_core}, 0),  // local_flow_control_address
+        CreateSemaphore(program, {worker_logical_core}, 0),  // local_teardown_address
+        CreateSemaphore(program, {worker_logical_core}, 0),  // local_buffer_index_address
+        termination_master_virtual_core.x,                   // termination_master_noc_x
+        termination_master_virtual_core.y,                   // termination_master_noc_y
+    };
+
+    worker_rt_args.reserve(worker_rt_args.capacity() + num_rt_args);
+    std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(worker_rt_args));
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
@@ -1106,7 +1116,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_kernel_config,
                     core,
-                    worker_id,
+                    worker,
                     worker == 0,
                     termination_master_virtual_core,
                     program,
@@ -1827,7 +1837,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
                     mux_kernel_config,
                     core,
-                    worker_id,
+                    worker,
                     worker == 0,
                     termination_master_virtual_core,
                     program,
