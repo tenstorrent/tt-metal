@@ -369,6 +369,8 @@ void Hal::initialize_bh() {
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->tensix_eth_static_tlb_size_ = 2 * (1 << 20);
+    this->dram_static_tlb_size_ = 4ULL * (1 << 30);
 
     this->eps_ = EPS_BH;
     this->nan_ = NAN_BH;
