@@ -17,7 +17,7 @@ training_config:
     embedding_dim: 384
     dropout_prob: 0.2
     num_blocks: 6
-    vocab_size: 96
+    vocab_size: 50257
     max_sequence_length: 256
     positional_embedding_type: trainable
     runner_type: default
