@@ -1,0 +1,83 @@
+name: PR Ready for Review Checks
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  pr-review-checks:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          # Get the list of changed files in this PR
+          CHANGED_FILES=$(gh pr view ${{ github.event.pull_request.number }} --json files --jq '.files[].path')
+          echo "changed_files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+
+          # Check if changes are only in github directory
+          ONLY_GITHUB_CHANGES=true
+          for file in $CHANGED_FILES; do
+            if [[ ! "$file" =~ ^\.github/ ]]; then
+              ONLY_GITHUB_CHANGES=false
+              break
+            fi
+          done
+          echo "only_github_changes=$ONLY_GITHUB_CHANGES" >> $GITHUB_OUTPUT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if PR title matches branch name
+        run: |
+          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title --jq '.title')
+          BRANCH_NAME=$(gh pr view ${{ github.event.pull_request.number }} --json headRefName --jq '.headRefName')
+
+          echo "PR title: $PR_TITLE"
+          echo "Branch name: $BRANCH_NAME"
+
+          # Remove common prefixes/suffixes that GitHub might add
+          CLEAN_BRANCH_NAME=$(echo "$BRANCH_NAME" | sed 's|^feature/||; s|^bugfix/||; s|^hotfix/||; s|^fix/||; s|-$||')
+
+          # Check if title matches branch name (case insensitive, allowing for spaces/hyphens)
+          NORMALIZED_TITLE=$(echo "$PR_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+          NORMALIZED_BRANCH=$(echo "$CLEAN_BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
+
+          if [[ "$NORMALIZED_TITLE" == "$NORMALIZED_BRANCH" ]]; then
+            echo "PR title appears to be the default branch name. Adding comment to request title change."
+            gh pr comment ${{ github.event.pull_request.number }} --body "🤖 It looks like this PR is using the default title (branch name). Please update the PR title to describe what this change does."
+          else
+            echo "PR title does not match branch name"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check PR title and add skip ci if needed
+        if: steps.changed-files.outputs.only_github_changes == 'true'
+        run: |
+          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title --jq '.title')
+          echo "Current PR title: $PR_TITLE"
+
+          # Check if title already contains "skip ci"
+          if [[ "$PR_TITLE" =~ [Ss][Kk][Ii][Pp][[:space:]]*[Cc][Ii] ]]; then
+            echo "PR title already contains 'skip ci'"
+          else
+            # Add "skip ci" to the title
+            NEW_TITLE="[skip ci] $PR_TITLE"
+            echo "Updating PR title to: $NEW_TITLE"
+            gh pr edit ${{ github.event.pull_request.number }} --title "$NEW_TITLE"
+
+            # Add comment about the title change
+            gh pr comment ${{ github.event.pull_request.number }} --body "🤖 Title changed to add '[skip ci]' since changes are only in the .github directory. If this is not needed, please remove it."
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
