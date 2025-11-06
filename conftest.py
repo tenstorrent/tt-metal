@@ -945,6 +945,36 @@ def pytest_runtest_teardown(item, nextitem):
 
 
 # Session watchdog process that supervises per-test timeouts from out-of-process
+def _ensure_watchdog_started(config):
+    cmd_queue = config.stash.get(watchdog_cmd_queue_key, None)
+    process = config.stash.get(watchdog_process_key, None)
+
+    if cmd_queue is not None and process is not None and process.is_alive():
+        return cmd_queue
+
+    parent_pid = os.getpid()
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
+
+    # Clean up stale process reference if present
+    if process is not None and not process.is_alive():
+        try:
+            process.join(timeout=0.1)
+        except Exception:
+            pass
+
+    try:
+        cmd_queue = multiprocess.Queue()
+        process = multiprocess.Process(target=_watchdog_main, args=(parent_pid, cmd_queue), daemon=True)
+        process.start()
+        config.stash[watchdog_cmd_queue_key] = cmd_queue
+        config.stash[watchdog_process_key] = process
+        logger.info(f"Watchdog[{worker_id}] started: watchdog_pid={process.pid} parent_pid={parent_pid}")
+        return cmd_queue
+    except Exception as e:
+        logger.error(f"Failed to start watchdog for parent={parent_pid}: {e}")
+        return None
+
+
 def _watchdog_main(parent_pid, cmd_queue):
     """Simple watchdog loop.
 
@@ -1011,18 +1041,8 @@ def _watchdog_main(parent_pid, cmd_queue):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session):
-    """Start a single watchdog process for this pytest session (worker)."""
-    # Only start watchdog if pytest-timeout is installed/usable; we rely on it for durations
-    parent_pid = os.getpid()
-    try:
-        cmd_queue = multiprocess.Queue()
-        p = multiprocess.Process(target=_watchdog_main, args=(parent_pid, cmd_queue), daemon=True)
-        p.start()
-        session.config.stash[watchdog_cmd_queue_key] = cmd_queue
-        session.config.stash[watchdog_process_key] = p
-        logger.info(f"Started session watchdog pid={p.pid} for parent={parent_pid}")
-    except Exception as e:
-        logger.error(f"Failed to start watchdog for parent={parent_pid}: {e}")
+    """Session start hook retained for compatibility; watchdog starts lazily per test."""
+    return
 
 
 @pytest.hookimpl(trylast=True)
@@ -1048,24 +1068,34 @@ def pytest_timeout_set_timer(item, settings):
     metal_timeout_enabled = item.config.getoption("--metal-timeout")
     using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
 
+    needs_watchdog = metal_timeout_enabled is not None or using_xdist
     cmd_queue = item.config.stash.get(watchdog_cmd_queue_key, None)
-    if (metal_timeout_enabled is not None or using_xdist) and cmd_queue is not None:
-        secs = float(settings.timeout)
-        try:
-            cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs})
-            logger.debug(f"Watchdog timer set for {item.nodeid} in {secs} seconds")
-        except Exception as e:
-            logger.error(f"Failed to arm watchdog timer: {e}")
 
-        def cancel():
+    if needs_watchdog:
+        if cmd_queue is None:
+            cmd_queue = _ensure_watchdog_started(item.config)
+
+        if cmd_queue is None:
+            logger.warning(f"Watchdog missing command queue; NOT arming timeout for {item.nodeid}")
+        else:
+            secs = float(settings.timeout)
+            worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
+            parent_pid = os.getpid()
             try:
-                logger.debug("Cancelling watchdog timer")
-                cmd_queue.put({"cmd": "cancel", "test_id": item.nodeid})
+                cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs})
+                logger.debug(f"Watchdog[{worker_id}] armed {item.nodeid}: timeout={secs}s parent_pid={parent_pid}")
             except Exception as e:
-                logger.error(f"Failed to cancel watchdog timer: {e}")
+                logger.error(f"Failed to arm watchdog timer for {item.nodeid}: {e}")
 
-        item.cancel_timeout = cancel
-        return True
+            def cancel():
+                try:
+                    logger.debug("Cancelling watchdog timer")
+                    cmd_queue.put({"cmd": "cancel", "test_id": item.nodeid})
+                except Exception as e:
+                    logger.error(f"Failed to cancel watchdog timer: {e}")
+
+            item.cancel_timeout = cancel
+            return True
 
     return True
 
