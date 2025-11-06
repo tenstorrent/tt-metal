@@ -88,11 +88,19 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
     auto dataset_size = dataset.get_size();
     auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-    return {steps_per_dataset, config.transformer_config.index() == 0
-                                         ? std::get<ttml::models::gpt2::TransformerConfig>(config.transformer_config)
-                                               .vocab_size
-                                         : std::get<ttml::models::llama::LlamaConfig>(config.transformer_config)
-                                               .vocab_size};
+
+    auto get_vocab_size =
+        [](const auto &training_config) {
+            return training_config.transformer_config.index() == 0
+                ? std::get<ttml::models::gpt2::TransformerConfig>(training_config.transformer_config)
+                    .vocab_size
+                : std::get<ttml::models::llama::LlamaConfig>(training_config.transformer_config)
+                    .vocab_size;
+        };
+
+    auto vocab_size = get_vocab_size(config);
+
+    return {steps_per_dataset, vocab_size};
 }
 
 std::string read_file_to_str(const std::string &file_path) {
