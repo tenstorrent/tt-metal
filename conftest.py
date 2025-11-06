@@ -429,11 +429,25 @@ def mesh_device(request, silicon_arch_name, device_params):
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
+    try:
+        for submesh in mesh_device.get_submeshes():
+            try:
+                ttnn.close_mesh_device(submesh)
+            except Exception as e:
+                logger.warning(f"Failed to close submesh: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to get submeshes: {e}")
 
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
+    try:
+        ttnn.close_mesh_device(mesh_device)
+    except Exception as e:
+        logger.warning(f"Failed to close mesh_device: {e}")
+
+    try:
+        reset_fabric(fabric_config)
+    except Exception as e:
+        logger.warning(f"Failed to reset fabric: {e}")
+
     del mesh_device
 
 

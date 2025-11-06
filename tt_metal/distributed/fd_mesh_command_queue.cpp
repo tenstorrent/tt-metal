@@ -9,7 +9,6 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
@@ -129,6 +128,25 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 }
 
 FDMeshCommandQueue::~FDMeshCommandQueue() {
+    // If trace capture is still active during cleanup, end it gracefully
+    // This can happen during test failures or early exits
+    if (trace_id_.has_value()) {
+        log_warning(
+            LogMetal,
+            "Trace {} was still active during FDMeshCommandQueue cleanup. Force-ending trace.",
+            trace_id_.value());
+        try {
+            this->record_end();
+        } catch (...) {
+            // If record_end fails during cleanup, just clear the state
+            trace_id_ = std::nullopt;
+            trace_ctx_ = nullptr;
+            for (auto device : mesh_device_->get_devices()) {
+                device->sysmem_manager().set_bypass_mode(/*enable*/ false, /*clear*/ true);
+            }
+        }
+    }
+
     if (in_use_) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
         // before going out of scope. This is a blocking operation - it waits
@@ -514,11 +532,6 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto lock = lock_api_function_();
     this->finish_nolock(sub_device_ids);
-
-    // Barrier across all hosts of the mesh
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_distributed_context(
-        mesh_device_->get_view().mesh_id());
-    distributed_context->barrier();
 }
 
 void FDMeshCommandQueue::write_shard_to_device(

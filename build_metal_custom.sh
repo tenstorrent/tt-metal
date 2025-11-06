@@ -21,9 +21,9 @@ show_help() {
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
     echo "  -v, --build-verbose              Enable CMAKE verbosity for the build."
-    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan and TSan."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
-    echo "  -p, --enable-profiler            Enable Tracy profiler."
+    echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
     echo "  -g, --generator generator        Set the build system generator. Default is Ninja. Other options are Make or 'Unix Makefiles' (case-insensitive)."
     echo "  --install-prefix                 Where to install build artifacts."
     echo "  --build-dir                      Build directory."
@@ -58,7 +58,7 @@ show_help() {
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built .cpmcache
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_ASanCoverage build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -71,7 +71,7 @@ enable_ccache="OFF"
 build_verbose="OFF"
 enable_time_trace="OFF"
 build_type="Release"
-enable_profiler="OFF"
+disable_profiler="OFF"
 generator="Ninja"
 build_dir=""
 build_tests="OFF"
@@ -106,7 +106,7 @@ enable_fake_kernels_target="OFF"
 
 declare -a cmake_args
 
-OPTIONS=h,e,c,v,t,a,m,s,u,b:,p,g:
+OPTIONS=h,e,c,v,t,a,m,s,u,b:,g:
 LONGOPTIONS="
 help
 build-all
@@ -115,7 +115,7 @@ enable-ccache
 build-verbose
 enable-time-trace
 build-type:
-enable-profiler
+disable-profiler
 generator:
 install-prefix:
 build-dir:
@@ -180,8 +180,8 @@ while true; do
             build_dir="$2";shift;;
         -b|--build-type)
             build_type="$2";shift;;
-        -p|--enable-profiler)
-            enable_profiler="ON";;
+        --disable-profiler)
+            disable_profiler="ON";;
         -g|--generator)
             generator="$2";shift;;
         --install-prefix)
@@ -248,9 +248,9 @@ if [[ $# -gt 0 ]]; then
 fi
 
 # Validate the build_type
-VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan")
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "ASanCoverage")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
-    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan."
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     show_help
     exit 1
 fi
@@ -271,12 +271,9 @@ elif [ "$generator" = "ninja" ]; then
 fi
 
 # If build-dir is not specified
-# Use build_type and enable_profiler setting to choose a default path
+# Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
-    if [ "$enable_profiler" = "ON" ]; then
-        build_dir="${build_dir}_tracy"
-    fi
     # Create and link the build directory
     mkdir -p $build_dir
     ln -nsf $build_dir build
@@ -288,6 +285,12 @@ cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
 # Set the python environment directory if not already set
 if [ -z "$PYTHON_ENV_DIR" ]; then
     PYTHON_ENV_DIR=$(pwd)/python_env
+fi
+
+# Determine Tracy default: enabled unless explicitly disabled
+tracy_enabled="ON"
+if [ "$disable_profiler" = "ON" ]; then
+    tracy_enabled="OFF"
 fi
 
 # Debug output to verify parsed options
@@ -306,6 +309,7 @@ echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
+echo "INFO: Enable Tracy: $tracy_enabled"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -342,8 +346,8 @@ if [ "$enable_time_trace" = "ON" ]; then
     cmake_args+=("-DENABLE_BUILD_TIME_TRACE=ON")
 fi
 
-if [ "$enable_profiler" = "ON" ]; then
-    cmake_args+=("-DENABLE_TRACY=ON")
+if [ "$disable_profiler" = "ON" ]; then
+    cmake_args+=("-DENABLE_TRACY=OFF")
 fi
 
 if [ "$enable_coverage" = "ON" ]; then

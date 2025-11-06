@@ -38,6 +38,10 @@ struct DeviceInfo {
 
 DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device);
 
+// Get device info for all physical devices in a mesh
+std::vector<std::pair<uint32_t, DeviceInfo>> get_all_devices_info(
+    const std::vector<tt::tt_metal::distributed::MeshDevice*>& devices);
+
 struct BufferInfo {
     uint32_t device_id;
     uint32_t address;

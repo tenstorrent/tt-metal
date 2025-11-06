@@ -37,9 +37,55 @@ void TracyMemoryMonitor::track_allocation(int device_id, uint64_t buffer_id, uin
         return;
     }
 
+    // Record buffer info (requires lock) - do this first to detect reallocations
+    bool is_reallocation = false;
+    BufferInfo old_info;
+    {
+        std::lock_guard<std::mutex> lock(registry_mutex_);
+
+        BufferKey key{device_id, buffer_id};
+        BufferInfo info{buffer_id, device_id, size, buffer_type, std::chrono::steady_clock::now()};
+
+        // Check for double allocation (potential bug)
+        auto it = active_buffers_.find(key);
+        if (it != active_buffers_.end()) {
+            // This is a reallocation - buffer is being reused without explicit deallocation
+            // Save old info to free it in Tracy first
+            is_reallocation = true;
+            old_info = it->second;
+
+            // std::cerr << "TracyMemoryMonitor: Reallocation detected: device=" << device_id
+            //  << ", buffer_id=0x" << std::hex << buffer_id << std::dec
+            //  << ", old_size=" << old_info.size << ", new_size=" << size << std::endl;
+        }
+
+        active_buffers_[key] = info;
+    }
+
     // Update atomic counters (lock-free)
     auto& stats = device_stats_[device_id];
 
+    // If reallocation, subtract old size first
+    if (is_reallocation) {
+        switch (old_info.buffer_type) {
+            case BufferType::DRAM: stats.dram_allocated.fetch_sub(old_info.size, std::memory_order_relaxed); break;
+            case BufferType::L1: stats.l1_allocated.fetch_sub(old_info.size, std::memory_order_relaxed); break;
+            case BufferType::SYSTEM_MEMORY:
+                stats.system_memory_allocated.fetch_sub(old_info.size, std::memory_order_relaxed);
+                break;
+            case BufferType::L1_SMALL:
+                stats.l1_small_allocated.fetch_sub(old_info.size, std::memory_order_relaxed);
+                break;
+            case BufferType::TRACE: stats.trace_allocated.fetch_sub(old_info.size, std::memory_order_relaxed); break;
+        }
+        // Don't decrement num_buffers since the buffer slot is being reused
+        stats.total_frees.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        // New allocation - increment buffer count
+        stats.num_buffers.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Add new allocation size
     switch (buffer_type) {
         case BufferType::DRAM: stats.dram_allocated.fetch_add(size, std::memory_order_relaxed); break;
         case BufferType::L1: stats.l1_allocated.fetch_add(size, std::memory_order_relaxed); break;
@@ -48,28 +94,17 @@ void TracyMemoryMonitor::track_allocation(int device_id, uint64_t buffer_id, uin
         case BufferType::TRACE: stats.trace_allocated.fetch_add(size, std::memory_order_relaxed); break;
     }
 
-    stats.num_buffers.fetch_add(1, std::memory_order_relaxed);
     stats.total_allocs.fetch_add(1, std::memory_order_relaxed);
-
-    // Record buffer info (requires lock)
-    {
-        std::lock_guard<std::mutex> lock(registry_mutex_);
-
-        BufferKey key{device_id, buffer_id};
-        BufferInfo info{buffer_id, device_id, size, buffer_type, std::chrono::steady_clock::now()};
-
-        // Check for double allocation (potential bug)
-        if (active_buffers_.find(key) != active_buffers_.end()) {
-            // std::cerr << "TracyMemoryMonitor: Double allocation detected: device=" << device_id
-            //  << ", buffer_id=0x" << std::hex << buffer_id << std::dec
-            //  << ", size=" << size << std::endl;
-        }
-
-        active_buffers_[key] = info;
-    }
 
     // Report to Tracy profiler (if enabled)
 #ifdef TRACY_ENABLE
+    // If this is a reallocation, free the old allocation in Tracy first
+    // to avoid "Memory allocation event was reported for an address that is already tracked" error
+    if (is_reallocation) {
+        const char* old_pool_name = get_tracy_pool_name(old_info.buffer_type, device_id);
+        TracyFreeN(reinterpret_cast<void*>(buffer_id), old_pool_name);
+    }
+
     // Use buffer_id as the memory address for Tracy
     // Tracy tracks memory by address, so this gives us per-buffer visibility
     const char* pool_name = get_tracy_pool_name(buffer_type, device_id);

@@ -265,8 +265,8 @@ public:
             it->second.ref_count++;
             const char* type_name[] = {"DRAM", "L1", "SYSTEM_MEMORY", "L1_SMALL", "TRACE"};
             std::cout << "✓ [PID " << msg.process_id << "] Allocated " << msg.size << " bytes of "
-                      << type_name[msg.buffer_type] << " on device " << msg.device_id << " (buffer_id=" << msg.buffer_id
-                      << ", ref_count=" << it->second.ref_count << ")" << std::endl;
+                      << type_name[msg.buffer_type] << " on device " << msg.device_id << " (buffer_id=0x" << std::hex
+                      << msg.buffer_id << std::dec << ", ref_count=" << it->second.ref_count << ")" << std::endl;
             return;
         }
 
@@ -296,7 +296,8 @@ public:
         const char* type_name[] = {"DRAM", "L1", "SYSTEM_MEMORY", "L1_SMALL", "TRACE"};
         const char* type_str = (msg.buffer_type <= 4) ? type_name[msg.buffer_type] : "UNKNOWN";
         std::cout << "✓ [PID " << msg.process_id << "] Allocated " << msg.size << " bytes of " << type_str
-                  << " on device " << msg.device_id << " (buffer_id=" << msg.buffer_id << ")" << std::endl;
+                  << " on device " << msg.device_id << " (buffer_id=0x" << std::hex << msg.buffer_id << std::dec << ")"
+                  << std::endl;
     }
 
     void handle_deallocation(const AllocMessage& msg) {
@@ -308,8 +309,9 @@ public:
 
         if (it == allocations_.end()) {
             // Buffer not tracked - likely allocated before tracking started
-            std::cout << "⚠ [PID " << msg.process_id << "] Deallocation for unknown buffer " << msg.buffer_id
-                      << " on device " << msg.device_id << " (allocated before tracking started)" << std::endl;
+            std::cout << "⚠ [PID " << msg.process_id << "] Deallocation for unknown buffer 0x" << std::hex
+                      << msg.buffer_id << std::dec << " on device " << msg.device_id
+                      << " (allocated before tracking started)" << std::endl;
             return;
         }
 
@@ -320,9 +322,9 @@ public:
 
         if (info.ref_count > 0) {
             // Still has references - don't fully deallocate yet
-            std::cout << "✗ [PID " << info.owner_pid << "] Freed buffer " << msg.buffer_id << " on device "
-                      << info.device_id << " (" << info.size << " bytes, ref_count=" << info.ref_count << " remaining)"
-                      << std::endl;
+            std::cout << "✗ [PID " << info.owner_pid << "] Freed buffer 0x" << std::hex << msg.buffer_id << std::dec
+                      << " on device " << info.device_id << " (" << info.size << " bytes, ref_count=" << info.ref_count
+                      << " remaining)" << std::endl;
             return;
         }
 
@@ -338,8 +340,8 @@ public:
             case 4: stats.trace_allocated -= info.size; break;     // TRACE
         }
 
-        std::cout << "✗ [PID " << info.owner_pid << "] Freed buffer " << msg.buffer_id << " on device "
-                  << info.device_id << " (" << info.size << " bytes, FINAL)" << std::endl;
+        std::cout << "✗ [PID " << info.owner_pid << "] Freed buffer 0x" << std::hex << msg.buffer_id << std::dec
+                  << " on device " << info.device_id << " (" << info.size << " bytes, FINAL)" << std::endl;
 
         allocations_.erase(it);
     }

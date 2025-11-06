@@ -864,9 +864,9 @@ void Cluster::verify_eth_fw_capability() const {
     if (rtoptions_.get_simulator_enabled()) {
         return;
     }
-    const auto fw_version = this->driver_->get_ethernet_firmware_version();
+    const auto fw_version = this->driver_->get_ethernet_fw_version();
     if (fw_version) {
-        hal_.verify_eth_fw_version(fw_version.value());
+        hal_.verify_eth_fw_version(tt::umd::semver_t(fw_version.value().str()));
     }
 }
 
