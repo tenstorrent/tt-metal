@@ -949,6 +949,7 @@ def _ensure_watchdog_started(config):
     cmd_queue = config.stash.get(watchdog_cmd_queue_key, None)
     process = config.stash.get(watchdog_process_key, None)
 
+    # If watchdog process is already running, and the command queue is still valid, return it.
     if cmd_queue is not None and process is not None and process.is_alive():
         return cmd_queue
 
@@ -975,6 +976,16 @@ def _ensure_watchdog_started(config):
         return None
 
 
+# This function is the watchdog process.
+# It is started once for every pytest-xdist worker.
+# It listens for commands via a queue and executes them.
+# The commands are:
+# - "start": arm a timeout for a given test
+# - "cancel": cancel a timeout for a given test
+# - "shutdown": shutdown the watchdog process
+#
+# The watchdog process runs in a loop and checks for any expired deadlines.
+# If a deadline is expired, it kills the parent process.
 def _watchdog_main(parent_pid, cmd_queue):
     """Simple watchdog loop.
 
@@ -985,14 +996,21 @@ def _watchdog_main(parent_pid, cmd_queue):
     """
     logger.debug(f"Watchdog started for parent={parent_pid} pid={os.getpid()}")
 
-    deadlines = {}  # test_id -> deadline (float)
+    # Dictionary of test_id -> deadline (float)
+    # This is used to track the deadline for each test.
+    # The deadline is the time when the test is expected to complete.
+    # If the test does not complete by the deadline, the watchdog will kill the parent process.
+    deadlines = {}
 
     while True:
         # Process incoming command, if any
         try:
-            msg = cmd_queue.get(timeout=0.5)
-        except Exception:
-            msg = None
+            msg = cmd_queue.get(timeout=1)
+        except Empty:
+            msg = None  # normal: nothing arrived
+        except Exception as e:
+            logger.error(f"Watchdog {os.getpid()}: fatal while reading queue: {e!r}")
+            break
 
         now = time.monotonic()
 
@@ -1006,6 +1024,7 @@ def _watchdog_main(parent_pid, cmd_queue):
                 os.kill(parent_pid, signal.SIGKILL)
                 break
 
+        # If no command is received, continue to the next iteration of the loop.
         if not msg:
             continue
 
@@ -1016,15 +1035,9 @@ def _watchdog_main(parent_pid, cmd_queue):
                 test_id = str(msg["test_id"])
                 timeout_secs = float(msg["timeout"])  # seconds from now
                 deadlines[test_id] = time.monotonic() + timeout_secs
-                try:
-                    logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
-                except Exception:
-                    pass
+                logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
             except Exception as e:
-                try:
-                    logger.error(f"Watchdog failed to arm: {e}")
-                except Exception:
-                    pass
+                logger.error(f"Watchdog failed to arm: {e}")
         elif cmd == "cancel":
             logger.debug(f"Watchdog received cancel command: {msg}")
             try:
@@ -1036,7 +1049,10 @@ def _watchdog_main(parent_pid, cmd_queue):
             logger.debug(f"Watchdog received shutdown command: {msg}")
             logger.debug(f"Watchdog shutting down")
             break
-        # ignore unknown commands
+        else:
+            logger.warning(f"Watchdog received unknown command: {cmd}")
+
+    logger.debug(f"Watchdog process {os.getpid()} exiting")
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -1062,7 +1078,7 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 # This overrides the timer setup hook from pytest-timeout.
-# If --metal-timeout is passed or when using xdist, we use a watchdog process to supervise the timeout.
+# If --metal-timeout is passed or when using xdist, we use a watchdog process per worker to supervise the timeout.
 @pytest.hookimpl(tryfirst=True)
 def pytest_timeout_set_timer(item, settings):
     metal_timeout_enabled = item.config.getoption("--metal-timeout")
@@ -1098,7 +1114,6 @@ def pytest_timeout_set_timer(item, settings):
                     logger.error(f"Failed to cancel watchdog timer: {e}")
 
             item.cancel_timeout = cancel
-            return True
 
     return True
 
