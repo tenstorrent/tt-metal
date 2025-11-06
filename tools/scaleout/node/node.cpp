@@ -209,14 +209,12 @@ public:
     }
 };
 
-// P150 LB Node class
 class P150LBNode {
 public:
     static tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create() {
         tt::scaleout_tools::cabling_generator::proto::NodeDescriptor node;
-        node.set_motherboard("X12DPG-QT6");
+        node.set_motherboard("H13DSG-O-CPU");
 
-        // Add boards
         add_boards(&node, "P150", 1, 8);
 
         return node;
