@@ -593,7 +593,7 @@ void MetalContext::initialize_control_plane() {
     auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), true, fabric_type);
+            cluster_type, rtoptions_.get_root_dir(), fabric_type);
 
     log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
