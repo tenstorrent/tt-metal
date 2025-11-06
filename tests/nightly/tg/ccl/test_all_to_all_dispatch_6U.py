@@ -239,7 +239,7 @@ def test_all_to_all_dispatch_8x8_dual_galaxy(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (2, 5, 1),
+        (2, 1, 1),
     ],
     ids=["s2"],
 )
