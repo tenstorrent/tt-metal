@@ -50,6 +50,8 @@ class DumpWaitGlobalsData:
     x: int | None = triage_field("x", verbose=2)
     y: int | None = triage_field("y", verbose=2)
     last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq", verbose=2)
+    # Number of extra pages available in the circular buffer that are not included in cb_fence_
+    sem_minus_local: int | None = triage_field("cb_extra_pages", verbose=1)
 
 
 def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
@@ -169,7 +171,7 @@ def read_wait_globals(
     last_event = _read_symbol_value(kernel_elf, "last_event", loc_mem_access)
     try:
         circular_buffer_fence = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).cb_fence_
-    except:
+    except Exception:
         circular_buffer_fence = None
     command_pointer = _read_symbol_value(kernel_elf, "cmd_ptr", loc_mem_access)
 
@@ -200,6 +202,26 @@ def read_wait_globals(
     if last_wait_count is not None and stream_width is not None:
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
+
+    # Compute sem_minus_local for dispatcher kernels by reading the live semaphore and subtracting local_count_
+    sem_minus_local: int | None = None
+    try:
+        my_dispatch_cb_sem_id = int(kernel_elf.get_constant("my_dispatch_cb_sem_id"))
+        fd_core_type_idx = int(kernel_elf.get_constant("fd_core_type_idx"))
+
+        # sem_l1_base is a firmware global array of L1 pointers; index by core type
+        sem_base_ptr = kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx]
+        sem_base_val = sem_base_ptr[0].read() + my_dispatch_cb_sem_id * 16
+
+        sem_value = int.from_bytes(loc_mem_access.read(sem_base_val, 4), byteorder="little")
+        local_count = kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_
+
+        # Two's-complement 32-bit wrapping difference
+        delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
+        sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
+    except Exception:
+        # Leave as None if any lookups fail
+        sem_minus_local = None
 
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
@@ -233,6 +255,7 @@ def read_wait_globals(
         cq_id=getattr(core_info, "cqId", None),
         servicing_device_id=getattr(core_info, "servicingDeviceId", None),
         last_event_issued_to_cq=getattr(core_info, "eventID", None),
+        sem_minus_local=sem_minus_local,
     )
 
 
