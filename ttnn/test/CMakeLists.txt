@@ -1,4 +1,5 @@
 # Spell out the RPATH so that shlibdeps can find deps across package components.
+# force a full run of merge gate
 set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
 
 # Smoke
