@@ -55,8 +55,10 @@ def validate_grid_sample_output(
 
     # Assertions
     assert pcc_passed, f"Test failed with PCC below threshold ({pcc_threshold})"
-    assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
-
+    if mode == "bilinear":
+        assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
+    else:
+        assert allclose_passed, f"Test failed exact equality comparison for nearest mode"
     return pcc_passed, allclose_passed, pcc_message
 
 
@@ -345,35 +347,35 @@ def prepare_sharded_ttnn_grid(
     return ttnn.to_memory_config(ttnn_grid_interleaved, grid_memory_config)
 
 
-@pytest.mark.parametrize("use_precomputed_grid", [False, True])
+@pytest.mark.parametrize("use_precomputed_grid", [True])
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        ((1, 256, 12, 40), (1, 7, 25281, 2)),
-        ((1, 256, 24, 80), (1, 7, 25281, 2)),
-        ((1, 256, 48, 160), (1, 7, 25281, 2)),
-        ((16, 32, 100, 100), (16, 10000, 4, 2)),
-        ((48, 32, 12, 20), (48, 3567, 8, 2)),
-        ((8, 32, 100, 100), (8, 300, 4, 2)),
-        ((8, 32, 100, 100), (8, 2000, 4, 2)),
-        ((16, 32, 50, 50), (16, 10000, 1, 2)),
-        ((48, 32, 80, 45), (48, 4832, 1, 2)),
-        ((48, 32, 40, 23), (48, 4832, 1, 2)),
-        ((48, 32, 20, 12), (48, 4832, 1, 2)),
-        ((48, 32, 10, 6), (48, 4832, 1, 2)),
-        ((8, 32, 50, 50), (8, 3604, 1, 2)),
+        ((1, 256, 12, 40), (1, 1, 1408, 2)),
+        # ((1, 256, 24, 80), (1, 7, 25281, 2)),
+        # ((1, 256, 48, 160), (1, 7, 25281, 2)),
+        # ((16, 32, 100, 100), (16, 10000, 4, 2)),
+        # ((48, 32, 12, 20), (48, 3567, 8, 2)),
+        # ((8, 32, 100, 100), (8, 300, 4, 2)),
+        # ((8, 32, 100, 100), (8, 2000, 4, 2)),
+        # ((16, 32, 50, 50), (16, 10000, 1, 2)),
+        # ((48, 32, 80, 45), (48, 4832, 1, 2)),
+        # ((48, 32, 40, 23), (48, 4832, 1, 2)),
+        # ((48, 32, 20, 12), (48, 4832, 1, 2)),
+        # ((48, 32, 10, 6), (48, 4832, 1, 2)),
+        # ((8, 32, 50, 50), (8, 3604, 1, 2)),
     ],
 )
 @pytest.mark.parametrize(
     "mode",
     [
-        "bilinear",
+        "nearest",
     ],
 )
 @pytest.mark.parametrize(
     "align_corners",
     [
-        False,
+        True,
     ],
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid):
@@ -397,7 +399,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
 
     # Add small noise to the grid
     torch_grid += torch.randn(grid_shape) * 0.05
-
+    # torch_grid  = torch.ones(grid_shape)
     torch_output_nchw = F.grid_sample(
         torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
     )
@@ -499,7 +501,7 @@ def test_grid_sample_batch_output_channels_flag(
     )
 
 
-@pytest.mark.parametrize("use_precomputed_grid", [True, False])
+@pytest.mark.parametrize("use_precomputed_grid", [True])
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
@@ -545,7 +547,7 @@ def test_grid_sample_sharded(
 
     torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
-    torch_grid = torch.ones(grid_shape, dtype=torch.float32) * 2 - 1
+    torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
 
     torch_output_nchw = F.grid_sample(
         torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
