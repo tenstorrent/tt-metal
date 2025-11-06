@@ -266,3 +266,8 @@ class EltwiseBinaryReuseDestType(Enum):
     NONE = 0
     DEST_TO_SRCA = 1
     DEST_TO_SRCB = 2
+
+
+class ImpliedMathFormat(Enum):
+    No = "false"
+    Yes = "true"
