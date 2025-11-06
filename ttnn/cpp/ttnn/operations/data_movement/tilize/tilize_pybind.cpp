@@ -14,26 +14,24 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_tilize(py::module& module) {
-    auto doc =
-        R"doc(
-            Changes data layout of input tensor to TILE.
+    auto doc = R"doc(
+Changes data layout of input tensor to TILE.
 
-            Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
+Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
 
-            Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
+Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
 
-            Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+Args:
+    input_tensor (ttnn.Tensor): the input tensor.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
-                use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
+Keyword Args:
+    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+    dtype (data type, optional): Data type of the output tensor. Defaults to `None`.
+    use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
 
-            Returns:
-                ttnn.Tensor: the output tensor.
-
-        )doc";
+Returns:
+    ttnn.Tensor: the output tensor.
+)doc";
 
     using OperationType = decltype(ttnn::tilize);
     ttnn::bind_registered_operation(

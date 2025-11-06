@@ -15,32 +15,22 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_slice(py::module& module) {
-    auto doc =
-        R"doc(
-            Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
+    auto doc = R"doc(
+Returns a sliced tensor. If the input tensor is on host, the slice will be performed on host, and if its on device it will be performed on device.
 
-            Args:
-                input_tensor: Input Tensor.
-                slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
+Args:
+    input_tensor: Input Tensor.
+    slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+    slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
+    slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
 
-            Keyword Args:
-                memory_config Memory Config of the output tensor
-                pad_value: Optional value to fill padding for tiled tensors. Padding values are unmodified (and undefined) by default
+Keyword Args:
+    memory_config Memory Config of the output tensor
+    pad_value: Optional value to fill padding for tiled tensors. Padding values are unmodified (and undefined) by default
 
-            Returns:
-                ttnn.Tensor: the output tensor.
-
-            Example:
-                >>> tensor = ttnn.slice(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device), [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
-                >>> print(tensor.shape)
-                [1, 1, 32, 16]
-                >>> input = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-                >>> output = ttnn.slice(input, [0, 0, 0, 0], [1, 1, 32, 32])
-                >>> print(output.shape)
-                [1, 1, 32, 32]
-                )doc";
+Returns:
+    ttnn.Tensor: the output tensor.
+)doc";
 
     // TODO: implementing the array version and overloading the pybind with all the possible array sizes is better than
     // a vector with a fixed size default value

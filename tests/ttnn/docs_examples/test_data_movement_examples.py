@@ -90,3 +90,35 @@ def test_repeat(device):
     # Repeat the tensor along specified dimensions
     repeated_tensor = ttnn.repeat(input_tensor_tt, (1, 2))
     print("Repeated Tensor Shape:", repeated_tensor.shape)  # [1, 2], [1, 2], [3, 4], [3, 4]]
+
+
+def test_repeat_interleave(device):
+    # Create a tensor to repeat interleave
+    input_tensor = torch.tensor([1, 2, 3])
+    input_tensor_tt = ttnn.from_torch(input_tensor, device=device)
+
+    # Repeat interleave the tensor
+    repeated_tensor = ttnn.repeat_interleave(input_tensor_tt, repeats=2, dim=0)
+    print("Repeat Interleave Tensor Shape:", repeated_tensor.shape)
+
+
+def test_slice(device):
+    # Create a tensor to slice
+    input_tensor = ttnn.rand((1, 1, 64, 32), dtype=torch.bfloat16, device=device)
+
+    # Slice the tensor
+    sliced_tensor = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 64, 16], [1, 1, 2, 1])
+    print("Sliced Tensor Shape:", sliced_tensor.shape)
+
+    # Create a tensor to slice without step
+    input_tensor = ttnn.rand([1, 1, 64, 32], ttnn.bfloat16, device=device)
+    output = ttnn.slice(input_tensor, [0, 0, 0, 0], [1, 1, 32, 32])
+    print("Sliced Tensor Shape:", output.shape)
+
+
+def test_tilize(device):
+    # Create a tensor to tilize
+    input_tensor = ttnn.rand([1, 1, 64, 32], ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Tilize the tensor
+    tilized_tensor = ttnn.tilize(input_tensor)
