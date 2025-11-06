@@ -187,6 +187,19 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
 
         self.tt_vae.load_state_dict(self.vae.state_dict())
 
+        # Initialize the host-side encoder
+        # self.host_encoder = WanEncoder(
+        #     base_dim=self.vae.config.base_dim,
+        #     z_dim=self.vae.config.z_dim,
+        #     dim_mult=self.vae.config.dim_mult,
+        #     num_res_blocks=self.vae.config.num_res_blocks,
+        #     attn_scales=self.vae.config.attn_scales,
+        #     temperal_downsample=self.vae.config.temperal_downsample,
+        #     is_residual=self.vae.config.is_residual,
+        #     in_channels=self.vae.config.in_channels,
+        # )
+        # self.host_encoder.load_state_dict(self.vae.state_dict())
+
         self.register_to_config(boundary_ratio=boundary_ratio)
         self.register_to_config(expand_timesteps=expand_timesteps)
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal if getattr(self, "vae", None) else 4
@@ -326,6 +339,35 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
 
         return prompt_embeds
 
+    def encode_on_host(self, x: torch.Tensor) -> torch.Tensor:
+        _, _, num_frame, height, width = x.shape
+
+        self.vae.clear_cache()
+        if self.vae.config.patch_size is not None:
+            x = patchify(x, patch_size=self.vae.config.patch_size)
+
+        if self.vae.use_tiling and (width > self.vae.tile_sample_min_width or height > self.vae.tile_sample_min_height):
+            return self.vae.tiled_encode(x)
+
+        iter_ = 1 + (num_frame - 1) // 4
+        for i in range(iter_):
+            self.vae._enc_conv_idx = [0]
+            if i == 0:
+                out = self.vae.encoder(
+                    x[:, :, :1, :, :], feat_cache=self.vae._enc_feat_map, feat_idx=self.vae._enc_conv_idx
+                )
+            else:
+                out_ = self.vae.encoder(
+                    x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
+                    feat_cache=self.vae._enc_feat_map,
+                    feat_idx=self.vae._enc_conv_idx,
+                )
+                out = torch.cat([out, out_], 2)
+
+        enc = self.vae.quant_conv(out).chunk(2, dim=1)[0]
+        self.vae.clear_cache()
+        return enc
+
     def prepare_image(
         self,
         image: PIL.Image.Image,
@@ -338,8 +380,6 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         patch_size = (1, 2, 2)
 
         img = TF.to_tensor(image).sub_(0.5).div_(0.5)
-
-        breakpoint()
 
         F = num_frames
         h, w = img.shape[1:]
@@ -357,7 +397,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         msk = msk.view(1, msk.shape[1] // 4, 4, lat_h, lat_w)
         msk = msk.transpose(1, 2)[0]
 
-        y = self.vae._encode(
+        y = self.encode_on_host(
             torch.concat(
                 [
                     torch.nn.functional.interpolate(img[None].cpu(), size=(h, w), mode="bicubic").transpose(0, 1),
@@ -366,6 +406,7 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
                 dim=1,
             ).unsqueeze(0)
         )[0]
+
         torch.save(y, "y.pt")
         y = torch.concat([msk, y])
         torch.save(y, "y_with_msk.pt")
@@ -899,3 +940,26 @@ class WanPipelineI2V(DiffusionPipeline, WanLoraLoaderMixin):
         pipeline_output = WanPipelineOutput(frames=video)
         self.timing_data["total"] = time.time() - pipeline_start_time
         return pipeline_output
+
+
+def patchify(x, patch_size):
+    if patch_size == 1:
+        return x
+
+    if x.dim() != 5:
+        raise ValueError(f"Invalid input shape: {x.shape}")
+    # x shape: [batch_size, channels, frames, height, width]
+    batch_size, channels, frames, height, width = x.shape
+
+    # Ensure height and width are divisible by patch_size
+    if height % patch_size != 0 or width % patch_size != 0:
+        raise ValueError(f"Height ({height}) and width ({width}) must be divisible by patch_size ({patch_size})")
+
+    # Reshape to [batch_size, channels, frames, height//patch_size, patch_size, width//patch_size, patch_size]
+    x = x.view(batch_size, channels, frames, height // patch_size, patch_size, width // patch_size, patch_size)
+
+    # Rearrange to [batch_size, channels * patch_size * patch_size, frames, height//patch_size, width//patch_size]
+    x = x.permute(0, 1, 6, 4, 2, 3, 5).contiguous()
+    x = x.view(batch_size, channels * patch_size * patch_size, frames, height // patch_size, width // patch_size)
+
+    return x
