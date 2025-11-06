@@ -262,7 +262,7 @@ public:
             this->tensor_attributes->get_storage(), this->tensor_attributes->get_tensor_spec());
     }
 
-    static std::uint64_t get_tensor_id_counter() { return tensor_id_counter.load(); }
+    static std::uint64_t get_tensor_id_counter() { return tensor_id_counter.load(std::memory_order_relaxed); }
 
     static void set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id); }
 
