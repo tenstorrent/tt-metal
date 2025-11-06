@@ -81,7 +81,7 @@ Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
 
 Tensor::Tensor(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
     init(Storage(std::move(storage)), std::move(tensor_spec), std::move(tensor_topology));
-    tensor_id = Tensor::fetch_and_increment_tensor_id_counter();
+    tensor_id = Tensor::next_tensor_id();
 }
 
 void Tensor::init(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) {
@@ -105,7 +105,7 @@ Tensor& Tensor::operator=(const Tensor& other) {
 
 Tensor& Tensor::operator=(Tensor&& other) noexcept {
     this->tensor_id = other.tensor_id;
-    other.tensor_id = 0;
+    other.tensor_id = INVALID_TENSOR_ID;
     if (this->tensor_attributes != other.tensor_attributes) {
         this->tensor_attributes = std::move(other.tensor_attributes);
     }
@@ -640,12 +640,13 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, std::optional<t
     tensor_impl::copy_to_device_wrapper(src, dst, cq_id);
 }
 
+// TODO #32045: Remove this function since IDs are assigned in the constructor.
 Tensor set_tensor_id(const Tensor& tensor) {
     if (not GraphTracker::instance().is_enabled()) {
         return tensor;
     }
     auto output = tensor;
-    output.tensor_id = Tensor::fetch_and_increment_tensor_id_counter();
+    output.tensor_id = Tensor::next_tensor_id();
     return output;
 };
 

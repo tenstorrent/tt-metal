@@ -278,14 +278,16 @@ int GraphProcessor::add_tensor(const Tensor& t) {
             return nullptr;
         },
         storage);
+
+    // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
     std::uint64_t tensor_id = t.tensor_id;
-    if (tensor_id == 0) {
+    if (tensor_id == tt::tt_metal::Tensor::INVALID_TENSOR_ID) {
         log_debug(
             tt::LogAlways,
             "Tensor doesn't have tensor_id (sentinel value is 0), generating new one. Ideally this should not happen. "
             "Please set tensor_id "
             "for this tensor ahead of time.");
-        tensor_id = tt::tt_metal::Tensor::fetch_and_increment_tensor_id_counter();
+        tensor_id = tt::tt_metal::Tensor::next_tensor_id();
     }
     auto tensor_counter = tensor_id_to_counter.count(tensor_id) > 0 ? tensor_id_to_counter[tensor_id] : graph.size();
     auto shape = t.logical_shape();

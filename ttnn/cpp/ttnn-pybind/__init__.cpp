@@ -316,7 +316,7 @@ PYBIND11_MODULE(_ttnn, module) {
         "Set the tensor ID counter to a specific value");
     module.def(
         "fetch_and_increment_tensor_id",
-        &tt::tt_metal::Tensor::fetch_and_increment_tensor_id_counter,
+        &tt::tt_metal::Tensor::next_tensor_id,
         "Atomically fetch and increment the tensor ID counter");
 
     module.def(

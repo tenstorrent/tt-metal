@@ -43,7 +43,8 @@ class MeshCommandQueue;
 
 class Tensor {
 public:
-    std::uint64_t tensor_id{0};
+    constexpr static std::uint64_t INVALID_TENSOR_ID = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t tensor_id{INVALID_TENSOR_ID};
 
     // Shared pointer to all attributes associated with this tensor
     // Can be safely passed between threads when the tensor is copied
@@ -266,7 +267,8 @@ public:
 
     static void set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
 
-    static std::uint64_t fetch_and_increment_tensor_id_counter() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
+    // TODO #32045: Remove this function since IDs are assigned in the constructor.
+    static std::uint64_t next_tensor_id() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 private:
     inline static std::atomic<std::uint64_t> tensor_id_counter{0};
