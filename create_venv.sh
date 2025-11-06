@@ -22,6 +22,58 @@ echo "Creating virtual env in: $PYTHON_ENV_DIR"
 
 # Create and activate virtual environment
 $PYTHON_CMD -m venv $PYTHON_ENV_DIR
+
+# Add custom environment variables to the activation script
+echo "Adding custom environment variables to activation script"
+
+# Capture current working directory at creation time
+# Assuming script is running from TT_METAL_HOME location
+CREATION_DIR=$(pwd)
+
+cat >> $PYTHON_ENV_DIR/bin/activate << EOF
+
+# Custom TT-Metal environment variables
+export PYTHONPATH="$CREATION_DIR"
+export TT_METAL_HOME="$CREATION_DIR"
+export TT_METAL_RUNTIME_ROOT="$CREATION_DIR"
+
+# Store original values for deactivation
+if [ -n "\${PYTHONPATH:-}" ]; then
+    _OLD_VIRTUAL_PYTHONPATH="\$PYTHONPATH"
+fi
+if [ -n "\${TT_METAL_HOME:-}" ]; then
+    _OLD_VIRTUAL_TT_METAL_HOME="\$TT_METAL_HOME"
+fi
+if [ -n "\${TT_METAL_RUNTIME_ROOT:-}" ]; then
+    _OLD_VIRTUAL_TT_METAL_RUNTIME_ROOT="\$TT_METAL_RUNTIME_ROOT"
+fi
+EOF
+
+# Also modify the deactivate function to restore original values
+sed -i '/unset VIRTUAL_ENV/i\
+    # Restore original environment variables\
+    if [ -n "${_OLD_VIRTUAL_PYTHONPATH:-}" ]; then\
+        PYTHONPATH="$_OLD_VIRTUAL_PYTHONPATH"\
+        export PYTHONPATH\
+        unset _OLD_VIRTUAL_PYTHONPATH\
+    else\
+        unset PYTHONPATH\
+    fi\
+    if [ -n "${_OLD_VIRTUAL_TT_METAL_HOME:-}" ]; then\
+        TT_METAL_HOME="$_OLD_VIRTUAL_TT_METAL_HOME"\
+        export TT_METAL_HOME\
+        unset _OLD_VIRTUAL_TT_METAL_HOME\
+    else\
+        unset TT_METAL_HOME\
+    fi\
+    if [ -n "${_OLD_VIRTUAL_TT_METAL_RUNTIME_ROOT:-}" ]; then\
+        TT_METAL_RUNTIME_ROOT="$_OLD_VIRTUAL_TT_METAL_RUNTIME_ROOT"\
+        export TT_METAL_RUNTIME_ROOT\
+        unset _OLD_VIRTUAL_TT_METAL_RUNTIME_ROOT\
+    else\
+        unset TT_METAL_RUNTIME_ROOT\
+    fi' $PYTHON_ENV_DIR/bin/activate
+
 source $PYTHON_ENV_DIR/bin/activate
 
 # Import functions for detecting OS
@@ -54,4 +106,10 @@ else
     echo "In worktree: not generating git hooks"
 fi
 
+echo "Environment setup complete!"
 echo "If you want stubs, run ./scripts/build_scripts/create_stubs.sh"
+echo ""
+echo "The following environment variables will be automatically set when you activate the virtual environment:"
+echo "  PYTHONPATH=$CREATION_DIR"
+echo "  TT_METAL_HOME=$CREATION_DIR"
+echo "  TT_METAL_RUNTIME_ROOT=$CREATION_DIR"
