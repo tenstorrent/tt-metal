@@ -308,6 +308,8 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
+    get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), false);
+
     if (data_collector_) {
         data_collector_->DumpData();
         data_collector_.reset();
@@ -324,6 +326,7 @@ void MetalContext::teardown() {
     if (get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         watcher_server_->detach_devices();
     }
+
     watcher_server_.reset();
 
     if (risc_firmware_initializer_) {
