@@ -15,7 +15,11 @@ graph_descriptors {
   type: "FABRIC"
   instances { mesh { mesh_descriptor: "LBOX" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "LBOX" mesh_id: 1 } }
-  graph_topology: { layout_type: ALL_TO_ALL channels: { count: 2 policy: STRICT } }
+  connections {
+    nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "LBOX" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
 }
 
 # --- Instantiation ----------------------------------------------------------
