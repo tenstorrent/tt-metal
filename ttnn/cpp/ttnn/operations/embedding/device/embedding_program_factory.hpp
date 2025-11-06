@@ -182,22 +182,14 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         buffering = 2;
     }
 
-    printf("use_chunked_processing: %s\n", use_chunked_processing ? "true" : "false");
-    printf("buffering: %u\n", buffering);
-    printf("num_tiles_per_block: %u\n", num_tiles_per_block);
-    printf("tiles_per_chunk: %u\n", tiles_per_chunk);
-    printf("num_chunks: %u\n", num_chunks);
-
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t cb0_size = buffering * tiles_per_chunk * weights_single_tile_size;
-    printf("cb0 size: %u\n", cb0_size);
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb0_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, weights_single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-    printf("cb1 size: %u\n", TILE_HEIGHT * input_element_size_bytes);
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(
             TILE_HEIGHT * input_element_size_bytes, {{src1_cb_index, input_cb_data_format}})
@@ -408,7 +400,6 @@ inline tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    printf("running embeddings_rm\n");
     tt::tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
