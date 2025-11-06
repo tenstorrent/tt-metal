@@ -502,7 +502,7 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     std::vector<uint32_t> src =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, UINT32_MAX, size_bytes / sizeof(uint32_t));
     EXPECT_EQ(MetalContext::instance().hal().get_alignment(HalMemType::L1), 16);
-    uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t num_16b_writes = size_bytes / MetalContext::instance().hal().get_write_alignment(HalMemType::HOST);
 
     // Allocate and pin host memory
     auto aligned_buf = std::make_shared<tt::tt_metal::vector_aligned<uint32_t>>(size_bytes / sizeof(uint32_t), 0);
@@ -514,6 +514,10 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
         host_buffer_view,
         true  // map_to_noc
     );
+    ASSERT_EQ(
+        reinterpret_cast<uintptr_t>(aligned_buf->data()) %
+            MetalContext::instance().hal().get_write_alignment(HalMemType::HOST),
+        0);
 
     // Get the pinned memory address that the device can write to
     uint64_t pinned_memory_device_addr = pinned_memory->get_device_addr(device->id());
