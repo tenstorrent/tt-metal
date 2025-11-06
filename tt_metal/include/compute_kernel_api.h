@@ -474,10 +474,10 @@ ALWI void silu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_silu_init<APPROX>
  * | STABLE_SORT     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool STABLE_SORT = false>
+template <bool stable_sort = false>
 ALWI void topk_local_sort(
     uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE, STABLE_SORT>(
+    MATH((llk_math_eltwise_unary_sfpu_topk_local_sort<true, DST_ACCUM_MODE, stable_sort>(
         idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
 }
 
@@ -512,9 +512,9 @@ ALWI void topk_local_sort(
  * | STABLE_SORT     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool idir = false, bool STABLE_SORT = false>
+template <bool idir = false, bool stable_sort = false>
 ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir, STABLE_SORT>(idst, m_iter, k)));
+    MATH((llk_math_eltwise_unary_sfpu_topk_merge<true, DST_ACCUM_MODE, idir, stable_sort>(idst, m_iter, k)));
 }
 
 // topK rebuild
@@ -550,9 +550,9 @@ ALWI void topk_merge(uint32_t idst, int m_iter, int k) {
  * | STABLE_SORT     | Maintain order of indices for equal values                                 | bool     | true, false                                           | False    |
  */
 // clang-format on
-template <bool STABLE_SORT = false>
+template <bool stable_sort = false>
 ALWI void topk_rebuild(uint32_t idst, bool idir, int m_iter, int k, int logk, int skip_second) {
-    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE, STABLE_SORT>(
+    MATH((llk_math_eltwise_unary_sfpu_topk_rebuild<true, DST_ACCUM_MODE, stable_sort>(
         idst, idir, m_iter, k, logk, skip_second)));
 }
 
