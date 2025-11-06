@@ -73,27 +73,29 @@ void kernel_main() {
     ASSERT(sem_l1_addr != 0);
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
-    // OPTIMAL PATTERN: Call _set_state once before the loop to configure ALL packet header fields
-    // This includes route, send type, write dest, semaphore addr, val, wrap, flush, and payload size
-    fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
-        header,
-        dst_dev_id,
-        dst_mesh_id,
-        dst_acc,  // TensorAccessor as addrgen
-        0,        // page_id (typically use 0 for initial config)
-        sem_noc,
-        1,    // val (increment by 1)
-        0,    // wrap (no wrap)
-        0,    // offset
-        true  // flush
-    );
-
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
-        // Use _with_state addrgen overload in the loop - only updates WriteDstAddr and PayloadSize
-        // Route and send type are already set by _set_state
+        if (i == 0) {
+            // First iteration: use _set_state to initialize ALL packet header fields
+            // This includes route, send type, write dest, semaphore addr, val, wrap, flush, and payload size
+            fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+                header,
+                dst_dev_id,
+                dst_mesh_id,
+                dst_acc,  // TensorAccessor as addrgen
+                i,        // page_id (use current page for correct address)
+                sem_noc,
+                1,    // val (increment by 1)
+                0,    // wrap (no wrap)
+                0,    // offset
+                true  // flush
+            );
+        }
+
+        // Use _with_state addrgen overload for all iterations to update WriteDstAddr and PayloadSize
+        // Route, send type, semaphore addr, val, wrap, and flush are already set by _set_state
         fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
             &sender,
             header,
