@@ -1,484 +1,493 @@
-# TT-CNN Model Bringup Guide
+# TT-CNN - Vision Model Bring-up Guide
 
-This guide provides a comprehensive walkthrough for bringing up CNN models using the TT-CNN library, using the Vanilla UNet implementation as a practical example.
+This documents demonstrates how to bring-up new vision models using the TT-CNN library.
 
-## Table of Contents
+Throughout this document we will refer to the Vanilla UNet implementation as a concrete example of how to use the available TT-CNN modules to create a model. Take a look at the implementation [here](../demos/vanilla_unet/README.md).
 
-1. [Overview](#overview)
-2. [Prerequisites](#prerequisites)
-3. [Architecture Patterns](#architecture-patterns)
-4. [Step-by-Step Implementation](#step-by-step-implementation)
-5. [Configuration Management](#configuration-management)
-6. [Performance Optimization](#performance-optimization)
-7. [Testing and Validation](#testing-and-validation)
-8. [Common Patterns](#common-patterns)
-9. [Troubleshooting](#troubleshooting)
+The TT-CNN library comprises several modular components designed to assist the development of vision models on Tenstorrent devices. At a high level, the main TT-CNN modules include:
+
+- **Pipeline**: Provides high-performance abstractions for model execution, with out-of-the-box support for tracing, and multi-command command queue pipelining.
+- **Builder**: Offers configuration-driven factories for defining and instantiating TTNN-compatible CNN and pooling layers, making it easy to compose models from reusable configuration classes.
+
+Each module is documented and illustrated with working examples. To dive deeper into:
+- **Pipeline API, memory layouts, and performance tuning**, see the [README.md](README.md) "Pipeline" and "Performance Optimization Techniques" sections.
+- **Builder API, configuration patterns, and layer composition**, refer to the [README.md](README.md) "Builder" section.
+
+This guide provides a stepwise introduction to bringing up new TT-NN models. For further details, practical tips, and reference patterns, please explore the in-depth documentation in [README.md](README.md).
 
 ## Overview
 
-The TT-CNN library provides three main components for CNN model development:
+The general flow for bringing up a vision model with TT-CNN is:
 
-- **Builder**: Configuration-driven layer composition (`TtConv2d`, `TtMaxPool2d`, `TtUpsample`)
-- **Pipeline**: High-performance execution framework with tracing and multi-CQ support
-- **Executor**: Various execution strategies for optimal throughput and latency
+1. **Reference Model**: Define your model reference using standard PyTorch modules (`nn.Module`) or use an available open source model. This reference implementation will serve as your accuracy benchmark to ensure that the TT-NN version of this model is correct.
 
-### Key Benefits
+2. **Parameter Preprocessing**: Extract, convert, and optionally fuse your PyTorch weights (e.g., batch norm folding). Also extract other layer parameters (kernel size, stride, etc.) from the reference model.
 
-- **Simplified Development**: Configuration-based approach reduces boilerplate
-- **Performance Optimization**: Built-in tracing, multi-command queues, and memory management
-- **Flexible Sharding**: Support for height, width, block, and auto-sharding strategies
-- **Memory Efficiency**: Automatic tensor slicing and memory configuration
+3. **Layer Configurations**: Using the parameters from the reference model, generate the TT-NN model's configurations for each layer, which contain the preprocessed weights and TT-specific layer attributes.
 
-## Prerequisites
+4. **TT-NN Model Construction**: Create the TT-NN model instance from the model configuration.
 
-- TT-NN environment setup
-- Understanding of CNN architectures
-- Basic knowledge of tensor sharding concepts
-- Familiarity with PyTorch (for reference models)
+5. **Pipeline Optimization**: Wrap your TT-NN model in the Pipeline API to ensure good end-to-end performance
 
-## Architecture Patterns
+The flow can be visualized as:
 
-### 1. Model Structure Organization
+```
+PyTorch Model
+    ↓
+Weight Preprocessing
+    ↓
+Layer Configurations
+    ↓
+TT-NN Model
+    ↓
+Pipeline Optimization (compile, enqueue, run)
+```
 
-Organize your model implementation into these key files:
+Let's examine each step using the Vanilla UNet as our example.
+
+## Supported Operations
+
+TT-CNN currently provides high-level APIs for:
+- **Conv2d**: Standard 2D convolution with various configurations
+- **MaxPool2d**: Max pooling operations
+- **Upsample**: Upsampling operations (bilinear and nearest interpolation)
+
+For operations not yet in TT-CNN, use the TT-NN API directly:
+- Transpose convolution: `ttnn.conv_transpose2d` (will be added to TT-CNN in the future)
+- Normalization: `ttnn.layer_norm`, `ttnn.group_norm`, `ttnn.batch_norm`
+- Activations (unless fused with conv2d): `ttnn.relu`, `ttnn.gelu`, `ttnn.silu`, `ttnn.leaky_relu`
+- Other operations: See the full TT-NN API documentation
+
+## 1. Model Structure Organization
+
+Every TT-CNN model follows roughly this standard structure:
 
 ```
 models/demos/your_model/
-├── tt/
-│   ├── model.py          # TT-NN model implementation
-│   ├── config.py         # Configuration management
-│   └── common.py         # Utilities and preprocessing
 ├── reference/
-│   └── model.py          # PyTorch reference implementation
+│   └── model.py          # Original PyTorch model
+├── tt/
+│   ├── common.py         # Weight preprocessing & utilities
+│   ├── config.py         # Layer configuration builder
+│   └── model.py          # TT-NN model implementation
 ├── tests/
-│   ├── test_model.py     # Accuracy tests
-│   └── test_perf.py      # Performance benchmarks
+│   ├── test_model.py     # Correctness validation
+│   └── test_perf.py      # Performance benchmarks for device and end-to-end performance
+│   └── test_*.py         # Additional unit tests for testing correctness at a more granular level - useful for complex models!
 └── demo/
-    └── demo.py           # End-to-end demo
+|    └── demo.py          # End-to-end demonstration
+└── README.md
 ```
 
-### 2. Layer Hierarchy
+## 2. Reference Model (PyTorch)
 
-Structure complex models using modular components:
-
-```python
-# Example from vanilla_unet/tt/model.py
-class TtUNetEncoder:
-    def __init__(self, conv1, conv2, pool, device):
-        self.conv1 = TtConv2d(conv1, device)
-        self.conv2 = TtConv2d(conv2, device)
-        self.pool = TtMaxPool2d(pool, device)
-
-    def __call__(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        skip = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        x = self.pool(x)
-        return x, skip
-```
-
-## Step-by-Step Implementation
-
-### Step 1: Define Configuration Classes
-
-Create configuration dataclasses for your model:
+We start with a standard PyTorch model. Here's the Vanilla UNet structure:
 
 ```python
-# config.py
-@dataclass
-class ModelLayerConfigs:
-    l1_input_memory_config: ttnn.MemoryConfig
+# reference/model.py
+class UNet(nn.Module):
+    def __init__(self, in_channels=3, out_channels=1, init_features=32):
+        super(UNet, self).__init__()
 
-    # Define configurations for each layer
-    conv1: Conv2dConfiguration
-    conv2: Conv2dConfiguration
-    pool1: MaxPool2dConfiguration
-    # ... additional layers
-
-class ModelConfigBuilder:
-    def __init__(self, parameters, input_height, input_width, batch_size):
-        self.parameters = parameters
-        self.input_height = input_height
-        self.input_width = input_width
-        self.batch_size = batch_size
-
-    def build_configs(self) -> ModelLayerConfigs:
-        return ModelLayerConfigs(
-            l1_input_memory_config=self._create_input_memory_config(),
-            conv1=self._create_conv_config_from_params(...),
-            # ... configure all layers
+        features = init_features
+        # Encoder blocks with Conv+BN+ReLU
+        self.encoder1 = nn.Sequential(
+            nn.Conv2d(in_channels, features, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(features),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(features, features, kernel_size=3, padding=1, bias=False),
+            nn.BatchNorm2d(features),
+            nn.ReLU(inplace=True),
         )
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        # ... more encoder blocks ...
 ```
 
-### Step 2: Implement Model Class
+## 3. Weight Preprocessing
 
-Create your main model class:
-
-```python
-# model.py
-from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
-
-class TtModel:
-    def __init__(self, configs: ModelLayerConfigs, device: ttnn.Device):
-        self.device = device
-        self.configs = configs
-
-        # Initialize layers using TT-CNN builder components
-        self.conv1 = TtConv2d(configs.conv1, device)
-        self.conv2 = TtConv2d(configs.conv2, device)
-        self.pool1 = TtMaxPool2d(configs.pool1, device)
-
-    def preprocess_input_tensor(self, x: ttnn.Tensor, deallocate_input_activation: bool = True):
-        # Convert input format as needed (e.g., CHW to HWC)
-        output = ttnn.experimental.convert_to_hwc(x)
-        if deallocate_input_activation:
-            ttnn.deallocate(x)
-        return output
-
-    def __call__(self, input_tensor: ttnn.Tensor, deallocate_input_activation: bool = True) -> ttnn.Tensor:
-        input_tensor = self.preprocess_input_tensor(input_tensor, deallocate_input_activation)
-
-        # Forward pass
-        x = self.conv1(input_tensor)
-        x = self.conv2(x)
-        x = self.pool1(x)
-
-        # Convert output format as needed
-        return ttnn.experimental.convert_to_chw(x, dtype=ttnn.bfloat16)
-
-def create_model_from_configs(configs: ModelLayerConfigs, device: ttnn.Device) -> TtModel:
-    return TtModel(configs, device)
-```
-
-### Step 3: Create Weight Preprocessing
-
-Implement parameter preprocessing to convert PyTorch weights to TT-NN format:
+The `create_unet_preprocessor` function extracts and converts PyTorch weights to TT-NN format:
 
 ```python
-# common.py
-def create_model_preprocessor(device, mesh_mapper=None):
+# tt/common.py
+def create_unet_preprocessor(device, mesh_mapper=None):
     def custom_preprocessor(model, name, ttnn_module_args):
         parameters = {}
 
-        if isinstance(model, YourPyTorchModel):
-            # Convert conv layers with batch norm folding
-            from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
+        if isinstance(model, UNet):
+            # Process each encoder block
+            for i in range(1, 5):
+                parameters[f"encoder{i}"] = {}
 
-            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
-                model.conv1, model.bn1
-            )
-            parameters["conv1"] = {
-                "weight": ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
-                "bias": ttnn.from_torch(
-                    torch.reshape(conv_bias, (1, 1, 1, -1)),
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=mesh_mapper
+                # Fold BatchNorm into Conv weights
+                from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
+
+                # First conv in block
+                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
+                    getattr(model, f"encoder{i}")[0],  # Conv layer
+                    getattr(model, f"encoder{i}")[1]   # BatchNorm layer
                 )
-            }
-            # ... process remaining layers
+                parameters[f"encoder{i}"][0] = {
+                    "weight": ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+                    "bias": ttnn.from_torch(
+                        torch.reshape(conv_bias, (1, 1, 1, -1)),
+                        dtype=ttnn.bfloat16,
+                        mesh_mapper=mesh_mapper
+                    )
+                }
+
+                # Second conv in block
+                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
+                    getattr(model, f"encoder{i}")[3],
+                    getattr(model, f"encoder{i}")[4]
+                )
+                parameters[f"encoder{i}"][1] = {
+                    "weight": ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper),
+                    "bias": ttnn.from_torch(
+                        torch.reshape(conv_bias, (1, 1, 1, -1)),
+                        dtype=ttnn.bfloat16,
+                        mesh_mapper=mesh_mapper
+                    )
+                }
+
+            # Process decoder blocks similarly...
+            # Process upconv layers
+            for i in range(4, 0, -1):
+                parameters[f"upconv{i}"] = {
+                    "weight": ttnn.from_torch(
+                        getattr(model, f"upconv{i}").weight,
+                        dtype=ttnn.bfloat16,
+                        mesh_mapper=mesh_mapper
+                    ),
+                    "bias": ttnn.from_torch(
+                        torch.reshape(getattr(model, f"upconv{i}").bias, (1, 1, 1, -1)),
+                        dtype=ttnn.bfloat16,
+                        mesh_mapper=mesh_mapper
+                    )
+                }
 
         return parameters
 
     return custom_preprocessor
 ```
 
-### Step 4: Integration with Pipeline API (Optional)
+Key points about weight preprocessing:
+- **Batch Norm Folding**: Conv+BN pairs are fused into single Conv operations
+- **Tensor Conversion**: PyTorch tensors → TT-NN tensors with appropriate dtype
+- **Bias Reshaping**: Biases must be reshaped to (1, 1, 1, channels) for TT-NN's expected format
+  - PyTorch bias shape: (out_channels,)
+  - TT-NN bias shape: (1, 1, 1, out_channels)
+- **Mesh Mapper**: For multi-device data parallelism, weights can be replicated across devices
 
-For high-performance inference, integrate with the Pipeline API:
+## 4. Building Layer Configurations
 
-```python
-from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-
-# Configure pipeline for optimal performance
-config = PipelineConfig(
-    use_trace=True,
-    num_command_queues=2,
-    all_transfers_on_separate_command_queue=False
-)
-
-# Create pipeline
-pipeline = create_pipeline_from_config(
-    config=config,
-    model=your_model_callable,
-    device=device,
-    dram_input_memory_config=dram_memory_config,
-    l1_input_memory_config=l1_memory_config
-)
-
-# Compile and run
-pipeline.compile(sample_input)
-outputs = pipeline.enqueue(inputs).pop_all()
-pipeline.cleanup()
-```
-
-## Configuration Management
-
-### Sharding Strategy Selection
-
-Choose appropriate sharding strategies based on your model's characteristics:
+The configuration builder takes preprocessed weights and creates detailed configs for each layer:
 
 ```python
-# For large spatial dimensions - use HeightShardedStrategy
-sharding_strategy = HeightShardedStrategyConfiguration(
-    act_block_h_override=64,  # Adjust based on tensor dimensions
-    reshard_if_not_optimal=False
-)
+# tt/config.py
+class TtUNetConfigBuilder:
+    def __init__(self, parameters: Dict, input_height: int, input_width: int, batch_size: int):
+        self.parameters = parameters
+        self.input_height = input_height
+        self.input_width = input_width
+        self.batch_size = batch_size
 
-# For models with many channels - use WidthShardedStrategy
-sharding_strategy = WidthShardedStrategyConfiguration(
-    act_block_w_div=1,
-    reshard_if_not_optimal=False
-)
+    def build_configs(self) -> TtUNetLayerConfigs:
+        return TtUNetLayerConfigs(
+            # Input memory configuration
+            l1_input_memory_config=self._create_input_memory_config(),
 
-# For optimal performance - use AutoShardedStrategy
-sharding_strategy = AutoShardedStrategyConfiguration()
+            # Encoder 1 configuration
+            encoder1_conv1=self._create_conv_config_from_params(
+                self.input_height,
+                self.input_width,
+                self.in_channels,
+                self.features,
+                self.parameters["encoder1"][0],  # Preprocessed weights
+                sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=15 * 32),
+                enable_act_double_buffer=True,
+                enable_weights_double_buffer=True,
+            ),
+            # ... more layer configs ...
+        )
+
+    def _create_conv_config_from_params(
+        self,
+        input_height: int,
+        input_width: int,
+        in_channels: int,
+        out_channels: int,
+        parameters: Dict,  # Contains preprocessed weight and bias
+        sharding_strategy: ShardingStrategy,
+        activation_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        **kwargs
+    ) -> Conv2dConfiguration:
+        """Create Conv2d config with preprocessed weights"""
+        return Conv2dConfiguration(
+            input_height=input_height,
+            input_width=input_width,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            batch_size=self.batch_size,
+            weight=parameters["weight"],  # TT-NN tensor from preprocessing
+            bias=parameters["bias"],      # TT-NN tensor from preprocessing
+            sharding_strategy=sharding_strategy,
+            activation_dtype=activation_dtype,
+            weights_dtype=weights_dtype,
+            **kwargs
+        )
 ```
 
-### Memory Configuration
+### Choosing Sharding Strategies
 
-Set up appropriate memory configurations:
+Sharding determines how tensors are distributed across device cores:
+
+- **HeightShardedStrategyConfiguration**: Best for tensors with large spatial dimensions (H×W)
+  - `act_block_h_override`: Controls activation block height (must be multiple of 32)
+  - Larger values = more L1 memory per core -> you want to maxmize this value without running out of L1
+
+- **WidthShardedStrategyConfiguration**: Best for inputs/outputs with deep channels
+  - `act_block_w_div`: Divides the width dimension for sharding
+  - Use when channels >> spatial dimensions
+
+- **BlockShardedStrategyConfiguration**: Shards across both height and width
+  - Combines both parameters for 2D sharding
+
+- **AutoShardedStrategyConfiguration**: Automatically selects optimal strategy (minimizing L1 usage)
+  - Good starting point, but manual tuning often yields better performance
+
+## 5. Creating the TT-NN Model
+
+The model uses TT-CNN builder components with the configurations:
 
 ```python
-# DRAM memory config for persistent tensors
-dram_memory_config = get_memory_config_for_persistent_dram_tensor(
-    shape=input_shape,
-    shard_strategy=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-    dram_grid_size=device.dram_grid_size()
-)
+# tt/model.py
+from models.tt_cnn.tt.builder import TtConv2d, TtMaxPool2d
 
-# L1 memory config for working tensors
-l1_shard_spec = ttnn.ShardSpec(
-    core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR
-)
-l1_memory_config = ttnn.MemoryConfig(
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, l1_shard_spec
-)
+class TtUNet:
+    def __init__(self, configs: TtUNetLayerConfigs, device: ttnn.Device):
+        self.device = device
+        self.configs = configs
+
+        # Create encoder blocks using configurations
+        self.downblock1 = TtUNetEncoder(
+            configs.encoder1_conv1,  # Conv config with weights
+            configs.encoder1_conv2,  # Conv config with weights
+            configs.encoder1_pool,   # Pool config
+            device
+        )
+        # ... more blocks ...
+
+    def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        # Convert input format from CHW to HWC
+        # TT-NN convolutions expect HWC format (Height-Width-Channel)
+        # while PyTorch uses CHW format (Channel-Height-Width)
+        input_tensor = ttnn.experimental.convert_to_hwc(input_tensor)
+
+        # Encoder path with skip connections
+        enc1, skip1 = self.downblock1(input_tensor)
+        enc2, skip2 = self.downblock2(enc1)
+        # ... encoder path ...
+
+        # Decoder path with upsampling and concatenation
+        dec4 = transpose_conv2d(bottleneck, self.upconv4_config)
+        dec4 = concatenate_skip_connection(dec4, skip4)
+        # ... decoder path ...
+
+        # Convert output format back to CHW for PyTorch compatibility
+        return ttnn.experimental.convert_to_chw(output, dtype=ttnn.bfloat16)
+
+class TtUNetEncoder:
+    def __init__(self, conv1, conv2, pool, device):
+        self.conv1 = TtConv2d(conv1, device)  # Uses weights from config
+        self.conv2 = TtConv2d(conv2, device)  # Uses weights from config
+        self.pool = TtMaxPool2d(pool, device)
+
+    def __call__(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        skip = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # Save for skip connection
+        x = self.pool(x)
+        return x, skip
 ```
 
-## Performance Optimization
+### Handling Skip Connections and Concatenation
 
-### 1. Data Type Selection
+For architectures with skip connections (ResNet, UNet, etc.), you'll need to:
 
-Use appropriate data types for optimal performance:
+1. **Store skip connections in DRAM** to free L1 memory:
+   ```python
+   skip = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+   ```
+
+2. **Implement concatenation** for feature fusion:
+   ```python
+   def concatenate_skip_connection(upsampled, skip):
+       # Ensure both tensors have same sharding
+       if not skip.is_sharded():
+           skip = ttnn.to_memory_config(skip, upsampled.memory_config())
+
+       # Concatenate along channel dimension
+       return ttnn.concat([upsampled, skip], dim=3)  # HWC format: dim=3 is channels
+   ```
+
+This is a common pattern for any architecture with residual connections or feature fusion.
+
+## 6. Complete Integration Example
+
+Here's how everything comes together in the demo:
 
 ```python
-conv_config = Conv2dConfiguration(
-    # ... other parameters
-    activation_dtype=ttnn.bfloat8_b,  # Lower precision for activations
-    weights_dtype=ttnn.bfloat8_b,     # Lower precision for weights
-    output_dtype=ttnn.bfloat16,       # Higher precision for output
+# demo/demo.py
+# Initialize device (typically provided by pytest fixtures)
+import ttnn
+device = ttnn.open_device(device_id=0)
+
+# Step 1: Load PyTorch model
+reference_model = load_reference_model()
+
+# Step 2: Preprocess weights
+parameters = preprocess_model_parameters(
+    initialize_model=lambda: reference_model,
+    custom_preprocessor=create_unet_preprocessor(device),
+    device=None,
 )
-```
 
-### 2. Memory Management
-
-Implement proper memory management:
-
-```python
-# Enable double buffering for better throughput
-conv_config = Conv2dConfiguration(
-    # ... other parameters
-    enable_act_double_buffer=True,
-    enable_weights_double_buffer=True,
-    deallocate_activation=True,  # Deallocate immediately after use
+# Step 3: Create configurations with weights
+configs = create_unet_configs_from_parameters(
+    parameters=parameters,  # Contains all preprocessed weights
+    input_height=480,
+    input_width=640,
+    batch_size=1,
 )
+
+# Step 4: Build TT-NN model
+tt_model = create_unet_from_configs(configs, device)
+
+# Run inference
+ttnn_input = prepare_ttnn_input(input_data, configs.l1_input_memory_config)
+output = tt_model(ttnn_input)
+
+# Cleanup
+ttnn.close_device(device)
 ```
 
-### 3. Compute Configuration
+## 7. Applying Tracing and Multi-CQ Pipeline
 
-Optimize compute settings:
-
-```python
-conv_config = Conv2dConfiguration(
-    # ... other parameters
-    math_fidelity=ttnn.MathFidelity.LoFi,  # Use LoFi for better performance
-    fp32_dest_acc_en=True,                 # Enable for better accuracy when needed
-    packer_l1_acc=True,                    # Enable L1 accumulation
-)
-```
-
-## Testing and Validation
-
-### 1. Accuracy Testing
-
-Create comprehensive accuracy tests:
-
-```python
-# test_model.py
-def test_model_accuracy(device, reset_seeds, model_location_generator):
-    # Load reference model
-    reference_model = load_reference_model()
-
-    # Create TT-NN model
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model,
-        custom_preprocessor=create_model_preprocessor(device),
-        device=None,
-    )
-    configs = create_model_configs_from_parameters(parameters)
-    tt_model = create_model_from_configs(configs, device)
-
-    # Compare outputs
-    torch_output = reference_model(torch_input)
-    tt_output = tt_model(ttnn_input)
-
-    assert_with_pcc(torch_output, ttnn.to_torch(tt_output), pcc=0.97)
-```
-
-### 2. Performance Testing
-
-Implement performance benchmarks:
+For optimal end-to-end performance, wrap your model with the Pipeline API:
 
 ```python
 # test_perf.py
-def test_model_performance(device):
-    # ... setup model
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
-    # Measure end-to-end performance
-    start_time = time.time()
-    for _ in range(num_iterations):
-        output = model(input_tensor)
-        ttnn.synchronize_device(device)
-    end_time = time.time()
+def create_unet_pipeline_model(model):
+    """Wrapper to make model compatible with pipeline"""
+    def run(input_l1_tensor: ttnn.Tensor):
+        # Model receives L1 tensors from pipeline
+        return model(input_l1_tensor, deallocate_input_activation=False)
+    return run
 
-    throughput = num_iterations / (end_time - start_time)
-    logger.info(f"Throughput: {throughput:.2f} inferences/second")
-```
-
-## Common Patterns
-
-### 1. Skip Connections (UNet Pattern)
-
-Implement skip connections with proper memory management:
-
-```python
-def concatenate_skip_connection(upsampled: ttnn.Tensor, skip: ttnn.Tensor) -> ttnn.Tensor:
-    # Reshard skip connection to match upsampled tensor's memory config
-    if not skip.is_sharded():
-        input_memory_config = upsampled.memory_config()
-        skip = ttnn.to_memory_config(skip, input_memory_config)
-
-    # Concatenate with appropriate output memory config
-    output_memory_config = # ... calculate based on input shapes
-    concatenated = ttnn.concat([upsampled, skip], dim=3, memory_config=output_memory_config)
-
-    return concatenated
-```
-
-### 2. Transpose Convolution
-
-Handle transpose convolutions for upsampling:
-
-```python
-def transpose_conv2d(input_tensor: ttnn.Tensor, upconv_config: UpconvConfiguration) -> ttnn.Tensor:
-    conv_config = ttnn.Conv2dConfig(
-        weights_dtype=ttnn.bfloat8_b,
-        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        deallocate_activation=True,
-    )
-
-    output, [weight, bias] = ttnn.conv_transpose2d(
-        input_tensor=input_tensor,
-        weight_tensor=upconv_config.weight,
-        bias_tensor=upconv_config.bias,
-        # ... other parameters
-        conv_config=conv_config,
-        return_weights_and_bias=True,
-    )
-    return output
-```
-
-### 3. Channel Slicing
-
-Implement channel slicing for large models:
-
-```python
-# In your configuration
-slice_strategy = ChannelSliceStrategyConfiguration(num_slices=4)
-
-conv_config = Conv2dConfiguration(
-    # ... other parameters
-    slice_strategy=slice_strategy
+# Configure pipeline with tracing and 2 command queues
+pipeline = create_pipeline_from_config(
+    config=PipelineConfig(
+        use_trace=True,  # Enable tracing for performance
+        num_command_queues=2,  # Use 2 CQs for overlapped execution
+        all_transfers_on_separate_command_queue=True  # Separate I/O queue
+    ),
+    model=create_unet_pipeline_model(tt_model),
+    device=device,
+    dram_input_memory_config=dram_input_memory_config,
+    dram_output_memory_config=dram_output_memory_config,
+    l1_input_memory_config=configs.l1_input_memory_config,
 )
 
-# The TtConv2d layer will automatically handle slicing
-layer = TtConv2d(conv_config, device)
-output = layer(input)  # Automatically sliced execution
+# Compile once
+pipeline.compile(sample_input)
+
+# Run inference
+input_tensors = [ttnn_input] * num_iterations
+outputs = pipeline.enqueue(input_tensors).pop_all()
+
+# Cleanup
+pipeline.cleanup()
+```
+
+## 8. Performance Optimization Tips
+
+### Sliding Window Configuration
+```python
+# Tune convolution activation block sizes to improve performance
+sharding_strategy = HeightShardedStrategyConfiguration(
+    act_block_h_override=15 * 32,  # Must fit in L1 memory per core
+    reshard_if_not_optimal=False
+)
+
+# Enable double buffering for throughput
+enable_act_double_buffer=True,      # Double buffer activations
+enable_weights_double_buffer=True,  # Double buffer weights
+```
+
+### Data Types
+```python
+# Example mixed precision strategy
+encoder1_conv1=Conv2dConfiguration(
+    activation_dtype=ttnn.bfloat16,    # First layer uses higher precision
+    weights_dtype=ttnn.bfloat8_b,      # Weights in lower precision
+    output_dtype=ttnn.bfloat16,
+)
+
+encoder2_conv1=Conv2dConfiguration(
+    activation_dtype=ttnn.bfloat8_b,   # Intermediate layers use lower precision
+    weights_dtype=ttnn.bfloat8_b,
+    output_dtype=ttnn.bfloat8_b,
+)
+```
+
+### Multi-Device Support
+```python
+# For multi-device deployment
+inputs_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+weights_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+
+parameters = preprocess_model_parameters(
+    initialize_model=lambda: reference_model,
+    custom_preprocessor=create_unet_preprocessor(mesh_device, mesh_mapper=weights_mesh_mapper),
+    device=None,
+)
 ```
 
 ## Troubleshooting
 
 ### Common Issues and Solutions
 
-1. **Memory Allocation Errors**
-   - Reduce `act_block_h_override` values
-   - Use channel slicing for large models
-   - Verify shard dimensions are compatible with tensor shapes
+1. **Memory Errors** (`Out of L1 memory`):
+   - Reduce `act_block_h_override` to create smaller shards
+   - Use slice strategies for large layers that don't fit
+   - Move intermediate tensors to DRAM
 
-2. **Shape Mismatch Errors**
-   - Ensure input preprocessing matches expected format
-   - Check that skip connection tensors have matching shapes
-   - Validate memory config compatibility between operations
+2. **Shape Mismatches**:
+   - Verify CHW/HWC conversions are in the right places
+   - Check that padding/stride calculations match PyTorch
+   - Ensure skip connection dimensions align for concatenation
 
-3. **Performance Issues**
-   - Enable tracing for repeated inference
-   - Use appropriate sharding strategies
-   - Consider pipeline API for high-throughput scenarios
+3. **Accuracy Issues**:
+   - Start with all bfloat16 to establish baseline
+   - Compare intermediate outputs with PyTorch using `ttnn.to_torch()`
+   - Check batch norm folding is correct
+   - Verify weight preprocessing matches layer order
 
-4. **Accuracy Issues**
-   - Verify weight preprocessing is correct
-   - Check data type configurations
-   - Ensure batch norm folding is applied correctly
+4. **Performance Issues**:
+   - Use the Pipeline API with tracing enabled
+   - Enable double buffering for weights and activations
+   - Profile with `ttnn.DumpDeviceProfiler()` to identify bottlenecks
 
-### Debug Utilities
+## Summary
 
-```python
-# Add debugging information
-logger.info(f"Tensor shape: {tensor.shape}")
-logger.info(f"Memory config: {tensor.memory_config()}")
-logger.info(f"Storage type: {tensor.storage_type()}")
+The TT-CNN library provides a structured approach for vision model development:
 
-# Validate tensor properties
-assert tensor.is_sharded(), "Expected sharded tensor"
-assert tensor.memory_config().buffer_type == ttnn.BufferType.L1, "Expected L1 tensor"
-```
+1. **Weight Preprocessing**: Extract and convert PyTorch weights with operations like batch norm folding
+2. **Configuration Building**: Create detailed layer configs that include the preprocessed weights
+3. **Model Construction**: Use TT-CNN builder components with weight-containing configurations
+4. **Pipeline Optimization**: Apply tracing and multi-CQ for maximum performance
 
-## Example: Complete Vanilla UNet Walkthrough
-
-The Vanilla UNet implementation (`models/demos/vanilla_unet/`) demonstrates all these patterns:
-
-### Key Files Reference
-
-- `tt/model.py:112-185`: Main UNet model implementation using TT-CNN components
-- `tt/config.py:75-452`: Configuration builder with comprehensive layer setup
-- `tt/common.py:46-167`: Weight preprocessing with batch norm folding
-- `demo/demo.py:97-162`: End-to-end demo showing complete inference pipeline
-- `tests/test_unet_model.py:26-61`: Accuracy validation against PyTorch reference
-
-### Usage Pattern
-
-```python
-# 1. Load and preprocess PyTorch model
-reference_model = load_reference_model()
-parameters = preprocess_model_parameters(
-    initialize_model=lambda: reference_model,
-    custom_preprocessor=create_unet_preprocessor(device),
-)
-
-# 2. Create configurations
-configs = create_unet_configs_from_parameters(
-    parameters=parameters,
-    input_height=480,
-    input_width=640,
-    batch_size=1,
-)
-
-# 3. Initialize TT-NN model
-tt_model = create_unet_from_configs(configs, device)
-
-# 4. Run inference
-ttnn_input = prepare_ttnn_input(input_data, configs.l1_input_memory_config)
-output = tt_model(ttnn_input)
-```
-
-This pattern provides a solid foundation for implementing any CNN architecture using the TT-CNN library.
+The key insight is that weights flow through the pipeline as TT-NN tensors, embedded within layer configurations, ensuring optimal memory placement and format throughout the model lifecycle.
