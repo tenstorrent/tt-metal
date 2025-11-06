@@ -1070,9 +1070,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     semaphore.at(dir).address(),              // out_ready_semaphore
                     dir,                                      // direction
                     chunks_per_sync_val,                      // chunks_per_sync
-                    start_pages_read_in_row,                  // start_pages_read_in_row
                     start_tiles_read,                         // start_tiles_read
                     start_tiles_to_read,                      // start_tiles_to_read
+                    start_pages_read_in_row,                  // start_pages_read_in_row
                     start_row_offset,                         // start_row_offset (unused by dim0 kernel)
                 };
                 if (input_is_sharded) {

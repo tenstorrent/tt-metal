@@ -255,7 +255,7 @@ void kernel_main() {
          * incoming BWD intermediate. Use output address generator.
          * If true, output += intermediate. Otherwise, output = input + intermediate
          */
-        const uint32_t tile_id_start = do_accumulate_output(is_forward) ? output_tile_id_start : input_tile_id_start;
+        uint32_t tile_id_start = detail::do_accumulate_output(is_forward) ? output_tile_id_start : input_tile_id_start;
 
         uint32_t cb_in0 = cb_input_id;
         for (uint32_t b = 0; b < slice_B; ++b) {
@@ -264,7 +264,7 @@ void kernel_main() {
 
             while (tiles_read < tiles_to_read) {
                 // Wait for FWD writer to signal that it has done its final reduction
-                if (do_accumulate_output(is_forward)) {
+                if (detail::do_accumulate_output(is_forward)) {
                     noc_semaphore_wait_min(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
                 }
@@ -276,7 +276,7 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                     uint32_t tile_id = tile_id_start + tiles_read + j;
-                    uint64_t noc_read_addr = do_accumulate_output(is_forward)
+                    uint64_t noc_read_addr = detail::do_accumulate_output(is_forward)
                                                  ? get_noc_addr(tile_id, output_tensor_addrgen)
                                                  : get_noc_addr(tile_id, input_tensor_addrgen);
                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
