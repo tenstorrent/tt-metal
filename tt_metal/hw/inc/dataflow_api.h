@@ -2615,17 +2615,29 @@ public:
      *
      * This blocking call waits for all the outstanding enqueued write transactions
      * issued on the current Tensix core to depart, but will not wait for them to complete.
+     * Can wait on posted or non-posted transactions.
+     *
+     * @tparam response_mode Indicates whether to wait for outstanding posted or non-posted transactions
+     * @param trid Transaction ID to wait on for outstanding writes (default: INVALID_TXN_ID for full barrier)
+     * @tparam barrier_type Indicates whether to issue a full barrier or on a transaction id
      */
     // TODO (#31405): there is no variant of this for transaction ids. Use
     // ncrisc_noc_nonposted_write_with_transaction_id_sent but none for dynamic noc version exists atm.
-    void async_writes_flushed() const { noc_async_writes_flushed(noc_id_); }
-
-    /** @brief Waits for all outstanding posted write transactions to be flushed.
-     *
-     * This blocking call waits for all the outstanding enqueued posted write transactions
-     * issued on the current Tensix core to depart, but will not wait for them to complete.
-     */
-    void async_posted_writes_flushed() const { noc_async_posted_writes_flushed(noc_id_); }
+    template <ResponseMode response_mode, BarrierMode barrier_type = BarrierMode::FULL>
+    void async_writes_flushed(uint32_t trid = INVALID_TXN_ID) const {
+        if constexpr (response_mode == ResponseMode::POSTED) {
+            static_assert(barrier_type == BarrierMode::FULL);
+            noc_async_posted_writes_flushed(noc_id_);
+        } else {  // ResponseMode::NON_POSTED
+            if constexpr (barrier_type == BarrierMode::FULL) {
+                noc_async_writes_flushed(noc_id_);
+            } else if constexpr (barrier_type == BarrierMode::TXN_ID) {
+                static_assert(noc_mode != DM_DYNAMIC_NOC);  // TODO make an issue for this
+                ASSERT(trid != INVALID_TXN_ID);
+                noc_async_write_flushed_with_trid(trid, noc_id_);
+            }
+        }
+    }
 
     /** @brief Initiates an atomic barrier for synchronization.
      *
