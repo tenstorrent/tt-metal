@@ -157,8 +157,9 @@ public:
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<ChipId, RouterEdge> get_valid_connections(
-        const MeshCoordinate& src_mesh_coord, const MeshCoordinateRange& mesh_coord_range, FabricType fabric_type) const;
-    void initialize_from_yaml(const std::string& mesh_graph_desc_file_path, std::optional<FabricConfig> fabric_config);
+        const MeshCoordinate& src_mesh_coord,
+        const MeshCoordinateRange& mesh_coord_range,
+        FabricType fabric_type) const;
     void initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config);
 
     void add_to_connectivity(

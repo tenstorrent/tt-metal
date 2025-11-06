@@ -587,21 +587,13 @@ void MetalContext::initialize_control_plane() {
         return;
     }
     log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
-
-    if (!rtoptions_.get_use_mesh_graph_descriptor_1_0()) {
-        log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
-    } else {
-        log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
-    }
+    log_debug(tt::LogDistributed, "Using MGD mesh graph descriptor.");
 
     auto cluster_type = cluster_->get_cluster_type();
     auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_);
     std::filesystem::path mesh_graph_desc_path =
         tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
-            cluster_type,
-            std::filesystem::path(rtoptions_.get_root_dir()),
-            !rtoptions_.get_use_mesh_graph_descriptor_1_0(),
-            fabric_type);
+            cluster_type, std::filesystem::path(rtoptions_.get_root_dir()), true, fabric_type);
 
     log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
