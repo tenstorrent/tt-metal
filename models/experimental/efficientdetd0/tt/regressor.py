@@ -22,7 +22,7 @@ class Regressor:
                     device=device,
                     parameters=parameters.conv_list[j][i],
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                    conv_params=conv_params.conv_list[str(i)][str(j)],
+                    conv_params=conv_params.conv_list[j][i],
                     batch=1,
                     deallocate_activation=True,
                 )
@@ -36,7 +36,7 @@ class Regressor:
                 device=device,
                 parameters=parameters.header_list[j],
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                conv_params=conv_params.header[str(j)],
+                conv_params=conv_params.header[j],
                 batch=1,
                 deallocate_activation=True,
             )
@@ -53,5 +53,7 @@ class Regressor:
             feat = ttnn.to_memory_config(feat, ttnn.DRAM_MEMORY_CONFIG)
             feat = ttnn.reshape(feat, (feat.shape[0], -1, 4))
             feats.append(feat)
-        feats = ttnn.concat(feats, dim=1)
-        return feats
+        concated_feats = ttnn.concat(feats, dim=1)
+        for t in feats:
+            ttnn.deallocate(t)
+        return concated_feats

@@ -72,10 +72,8 @@ def custom_preprocessor(
         for layer_num, pyramid_layer_bn_list in enumerate(model.bn_list):
             parameters["conv_list"][layer_num] = {}
             for id, bn in enumerate(pyramid_layer_bn_list):
-                # parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id])
                 parameters["conv_list"][layer_num][id] = _extract_seperable_conv(model.conv_list[id], bn)
             parameters["header_list"][layer_num] = _extract_seperable_conv(model.header)
-
     elif isinstance(model, BiFPN):
         # Process all separable conv blocks for upsampling path
         parameters["conv6_up"] = _extract_seperable_conv(model.conv6_up)
@@ -137,7 +135,6 @@ def custom_preprocessor(
             parameters["p5_w2"] = model.p5_w2.data
             parameters["p6_w2"] = model.p6_w2.data
             parameters["p7_w2"] = model.p7_w2.data
-
     elif isinstance(
         model,
         (EfficientDetBackbone,),
@@ -210,12 +207,24 @@ def register_layer_hooks(model, layer_type):
 
 
 def _expand_dotted_keys(flat_dict):
-    from functools import reduce
+    result = {}
 
-    tree = {}
-    for k, v in flat_dict.items():
-        reduce(lambda d, p: d.setdefault(p, {}), k.split(".")[:-1], tree)[k.split(".")[-1]] = v
-    return tree
+    for key, value in flat_dict.items():
+        parts = key.split(".")
+        current = result
+        for i, part in enumerate(parts):
+            # convert numeric keys to int
+            if part.isdigit():
+                part = int(part)
+
+            if i == len(parts) - 1:
+                # last part — assign the value
+                current[part] = value
+            else:
+                if part not in current or not isinstance(current[part], dict):
+                    current[part] = {}
+                current = current[part]
+    return result
 
 
 def _make_dot_accessible_args(layer_info):
@@ -224,7 +233,7 @@ def _make_dot_accessible_args(layer_info):
         if len(instances) > 1:
             for idx, instance in instances.items():
                 updated_layer_name = (
-                    layer_name[: layer_name.rfind(".") + 1] + str(idx) + layer_name[layer_name.rfind(".") :]
+                    layer_name[: layer_name.find(".") + 1] + str(idx) + layer_name[layer_name.find(".") :]
                 )
                 structured_args[updated_layer_name] = instance
         else:
