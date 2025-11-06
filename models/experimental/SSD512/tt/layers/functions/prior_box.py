@@ -1,12 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
 # SPDX-License-Identifier: Apache-2.0
 
-
-"""TTNN implementation of prior (default) box generation for SSD.
-
-Matches functionality of reference PriorBox using TTNN ops.
-"""
 
 import ttnn
 from itertools import product
@@ -16,23 +10,10 @@ import torch
 
 class TtPriorBox:
     """Compute priorbox coordinates in center-offset form for each source
-    feature map. Follows reference implementation exactly but uses TTNN ops.
+    feature map.
     """
 
     def __init__(self, cfg, device=None):
-        """
-        Args:
-            cfg: Configuration dict with keys:
-                - min_dim: Image size
-                - aspect_ratios: List of aspect ratios for each feature level
-                - variance: Box variance for encoding
-                - feature_maps: List of feature map sizes
-                - min_sizes: List of anchor box min sizes
-                - max_sizes: List of anchor box max sizes
-                - steps: List of feature map strides
-                - clip: Whether to clip boxes to [0,1]
-            device: Device to place tensors on
-        """
         self.image_size = cfg["min_dim"]
         self.num_priors = len(cfg["aspect_ratios"])
         self.variance = cfg["variance"] or [0.1]
@@ -49,15 +30,8 @@ class TtPriorBox:
                 raise ValueError("Variances must be greater than 0")
 
     def __call__(self):
-        """Generate SSD prior boxes.
-
-        Returns:
-            TTNN tensor of shape [num_priors,4] containing prior boxes
-            in center-size format (cx,cy,w,h).
-        """
-        mean = []  # Collect all coordinates in a flat list like reference
-
-        # Build all priors in the same order as reference implementation
+        """Generate SSD prior boxes."""
+        mean = []
         for k, f in enumerate(self.feature_maps):
             for i, j in product(range(f), repeat=2):
                 f_k = self.image_size / self.steps[k]
@@ -81,7 +55,6 @@ class TtPriorBox:
 
         # Convert to tensor and reshape to [N,4] like reference
         output = ttnn.Tensor(torch.tensor(mean), device=self.device)
-        print("Prior box raw output shape:", output.shape)
         output = ttnn.reshape(output, (-1, 4))
         if self.clip:
             output = ttnn.clamp(output, min=0.0, max=1.0)

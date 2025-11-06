@@ -28,12 +28,9 @@ def test_extras_backbone(device, pcc, size, reset_seeds):
     """
     Test Extras backbone TTNN implementation against PyTorch reference.
     """
-    if reset_seeds:
-        torch.manual_seed(0)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(0)
-    else:
-        torch.manual_seed(0)
+    from models.experimental.SSD512.common import setup_seeds_and_deterministic
+
+    setup_seeds_and_deterministic(reset_seeds=reset_seeds, seed=0)
 
     cfg = extras[str(size)]
     torch_layers = add_extras(cfg, i=1024, batch_norm=False)

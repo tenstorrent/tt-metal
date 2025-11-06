@@ -114,11 +114,7 @@ class SSD(nn.Module):
     def load_weights(self, base_file):
         other, ext = os.path.splitext(base_file)
         if ext == ".pkl" or ".pth":
-            print("Begin loading weights into state dict...")
             self.load_state_dict(torch.load(base_file, map_location=lambda storage, loc: storage))
-            print("Finished!")
-        else:
-            print("Sorry only .pth and .pkl files supported.")
 
 
 # This function is derived from torchvision VGG make_layers()
@@ -200,5 +196,4 @@ def build_ssd(phase, size=512, num_classes=21):
     base_, extras_, head_ = multibox(
         vgg(base[str(size)], 3), add_extras(extras[str(size)], 1024), mbox[str(size)], num_classes
     )
-    logger.info("Begin to build SSD-VGG...\n")
     return SSD(phase, size, base_, extras_, head_, num_classes)

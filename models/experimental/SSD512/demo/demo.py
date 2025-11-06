@@ -6,89 +6,62 @@ import argparse
 import os
 import sys
 from pathlib import Path
-
 import torch
+from loguru import logger
 import torch.nn.functional as F
 import ttnn
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageFont
-from loguru import logger
 
-# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from models.experimental.SSD512.reference.ssd import build_ssd
-from models.experimental.SSD512.tt.tt_ssd import build_ssd512
-from models.experimental.SSD512.tt.layers.detect import TtDetect
 from models.experimental.SSD512.reference.data.voc0712 import VOC_CLASSES
-from models.experimental.SSD512.reference.data.config import voc
+from models.experimental.SSD512.common import (
+    build_and_init_torch_model,
+    build_and_load_ttnn_model,
+    generate_prior_boxes,
+    synchronize_device,
+    cleanup_device_memory,
+)
+from models.experimental.SSD512.tt.layers.detect import TtDetect
 
 
 def load_image(image_path, size=512):
     """Load and preprocess image for SSD512 input."""
-    # Load image with OpenCV (BGR format by default)
     image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
     if image_bgr is None:
         raise ValueError(f"Could not load image from {image_path}")
 
-    # Store original size for box scaling
     original_height, original_width = image_bgr.shape[:2]
 
-    # Convert to RGB for visualization (original image)
     original_img_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     original_img = Image.fromarray(original_img_rgb)
 
-    # Resize directly to 512x512 (no aspect ratio preservation, matching original demo)
     x = cv2.resize(image_bgr, (size, size)).astype(np.float32)
 
-    # Verify image is resized to 512x512
     resized_height, resized_width = x.shape[:2]
     if resized_height != size or resized_width != size:
-        logger.error(
-            f"ERROR: Image resize failed! Expected {size}x{size}, got {resized_height}x{resized_width}. "
-            f"Original size: {original_height}x{original_width}"
-        )
         raise ValueError(f"Image resize failed: expected {size}x{size}, got {resized_height}x{resized_width}")
 
-    # Subtract BGR mean (SSD standard: [104, 117, 123] for BGR channels)
     x -= (104.0, 117.0, 123.0)
 
-    # Ensure contiguous array
     x = x.astype(np.float32)
 
-    # Convert to tensor and permute from HWC to CHW
-    img_tensor = torch.from_numpy(x).permute(2, 0, 1)  # HWC -> CHW
+    img_tensor = torch.from_numpy(x).permute(2, 0, 1)
 
-    # Add batch dimension
     img_tensor = img_tensor.unsqueeze(0)
 
-    # Verify tensor shape is [1, 3, 512, 512]
     expected_shape = (1, 3, size, size)
     if img_tensor.shape != expected_shape:
-        logger.error(
-            f"ERROR: Tensor shape mismatch! Expected {expected_shape}, got {img_tensor.shape}. "
-            f"Image may not be properly resized."
-        )
         raise ValueError(f"Tensor shape mismatch: expected {expected_shape}, got {img_tensor.shape}")
 
-    # Store original dimensions for later box scaling
     original_img.original_size = (original_width, original_height)
 
     return img_tensor, original_img
 
 
 def filter_top_detections(detections, max_detections=2, min_score=0.1):
-    """Filter detections to keep only top N by confidence score.
-
-    Args:
-        detections: List of detection dictionaries, each with 'boxes', 'scores', 'labels'
-        max_detections: Maximum number of detections to keep (default: 2)
-        min_score: Minimum confidence score to keep (default: 0.1)
-
-    Returns:
-        Filtered list of detection dictionaries
-    """
+    """filter detections to keep only top N by confidence score."""
     if len(detections) == 0:
         return detections
 
@@ -132,7 +105,7 @@ def filter_top_detections(detections, max_detections=2, min_score=0.1):
 
 
 def draw_detections(image, detections, output_path, model_name):
-    """Draw bounding boxes and labels on image."""
+    """draw bounding boxes and labels on image."""
     draw = ImageDraw.Draw(image)
 
     # Try to load a font, fallback to default if not available
@@ -209,40 +182,15 @@ def draw_detections(image, detections, output_path, model_name):
     image.save(output_path)
 
 
-def generate_prior_boxes(cfg, device=None):
-    """Generate prior boxes for SSD512."""
-    from models.experimental.SSD512.reference.layers.functions.prior_box import PriorBox
-
-    # Use PyTorch PriorBox for simplicity
-    prior_box = PriorBox(cfg)
-    priors = prior_box.forward()
-
-    # Ensure it's a torch tensor
-    if not isinstance(priors, torch.Tensor):
-        priors = torch.tensor(priors)
-
-    return priors
-
-
 def run_ttnn_detection(model, image_tensor, priors, device, conf_thresh=0.01, nms_thresh=0.45, top_k=200):
     """Run TTNN model and get detections."""
     # Verify image tensor shape before sending to backbone
     expected_shape = (1, 3, 512, 512)
     if image_tensor.shape != expected_shape:
-        logger.error(
-            f"ERROR: Image tensor shape mismatch before TTNN model! "
-            f"Expected {expected_shape}, got {image_tensor.shape}. "
-            f"This may cause L1 issues if image is not 512x512."
-        )
         raise ValueError(f"Image tensor shape mismatch: expected {expected_shape}, got {image_tensor.shape}")
 
     # Synchronize and clear memory before forward pass
-    if device is not None:
-        ttnn.synchronize_device(device)
-        import gc
-
-        gc.collect()
-        ttnn.synchronize_device(device)
+    synchronize_device(device)
 
     # Forward pass
     loc, conf = model.forward(image_tensor, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -280,10 +228,7 @@ def run_ttnn_detection(model, image_tensor, priors, device, conf_thresh=0.01, nm
         ttnn.deallocate(loc_ttnn)
         ttnn.deallocate(conf_ttnn)
         ttnn.deallocate(priors_ttnn)
-        ttnn.synchronize_device(device)
-        import gc
-
-        gc.collect()
+        synchronize_device(device)
 
     return detections
 
@@ -294,8 +239,8 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./models/experimental/SSD512/resources/ssd512_outputs",
-        help="Directory to save output images (default: ./models/experimental/SSD512/resources/ssd512_outputs)",
+        default="./models/experimental/SSD512/resources/sample_output",
+        help="Directory to save output images (default: ./models/experimental/SSD512/resources/sample_output)",
     )
     parser.add_argument(
         "--conf_thresh",
@@ -326,19 +271,8 @@ def main():
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Get VOC configuration
-    voc_cfg = voc["SSD512"]
-
     # Build PyTorch model (only need to do this once for weight loading)
-    torch_model = build_ssd("test", size=512, num_classes=21)
-    torch_model.eval()
-
-    # Initialize with random weights (xavier uniform)
-    for m in torch_model.modules():
-        if isinstance(m, torch.nn.Conv2d):
-            torch.nn.init.xavier_uniform_(m.weight)
-            if m.bias is not None:
-                torch.nn.init.constant_(m.bias, 0)
+    torch_model = build_and_init_torch_model(phase="test", size=512, num_classes=21)
 
     # Initialize device and model (will be reused unless --restart_device is set)
     device = None
@@ -361,19 +295,9 @@ def main():
             l1_size = args.l1_small_size
             device = ttnn.open_device(device_id=args.device_id, l1_small_size=l1_size)
 
-        # Build TTNN model
-        ttnn_model = build_ssd512(num_classes=21, device=device)
-
-        # Load weights from PyTorch to TTNN (same random weights)
+        # Build TTNN model and load weights
         # Use device=None (host) for weights to avoid OOM - conv2d will prepare them correctly
-        ttnn_model.load_weights_from_torch(torch_model, weight_device=None)
-
-        # Synchronize device after weight loading to ensure weights are ready
-        ttnn.synchronize_device(device)
-        import gc
-
-        gc.collect()
-        ttnn.synchronize_device(device)
+        ttnn_model = build_and_load_ttnn_model(torch_model, device, num_classes=21, weight_device=None)
 
         return device, ttnn_model
 
@@ -382,7 +306,7 @@ def main():
 
     try:
         # Generate prior boxes
-        priors_torch = generate_prior_boxes(voc_cfg)
+        priors_torch = generate_prior_boxes()
 
         # Get image files
         image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif"}
@@ -392,15 +316,10 @@ def main():
             image_files.extend(Path(args.input_dir).glob(f"*{ext.upper()}"))
 
         if len(image_files) == 0:
-            logger.error(f"No images found in {args.input_dir}")
-            return
-
-        logger.info(f"Processing {len(image_files)} images...")
+            raise ValueError(f"No images found in {args.input_dir}")
 
         # Process each image
         for img_idx, img_path in enumerate(image_files):
-            logger.info(f"Processing image {img_idx+1}/{len(image_files)}: {img_path.name}")
-
             # Restart device if requested (frees all memory including L1)
             if args.restart_device and img_idx > 0:
                 device, ttnn_model = init_device_and_model()
@@ -409,21 +328,7 @@ def main():
             image_tensor, original_img = load_image(str(img_path))
 
             # Run TTNN detection
-            ttnn.synchronize_device(device)
-            import gc
-
-            gc.collect()
-            # Try to deallocate all buffers to free L1 memory
-            try:
-                if hasattr(ttnn, "deallocate_buffers"):
-                    ttnn.deallocate_buffers(device)
-            except Exception:
-                pass
-
-            # Additional synchronization to ensure all operations complete
-            ttnn.synchronize_device(device)
-            gc.collect()
-            ttnn.synchronize_device(device)
+            cleanup_device_memory(device)
 
             # Run TTNN detection
             try:
@@ -437,16 +342,13 @@ def main():
                     top_k=args.top_k,
                 )
             except RuntimeError as e:
-                if str(e) != "":
-                    logger.error(f"Error on image {img_path.name}: {e}")
+                if "Out of Memory" in str(e) or "L1" in str(e):
                     continue
                 else:
                     raise
 
             # Synchronize after TTNN detection to free memory
-            ttnn.synchronize_device(device)
-            gc.collect()
-            ttnn.synchronize_device(device)
+            synchronize_device(device)
 
             # Filter to top detections
             ttnn_detections = filter_top_detections(ttnn_detections, max_detections=args.max_detections, min_score=0.1)
@@ -454,16 +356,8 @@ def main():
             # Save TTNN output
             base_name = img_path.stem
             ttnn_output_path = os.path.join(args.output_dir, f"{base_name}_ttnn.jpg")
-            draw_detections(original_img.copy(), ttnn_detections, ttnn_output_path, "TTNN")
-
-            # Log detection count
-            if len(ttnn_detections) > 0:
-                ttnn_count = len(ttnn_detections[0]["boxes"])
-                logger.info(f"  Detections: {ttnn_count}")
-            else:
-                logger.info("  Detections: 0")
-
-        logger.info(f"All images processed. Outputs saved to: {args.output_dir}")
+            draw_detections(original_img.copy(), ttnn_detections, ttnn_output_path, "SSD512")
+            logger.info(f"Demo completed! Results saved to: {ttnn_output_path}")
 
     finally:
         # Close device
