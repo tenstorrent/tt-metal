@@ -121,6 +121,7 @@ async def shutdown():
 async def pose_estimation_v2(file: UploadFile = File(...)):
     global model, device_global
 
+    print("DEBUG: Received pose estimation request")
     # Lazy loading of TTNN model
     if model is None:
         try:
