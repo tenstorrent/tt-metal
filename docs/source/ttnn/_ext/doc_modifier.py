@@ -40,7 +40,6 @@ def process_docstring(app, what, name, obj, options, lines):
         - Uses inspect.getsource() to extract source code from example functions
     """
     if name in FUNCTION_TO_EXAMPLES_MAPPING_DICT:
-        print("---------- Modifying docstring for:", name, "----------")
         # Get current docstring
         current_doc = lines
 
@@ -70,9 +69,6 @@ def process_docstring(app, what, name, obj, options, lines):
         new_lines = []
         new_lines.extend(current_doc)
         new_lines.extend(additional_doc.splitlines())
-
-        for line in new_lines:
-            print(line)
 
         # Modify lines *in place*
         lines[:] = new_lines

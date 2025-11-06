@@ -130,3 +130,39 @@ def test_tilize_with_val_padding(device):
 
     # Tilize the tensor with value padding
     tilized_tensor = ttnn.tilize_with_val_padding(input_tensor, output_tensor_shape=[1, 1, 64, 64], pad_value=0.0)
+
+
+def test_fill_rm(device):
+    # TODO: implement example
+    pass
+
+
+def test_fill_ones_rm(device):
+    # TODO: implement example
+    pass
+
+
+def test_untilize(device):
+    # Create a tilized tensor
+    tilized_tensor = ttnn.rand([1, 1, 64, 32], ttnn.bfloat16, layout=ttnn.TILE, device=device)
+
+    # Untilize the tensor
+    untilized_tensor = ttnn.untilize(tilized_tensor)
+
+
+def test_untilize_with_unpadding(device):
+    # Create a tilized tensor with padding
+    tilized_tensor = ttnn.rand([1, 1, 64, 64], ttnn.bfloat16, layout=ttnn.TILE, device=device)
+
+    # Untilize the tensor with unpadding
+    untilized_tensor = ttnn.untilize_with_unpadding(tilized_tensor, output_tensor_end=[1, 1, 64, 32])
+
+
+def test_indexed_fill(device):
+    # Create a tensor to perform indexed fill
+    batch_id = ttnn.rand([1, 2], ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
+    input_tensor_a = ttnn.rand([1, 2], ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    input_tensor_b = ttnn.rand([0, 1], ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    # Perform indexed fill
+    output_tensor = ttnn.indexed_fill(batch_id, input_tensor_a, input_tensor_b)
