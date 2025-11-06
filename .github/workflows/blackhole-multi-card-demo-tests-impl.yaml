@@ -111,14 +111,22 @@ jobs:
         run: |
           tt-smi -s
       - name: Save environment data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        id: save-environment-data
+        if: ${{ !cancelled() }}
         timeout-minutes: 15
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
-        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -149,11 +157,11 @@ jobs:
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
             owner_id: U03PUAKE719 # Miguel Tairum
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode"
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-1024-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
-          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf prefill"
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-1 TP device perf decode"
             arch: blackhole
             cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-1024-10-1-1-False"
             owner_id: U08GELBB1AP # Ambrose Ling
@@ -200,14 +208,22 @@ jobs:
           ${{ matrix.test-group.cmd }}
 
       - name: Save environment data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        id: save-environment-data
+        if: ${{ !cancelled() }}
         timeout-minutes: 15
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
-        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        run: |
+          if [ -d "generated/benchmark_data" ]; then
+            echo "has_benchmark_data=true" >> $GITHUB_OUTPUT
+            python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+          else
+            echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
+            echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload benchmark data
-        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

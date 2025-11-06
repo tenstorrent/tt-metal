@@ -101,7 +101,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_push_back(in_cb, num_tiles);
 }
 
-template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, bool write_result_inplace>
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32, bool write_result_inplace = true>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced

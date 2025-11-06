@@ -351,7 +351,7 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
-void Cluster::open_driver(const bool &skip_driver_allocs) {
+void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     if (this->target_type_ == TargetDevice::Silicon) {
