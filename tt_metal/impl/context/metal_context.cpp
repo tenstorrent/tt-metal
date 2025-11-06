@@ -271,12 +271,30 @@ MetalContext::MetalContext() {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
-    bool is_base_routing_fw_enabled =
+    const bool is_base_routing_fw_enabled =
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
-    hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
-    rtoptions_.ParseAllFeatureEnv(*hal_);
-    cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    const auto platform_arch = get_platform_architecture(rtoptions_);
+
+    const auto initialize_objects = [&]() {
+        hal_ = std::make_unique<Hal>(platform_arch, is_base_routing_fw_enabled, rtoptions_.get_enable_2_erisc_mode());
+        rtoptions_.ParseAllFeatureEnv(*hal_);
+        cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+        distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+    };
+
+    initialize_objects();
+
+    // Requires reinit with features disabled
+    // This will maintain backward compatibility with clusters that have legacy firmware but it will cause a slowdown
+    // during the first init
+    if (!cluster_->verify_eth_fw_capability()) {
+        rtoptions_.set_enable_2_erisc_mode(false);
+        // Reset in backward order
+        distributed_context_.reset();
+        cluster_.reset();
+        hal_.reset();
+        initialize_objects();
+    }
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
     // how MetalContext lifetime will work through the API.

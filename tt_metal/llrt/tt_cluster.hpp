@@ -131,6 +131,7 @@ public:
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
+    bool verify_eth_fw_capability() const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
@@ -371,8 +372,6 @@ private:
     void set_tunnels_from_mmio_device();
 
     bool supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const;
-
-    void verify_eth_fw_capability() const;
 
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};

@@ -498,6 +498,8 @@ public:
     // Feature flag to enable 2-erisc mode on Blackhole
     bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
+    void set_enable_2_erisc_mode(bool enable) { enable_2_erisc_mode = enable; }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
