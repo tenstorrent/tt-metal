@@ -650,7 +650,9 @@ private:
             dst_node_ids = traffic_config.dst_node_ids.value();
 
             // assign hops for 2d LL and 1D
-            hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+            if (src_node_id.mesh_id == dst_node_ids[0].mesh_id) {
+                hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+            }
         }
 
         // for 2d, we need to spcify the mcast start node id
@@ -736,7 +738,9 @@ private:
                     per_receiver_config.receiver_credit_info->credit_return_address = credit_return_address;
 
                     std::optional<std::unordered_map<RoutingDirection, uint32_t>> reverse_hops = std::nullopt;
-                    reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
+                    if (src_node_id.mesh_id == dst_node_id.mesh_id) {
+                        reverse_hops = fixture_->get_hops_to_chip(dst_node_id, src_node_id);
+                    }
                     per_receiver_config.receiver_credit_info->hops = reverse_hops;
                 }
 
