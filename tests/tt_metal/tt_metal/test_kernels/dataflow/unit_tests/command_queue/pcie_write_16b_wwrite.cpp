@@ -30,6 +30,7 @@ void kernel_main() {
             DM_DEDICATED_NOC,
             0 /* cmd_buf */,
             CQ_NOC_SNDL,
+            CQ_NOC_SEND,
             CQ_NOC_WAIT,
             true /* update_counter */,
             false /* posted */>(
