@@ -511,7 +511,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     // Elf file has dependencies other than object files:
     // 1. Linker script
     // 2. Weakened firmware elf (for kernels)
-    std::vector<std::string> link_deps = {{this->linker_script_}};
+    std::vector<std::string> link_deps = {this->linker_script_};
     if (!this->is_fw_) {
         std::string weakened_elf = weakened_firmeware_elf_name();
         cmd += "-Wl,--just-symbols=" + weakened_elf + " ";
