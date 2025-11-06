@@ -35,7 +35,10 @@ jobs:
         id: set-matrix
         run: |
           # Create full matrix with jq for readability
+<<<<<<< HEAD
           # For Falcon7b, please see issue #31939
+=======
+>>>>>>> cbd9d76672 ( #31825: Allow developers run individual models in the demo workflow)
           FULL_MATRIX=$(jq -n '[
             {
               "name": "Galaxy Llama3 demo tests",
@@ -122,7 +125,11 @@ jobs:
               "owner_id": "U09ELB03XRU"
             }
           ]' --compact-output)
+<<<<<<< HEAD
 
+=======
+          
+>>>>>>> cbd9d76672 ( #31825: Allow developers run individual models in the demo workflow)
           # Filter matrix based on model selection
           if [ "${{ inputs.model }}" = "all" ]; then
             echo "matrix=$FULL_MATRIX" >> $GITHUB_OUTPUT
