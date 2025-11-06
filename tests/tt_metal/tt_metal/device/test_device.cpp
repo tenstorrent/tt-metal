@@ -41,8 +41,6 @@
 #include <tt-metalium/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "command_queue_fixture.hpp"
 #include "math.hpp"
 
 namespace tt::tt_metal {
