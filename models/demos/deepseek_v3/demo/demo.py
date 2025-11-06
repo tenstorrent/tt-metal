@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
-from models.demos.deepseek_v3.tt.generator_bp import DeepseekGenerator as DeepseekGeneratorPP
+from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
 
