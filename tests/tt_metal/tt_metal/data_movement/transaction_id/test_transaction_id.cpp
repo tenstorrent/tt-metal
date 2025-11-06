@@ -19,7 +19,7 @@ using namespace test_utils;
 namespace unit_tests::dm::transaction_id {
 
 // Test config, i.e. test parameters
-struct ReadAfterWriteConfig {
+struct TransactionIdConfig {
     uint32_t test_id = 0;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord sub0_core_coord = {0, 0};
@@ -31,16 +31,17 @@ struct ReadAfterWriteConfig {
     NOC noc_id = NOC::NOC_0;
     bool one_packet = false;
     bool stateful = false;
+    bool read_after_write = true;
 
     // TODO: Add the following parameters
     //  1. Posted flag
 };
 
-/// @brief Does L1 Sender Core --> L1 Receiver Core
+/// @brief Does L1 Sender Core --> L1 Receiver Core or L1 Receiver Core --> L1 Sender Core
 /// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const ReadAfterWriteConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const TransactionIdConfig& test_config) {
     // Get the actual device for this single-device test
     IDevice* device = mesh_device->get_device(0);
 
@@ -214,7 +215,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite) 
                 continue;
             }
             // Test config
-            unit_tests::dm::transaction_id::ReadAfterWriteConfig test_config = {
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
                 .test_id = test_id,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
@@ -260,7 +261,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
                 continue;
             }
             // Test config
-            unit_tests::dm::transaction_id::ReadAfterWriteConfig test_config = {
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
                 .test_id = test_id,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
@@ -307,7 +308,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
                 continue;
             }
             // Test config
-            unit_tests::dm::transaction_id::ReadAfterWriteConfig test_config = {
+            unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
                 .test_id = test_id,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
