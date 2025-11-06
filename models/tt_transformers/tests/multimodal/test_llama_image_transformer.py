@@ -93,7 +93,17 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
 
-    # keep in mind that rope is not applied by model definition on the vision branch while HF has differnent format in weights thus the following is done so it does affect other scripts
+    """
+    load_checkpoints.py converts HF-Llama-weight to meta-format due to different rope implemenations between the two libraries.
+    Meta lib and TT model use interleaved sin()-cos() rope placement whereas HF uses separate blocks of sin() and cos() features. The latter does not need complex number support and is easily modifiable.
+    TT code uses reverse_permute for HF weights to make these compatible with tt_rope implementation.
+    As a consequence the code-links below permute the HF weights for vision branch but vision branch should not have any rope treatment because no rope is applied on the vision branch by multimodal Llama-11b.
+    The weights that are loaded on the vision branch should not be permuted. Applying a filter to exclude the vision's branch weights from reverse_permute in the code links below affects all the other scripts that still use meta lib
+    [convert_hf_to_meta_llama]https://github.com/tenstorrent/tt-metal/blob/3d6a97cf44dcc1008569f39bade9f068a1be2ad0/models/tt_transformers/tt/load_checkpoints.py#L96
+    [convert_hf_to_meta_llama_format]https://github.com/tenstorrent/tt-metal/blob/3d6a97cf44dcc1008569f39bade9f068a1be2ad0/models/tt_transformers/tt/load_checkpoints.py#L277
+    Since attention weights are permuted by load_checkpoints.py the Q and K attention weights are assigned to HF model computational graph to match tensor output for increased similarity between hidden states.
+    This is temporal till exlusion of vision branch is implemented in convert_hf_to_meta_llama_format() and all Llama reference models use HF's computational graph.
+    """
     prefix = "global_" if is_global else ""
     for id_b, _ in enumerate(callable_reference.layers):
         callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
