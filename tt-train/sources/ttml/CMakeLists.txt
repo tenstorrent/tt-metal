@@ -388,7 +388,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        tokenizers_cpp
         Boost::core
         Boost::container
         tt-logger
@@ -404,16 +403,13 @@ target_include_directories(ttml PUBLIC ${msgpack_SOURCE_DIR}/include)
 message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
-target_include_directories(ttml PUBLIC ${TOKENZIER_CPP_PATH}/include)
-
 if(ENABLE_LIBCXX)
     target_link_libraries(
-        tokenizers_cpp
         PUBLIC
             ${LIBC++}
             ${LIBC++ABI}
     )
-    target_compile_options(tokenizers_cpp PUBLIC -stdlib=libc++)
+    target_compile_options(PUBLIC -stdlib=libc++)
 
     target_link_libraries(
         PUBLIC
