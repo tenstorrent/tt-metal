@@ -19,12 +19,12 @@
 
 #else
 
-#define NOC_WRITE_REG(addr, val)                                      \
-    ((*((volatile uint32_t*)(noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + \
+#define NOC_WRITE_REG(addr, val)                                                \
+    ((*((volatile uint32_t*)((uint64_t)noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + \
                              noc_get_active_instance() * NOC_INSTANCE_OFFSET + (addr)))) = (val))
-#define NOC_READ_REG(addr)                                                                                             \
-    (*((volatile uint32_t*)(noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + noc_get_active_instance() * NOC_INSTANCE_OFFSET + \
-                            (addr))))
+#define NOC_READ_REG(addr)                                                     \
+    (*((volatile uint32_t*)((uint64_t)noc_get_cmd_buf() * NOC_CMD_BUF_OFFSET + \
+                            noc_get_active_instance() * NOC_INSTANCE_OFFSET + (addr))))
 
 #endif
 
@@ -123,7 +123,7 @@ void noc_transfer(TransferParams* p) {
         NOC_WRITE_REG(NOC_NIU_AT_LEN_REG_ADDR, (uint32_t)(p->size));
 
     } else {
-        NOC_WRITE_REG(NOC_NIU_RET_ADDR_LO_REG_ADDR, (uint32_t)(p->dst_addr & 0xFFFFFFFF));
+        NOC_WRITE_REG(NOC_NIU_RET_ADDR_LO_REG_ADDR, (uint64_t)(p->dst_addr & 0xFFFFFFFF));
         NOC_WRITE_REG(NOC_NIU_RET_ADDR_MID_REG_ADDR, (uint32_t)(p->dst_addr >> 32));
         NOC_WRITE_REG(NOC_NIU_RET_ADDR_HI_REG_ADDR, p->dst_coordinate);
 

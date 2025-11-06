@@ -243,6 +243,7 @@ set(GPP_DEFINES -DTENSIX_FIRMWARE)
 # Define flags for each architecture
 set(GPP_FLAGS_wormhole -mcpu=tt-wh)
 set(GPP_FLAGS_blackhole -mcpu=tt-bh)
+set(GPP_FLAGS_quasar -mcpu=tt-qsr64)
 
 # Define common flags for all architectures
 set(GPP_FLAGS_common
@@ -325,6 +326,7 @@ foreach(ARCH IN LISTS ARCHS)
     list(
         APPEND
         GPP_INCLUDES
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/${ARCH_ALIAS}_defines
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${HW_VERSION_PATH}/${ARCH}/noc
@@ -406,6 +408,8 @@ target_sources(
             inc/accessor/page.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
+            inc/tt-1xx/risc_common.h
+            inc/tt-1xx/tensix_functions.h
             inc/tt-1xx/blackhole/c_tensix_core.h
             inc/tt-1xx/blackhole/cfg_defines.h
             inc/tt-1xx/blackhole/core_config.h
@@ -452,6 +456,9 @@ target_sources(
             inc/ethernet/tunneling.h
             inc/firmware_common.h
             inc/mod_div_lib.h
+            inc/tensix_functions_common.h
+            inc/tt-2xx/risc_common.h
+            inc/tt-2xx/tensix_functions.h
             inc/tt-2xx/quasar/c_tensix_core.h
             inc/tt-2xx/quasar/cfg_defines.h
             inc/tt-2xx/quasar/core_config.h
@@ -471,8 +478,6 @@ target_sources(
             inc/tt-2xx/quasar/tensix_types.h
             inc/remote_circular_buffer_api.h
             inc/risc_attribs.h
-            inc/tt-1xx/risc_common.h
-            inc/tensix_functions.h
             inc/utils/bfloat16.h
             inc/utils/float32.h
             inc/utils/int32.h

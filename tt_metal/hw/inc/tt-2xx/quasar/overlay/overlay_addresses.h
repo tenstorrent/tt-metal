@@ -6,8 +6,8 @@
 #define __OVERLAY_ADDRESSES_HPP__
 
 #include <tt_tensix_noc_overlay_reg.h>
-#include <overlay_reg.h>
-#include <noc_config_reg.h>
+#include <meta/registers/overlay_reg.h>
+#include <registers/noc_config_reg.h>
 
 #define MEM_PORT_CACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_BASE_ADDR
 #define MEM_PORT_NONCACHEABLE_BASE_ADDR (uint64_t)MEMORY_PORT_NONCACHEABLE_MEM_PORT_MEM_BASE_ADDR

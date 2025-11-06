@@ -9,8 +9,13 @@
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
 
-OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
-	      "elf32-littleriscv")
+#if defined (COMPILE_FOR_DM)
+  OUTPUT_FORMAT("elf64-littleriscv", "elf64-littleriscv",
+          "elf64-littleriscv")
+#else
+  OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
+          "elf32-littleriscv")
+#endif
 OUTPUT_ARCH(riscv)
 
 #include "dev_mem_map.h"

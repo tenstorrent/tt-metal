@@ -100,7 +100,7 @@ bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_
  * | arg_idx        | Unique Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l1_base[arg_idx]; }
+static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)(uint64_t)&rta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -114,7 +114,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) { return (uint32_t)&rta_l
  * | arg_idx        | Common Runtime argument index                                           | uint32_t | 0 to 341    | True     |
  */
 // clang-format on
-static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)&crta_l1_base[arg_idx]; }
+static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) { return (uint32_t)(uint64_t)&crta_l1_base[arg_idx]; }
 
 // clang-format off
 /**
@@ -133,7 +133,7 @@ template <typename T>
 FORCE_INLINE T get_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
-    return *((tt_l1_ptr T*)(get_arg_addr(arg_idx)));
+    return *((tt_l1_ptr T*)((uint64_t)get_arg_addr(arg_idx)));
 }
 
 // clang-format off
@@ -153,7 +153,7 @@ template <typename T>
 FORCE_INLINE T get_common_arg_val(int arg_idx) {
     // only 4B args are supported (eg int32, uint32)
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
-    return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
+    return *((tt_l1_ptr T*)((uint64_t)get_common_arg_addr(arg_idx)));
 }
 
 // clang-format off
@@ -315,7 +315,7 @@ uint32_t get_read_ptr(uint32_t operand) {
 }
 
 inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
-    volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)addr;
+    volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)(uint64_t)addr;
     int32_t reg_value;
     WAYPOINT("SW");
     do {
@@ -341,7 +341,7 @@ inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
 // clang-format on
 FORCE_INLINE
 bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uint32_t pages_acked_ptr = (uint32_t)(uint64_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -371,7 +371,7 @@ bool cb_pages_reservable_at_back(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void cb_reserve_back(int32_t operand, int32_t num_pages) {
-    uint32_t pages_acked_ptr = (uint32_t)get_cb_tiles_acked_ptr(operand);
+    uint32_t pages_acked_ptr = (uint32_t)(uint64_t)get_cb_tiles_acked_ptr(operand);
 
     // while the producer (write-side interface) is waiting for space to free up "tiles_pushed" is not changing
     // "tiles_pushed" is updated by the producer only when the tiles are pushed
@@ -418,7 +418,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uint32_t pages_received_ptr = (uint32_t)(uint64_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received = ((uint16_t)reg_read(pages_received_ptr)) - pages_acked;
     return num_pages <= pages_received;
@@ -451,7 +451,7 @@ bool cb_pages_available_at_front(int32_t operand, int32_t num_pages) {
 FORCE_INLINE
 void cb_wait_front(int32_t operand, int32_t num_pages) {
     uint32_t pages_acked = get_cb_tiles_acked_ptr(operand)[0];
-    uint32_t pages_received_ptr = (uint32_t)get_cb_tiles_received_ptr(operand);
+    uint32_t pages_received_ptr = (uint32_t)(uint64_t)get_cb_tiles_received_ptr(operand);
 
     uint16_t pages_received;
 

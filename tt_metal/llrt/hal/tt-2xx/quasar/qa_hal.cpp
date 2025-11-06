@@ -87,6 +87,7 @@ public:
         includes.push_back("tt_metal/hw/inc/tt-2xx/quasar");
         includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/quasar_defines");
         includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/overlay");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -133,8 +134,8 @@ public:
 
     std::string common_flags(const Params& params) const override {
         std::string cflags =
-            "-mcpu=tt-bh -fno-rvtt-sfpu-replay ";  // TODO: change to -mcpu=tt-qa once
-                                                   // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
+            "-mcpu=tt-qsr64 -fno-rvtt-sfpu-replay ";  // TODO: change to -mcpu=tt-qa once
+                                                      // https://github.com/tenstorrent/tt-metal/issues/29186 is ready
         if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
               params.processor_class == HalProcessorClassType::COMPUTE)) {
             cflags += "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops

@@ -115,25 +115,25 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
         watcher_msg->noc_linked_status[noc] = (val & NOC_CMD_VC_LINKED) != 0;
     }
 #endif
-    uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
+    uint64_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     *ptr = val;
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {
-    uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
+    uint64_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     return *ptr;
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_STATUS_READ_REG(uint32_t noc, uint32_t reg_id) {
-    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(reg_id);
+    uint64_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(reg_id);
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     return *ptr;
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, uint32_t reg_id) {
-    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
+    uint64_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     return *ptr;
 }
@@ -143,7 +143,7 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
 }
 
 inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_t noc, uint32_t id_mask) {
-    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CLEAR_OUTSTANDING_REQ_CNT;
+    uint64_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CLEAR_OUTSTANDING_REQ_CNT;
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     *ptr = id_mask;
 }

@@ -14,6 +14,7 @@
 #include "mod_div_lib.h"
 #include "noc_overlay_parameters.h"
 #include "noc_parameters.h"
+#include "overlay_addresses.h"
 #include "stream_io_map.h"
 #include "tensix.h"
 
@@ -42,12 +43,12 @@ extern uint8_t my_x[NUM_NOCS];
 // Virtual Y coordinate
 extern uint8_t my_y[NUM_NOCS];
 
-inline void WRITE_REG(uint32_t addr, uint32_t val) {
+inline void WRITE_REG(uint64_t addr, uint32_t val) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
     ptr[0] = val;
 }
 
-inline uint32_t READ_REG(uint32_t addr) {
+inline uint32_t READ_REG(uint64_t addr) {
     volatile tt_reg_ptr uint32_t* ptr = (volatile tt_reg_ptr uint32_t*)addr;
     return ptr[0];
 }
@@ -185,6 +186,11 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
                 : "t1");
     }
 #endif
+}
+
+inline __attribute__((always_inline)) void flush_l2_cache(uint64_t addr) {
+    *reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR) = addr;
+    asm volatile("fence" ::: "memory");
 }
 
 // risc_init function isn't required for TRISCS
