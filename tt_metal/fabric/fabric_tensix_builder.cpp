@@ -233,7 +233,7 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
         // TODO: later need to calculate the number of channels based on the number of worker served, plus one relay
         // channel, plus one forwarding channel between mux. RELAY permanently has 1 channel (configured separately in
         // its constructor)
-        num_channels_for_mux_ = 3;
+        num_channels_for_mux_ = static_cast<size_t>(UdmMuxChannelId::NUM_CHANNELS);
     } else {
         // MUX mode: use topology-based channel count
         switch (topology) {
@@ -530,14 +530,14 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
         direction);
 }
 
-void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
+void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::Program& program) {
     // Always create and compile mux builder
     TT_FATAL(mux_builder_ != nullptr, "Mux builder must not be null");
-    mux_builder_->create_and_compile(device, program);
+    mux_builder_->create_and_compile(program);
 
     // In UDM mode, also create and compile relay builder
     if (relay_builder_ != nullptr) {
-        // relay_builder_->create_and_compile(device, program);
+        // relay_builder_->create_and_compile(program);
     }
 }
 
