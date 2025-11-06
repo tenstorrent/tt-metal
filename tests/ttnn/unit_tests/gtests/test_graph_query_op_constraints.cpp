@@ -799,7 +799,7 @@ class Conv2dOpIfTest
       public ::testing::WithParamInterface<std::optional<ttnn::operations::conv::conv2d::Conv2dConfig>> {};
 
 TEST_P(Conv2dOpIfTest, Conv2d) {
-    const auto conv2d_config = GetParam();
+    const auto& conv2d_config = GetParam();
 
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
