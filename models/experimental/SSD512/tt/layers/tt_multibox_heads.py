@@ -192,13 +192,10 @@ def apply_multibox_heads(
     loc_preds = []
     conf_preds = []
 
-    # apply heads to each source feature map
     for source_idx, source in enumerate(sources):
-        # get corresponding head layers
         loc_layer = loc_layers_with_weights[source_idx]
         conf_layer = conf_layers_with_weights[source_idx]
 
-        # apply location head
         loc_pred = apply_multibox_head(
             source,
             loc_layer,
@@ -208,7 +205,6 @@ def apply_multibox_heads(
         )
         loc_preds.append(loc_pred)
 
-        # apply confidence head
         conf_pred = apply_multibox_head(
             source,
             conf_layer,
@@ -223,10 +219,24 @@ def apply_multibox_heads(
 
 def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttnn.bfloat16, memory_config=None):
     """Apply a single multibox head (location or confidence) to input tensor."""
-    if memory_config is None:
-        memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if isinstance(input_tensor, torch.Tensor):
+        batch_size = 1
+        input_height = input_tensor.shape[2]
+        input_width = input_tensor.shape[3]
+        in_channels = input_tensor.shape[1]
+    else:
+        shape = input_tensor.shape
+        batch_size = 1
+        input_height = shape[1]
+        input_width = shape[2]
+        in_channels = shape[3]
 
-    # convert input to TTNN format if it's a torch tensor
+    # Use L1 for smaller feature maps (<=128x128), DRAM for larger ones
+    tensor_size_estimate = batch_size * input_height * input_width * in_channels
+    use_l1_for_this_layer = input_height <= 128 and input_width <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
+    if memory_config is None:
+        memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else ttnn.DRAM_MEMORY_CONFIG
+
     if isinstance(input_tensor, torch.Tensor):
         x_torch = input_tensor.permute(0, 2, 3, 1)
         x = ttnn.from_torch(
@@ -245,13 +255,11 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
             layout=ttnn.TILE_LAYOUT,
         )
 
-    # get layer parameters
     weight = layer_with_weights["weight"]
     bias = layer_with_weights.get("bias", None)
     config = layer_with_weights["config"]
     out_channels = layer_with_weights["out_channels"]
 
-    # get expected input channels from layer config
     expected_in_channels = layer_with_weights.get("in_channels", config.get("in_channels", None))
 
     kernel_size = config["kernel_size"]
@@ -260,20 +268,6 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     dilation = config["dilation"]
     groups = config["groups"]
 
-    # get dimensions to determine if we need DRAM slicing
-    if isinstance(input_tensor, torch.Tensor):
-        batch_size = 1
-        input_height = input_tensor.shape[2]
-        input_width = input_tensor.shape[3]
-        in_channels = input_tensor.shape[1]
-    else:
-        shape = x.shape
-        batch_size = 1
-        input_height = shape[1]
-        input_width = shape[2]
-        in_channels = shape[3]
-
-    # Get actual weight input channels from weight tensor
     if isinstance(weight, torch.Tensor):
         actual_weight_in_channels = weight.shape[1]
     else:
@@ -285,13 +279,13 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
             f"Input tensor channels ({in_channels}) don't match weight's expected input channels ({actual_weight_in_channels})!"
         )
 
-    tensor_size_estimate = batch_size * input_height * input_width * in_channels
     is_1x1_conv = kernel_size == (1, 1) or (kernel_size[0] == 1 and kernel_size[1] == 1)
     is_very_small = input_height <= 2 or input_width <= 2
 
     is_l1_memory = memory_config is not None and memory_config.buffer_type == ttnn.BufferType.L1
     force_l1_slice = is_very_small or is_1x1_conv
 
+    # Use DRAM slicing only if using DRAM memory config and tensor is large
     use_dram_slicing = (
         not force_l1_slice
         and not is_l1_memory
@@ -350,7 +344,6 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
     if device is not None:
         x = ttnn.to_device(x, device, memory_config=memory_config)
 
-    # create compute_config with HiFi4 and fp32 accumulator for higher precision
     compute_config = None
     if device is not None:
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -361,14 +354,71 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
             math_approx_mode=False,
         )
 
-    conv_config = ttnn.Conv2dConfig(
-        weights_dtype=dtype,
-        shard_layout=None,
-        deallocate_activation=False,
-        enable_act_double_buffer=False,
-        enable_activation_reuse=False,
-        reshard_if_not_optimal=False,
-    )
+    estimated_memory_bytes = input_height * input_width * in_channels * 2  # 2 bytes per element, bfloat16
+
+    if use_l1_for_this_layer and not use_dram_slicing and estimated_memory_bytes < 1024 * 1024:
+        if in_channels > 256 or out_channels > 512:
+            use_l1_for_this_layer = False
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+            conv_config = ttnn.Conv2dConfig(
+                weights_dtype=dtype,
+                shard_layout=None,
+                deallocate_activation=False,
+                enable_act_double_buffer=False,
+                enable_weights_double_buffer=False,
+                reshard_if_not_optimal=False,
+            )
+        elif input_height <= 32:
+            act_block_h = 32
+            enable_double_buffer = True
+            conv_config = ttnn.Conv2dConfig(
+                weights_dtype=dtype,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                deallocate_activation=False,
+                enable_act_double_buffer=enable_double_buffer,
+                enable_weights_double_buffer=False,
+                reshard_if_not_optimal=True,
+                act_block_h_override=act_block_h,
+                act_block_w_div=1,
+            )
+        else:
+            if in_channels <= 128 and out_channels <= 256:
+                act_block_h = 32
+                enable_double_buffer = False
+                conv_config = ttnn.Conv2dConfig(
+                    weights_dtype=dtype,
+                    shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    deallocate_activation=False,
+                    enable_act_double_buffer=enable_double_buffer,
+                    enable_weights_double_buffer=False,
+                    reshard_if_not_optimal=True,
+                    act_block_h_override=act_block_h,
+                    act_block_w_div=1,
+                )
+            else:
+                # Too large for L1, fall back to DRAM
+                use_l1_for_this_layer = False
+                memory_config = ttnn.DRAM_MEMORY_CONFIG
+                conv_config = ttnn.Conv2dConfig(
+                    weights_dtype=dtype,
+                    shard_layout=None,
+                    deallocate_activation=False,
+                    enable_act_double_buffer=False,
+                    enable_weights_double_buffer=False,
+                    reshard_if_not_optimal=False,
+                )
+    else:
+        # For DRAM, DRAM slicing, or too large for L1, use default config
+        use_l1_for_this_layer = False
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+        conv_config = ttnn.Conv2dConfig(
+            weights_dtype=dtype,
+            shard_layout=None,
+            deallocate_activation=False,
+            enable_act_double_buffer=False,
+            enable_weights_double_buffer=False,
+            reshard_if_not_optimal=False,
+        )
 
     # call ttnn.conv2d
     output_tensor, [output_height, output_width] = ttnn.conv2d(
@@ -394,11 +444,9 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
         compute_config=compute_config,
     )
 
-    # convert back to TILE_LAYOUT if we switched to ROW_MAJOR for slicing
     if slice_config != ttnn.Conv2dL1FullSliceConfig and output_tensor.layout != ttnn.TILE_LAYOUT:
         output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
 
-    # add bias separately if needed (when using DRAM slicing)
     if bias is not None and use_dram_slicing:
         output_tensor = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
 
@@ -415,7 +463,6 @@ def apply_multibox_head(input_tensor, layer_with_weights, device=None, dtype=ttn
 
         output_tensor = ttnn.add(output_tensor, bias_full, memory_config=memory_config)
 
-    # reshape output to proper dimensions
     if bias is None or not use_dram_slicing:
         x = output_tensor.reshape([batch_size, output_height, output_width, out_channels])
     else:
@@ -448,12 +495,10 @@ def build_multibox_heads(
 
     cfg = mbox[str(size)]
 
-    # VGG source indices: [21, -2] for Conv4_3 and Conv7
     if vgg_source_indices is None:
         vgg_source_indices = [21, -2]
 
     # Extras source indices: every other layer starting from index 1
-    # For SSD300: indices 1, 3, 5, 7 (4 layers)
     # For SSD512: indices 1, 3, 5, 7, 9, 11 (6 layers)
     if extra_source_indices is None:
         if size == 300:
@@ -467,7 +512,7 @@ def build_multibox_heads(
 
     if extra_channels is None:
         if size == 300:
-            extra_channels = [512, 256, 256, 256]  # From extras[1::2]
+            extra_channels = [512, 256, 256, 256]
         else:  # size == 512
             extra_channels = [512, 256, 256, 256, 256, 256]
 

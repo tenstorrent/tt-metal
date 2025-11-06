@@ -30,7 +30,6 @@ def vgg_backbone(cfg, input_channels=3, batch_norm=False, device=None):
             )
         elif v == "C":
             # MaxPool2d with ceil_mode=True: kernel_size=2, stride=2, padding=0, ceil_mode=True
-            # This is required for handling odd-sized inputs in pool3
             layers.append(
                 {
                     "type": "pool",
@@ -214,7 +213,6 @@ def apply_vgg_backbone(
 
     for layer_idx, layer in enumerate(layers_with_weights):
         if layer["type"] == "conv":
-            # apply TTNN conv2d
             weight = layer["weight"]
             bias = layer.get("bias", None)
             config = layer["config"]
@@ -230,6 +228,12 @@ def apply_vgg_backbone(
             dilation = config["dilation"]
             groups = config["groups"]
 
+            tensor_size_estimate = batch_size * input_height * input_width * in_channels
+            use_l1_for_this_layer = (
+                input_height <= 128 and input_width <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
+            )
+            layer_memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else memory_config
+
             if kernel_size == (1, 1) and stride == (1, 1) and padding == (0, 0):
                 if isinstance(weight, torch.Tensor):
                     weight_torch = weight
@@ -244,7 +248,7 @@ def apply_vgg_backbone(
                         device=device,
                         dtype=dtype,
                         layout=ttnn.TILE_LAYOUT,
-                        memory_config=memory_config,
+                        memory_config=layer_memory_config,
                     )
                 else:
                     weight_2d = ttnn.from_torch(weight_2d_torch, device=None, dtype=dtype, layout=ttnn.TILE_LAYOUT)
@@ -254,12 +258,11 @@ def apply_vgg_backbone(
 
                 x_flat = ttnn.reshape(x, (batch_size * current_h * current_w, in_channels))
 
-                out_flat = ttnn.matmul(x_flat, weight_2d, memory_config=memory_config)
+                out_flat = ttnn.matmul(x_flat, weight_2d, memory_config=layer_memory_config)
 
                 output_tensor = ttnn.reshape(out_flat, (batch_size, current_h, current_w, out_channels))
 
                 if bias is not None:
-                    # Convert bias similarly
                     if isinstance(bias, torch.Tensor):
                         bias_torch = bias
                     else:
@@ -273,11 +276,11 @@ def apply_vgg_backbone(
                             device=device,
                             dtype=dtype,
                             layout=ttnn.TILE_LAYOUT,
-                            memory_config=memory_config,
+                            memory_config=layer_memory_config,
                         )
                     else:
                         bias_1d = ttnn.from_torch(bias_reshaped, device=None, dtype=dtype, layout=ttnn.TILE_LAYOUT)
-                    output_tensor = ttnn.add(output_tensor, bias_1d, memory_config=memory_config)
+                    output_tensor = ttnn.add(output_tensor, bias_1d, memory_config=layer_memory_config)
 
                 output_height = current_h
                 output_width = current_w
@@ -290,6 +293,75 @@ def apply_vgg_backbone(
                         fp32_dest_acc_en=True,
                         packer_l1_acc=False,
                         math_approx_mode=False,
+                    )
+
+                estimated_memory_bytes = input_height * input_width * in_channels * 2  # 2 bytes per element, bfloat16
+                if use_l1_for_this_layer and estimated_memory_bytes < 1024 * 1024:
+                    if in_channels > 256 or out_channels > 512:
+                        # For large channels, don't use L1 sharding - fall back to DRAM
+                        use_l1_for_this_layer = False
+                        act_block_h = 256
+                        layer_memory_config = memory_config
+                        conv_config = ttnn.Conv2dConfig(
+                            weights_dtype=dtype,
+                            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            deallocate_activation=True,
+                            enable_act_double_buffer=False,
+                            enable_weights_double_buffer=False,
+                            reshard_if_not_optimal=False,
+                            act_block_h_override=act_block_h,
+                            act_block_w_div=1,
+                        )
+                    elif input_height <= 32:
+                        act_block_h = 32
+                        enable_double_buffer = True
+                        conv_config = ttnn.Conv2dConfig(
+                            weights_dtype=dtype,
+                            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            deallocate_activation=True,
+                            enable_act_double_buffer=enable_double_buffer,
+                            enable_weights_double_buffer=False,
+                            reshard_if_not_optimal=True,
+                            act_block_h_override=act_block_h,
+                            act_block_w_div=1,
+                        )
+                    else:
+                        if in_channels <= 128 and out_channels <= 256:
+                            act_block_h = 128
+                            enable_double_buffer = True
+                            conv_config = ttnn.Conv2dConfig(
+                                weights_dtype=dtype,
+                                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                                deallocate_activation=False,
+                                enable_act_double_buffer=enable_double_buffer,
+                                enable_weights_double_buffer=False,
+                                reshard_if_not_optimal=True,
+                                act_block_h_override=act_block_h,
+                                act_block_w_div=1,
+                            )
+                        else:
+                            # Too large for L1, fall back to DRAM
+                            use_l1_for_this_layer = False
+                            layer_memory_config = memory_config
+                            conv_config = ttnn.Conv2dConfig(
+                                weights_dtype=dtype,
+                                shard_layout=None,
+                                deallocate_activation=False,
+                                enable_act_double_buffer=False,
+                                enable_weights_double_buffer=False,
+                                reshard_if_not_optimal=False,
+                            )
+                else:
+                    # For DRAM or too large for L1, use default config
+                    use_l1_for_this_layer = False
+                    layer_memory_config = memory_config
+                    conv_config = ttnn.Conv2dConfig(
+                        weights_dtype=dtype,
+                        shard_layout=None,
+                        deallocate_activation=False,
+                        enable_act_double_buffer=False,
+                        enable_weights_double_buffer=False,
+                        reshard_if_not_optimal=False,
                     )
 
                 conv2d_kwargs = {
@@ -311,10 +383,13 @@ def apply_vgg_backbone(
                     "return_weights_and_bias": False,
                     "dtype": dtype,
                     "compute_config": compute_config,
+                    "conv_config": conv_config,
                 }
 
-                if memory_config != ttnn.DRAM_MEMORY_CONFIG:
-                    conv2d_kwargs["memory_config"] = memory_config
+                if not use_l1_for_this_layer:
+                    layer_memory_config = memory_config
+                if layer_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                    conv2d_kwargs["memory_config"] = layer_memory_config
 
                 output_tensor, [output_height, output_width] = ttnn.conv2d(**conv2d_kwargs)
 
@@ -327,12 +402,21 @@ def apply_vgg_backbone(
             current_c = out_channels
 
         elif layer["type"] == "pool":
-            # apply TTNN max_pool2d
             config = layer["config"]
 
             input_height = current_h
             input_width = current_w
             channels = current_c
+
+            tensor_size_estimate = batch_size * input_height * input_width * channels
+            use_l1_for_this_layer = (
+                input_height <= 128 and input_width <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
+            )
+            layer_memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else memory_config
+
+            if hasattr(x, "memory_config") and x.memory_config() is not None:
+                if x.memory_config().is_sharded():
+                    x = ttnn.sharded_to_interleaved(x, memory_config=layer_memory_config)
 
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -354,7 +438,7 @@ def apply_vgg_backbone(
                 padding=padding,
                 dilation=dilation,
                 ceil_mode=ceil_mode,
-                memory_config=memory_config,
+                memory_config=layer_memory_config,
                 dtype=dtype,
                 output_layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -377,14 +461,12 @@ def apply_vgg_backbone(
                 output_height = (input_height + 2 * padding_h - dilation_h * (kernel_h - 1) - 1) // stride_h + 1
                 output_width = (input_width + 2 * padding_w - dilation_w * (kernel_w - 1) - 1) // stride_w + 1
 
-            # Update tracked dimensions for next layer
             current_h = output_height
             current_w = output_width
             current_c = channels
 
         elif layer["type"] == "relu":
-            # Apply TTNN relu
-            x = ttnn.relu(x, memory_config=memory_config)
+            x = ttnn.relu(x)
 
         if return_sources is not None and layer_idx in return_sources:
             sources.append(x)

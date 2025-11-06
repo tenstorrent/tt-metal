@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 import ttnn
 from models.experimental.SSD512.tt.layers.tt_vgg_backbone import (
@@ -244,7 +243,6 @@ def load_multibox_weights_from_torch(
             weight = torch_layer.weight.data.clone()
             bias = torch_layer.bias.data.clone() if torch_layer.bias is not None else None
 
-            # Convert to TTNN format
             weight_ttnn = ttnn.from_torch(
                 weight,
                 device=weight_device_placement,
@@ -468,7 +466,6 @@ class SSD512Network:
             conv7 = vgg_result
             conv4_3 = None
 
-        # Apply L2Norm to conv4_3 if available
         if conv4_3 is not None:
             conv4_3_norm = self.l2norm(conv4_3)
             sources = [conv4_3_norm, conv7]
@@ -493,7 +490,6 @@ class SSD512Network:
         expected_channels = [512, 1024, 512, 256, 256, 256, 256]
         torch_sources = []
         for idx, source in enumerate(sources):
-            # Convert TTNN tensor to torch tensor
             source_torch = ttnn.to_torch(source)
             if source_torch.dim() == 4:
                 expected_c = expected_channels[idx] if idx < len(expected_channels) else None
@@ -512,22 +508,21 @@ class SSD512Network:
                     if dim3_val > dim1_val:
                         source_torch = source_torch.permute(0, 3, 1, 2)
             torch_sources.append(source_torch)
-            # deallocate TTNN tensor to free memory
             if hasattr(source, "is_allocated") and source.is_allocated():
                 try:
                     ttnn.deallocate(source)
                 except:
                     pass
-        # Apply multibox heads to all sources
+
         loc_outputs = []
         conf_outputs = []
         for idx, source in enumerate(torch_sources):
             source_h, source_w = source.shape[2], source.shape[3]
             source_channels = source.shape[1]
-            is_very_small = source_h <= 2 or source_w <= 2
-            source_memory_config = ttnn.L1_MEMORY_CONFIG if is_very_small else ttnn.DRAM_MEMORY_CONFIG
+            tensor_size_estimate = batch_size * source_h * source_w * source_channels
+            use_l1_for_this_layer = source_h <= 128 and source_w <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
+            source_memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else ttnn.DRAM_MEMORY_CONFIG
 
-            # update layer config to match actual source channels
             if idx < len(self.loc_config):
                 actual_weight_channels = None
                 if "weight" in self.loc_config[idx]:
@@ -556,16 +551,13 @@ class SSD512Network:
                 source, self.loc_config[idx], device=self.device, dtype=dtype, memory_config=source_memory_config
             )
 
-            # convert to torch immediately to free TTNN memory
             loc_torch = tt_to_torch_tensor(loc_out)
-            # deallocate TTNN tensor
             if hasattr(loc_out, "is_allocated") and loc_out.is_allocated():
                 try:
                     ttnn.deallocate(loc_out)
                 except:
                     pass
 
-            # synchronize device to ensure memory is freed
             if self.device is not None:
                 ttnn.synchronize_device(self.device)
 
@@ -573,27 +565,22 @@ class SSD512Network:
                 source, self.conf_config[idx], device=self.device, dtype=dtype, memory_config=source_memory_config
             )
 
-            # convert to torch immediately to free TTNN memory
             conf_torch = tt_to_torch_tensor(conf_out)
-            # deallocate TTNN tensor
             if hasattr(conf_out, "is_allocated") and conf_out.is_allocated():
                 try:
                     ttnn.deallocate(conf_out)
                 except:
                     pass
 
-            # synchronize device to ensure memory is freed
             if self.device is not None:
                 ttnn.synchronize_device(self.device)
 
-            # reshape: [B, H, W, boxes*4] -> [B, H*W*boxes, 4]
             loc_torch = loc_torch.reshape(batch_size, -1, 4)
-            # reshape: [B, H, W, boxes*classes] -> [B, H*W*boxes, classes]
             conf_torch = conf_torch.reshape(batch_size, -1, self.num_classes)
 
             loc_outputs.append(loc_torch)
             conf_outputs.append(conf_torch)
-        # concatenate all outputs
+
         loc = torch.cat([o.view(batch_size, -1) for o in loc_outputs], dim=1)
         conf = torch.cat([o.view(batch_size, -1) for o in conf_outputs], dim=1)
 

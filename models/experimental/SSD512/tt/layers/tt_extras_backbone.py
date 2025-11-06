@@ -15,7 +15,6 @@ def extras_backbone(cfg, input_channels=1024, batch_norm=False, device=None):
         if in_channels != "S":
             if v == "S":
                 # Stride=2 downsampling layer
-                # Output channels come from next element in cfg
                 if k + 1 >= len(cfg):
                     raise ValueError(f"'S' marker at index {k} but no next element in cfg")
                 out_channels = cfg[k + 1]
@@ -35,7 +34,6 @@ def extras_backbone(cfg, input_channels=1024, batch_norm=False, device=None):
                         "out_channels": out_channels,
                     }
                 )
-                # Add ReLU after conv (matching PyTorch pattern)
                 layers.append(
                     {
                         "type": "relu",
@@ -45,7 +43,7 @@ def extras_backbone(cfg, input_channels=1024, batch_norm=False, device=None):
             else:
                 # Regular layer (stride=1, no padding)
                 out_channels = v
-                kernel_size = (1, 3)[flag]  # Alternating: 1 or 3
+                kernel_size = (1, 3)[flag]
 
                 layers.append(
                     {
@@ -61,18 +59,15 @@ def extras_backbone(cfg, input_channels=1024, batch_norm=False, device=None):
                         "out_channels": out_channels,
                     }
                 )
-                # Add ReLU after conv (matching PyTorch pattern)
                 layers.append(
                     {
                         "type": "relu",
                     }
                 )
-                flag = not flag  # Toggle for next layer
+                flag = not flag
 
-        # update in_channels to current v
         in_channels = v
 
-    # for SSD512: add final 4x4 conv layer
     if len(cfg) == 13:
         layers.append(
             {
@@ -88,7 +83,6 @@ def extras_backbone(cfg, input_channels=1024, batch_norm=False, device=None):
                 "out_channels": 256,
             }
         )
-        # Add ReLU after conv
         layers.append(
             {
                 "type": "relu",
@@ -134,7 +128,6 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
     if memory_config is None:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    # convert input to TTNN format if it's a torch tensor
     if isinstance(input_tensor, torch.Tensor):
         x_torch = input_tensor.permute(0, 2, 3, 1)  # NCHW -> NHWC
         x = ttnn.from_torch(
@@ -147,15 +140,12 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
     else:
         x = input_tensor
 
-    # track dimensions explicitly throughout the forward pass
     if isinstance(input_tensor, torch.Tensor):
-        # get initial dimensions from input tensor
         batch_size = 1
-        input_height = input_tensor.shape[2]  # H from NCHW
-        input_width = input_tensor.shape[3]  # W from NCHW
-        current_channels = input_tensor.shape[1]  # C from NCHW
+        input_height = input_tensor.shape[2]
+        input_width = input_tensor.shape[3]
+        current_channels = input_tensor.shape[1]
     else:
-        # If already TTNN tensor, extract from shape (NHWC format)
         shape = x.shape
         batch_size = 1
         input_height = shape[1]
@@ -169,7 +159,6 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
 
     for layer_idx, layer in enumerate(layers_with_weights):
         if layer["type"] == "conv":
-            # Apply TTNN conv2d
             weight = layer["weight"]
             bias = layer.get("bias", None)
             config = layer["config"]
@@ -183,25 +172,36 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
             dilation = config["dilation"]
             groups = config["groups"]
 
-            # determine slice config based on tensor size
             tensor_size_estimate = batch_size * input_height * input_width * in_channels
+            use_l1_for_this_layer = (
+                input_height <= 128 and input_width <= 128 and tensor_size_estimate <= 2 * 1024 * 1024
+            )
+            layer_memory_config = ttnn.L1_MEMORY_CONFIG if use_l1_for_this_layer else memory_config
 
             is_1x1_conv = kernel_size == (1, 1) or (kernel_size[0] == 1 and kernel_size[1] == 1)
 
             use_dram_slicing = (
-                tensor_size_estimate > 1024 * 1024 or input_height > 64 or input_width > 64
-            ) and not is_1x1_conv
+                not use_l1_for_this_layer
+                and (tensor_size_estimate > 1024 * 1024 or input_height > 64 or input_width > 64)
+                and not is_1x1_conv
+            )
 
             if use_dram_slicing:
                 conv_bias = None
                 slice_count = max(1, (batch_size * input_height * input_width) // (1024))
                 slice_count = min(slice_count, 64)
 
-                # convert to ROW_MAJOR_LAYOUT for DRAM slicing
+                if hasattr(x, "memory_config") and x.memory_config() is not None:
+                    if x.memory_config().is_sharded():
+                        x = ttnn.sharded_to_interleaved(x, memory_config=memory_config)
+
                 if x.layout != ttnn.ROW_MAJOR_LAYOUT:
                     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-                # ensure weight tensor is also in ROW_MAJOR_LAYOUT for DRAM slicing
+                if hasattr(weight, "memory_config") and weight.memory_config() is not None:
+                    if weight.memory_config().is_sharded():
+                        weight = ttnn.sharded_to_interleaved(weight, memory_config=memory_config)
+
                 if weight.layout != ttnn.ROW_MAJOR_LAYOUT:
                     weight = ttnn.to_layout(weight, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -210,11 +210,9 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                     num_slices=slice_count,
                 )
             else:
-                # for 1x1 convs or smaller tensors, use L1 full slice config
                 conv_bias = bias
                 slice_config = ttnn.Conv2dL1FullSliceConfig
 
-            # create compute_config with HiFi4 and fp32 accumulator for higher precision
             compute_config = None
             if device is not None:
                 compute_config = ttnn.init_device_compute_kernel_config(
@@ -225,31 +223,103 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                     math_approx_mode=False,
                 )
 
-            # call ttnn.conv2d with slice_config
+            estimated_memory_bytes = input_height * input_width * in_channels * 2  # 2 bytes per element, bfloat16
+
+            if use_l1_for_this_layer and not use_dram_slicing and estimated_memory_bytes < 1024 * 1024:
+                if in_channels > 256 or out_channels > 512:
+                    use_l1_for_this_layer = False
+                    layer_memory_config = memory_config
+                    conv_config = ttnn.Conv2dConfig(
+                        weights_dtype=dtype,
+                        shard_layout=None,
+                        deallocate_activation=False,
+                        enable_act_double_buffer=False,
+                        enable_weights_double_buffer=False,
+                        reshard_if_not_optimal=False,
+                    )
+                elif input_height <= 32:
+                    act_block_h = 32
+                    enable_double_buffer = True
+                    conv_config = ttnn.Conv2dConfig(
+                        weights_dtype=dtype,
+                        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        deallocate_activation=False,
+                        enable_act_double_buffer=enable_double_buffer,
+                        enable_weights_double_buffer=False,
+                        reshard_if_not_optimal=True,
+                        act_block_h_override=act_block_h,
+                        act_block_w_div=1,
+                    )
+                else:
+                    # For 64x64 or larger, only use L1 if channels are small
+                    if in_channels <= 128 and out_channels <= 256:
+                        act_block_h = 32
+                        enable_double_buffer = False
+                        conv_config = ttnn.Conv2dConfig(
+                            weights_dtype=dtype,
+                            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                            deallocate_activation=False,
+                            enable_act_double_buffer=enable_double_buffer,
+                            enable_weights_double_buffer=False,
+                            reshard_if_not_optimal=True,
+                            act_block_h_override=act_block_h,
+                            act_block_w_div=1,
+                        )
+                    else:
+                        # Too large for L1, fall back to DRAM
+                        use_l1_for_this_layer = False
+                        layer_memory_config = memory_config
+                        conv_config = ttnn.Conv2dConfig(
+                            weights_dtype=dtype,
+                            shard_layout=None,
+                            deallocate_activation=False,
+                            enable_act_double_buffer=False,
+                            enable_weights_double_buffer=False,
+                            reshard_if_not_optimal=False,
+                        )
+            else:
+                # For DRAM, DRAM slicing, or too large for L1, use default config
+                use_l1_for_this_layer = False
+                layer_memory_config = memory_config
+                conv_config = ttnn.Conv2dConfig(
+                    weights_dtype=dtype,
+                    shard_layout=None,
+                    deallocate_activation=False,
+                    enable_act_double_buffer=False,
+                    enable_weights_double_buffer=False,
+                    reshard_if_not_optimal=False,
+                )
+
+            conv2d_kwargs = {
+                "input_tensor": x,
+                "weight_tensor": weight,
+                "bias_tensor": conv_bias,
+                "in_channels": in_channels,
+                "out_channels": out_channels,
+                "kernel_size": kernel_size,
+                "stride": stride,
+                "padding": padding,
+                "dilation": dilation,
+                "groups": groups,
+                "batch_size": batch_size,
+                "input_height": input_height,
+                "input_width": input_width,
+                "device": device,
+                "return_output_dim": True,
+                "return_weights_and_bias": True,
+                "dtype": dtype,
+                "slice_config": slice_config,
+                "compute_config": compute_config,
+                "conv_config": conv_config,
+            }
+
+            if layer_memory_config != ttnn.DRAM_MEMORY_CONFIG:
+                conv2d_kwargs["memory_config"] = layer_memory_config
+
             output_tensor, [output_height, output_width], [prepared_weight, prepared_bias] = ttnn.conv2d(
-                input_tensor=x,
-                weight_tensor=weight,
-                bias_tensor=conv_bias,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                dilation=dilation,
-                groups=groups,
-                batch_size=batch_size,
-                input_height=input_height,
-                input_width=input_width,
-                device=device,
-                return_output_dim=True,
-                return_weights_and_bias=True,
-                dtype=dtype,
-                memory_config=memory_config,
-                slice_config=slice_config,
-                compute_config=compute_config,
+                **conv2d_kwargs
             )
 
-            # convert back to TILE_LAYOUT if we switched to ROW_MAJOR for slicing
             if slice_config != ttnn.Conv2dL1FullSliceConfig and output_tensor.layout != ttnn.TILE_LAYOUT:
                 output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
 
@@ -262,10 +332,10 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
                     device=device,
                     dtype=dtype,
                     layout=output_tensor.layout,
-                    memory_config=memory_config,
+                    memory_config=layer_memory_config,
                 )
 
-                output_tensor = ttnn.add(output_tensor, bias_full, memory_config=memory_config)
+                output_tensor = ttnn.add(output_tensor, bias_full, memory_config=layer_memory_config)
 
             layer["weight"] = prepared_weight
             if prepared_bias is not None and not use_dram_slicing:
@@ -281,8 +351,7 @@ def apply_extras_backbone(input_tensor, layers_with_weights, device=None, dtype=
             current_c = out_channels
 
         elif layer["type"] == "relu":
-            # Apply TTNN relu
-            x = ttnn.relu(x, memory_config=memory_config)
+            x = ttnn.relu(x)
 
     return x
 
