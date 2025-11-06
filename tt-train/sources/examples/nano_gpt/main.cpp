@@ -305,12 +305,10 @@ int main(int argc, char **argv) {
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt.yaml";
 
     std::string run_name = "";
-    bool is_eval = false;
     bool add_time_to_name = true;
     std::string safetensors_path = "";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
-    app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     app.add_option("-s,--save_and_exit", save_and_exit_path, "Save and exit (path to dumped msgpack)")
@@ -353,9 +351,6 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
         }
 
-        if (is_eval) {
-            throw std::runtime_error("Evaluation is not supported with Tensor Parallel model");
-        }
     }
 
     // set seed
@@ -367,20 +362,6 @@ int main(int argc, char **argv) {
     }
     auto schedule_func = schedulers.at(config.scheduler_type);
 
-    std::string text;
-    std::variant<std::string, std::vector<uint32_t>> text_or_tokens;
-    try {
-        text = read_file_to_str(config.data_path);
-        // check file extension:
-        if (config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(config.data_path);
-        } else {
-            text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
-        }
-    } catch (const std::exception &e) {
-        std::cerr << e.what() << std::endl;
-        return -1;
-    }
     fmt::print("Max steps {}\n", config.max_steps);
     fmt::print("Batch size {}\n", config.batch_size);
     fmt::print("Gradient accumulation steps {}\n", config.gradient_accumulation_steps);
@@ -389,13 +370,22 @@ int main(int argc, char **argv) {
     fmt::print("Seed {}\n", ttml::autograd::ctx().get_seed());
     auto sequence_length = std::visit([](auto &&arg) { return arg.max_sequence_length; }, config.transformer_config);
 
-    auto tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+    std::vector<uint32_t> tokens_vector;
+
+    try
+    {
+        tokens_vector = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
+    } catch (const std::exception &e) {
+        std::cerr << e.what() << std::endl;
+        std::cerr << "\nDid you tokenize the dataset?" << std::endl;
+        return -1;
+    }
+
     auto dataset = ttml::datasets::InMemoryTokenDataset(
         std::move(tokens_vector), sequence_length);
 
     fmt::print("Tokenizer path: {}\n", config.tokenizer_path);
     fmt::print("Dataset size: {}\n", dataset.get_size());
-    // fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
     auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
@@ -542,7 +532,7 @@ int main(int argc, char **argv) {
     }
 
     // Load model parameters if in eval mode and model path exists
-    if (is_eval && !config.model_path.empty() && std::filesystem::exists(config.model_path)) {
+    if (!safetensors_path.empty() && !config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
         std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
         fmt::print("Loading model parameters\n");
@@ -604,10 +594,6 @@ int main(int argc, char **argv) {
             load_training_state(config.model_path, model, scheduler, model_name, optimizer_name);
             fmt::print("Model loaded after {} steps\n", optimizer->get_steps());
         }
-    }
-
-    if (config.enable_mpi && is_eval) {
-        throw std::logic_error("Evaluation is not supported with 3 tier training");
     }
 
     if (config.enable_mpi && config.use_clip_grad_norm) {
