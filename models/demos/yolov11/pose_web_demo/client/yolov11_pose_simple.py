@@ -58,7 +58,7 @@ class VideoProcessor(VideoProcessorBase):
 
         for detection in detections:
             # Extract bbox and keypoints
-            bbox = detection[:4]  # x, y, w, h (normalized 0-1)
+            bbox = detection[:4]  # x, y, w, h (normalized 0-1) - should be corner coordinates
             confidence = detection[4]
             keypoints = detection[5:]  # 51 values (17 keypoints x 3)
 
@@ -100,7 +100,10 @@ class VideoProcessor(VideoProcessorBase):
         return img
 
     def recv(self, frame):
+        self.frame_count += 1
         t0 = time.time()
+
+        print(f"DEBUG: Processing frame {self.frame_count}")
 
         # Convert frame to PIL image and resize to 640x640 for processing
         pil_image = frame.to_image()
@@ -150,14 +153,17 @@ class VideoProcessor(VideoProcessorBase):
                         pass  # output is already in the correct format
                     else:
                         print(f"DEBUG: Unexpected response format: {output}")
-                        return None
+                        # Return original frame without detections on error
+                        return av.VideoFrame.from_ndarray(frame.to_ndarray(format="bgr24"), format="bgr24")
                 else:
                     print(f"Request failed with status code {response.status_code}")
                     print(f"Response text: {response.text}")
-                    return None
+                    # Return original frame without detections on error
+                    return av.VideoFrame.from_ndarray(frame.to_ndarray(format="bgr24"), format="bgr24")
         except requests.exceptions.RequestException as e:
             print(f"Request failed: {e}")
-            return None
+            # Return original frame without detections on error
+            return av.VideoFrame.from_ndarray(frame.to_ndarray(format="bgr24"), format="bgr24")
 
         t3 = time.time()
         # Convert frame to ndarray and perform post-processing

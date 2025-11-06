@@ -120,8 +120,18 @@ async def shutdown():
 @app.post("/pose_estimation_v2")
 async def pose_estimation_v2(file: UploadFile = File(...)):
     global model, device_global
+    global request_count
+    if "request_count" not in globals():
+        request_count = 0
+    request_count += 1
 
-    print("DEBUG: Received pose estimation request")
+    print(f"DEBUG: Received pose estimation request #{request_count}")
+    # Check if we're getting different images
+    import hashlib
+
+    image_hash = hashlib.md5(contents).hexdigest()[:8]
+    print(f"DEBUG: Processing image with hash: {image_hash}, size: {len(contents)} bytes")
+
     # Lazy loading of TTNN model
     if model is None:
         try:
@@ -242,11 +252,12 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: Processed output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
 
         # Extract components from processed output
-        bbox = processed_output[0, :4, :]  # [4, num_anchors] - x, y, w, h
+        bbox = processed_output[0, :4, :]  # [4, num_anchors] - center_x, center_y, w, h
         conf = processed_output[0, 4:5, :]  # [1, num_anchors] - confidence
         keypoints = processed_output[0, 5:, :]  # [51, num_anchors] - 17 keypoints * 3 values each
 
         print(f"DEBUG: bbox shape: {bbox.shape}, conf shape: {conf.shape}, keypoints shape: {keypoints.shape}")
+        print(f"DEBUG: Raw bbox sample: {bbox[:, 0].tolist() if bbox.shape[1] > 0 else 'no bboxes'}")
 
         # Debug: Show confidence statistics
         max_conf = conf.max().item()
