@@ -17,8 +17,6 @@
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-using std::vector;
-
 namespace tt {
 
 namespace llrt {
@@ -33,22 +31,31 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-// Used for demonstration purposes and will be removed in the future.
-// Env variable to override the core grid configuration
-constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
-
-// Environment variable name for TT-Metal root directory
-constexpr auto TT_METAL_RUNTIME_ROOT_ENV_VAR = "TT_METAL_RUNTIME_ROOT";
-
 namespace {
 // Helper function to normalize directory paths using std::filesystem
-std::string normalize_path(const char* path, const std::string& subdir = "") {
-    std::filesystem::path p(path);
+std::string normalize_path(const std::filesystem::path& path, const std::string& subdir = "") {
     if (!subdir.empty()) {
-        p /= subdir;
+        path /= subdir;
     }
-    return p.lexically_normal().string();
+    return path.lexically_normal().string();
 }
+
+bool is_env_var_enabled(const char* value) { return value != nullptr && value[0] == '1' && value[1] == '\0'; }
+
+bool validate_root_dir(const std::string& root_dir) {
+    if (root_dir.empty()) {
+        return false;
+    }
+    if (!std::filesystem::is_directory(root_dir)) {
+        return false;
+    }
+    auto tt_metal_subdirectory = std::filesystem::path(root_dir) / "tt_metal";
+    if (!std::filesystem::exists(tt_metal_subdirectory)) {
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() :
@@ -62,56 +69,44 @@ RunTimeOptions::RunTimeOptions() :
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
     if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
-        this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
+        options_[EnvVarID::TT_METAL_RUNTIME_ROOT] = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
-    log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
+    log_debug(tt::LogMetal, "initial root_dir: {}", options_[EnvVarID::TT_METAL_RUNTIME_ROOT]);
 #endif
 
-    // ENV Can Override
-    const char* root_dir_str = std::getenv(TT_METAL_RUNTIME_ROOT_ENV_VAR);
-    if (root_dir_str == nullptr) {
-        // Fallback to TT_METAL_HOME for backwards compatibility
-        root_dir_str = std::getenv("TT_METAL_HOME");
-    }
-    if (root_dir_str != nullptr) {
-        this->root_dir = std::string(root_dir_str);
-        log_debug(tt::LogMetal, "ENV override root_dir: {}", this->root_dir);
-    } else if (!g_root_dir.empty()) {
-        this->root_dir = g_root_dir;
-        log_debug(tt::LogMetal, "API override root_dir: {}", this->root_dir);
-    } else if (this->root_dir.empty()) {
-        // If the current working directory contains a "tt_metal/" directory,
-        // treat the current working directory as the repository root.
-        std::filesystem::path current_working_directory = std::filesystem::current_path();
-        std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
-        if (std::filesystem::is_directory(tt_metal_subdirectory)) {
-            this->root_dir = current_working_directory.string();
-            log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
-        }
+    // API override
+    if (!g_root_dir.empty()) {
+        options_[EnvVarID::TT_METAL_RUNTIME_ROOT] = g_root_dir;
+        log_debug(tt::LogMetal, "API override root_dir: {}", options_[EnvVarID::TT_METAL_RUNTIME_ROOT]);
     }
 
-    if (this->root_dir.empty()) {
+    // Fallback to current working directory if the root directory is not valid
+    if (!validate_root_dir(options_[EnvVarID::TT_METAL_RUNTIME_ROOT])) {
+        std::filesystem::path current_working_directory = std::filesystem::current_path();
+        options_[EnvVarID::TT_METAL_RUNTIME_ROOT] = current_working_directory.string();
+        log_debug(
+            tt::LogMetal, "current working directory fallback root_dir: {}", options_[EnvVarID::TT_METAL_RUNTIME_ROOT]);
+    }
+
+    InitializeFromEnvVars();
+
+    if (!validate_root_dir(options_[EnvVarID::TT_METAL_RUNTIME_ROOT])) {
         log_critical(
             tt::LogMetal,
             "Failed to determine TT-Metal root directory. "
             "Root directory must be set via one of the following methods:\n"
             "1. Automatically determined when using a package install\n"
-            "2. Set TT_METAL_RUNTIME_ROOT (or TT_METAL_HOME) environment variable to the path containing tt_metal/\n"
+            "2. Set TT_METAL_RUNTIME_ROOT environment variable to the path containing tt_metal/\n"
             "3. Call RunTimeOptions::set_root_dir() API before creating RunTimeOptions\n"
             "4. Run from the root of the repository\n"
             "Current working directory: {}",
             std::filesystem::current_path().string());
     }
 
-    TT_FATAL(!this->root_dir.empty(), "Root Directory is not set.");
+    TT_FATAL(options_.contains(EnvVarID::TT_METAL_RUNTIME_ROOT), "Root Directory is not set.");
 
-    {
-        std::filesystem::path p(root_dir);
-        p /= "";  // ensures trailing slash, never duplicates
-        this->root_dir = p.string();
-    }
-
-    InitializeFromEnvVars();
+    // Ensure the root directory has a trailing slash
+    options_[EnvVarID::TT_METAL_RUNTIME_ROOT] = normalize_path(options_[EnvVarID::TT_METAL_RUNTIME_ROOT], "/");
 
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
@@ -122,29 +117,30 @@ void RunTimeOptions::set_root_dir(const std::string& root_dir) {
     std::call_once(g_root_once, [&] { g_root_dir = root_dir; });
 }
 
-const std::string& RunTimeOptions::get_root_dir() const { return root_dir; }
+const std::string& RunTimeOptions::get_root_dir() const { return options_.at(EnvVarID::TT_METAL_RUNTIME_ROOT); }
 
 const std::string& RunTimeOptions::get_cache_dir() const {
-    if (!this->is_cache_dir_specified()) {
-        TT_THROW("Env var {} is not set.", "TT_METAL_CACHE");
+    if (!is_cache_dir_specified()) {
+        TT_THROW("Env var {} is not set.", enchantum::to_string(EnvVarID::TT_METAL_CACHE));
     }
-    return this->cache_dir_;
+
+    return options_.at(EnvVarID::TT_METAL_CACHE);
 }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
-    if (!this->is_kernel_dir_specified()) {
-        TT_THROW("Env var {} is not set.", "TT_METAL_KERNEL_PATH");
+    if (!is_kernel_dir_specified()) {
+        TT_THROW("Env var {} is not set.", enchantum::to_string(EnvVarID::TT_METAL_KERNEL_PATH));
     }
 
-    return this->kernel_dir;
+    return options_.at(EnvVarID::TT_METAL_KERNEL_PATH);
 }
 
 const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
-    if (!this->is_core_grid_override_todeprecate()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR);
+    if (!is_core_grid_override_todeprecate()) {
+        TT_THROW("Env var {} is not set.", enchantum::to_string(EnvVarID::TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE));
     }
 
-    return this->core_grid_override_todeprecate;
+    return options_.at(EnvVarID::TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE);
 }
 
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
@@ -161,32 +157,32 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // PATH CONFIGURATION
         // ========================================
 
+        // TT_METAL_RUNTIME_ROOT
+        // Root directory for TT-Metal runtime.
+        // Default: Defaults to system temp directory if not set
+        // Usage: export TT_METAL_RUNTIME_ROOT=/path/to/runtime
+        case EnvVarID::TT_METAL_RUNTIME_ROOT: options_[id] = normalize_path(value, "/"); break;
+
         // TT_METAL_CACHE
         // Directory for caching compiled kernels and other build artifacts.
         // Default: Defaults to system temp directory if not set
         // Usage: export TT_METAL_CACHE=/path/to/cache
-        case EnvVarID::TT_METAL_CACHE:
-            this->is_cache_dir_env_var_set = true;
-            this->cache_dir_ = normalize_path(value, "tt-metal-cache");
-            break;
+        case EnvVarID::TT_METAL_CACHE: options_[id] = normalize_path(value, "tt-metal-cache"); break;
 
         // TT_METAL_KERNEL_PATH
         // Path to kernel source files.
         // Default: Uses TT_METAL_RUNTIME_ROOT/tt_metal/kernels if not set
         // Usage: export TT_METAL_KERNEL_PATH=/path/to/kernels
-        case EnvVarID::TT_METAL_KERNEL_PATH:
-            this->is_kernel_dir_env_var_set = true;
-            this->kernel_dir = normalize_path(value) + "/";
-            break;
+        case EnvVarID::TT_METAL_KERNEL_PATH: options_[id] = normalize_path(value, "/"); break;
 
         // TT_METAL_SIMULATOR
         // Path to simulator executable. When set, overrides mock cluster mode if both are set.
         // Default: Hardware mode (no simulator)
         // Usage: export TT_METAL_SIMULATOR=/path/to/simulator
         case EnvVarID::TT_METAL_SIMULATOR:
-            this->simulator_path = std::string(value);
+            options_[id] = normalize_path(value);
             // Simulator takes precedence over Mock (will be set even if Mock was set first)
-            this->runtime_target_device_ = tt::TargetDevice::Simulator;
+            runtime_target_device_ = tt::TargetDevice::Simulator;
             break;
 
         // TT_METAL_MOCK_CLUSTER_DESC_PATH
@@ -195,10 +191,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Hardware mode (no mock cluster)
         // Usage: export TT_METAL_MOCK_CLUSTER_DESC_PATH=/path/to/mock_cluster_desc.yaml
         case EnvVarID::TT_METAL_MOCK_CLUSTER_DESC_PATH:
-            this->mock_cluster_desc_path = std::string(value);
+            options_[id] = normalize_path(value);
             // Only set Mock target if Simulator hasn't been set already
-            if (this->simulator_path.empty()) {
-                this->runtime_target_device_ = tt::TargetDevice::Mock;
+            if (!options_.contains(EnvVarID::TT_METAL_SIMULATOR)) {
+                runtime_target_device_ = tt::TargetDevice::Mock;
             }
             break;
 
@@ -206,31 +202,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Comma-separated list of device IDs to make visible to the runtime.
         // Default: All devices visible
         // Usage: export TT_METAL_VISIBLE_DEVICES=0,1,2
-        case EnvVarID::TT_METAL_VISIBLE_DEVICES: this->visible_devices = std::string(value); break;
+        case EnvVarID::TT_METAL_VISIBLE_DEVICES: options_[id] = std::string(value); break;
 
         // ARCH_NAME
         // Sets the architecture name (only necessary during simulation).
         // Default: Hardware-detected architecture
         // Usage: export ARCH_NAME=wormhole_b0
-        case EnvVarID::ARCH_NAME: this->arch_name = std::string(value); break;
+        case EnvVarID::ARCH_NAME: options_[id] = std::string(value); break;
 
         // TT_MESH_GRAPH_DESC_PATH
         // Custom fabric mesh graph descriptor path.
         // Default: Default fabric mesh configuration
         // Usage: export TT_MESH_GRAPH_DESC_PATH=/path/to/mesh_desc.yaml
-        case EnvVarID::TT_MESH_GRAPH_DESC_PATH:
-            this->is_custom_fabric_mesh_graph_desc_path_set = true;
-            this->custom_fabric_mesh_graph_desc_path = std::string(value);
-            break;
+        case EnvVarID::TT_MESH_GRAPH_DESC_PATH: options_[id] = normalize_path(value); break;
 
         // TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE
         // Override core grid configuration (this is meant to be deprecated).
         // Default: Hardware-detected core grid
         // Usage: export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=custom_grid
-        case EnvVarID::TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE:
-            this->is_core_grid_override_todeprecate_env_var_set = true;
-            this->core_grid_override_todeprecate = std::string(value);
-            break;
+        case EnvVarID::TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: options_[id] = std::string(value); break;
 
         // ========================================
         // KERNEL EXECUTION CONTROL
@@ -240,13 +230,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Skip actual kernel execution, useful for testing dispatch logic without running kernels.
         // Default: false (kernels execute normally)
         // Usage: export TT_METAL_NULL_KERNELS=1
-        case EnvVarID::TT_METAL_NULL_KERNELS: this->null_kernels = true; break;
+        case EnvVarID::TT_METAL_NULL_KERNELS: this->null_kernels = is_env_var_enabled(value); break;
 
         // TT_METAL_KERNELS_EARLY_RETURN
         // Kernels return early, skipping execution but maintaining same size as normal.
         // Default: false (kernels execute fully)
         // Usage: export TT_METAL_KERNELS_EARLY_RETURN=1
-        case EnvVarID::TT_METAL_KERNELS_EARLY_RETURN: this->kernels_early_return = true; break;
+        case EnvVarID::TT_METAL_KERNELS_EARLY_RETURN: this->kernels_early_return = is_env_var_enabled(value); break;
 
         // ========================================
         // MEMORY INITIALIZATION
@@ -256,13 +246,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Clear L1 memory on device initialization.
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_L1=1
-        case EnvVarID::TT_METAL_CLEAR_L1: this->clear_l1 = (value[0] == '1'); break;
+        case EnvVarID::TT_METAL_CLEAR_L1: this->clear_l1 = is_env_var_enabled(value); break;
 
         // TT_METAL_CLEAR_DRAM
         // Clear DRAM memory on device initialization.
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_DRAM=1
-        case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = (value[0] == '1'); break;
+        case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = is_env_var_enabled(value); break;
+
         // ========================================
         // DEBUG & TESTING
         // ========================================
@@ -271,19 +262,21 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Enable test mode for watcher functionality.
         // Default: false (normal mode)
         // Usage: export TT_METAL_WATCHER_TEST_MODE=1
-        case EnvVarID::TT_METAL_WATCHER_TEST_MODE: this->test_mode_enabled = true; break;
+        case EnvVarID::TT_METAL_WATCHER_TEST_MODE: this->test_mode_enabled = is_env_var_enabled(value); break;
 
         // TT_METAL_KERNEL_MAP
         // Enable kernel build mapping for debugging.
         // Default: false (mapping disabled)
         // Usage: export TT_METAL_KERNEL_MAP=1
-        case EnvVarID::TT_METAL_KERNEL_MAP: this->build_map_enabled = true; break;
+        case EnvVarID::TT_METAL_KERNEL_MAP: this->build_map_enabled = is_env_var_enabled(value); break;
 
         // TT_METAL_DISPATCH_DATA_COLLECTION
         // Enable collection of dispatch debugging data.
         // Default: false (collection disabled)
         // Usage: export TT_METAL_DISPATCH_DATA_COLLECTION=1
-        case EnvVarID::TT_METAL_DISPATCH_DATA_COLLECTION: this->enable_dispatch_data_collection = true; break;
+        case EnvVarID::TT_METAL_DISPATCH_DATA_COLLECTION:
+            this->enable_dispatch_data_collection = is_env_var_enabled(value);
+            break;
 
         // TT_METAL_GTEST_ETH_DISPATCH
         // Use Ethernet cores for dispatch in tests.
@@ -422,21 +415,23 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (skip retraining)
         // Usage: export TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1
         case EnvVarID::TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN:
-            this->skip_eth_cores_with_retrain = (value[0] == '1');
+            this->skip_eth_cores_with_retrain = is_env_var_enabled(value);
             break;
 
         // TT_METAL_VALIDATE_PROGRAM_BINARIES
         // Validate kernel binary integrity before execution.
         // Default: 0 (no validation)
         // Usage: export TT_METAL_VALIDATE_PROGRAM_BINARIES=1
-        case EnvVarID::TT_METAL_VALIDATE_PROGRAM_BINARIES: this->set_validate_kernel_binaries(value[0] == '1'); break;
+        case EnvVarID::TT_METAL_VALIDATE_PROGRAM_BINARIES:
+            this->set_validate_kernel_binaries(is_env_var_enabled(value));
+            break;
 
         // TT_METAL_DISABLE_DMA_OPS
         // Disable DMA operations for debugging.
         // Default: 0 (DMA enabled)
         // Usage: export TT_METAL_DISABLE_DMA_OPS=1
         case EnvVarID::TT_METAL_DISABLE_DMA_OPS:
-            if (value[0] == '1') {
+            if (is_env_var_enabled(value)) {
                 this->disable_dma_ops = true;
             }
             break;
@@ -464,7 +459,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 #if !defined(TRACY_ENABLE)
             TT_FATAL(false, "TT_METAL_DEVICE_PROFILER requires a Tracy-enabled build of tt-metal.");
 #else
-            if (value && value[0] == '1') {
+            if (is_env_var_enabled(value)) {
                 this->profiler_enabled = true;
             }
 #endif
@@ -476,7 +471,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DEVICE_PROFILER_DISPATCH=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_DISPATCH: {
             // Only enable dispatch profiling if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_var_enabled(value)) {
                 this->profile_dispatch_cores = true;
             }
             break;
@@ -488,7 +483,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_SYNC=1
         case EnvVarID::TT_METAL_PROFILER_SYNC: {
             // Only enable sync profiling if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_var_enabled(value)) {
                 this->profiler_sync_enabled = true;
             }
             break;
@@ -499,7 +494,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (NoC events not profiled)
         // Usage: export TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_NOC_EVENTS:
-            if (value && value[0] == '1') {
+            if (is_env_var_enabled(value)) {
                 this->profiler_enabled = true;
                 this->profiler_noc_events_enabled = true;
             }
@@ -518,7 +513,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (memory profiling disabled)
         // Usage: export TT_METAL_MEM_PROFILER=1
         case EnvVarID::TT_METAL_MEM_PROFILER:
-            if (value && value[0] == '1') {
+            if (is_env_var_enabled(value)) {
                 this->profiler_buffer_usage_enabled = true;
             }
             break;
@@ -529,7 +524,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_TRACE_PROFILER=1
         case EnvVarID::TT_METAL_TRACE_PROFILER: {
             // Only enable trace profiling if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_var_enabled(value)) {
                 this->profiler_trace_profiler = true;
             }
             break;
@@ -541,7 +536,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_TRACE_TRACKING=1
         case EnvVarID::TT_METAL_PROFILER_TRACE_TRACKING: {
             // Only enable trace tracking if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_var_enabled(value)) {
                 this->profiler_trace_tracking = true;
             }
             break;
@@ -553,7 +548,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_MID_RUN_DUMP=1
         case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: {
             // Only enable mid-run dumps if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_var_enabled(value)) {
                 this->profiler_mid_run_dump = true;
             }
             break;
@@ -565,7 +560,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_CPP_POST_PROCESS=1
         case EnvVarID::TT_METAL_PROFILER_CPP_POST_PROCESS: {
             // Only enable C++ post-processing if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_var_enabled(value)) {
                 this->profiler_cpp_post_process = true;
             }
             break;

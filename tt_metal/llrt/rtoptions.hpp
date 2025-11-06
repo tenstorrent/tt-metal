@@ -34,7 +34,7 @@ enum class EnvVarID {
     // ========================================
     // PATH CONFIGURATION
     // ========================================
-
+    TT_METAL_RUNTIME_ROOT,                    // Path to metal runtime artifacts (Optional Override)
     TT_METAL_CACHE,                           // Cache directory for compiled kernels
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_SIMULATOR,                       // Path to simulator executable
@@ -217,22 +217,9 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
-    std::string root_dir;
+    std::unordered_map<EnvVarID, std::string> options_;
 
-    bool is_cache_dir_env_var_set = false;
-    std::string cache_dir_;
-
-    bool is_kernel_dir_env_var_set = false;
-    std::string kernel_dir;
-    std::string system_kernel_dir;
-
-    bool is_core_grid_override_todeprecate_env_var_set = false;
-    std::string core_grid_override_todeprecate;
-
-    bool is_custom_fabric_mesh_graph_desc_path_set = false;
-    std::string custom_fabric_mesh_graph_desc_path;
-
-    bool build_map_enabled = false;
+    bool build_map_enabled_ = false;
 
     WatcherSettings watcher_settings;
     bool record_noc_transfer_data = false;
@@ -361,10 +348,10 @@ public:
     static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
-    bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
+    bool is_cache_dir_specified() const { return options_.contains(EnvVarID::TT_METAL_CACHE); }
     const std::string& get_cache_dir() const;
 
-    bool is_kernel_dir_specified() const { return this->is_kernel_dir_env_var_set; }
+    bool is_kernel_dir_specified() const { return options_.contains(EnvVarID::TT_METAL_KERNEL_PATH); }
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
