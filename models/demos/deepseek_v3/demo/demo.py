@@ -94,7 +94,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--generator",
         choices=["pp", "bp"],
         default="bp",
-        help="Select generator implementation: default (pipeline parallel), bp (batch parallel).",
+        help="Select generator implementation: default (batch parallel), pp (pipeline parallel).",
     )
     return p
 
