@@ -352,8 +352,8 @@ def prepare_sharded_ttnn_grid(
     "input_shape, grid_shape",
     [
         ((1, 256, 48, 160), (1, 1, 1408, 2)),
-        # ((1, 256, 24, 80), (1, 7, 1408, 2)),
-        # ((1, 256, 48, 160), (1, 7, 1408, 2)),
+        # ((1, 256, 24, 80), (1, 1, 1408, 2)),
+        # ((1, 256, 48, 160), (1, 1, 1408, 2)),
         # ((16, 32, 100, 100), (16, 10000, 4, 2)),
         # ((48, 32, 12, 20), (48, 3567, 8, 2)),
         # ((8, 32, 100, 100), (8, 300, 4, 2)),
@@ -367,15 +367,11 @@ def prepare_sharded_ttnn_grid(
     ],
 )
 @pytest.mark.parametrize(
-    "mode",
+    "mode, align_corners",
     [
-        "nearest",
-    ],
-)
-@pytest.mark.parametrize(
-    "align_corners",
-    [
-        True,
+        ("nearest", True),
+        # ("nearest", False),
+        # ("bilinear", False),
     ],
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid):
@@ -399,7 +395,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
 
     # Add small noise to the grid
     torch_grid += torch.randn(grid_shape) * 0.05
-    # torch_grid  = torch.ones(grid_shape)
+
     torch_output_nchw = F.grid_sample(
         torch_input_nchw, torch_grid, mode=mode, padding_mode="zeros", align_corners=align_corners
     )
@@ -514,15 +510,15 @@ def test_grid_sample_batch_output_channels_flag(
     "input_shape, grid_shape",
     [
         ((1, 256, 48, 160), (1, 1, 1408, 2)),
-        # ((1, 256, 24, 80), (1, 1, 1408, 2)),
-        # ((48, 64, 32, 64), (48, 15, 15, 2)),
-        # ((13, 96, 8, 16), (13, 6, 7, 2)),
+        ((1, 256, 24, 80), (1, 1, 1408, 2)),
+        ((48, 64, 32, 64), (48, 15, 15, 2)),
+        ((13, 96, 8, 16), (13, 6, 7, 2)),
     ],
 )
 @pytest.mark.parametrize(
     "core_grid",
     [
-        # None,  # Use full device grid
+        None,  # Use full device grid
         ttnn.CoreGrid(y=4, x=5),  # 4,5 is the grid size of the BOS N1 device
     ],
 )
@@ -530,8 +526,8 @@ def test_grid_sample_batch_output_channels_flag(
     "mode, align_corners",
     [
         ("nearest", True),
-        # ("nearest", False),
-        # ("bilinear", False),
+        ("nearest", False),
+        ("bilinear", False),
     ],
 )
 def test_grid_sample_sharded(

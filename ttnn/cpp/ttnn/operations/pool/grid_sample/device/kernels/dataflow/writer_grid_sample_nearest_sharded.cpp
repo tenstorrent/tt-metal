@@ -92,9 +92,9 @@ ALWI void process_grid_point_nearest(
         const uint32_t input_stick_index = batch_offset + (nearest_h * input_width) + nearest_w;
         const uint64_t input_noc_addr = input_tensor_accessor.get_noc_addr(input_stick_index);
         noc_async_read(input_noc_addr, l1_write_output_addr, input_stick_nbytes);
-        if constexpr (!is_sharded) {
-            noc_async_read_barrier();
-        }
+        // if constexpr (!is_sharded) {
+        //     noc_async_read_barrier();
+        // }
     } else {
         // Out of bounds - fill with zeros
         for (uint32_t i = 0; i < input_stick_nbytes; i += sizeof(uint32_t)) {
@@ -106,6 +106,7 @@ ALWI void process_grid_point_nearest(
 }
 
 // Advance grid index utility - same as sharded reader
+template <bool is_sharded>
 ALWI void advance_grid_index(
     uint32_t& in_grid_row_idx,
     uint32_t& grid_stick_idx,
@@ -120,7 +121,9 @@ ALWI void advance_grid_index(
     if (in_grid_row_idx == grid_batching_factor) {
         in_grid_row_idx = 0;
         ++grid_stick_idx;
-        l1_grid_addr += grid_stick_nbytes;
+        if constexpr (is_sharded) {
+            l1_grid_addr += grid_stick_nbytes;
+        }
         ++grid_points_processed;
         if (grid_points_processed == grid_hw) {
             grid_points_processed = 0;
@@ -191,7 +194,7 @@ void kernel_main() {
     uint32_t grid_points_processed = global_grid_stick_start % grid_hw;
     // Advance at start if needed (for split reader)
     if constexpr (split_reader && reader_id == 1) {
-        advance_grid_index(
+        advance_grid_index<is_sharded>(
             in_grid_row_idx,
             grid_stick_idx,
             l1_grid_addr,
@@ -202,12 +205,10 @@ void kernel_main() {
             grid_hw,
             grid_nsticks_per_core);
     }
-    volatile tt_l1_ptr uint16_t* grid_stick_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
 
     while (grid_stick_idx < grid_nsticks_per_core) {
-        if constexpr (is_sharded) {
-            grid_stick_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
-        }
+        volatile tt_l1_ptr uint16_t* grid_stick_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_grid_addr);
+
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
         if constexpr (!is_sharded) {
@@ -216,9 +217,7 @@ void kernel_main() {
             noc_async_read(grid_noc_addr, l1_grid_base_addr, grid_stick_nbytes);
             noc_async_read_barrier();
         }
-        // Reserve CB space for output
-        // cb_reserve_back(output_cb_index, 1);
-        uint32_t l1_write_output_addr = l1_write_output_base_addr + grid_stick_idx * input_stick_nbytes;
+        uint32_t l1_write_output_addr = l1_write_output_base_addr + (grid_stick_idx * input_stick_nbytes);
 
         // Process nearest neighbor sampling and write directly to output
         process_grid_point_nearest<
@@ -232,11 +231,8 @@ void kernel_main() {
             output_cb_index>(
             grid_stick_ptr, in_grid_row_idx, input_tensor_accessor, batch_offset, l1_write_output_addr);
 
-        // Push output to CB
-        // cb_push_back(output_cb_index, 1);
-
         // Always advance once after processing
-        advance_grid_index(
+        advance_grid_index<is_sharded>(
             in_grid_row_idx,
             grid_stick_idx,
             l1_grid_addr,
@@ -249,7 +245,7 @@ void kernel_main() {
 
         // For split reader, advance one more time to skip the coordinate that the other reader will process
         if constexpr (split_reader) {
-            advance_grid_index(
+            advance_grid_index<is_sharded>(
                 in_grid_row_idx,
                 grid_stick_idx,
                 l1_grid_addr,
@@ -261,7 +257,5 @@ void kernel_main() {
                 grid_nsticks_per_core);
         }
     }
-    if constexpr (is_sharded) {
-        noc_async_read_barrier();
-    }
+    noc_async_read_barrier();
 }
