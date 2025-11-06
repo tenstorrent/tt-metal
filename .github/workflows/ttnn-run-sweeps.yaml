@@ -774,7 +774,7 @@ jobs:
           is_schedule = event_name == "schedule"
           is_comprehensive = schedule_expr == "0 4 * * 3" or schedule_expr == "0 5 * * 6" or sweep_name == "ALL SWEEPS (Comprehensive)"
           wormhole_suite_name = "nightly" if not is_comprehensive else None
-          should_add_n300 = is_schedule and schedule_expr == "0 4 * * 1,2,4,5"
+          should_add_n300 = True
 
           include_entries = []
 
