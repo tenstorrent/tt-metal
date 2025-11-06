@@ -13,7 +13,7 @@
 #include <stdexcept>
 #include <string>
 #include <enchantum/enchantum.hpp>
-#include "tt_stl/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -33,10 +33,6 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-// Used for demonstration purposes and will be removed in the future.
-// Env variable to override the core grid configuration
-constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
-
 // Environment variable name for TT-Metal root directory
 constexpr auto TT_METAL_RUNTIME_ROOT_ENV_VAR = "TT_METAL_RUNTIME_ROOT";
 
@@ -49,6 +45,9 @@ std::string normalize_path(const char* path, const std::string& subdir = "") {
     }
     return p.lexically_normal().string();
 }
+
+// Helper function to check if environment variable value is "1" (enabled)
+inline bool is_env_enabled(const char* value) { return value && value[0] == '1'; }
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() :
@@ -141,7 +140,7 @@ const std::string& RunTimeOptions::get_kernel_dir() const {
 
 const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
     if (!this->is_core_grid_override_todeprecate()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR);
+        TT_THROW("Env var {} is not set.", enchantum::to_string(EnvVarID::TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE));
     }
 
     return this->core_grid_override_todeprecate;
@@ -256,13 +255,13 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Clear L1 memory on device initialization.
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_L1=1
-        case EnvVarID::TT_METAL_CLEAR_L1: this->clear_l1 = (value[0] == '1'); break;
+        case EnvVarID::TT_METAL_CLEAR_L1: this->clear_l1 = is_env_enabled(value); break;
 
         // TT_METAL_CLEAR_DRAM
         // Clear DRAM memory on device initialization.
         // Default: 0 (don't clear)
         // Usage: export TT_METAL_CLEAR_DRAM=1
-        case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = (value[0] == '1'); break;
+        case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = is_env_enabled(value); break;
         // ========================================
         // DEBUG & TESTING
         // ========================================
@@ -345,7 +344,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             if (value) {
                 std::string mode_str(value);
                 // Convert to lowercase for case-insensitive comparison
-                std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), ::tolower);
+                std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), [](unsigned char c) {
+                    return std::tolower(c);
+                });
                 if (mode_str == "strict" || mode_str == "0") {
                     this->reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
                 } else if (mode_str == "relaxed" || mode_str == "1") {
@@ -373,10 +374,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_USE_MGD_2_0=1
         case EnvVarID::TT_METAL_USE_MGD_2_0:
             if (value) {
-                this->use_mesh_graph_descriptor_2_0 = true;
-                if (std::strncmp(value, "0", 1) == 0) {
-                    this->use_mesh_graph_descriptor_2_0 = false;
-                }
+                this->use_mesh_graph_descriptor_2_0 = (std::strncmp(value, "0", 1) != 0);
             }
             break;
 
@@ -412,24 +410,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: true (skip retraining)
         // Usage: export TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1
         case EnvVarID::TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN:
-            this->skip_eth_cores_with_retrain = (value[0] == '1');
+            this->skip_eth_cores_with_retrain = is_env_enabled(value);
             break;
 
         // TT_METAL_VALIDATE_PROGRAM_BINARIES
         // Validate kernel binary integrity before execution.
         // Default: 0 (no validation)
         // Usage: export TT_METAL_VALIDATE_PROGRAM_BINARIES=1
-        case EnvVarID::TT_METAL_VALIDATE_PROGRAM_BINARIES: this->set_validate_kernel_binaries(value[0] == '1'); break;
+        case EnvVarID::TT_METAL_VALIDATE_PROGRAM_BINARIES:
+            this->set_validate_kernel_binaries(is_env_enabled(value));
+            break;
 
         // TT_METAL_DISABLE_DMA_OPS
         // Disable DMA operations for debugging.
         // Default: 0 (DMA enabled)
         // Usage: export TT_METAL_DISABLE_DMA_OPS=1
-        case EnvVarID::TT_METAL_DISABLE_DMA_OPS:
-            if (value[0] == '1') {
-                this->disable_dma_ops = true;
-            }
-            break;
+        case EnvVarID::TT_METAL_DISABLE_DMA_OPS: this->disable_dma_ops = is_env_enabled(value); break;
 
         // TT_METAL_ENABLE_ERISC_IRAM
         // Enable ERISC IRAM functionality (inverted: 0=disabled, 1=enabled).
@@ -454,7 +450,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 #if !defined(TRACY_ENABLE)
             TT_FATAL(false, "TT_METAL_DEVICE_PROFILER requires a Tracy-enabled build of tt-metal.");
 #else
-            if (value && value[0] == '1') {
+            if (is_env_enabled(value)) {
                 this->profiler_enabled = true;
             }
 #endif
@@ -466,7 +462,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DEVICE_PROFILER_DISPATCH=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_DISPATCH: {
             // Only enable dispatch profiling if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profile_dispatch_cores = true;
             }
             break;
@@ -478,7 +474,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_SYNC=1
         case EnvVarID::TT_METAL_PROFILER_SYNC: {
             // Only enable sync profiling if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_sync_enabled = true;
             }
             break;
@@ -489,7 +485,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (NoC events not profiled)
         // Usage: export TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1
         case EnvVarID::TT_METAL_DEVICE_PROFILER_NOC_EVENTS:
-            if (value && value[0] == '1') {
+            if (is_env_enabled(value)) {
                 this->profiler_enabled = true;
                 this->profiler_noc_events_enabled = true;
             }
@@ -508,7 +504,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (memory profiling disabled)
         // Usage: export TT_METAL_MEM_PROFILER=1
         case EnvVarID::TT_METAL_MEM_PROFILER:
-            if (value && value[0] == '1') {
+            if (is_env_enabled(value)) {
                 this->profiler_buffer_usage_enabled = true;
             }
             break;
@@ -519,7 +515,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_TRACE_PROFILER=1
         case EnvVarID::TT_METAL_TRACE_PROFILER: {
             // Only enable trace profiling if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_trace_profiler = true;
             }
             break;
@@ -531,7 +527,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_TRACE_TRACKING=1
         case EnvVarID::TT_METAL_PROFILER_TRACE_TRACKING: {
             // Only enable trace tracking if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_trace_tracking = true;
             }
             break;
@@ -543,7 +539,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_MID_RUN_DUMP=1
         case EnvVarID::TT_METAL_PROFILER_MID_RUN_DUMP: {
             // Only enable mid-run dumps if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_mid_run_dump = true;
             }
             break;
@@ -555,7 +551,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_PROFILER_CPP_POST_PROCESS=1
         case EnvVarID::TT_METAL_PROFILER_CPP_POST_PROCESS: {
             // Only enable C++ post-processing if device profiler is also enabled
-            if (this->profiler_enabled && value && value[0] == '1') {
+            if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_cpp_post_process = true;
             }
             break;
@@ -815,8 +811,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                     this->inspector_settings.rpc_server_host = addr.substr(0, colon_pos);
                     try {
                         this->inspector_settings.rpc_server_port = std::stoi(addr.substr(colon_pos + 1));
-                    } catch (...) {
+                    } catch (const std::invalid_argument&) {
                         TT_THROW("Invalid port in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
+                    } catch (const std::out_of_range&) {
+                        TT_THROW("Port out of range in TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS: {}", value);
                     }
                 } else {
                     this->inspector_settings.rpc_server_host = addr;

@@ -395,7 +395,6 @@ public:
     void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
-    //
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
     uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
