@@ -56,6 +56,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
+      contents: read # this line must be added
+      actions: read # this line must be added
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -63,6 +65,7 @@ jobs:
       tracy: true
       version: ${{ inputs.version || '22.04' }}
       skip-tt-train: false
+      use-artifacts-from-run: 19147788291
 
   find-changed-files:
     runs-on: ubuntu-latest
