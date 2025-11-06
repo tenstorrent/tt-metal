@@ -12,13 +12,9 @@ Tokenizing is done in 128 splits to avoid memory issues.
 import os
 import argparse
 import numpy as np
-import msgpack
 import msgpack_numpy as m
 import csv
 from transformers import AutoTokenizer
-
-# Enable numpy serialization for msgpack
-m.patch()
 
 
 def load_text_data(text_file):
@@ -63,6 +59,7 @@ def main():
     parser.add_argument(
         "--hf_tokenizer",
         type=str,
+        required=True,
         help="Hugging Face tokenizer identifier (e.g., gpt2, distilgpt2).",
     )
     parser.add_argument(

@@ -5,7 +5,7 @@ To pre-tokenize the Shakespeare dataset (as an example), use the `dataset_to_tok
 Example usage:
 ```
 cd $TT_METAL_HOME/tt-train
-python dataset_to_tokens.py --text_file data/shakespeare.txt --hf_tokenizer gpt2
+python tools/dataset_to_tokens.py --text_file data/shakespeare.txt --hf_tokenizer gpt2
 ```
 
 Arguments:
