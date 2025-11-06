@@ -91,10 +91,10 @@ jobs:
 
           # By default, test list includes perf tests. If we don't want to run perf tests,
           # filter them out
-          if [[ "$merge-gate-call" == "true" ]]; then
-            requested_ttnn_tests=$(jq '[.[] | select(.merge_gate == true)]' <<< "$requested_ttnn_tests")
-            echo "[info] after filtering filtering out perf tests: $requested_ttnn_tests"
-          fi
+          # if [[ "$merge-gate-call" == "true" ]]; then
+          #   requested_ttnn_tests=$(jq '[.[] | select(.merge_gate == true)]' <<< "$requested_ttnn_tests")
+          #   echo "[info] after filtering filtering out perf tests: $requested_ttnn_tests"
+          # fi
 
           # Check that we have a valid test list that's not empty
           echo "$requested_ttnn_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
