@@ -165,6 +165,85 @@ def test_convert_to_hwc(device, B, C, HW, core_grid, padded_sharded_dim, provide
     assert passed, message
 
 
+@pytest.mark.parametrize("B", [1, 2])
+@pytest.mark.parametrize("C", [1, 2])
+@pytest.mark.parametrize(
+    "HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim",
+    (
+        (
+            32,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            32,
+            32,
+        ),
+        (
+            64,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+            64,
+            32,
+        ),
+    ),
+)
+def test_convert_to_hwc_with_resharding(
+    device, B, C, HW, input_core_grid, output_core_grid, input_padded_sharded_dim, output_padded_sharded_dim
+):
+    device_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y
+    requested_num_cores = output_core_grid.num_cores()
+    if device_num_cores < requested_num_cores:
+        pytest.skip(f"Not enough cores to run test case (need {requested_num_cores} but have {device_num_cores})")
+
+    is_uneven = input_padded_sharded_dim * input_core_grid.num_cores() > HW
+    if is_uneven and B > 1:
+        pytest.skip(f"Uneven sharding is not supported when B > 1 (was {B})")
+
+    input_tensor = torch.concat(
+        [
+            torch.concat(
+                [torch.full([1, 1, 1, HW], c + ((b + 1) * 100), dtype=torch.bfloat16) for c in range(C)], dim=2
+            )
+            for b in range(B)
+        ],
+        dim=1,
+    )
+    input_tensor = torch.randn([1, B, C, HW], dtype=torch.bfloat16)
+
+    expected = input_tensor.transpose(2, 3).reshape(1, 1, B * HW, C)
+
+    input_shard_shape = (B * C, input_padded_sharded_dim)
+    input_shard_spec = ttnn.ShardSpec(input_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    input_tensor = ttnn.Tensor(
+        input_tensor, ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, mem_config=input_mem_config
+    )
+
+    print(input_tensor)
+    print(
+        input_tensor.shape,
+        input_tensor.memory_config().shard_spec,
+        " cores=",
+        input_tensor.memory_config().shard_spec.num_cores(),
+    )
+
+    output_shard_shape = (B * output_padded_sharded_dim, round_up(C, 8))
+    output_shard_spec = ttnn.ShardSpec(output_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+    print(output_mem_config.shard_spec, " cores=", output_mem_config.shard_spec.num_cores())
+
+    actual = ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
+    actual = ttnn.to_torch(actual)
+
+    print(expected)
+    print(actual[:, :, :, : expected.shape[-1]])
+
+    passed, message = assert_equal(
+        expected, actual[:, :, :, : expected.shape[-1]]
+    )  # slice off padding that is applied when C % 8 != 0
+    assert passed, message
+
+
 # @pytest.mark.parametrize("C", CHANNEL_TEST_CASES)
 @pytest.mark.parametrize("C", [1, 2])
 @pytest.mark.parametrize(
