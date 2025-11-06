@@ -276,6 +276,27 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
         MeshId mesh_id(mesh_instance.local_id);
         MeshShape mesh_shape(mesh_desc->device_topology().dims().at(0), mesh_desc->device_topology().dims().at(1));
 
+        // Validate mesh shape dimensions are valid (must be positive and even for WORMHOLE_B0)
+        TT_FATAL(
+            mesh_shape[0] > 0 && mesh_shape[1] > 0,
+            "MeshGraph: Mesh shape dimensions must be positive, got {}x{}",
+            mesh_shape[0],
+            mesh_shape[1]);
+
+        // For WORMHOLE_B0 architecture, if both dimensions are odd, they must both be 1
+        // (i.e., 1x1 is valid, but 3x5 is not)
+        if (mesh_desc->arch() == proto::Architecture::WORMHOLE_B0) {
+            bool both_odd = (mesh_shape[0] % 2 != 0) && (mesh_shape[1] % 2 != 0);
+            if (both_odd) {
+                TT_FATAL(
+                    mesh_shape[0] == 1 && mesh_shape[1] == 1,
+                    "MeshGraph: For WORMHOLE_B0 architecture, if both mesh dimensions are odd, they must both be 1, "
+                    "got {}x{}",
+                    mesh_shape[0],
+                    mesh_shape[1]);
+            }
+        }
+
         // Build intra-mesh connectivity based on FabricConfig override (if provided) or MGD's fabric type
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
         FabricType effective_fabric_type;
@@ -307,6 +328,15 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
         MeshShape host_shape(mesh_desc->host_topology().dims().at(0), mesh_desc->host_topology().dims().at(1));
 
+        // Validate that mesh shape is divisible by host shape before processing
+        TT_FATAL(
+            mesh_shape[0] % host_shape[0] == 0 && mesh_shape[1] % host_shape[1] == 0,
+            "MeshGraph: Mesh shape {}x{} must be divisible by host shape {}x{}",
+            mesh_shape[0],
+            mesh_shape[1],
+            host_shape[0],
+            host_shape[1]);
+
         std::vector<MeshHostRankId> mesh_host_ranks_values;
         uint32_t next_rank = 0;
         for (const auto& host_coord : MeshCoordinateRange(host_shape)) {
@@ -314,14 +344,6 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd, std::optiona
 
             std::uint32_t board_ns_size = mesh_shape[0] / host_shape[0];
             std::uint32_t board_ew_size = mesh_shape[1] / host_shape[1];
-
-            TT_FATAL(
-                mesh_shape[0] % host_shape[0] == 0 && mesh_shape[1] % host_shape[1] == 0,
-                "MeshGraph: Mesh shape {}x{} must be divisible by host shape {}x{}",
-                mesh_shape[0],
-                mesh_shape[1],
-                host_shape[0],
-                host_shape[1]);
 
             // Populate mesh_host_rank_coord_ranges_
             this->mesh_host_rank_coord_ranges_.emplace(
