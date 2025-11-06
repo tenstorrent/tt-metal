@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -160,8 +159,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat x = sfpi::setexp(absbase, 127);  // set exp to exp bias (put base in range of 1-2)
 
     // 5th degree polynomial approx - REMEZ algorithm over [1,2]
-    constexpr float coeffs[] = {-1.94046315f, 3.5271965f, -2.45830873f, 1.1286426f, -0.28807408f, 0.03101577f};
-    sfpi::vFloat series_result = PolynomialEvaluator<6, sfpi::vFloat, float>::eval(coeffs, x);
+    // constexpr float coeffs[] = {-1.94046315f, 3.5271965f, -2.45830873f, 1.1286426f, -0.28807408f, 0.03101577f};
+    // sfpi::vFloat series_result = PolynomialEvaluator<6, sfpi::vFloat, float>::eval(coeffs, x);
+    sfpi::vFloat series_result =
+        x * (x * (x * (x * (x * 0.03101577f - 0.28807408f) + 1.1286426f) - 2.45830873f) + 3.5271965f) - 1.94046315f;
 
     // Convert exponent to float
     sfpi::vInt exp = sfpi::exexp(base);
@@ -216,9 +217,20 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     // mantissa fields (using bit manipulation techniques - BMT) for exactness. In exp_61f, all coefficients are
     // floating-point values derived from the Chebyshev polynomial approach, making the implementation simpler and
     // purely mathematical without integer-based operations.
-    constexpr float coeffs_61f[] = {
-        1.0000000018f, 0.69314699f, 0.24022982f, 0.055483369f, 0.0096788315f, 0.001243946f, 0.0002170391f};
-    sfpi::vFloat poly = PolynomialEvaluator<7, sfpi::vFloat, float>::eval(coeffs_61f, frac);
+    // constexpr float coeffs_61f[] = {
+    //     1.0000000018f, 0.69314699f, 0.24022982f, 0.055483369f, 0.0096788315f, 0.001243946f, 0.0002170391f};
+    // sfpi::vFloat poly = PolynomialEvaluator<7, sfpi::vFloat, float>::eval(coeffs_61f, frac);
+
+    // sfpi::vFloat poly = POLYVAL7<sfpi::vFloat>(
+    //     0.0002170391f, 0.001243946f, 0.0096788315f, 0.055483369f, 0.24022982f, 0.69314699f, 1.0000000018f, frac);
+
+    sfpi::vFloat poly =
+        ((((((0.0002170391f * frac) + 0.001243946f) * frac + 0.0096788315f) * frac + 0.055483369f) * frac +
+          0.24022982f) *
+             frac +
+         0.69314699f) *
+            frac +
+        1.0000000018f;
 
     // Restore exponent
     zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
@@ -254,34 +266,33 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_61f_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
-template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow);
-
-// is_fp32_dest_acc_en == false
-template <>
-sfpi_inline sfpi::vFloat _sfpu_binary_power_<false>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_21f_<false>(base, pow);
-}
-
-// is_fp32_dest_acc_en == true
-template <>
-sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFloat pow) {
-    return _sfpu_binary_power_61f_(base, pow);
-}
-
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     if constexpr (BINOP == BinaryOp::POW) {
-        for (int d = 0; d < ITERATIONS; d++) {
-            // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-            constexpr uint dst_tile_size_sfpi = 32;
-            sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-            sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        if constexpr (is_fp32_dest_acc_en) {
+            for (int d = 0; d < ITERATIONS; d++) {
+                // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+                constexpr uint dst_tile_size_sfpi = 32;
+                sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+                sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-            sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
+                sfpi::vFloat result = _sfpu_binary_power_61f_(in0, in1);
 
-            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-            sfpi::dst_reg++;
+                sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+                sfpi::dst_reg++;
+            }
+        } else {
+            for (int d = 0; d < ITERATIONS; d++) {
+                // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+                constexpr uint dst_tile_size_sfpi = 32;
+                sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+                sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+                sfpi::vFloat result = _sfpu_binary_power_21f_<is_fp32_dest_acc_en>(in0, in1);
+
+                sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+                sfpi::dst_reg++;
+            }
         }
     } else {
         _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_out);
