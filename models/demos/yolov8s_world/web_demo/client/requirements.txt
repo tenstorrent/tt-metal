@@ -1,4 +1,4 @@
-opencv-python==4.12.0.88
+opencv-python==4.8.1.78
 streamlit==1.26.0
 streamlit-webrtc==0.47.0
 orjson==3.10.12

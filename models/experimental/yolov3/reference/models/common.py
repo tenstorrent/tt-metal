@@ -479,7 +479,7 @@ class DetectMultiBackend(nn.Module):
                 stride, names = int(d["stride"]), d["names"]
         elif dnn:  # ONNX OpenCV DNN
             LOGGER.info(f"Loading {w} for ONNX OpenCV DNN inference...")
-            check_requirements("opencv-python>=4.12.0.88")
+            check_requirements("opencv-python>=4.8.1.78")
             net = cv2.dnn.readNetFromONNX(w)
         elif onnx:  # ONNX Runtime
             LOGGER.info(f"Loading {w} for ONNX Runtime inference...")
