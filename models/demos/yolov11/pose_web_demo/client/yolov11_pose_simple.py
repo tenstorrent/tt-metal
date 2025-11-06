@@ -135,6 +135,9 @@ class VideoProcessor(VideoProcessorBase):
                     elif isinstance(output, list):
                         # Server returned processed detections
                         output = {"detections": output}
+                    elif isinstance(output, dict) and "detections" in output:
+                        # Server returned properly formatted response: {"detections": [...]}
+                        pass  # output is already in the correct format
                     else:
                         print(f"DEBUG: Unexpected response format: {output}")
                         return None

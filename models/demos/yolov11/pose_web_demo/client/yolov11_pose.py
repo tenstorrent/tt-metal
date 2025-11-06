@@ -214,7 +214,8 @@ class VideoProcessor(VideoProcessorBase):
                 response = requests.post(server_endpoint, files=files, timeout=10)
 
                 if response.status_code == 200:
-                    detections = response.json()
+                    result = response.json()
+                    detections = result.get("detections", [])
                     if detections:
                         img = self.plot_pose_cv2(img, detections)
                 else:
