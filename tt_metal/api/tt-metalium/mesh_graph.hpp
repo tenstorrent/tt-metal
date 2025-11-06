@@ -139,7 +139,6 @@ public:
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(
         tt::tt_metal::ClusterType cluster_type,
         const std::string& root_dir,
-        bool version_2 = true,
         tt::tt_fabric::FabricType fabric_type = tt::tt_fabric::FabricType::MESH);
 
     // Get the number of active channels the user has requested between meshes

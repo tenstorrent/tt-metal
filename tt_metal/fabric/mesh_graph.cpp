@@ -543,10 +543,8 @@ const MeshContainer<MeshHostRankId>& MeshGraph::get_host_ranks(MeshId mesh_id) c
 std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
     const tt::tt_metal::ClusterType cluster_type,
     const std::string& root_dir,
-    const bool version_2,
     const tt::tt_fabric::FabricType fabric_type) {
-    auto& fabric_to_cluster_map =
-        version_2 ? cluster_type_to_mesh_graph_descriptor.get() : cluster_type_to_mesh_graph_descriptor.get();
+    auto& fabric_to_cluster_map = cluster_type_to_mesh_graph_descriptor.get();
     auto fabric_it = fabric_to_cluster_map.find(fabric_type);
     if (fabric_it != fabric_to_cluster_map.end()) {
         const auto& cluster_to_descriptor_map = fabric_it->second;
