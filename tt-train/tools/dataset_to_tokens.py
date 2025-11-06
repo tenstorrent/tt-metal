@@ -70,9 +70,6 @@ def main():
         required=True,
         help="Path to the input text dataset (e.g., merged.txt).",
     )
-    # parser.add_argument(
-    #     "--tokenizer_file", type=str, required=True, help="Path to the pre-trained tokenizer.json file."
-    # )
     parser.add_argument(
         "--hf_tokenizer",
         type=str,
@@ -84,13 +81,7 @@ def main():
         default="tokenized_data",
         help="Base path to save the tokenized data (extension will be added based on format).",
     )
-    parser.add_argument(
-        "--format",
-        type=str,
-        choices=["msgpack", "csv"],
-        default="csv",
-        help="Output format for tokenized data (default: csv).",
-    )
+
     args = parser.parse_args()
 
     # Load text data
@@ -108,13 +99,8 @@ def main():
         tokenized_data_split = tokenizer.encode(text_data_split)
         tokenized_data.extend(tokenized_data_split)
 
-    # Save tokenized data in the specified format
-    if args.format == "msgpack":
-        output_file = f"{args.output_file}.msgpack"
-        save_to_msgpack(tokenized_data, output_file)
-    elif args.format == "csv":
-        output_file = f"{args.output_file}.txt"
-        save_to_csv(tokenized_data, output_file)
+    # Save tokenized data
+    save_to_csv(tokenized_data, args.output_file)
 
 
 if __name__ == "__main__":
