@@ -172,22 +172,23 @@ def apply_simple_nms(detections, iou_threshold=0.5):
 
     keep = []
     for i, det in enumerate(detections):
-        if i in keep:
-            continue
-
-        keep.append(i)
+        # Check if this detection overlaps too much with any already kept detection
+        should_keep = True
         x1, y1, w1, h1 = det[:4]
 
-        for j in range(i + 1, len(detections)):
-            if j in keep:
-                continue
-
-            x2, y2, w2, h2 = detections[j][:4]
+        for kept_idx in keep:
+            kept_det = detections[kept_idx]
+            x2, y2, w2, h2 = kept_det[:4]
 
             # Calculate IoU
             iou = calculate_iou(x1, y1, w1, h1, x2, y2, w2, h2)
             if iou > iou_threshold:
-                keep.remove(j) if j in keep else None
+                should_keep = False
+                break
+
+        # Only keep this detection if it doesn't overlap too much with kept detections
+        if should_keep:
+            keep.append(i)
 
     return [detections[i] for i in sorted(keep)]
 
@@ -392,7 +393,8 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         processed_output = (
             torch.randn(batch_size, num_channels, num_anchors) * 100 + 320
         )  # Mock coordinates around center
-        processed_output[:, 4:5, :] = torch.sigmoid(torch.randn(batch_size, 1, num_anchors))  # Mock confidences
+        # Mock confidences - make them lower and more realistic
+        processed_output[:, 4:5, :] = torch.sigmoid(torch.randn(batch_size, 1, num_anchors) - 2.0)  # Lower confidence
         print(f"DEBUG: Using mock processed output shape: {processed_output.shape}")
         print(f"DEBUG: Mock output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
         print(f"DEBUG: Mock output sample [0,:5,0]: {processed_output[0,:5,0].tolist()}")
@@ -425,7 +427,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: Found {len(valid_indices)} detections above confidence threshold {conf_threshold}")
 
         # Limit detections to prevent server hang
-        max_detections = 20  # Increased for debugging
+        max_detections = 10  # Reasonable limit
         if len(valid_indices) > max_detections:
             # Sort by confidence and take top N
             conf_values = conf[0, valid_indices]
@@ -504,7 +506,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
 
         # Apply NMS to remove overlapping detections
         if len(detections) > 1:
-            detections = apply_simple_nms(detections, iou_threshold=0.5)
+            detections = apply_simple_nms(detections, iou_threshold=0.3)
 
         print(f"DEBUG: Final detections after NMS: {len(detections)}")
 
