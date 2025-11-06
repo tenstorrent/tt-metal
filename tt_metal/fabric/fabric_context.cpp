@@ -168,7 +168,7 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     this->master_router_chans_.resize(num_devices, UNINITIALIZED_MASTER_ROUTER_CHAN);
     this->num_initialized_routers_.resize(num_devices, UNINITIALIZED_ROUTERS);
 
-    set_routing_mode(this->topology_, this->fabric_config_);
+    set_routing_mode(this->topology_);
 }
 
 bool FabricContext::is_wrap_around_mesh(MeshId mesh_id) const {

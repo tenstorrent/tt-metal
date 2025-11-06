@@ -27,6 +27,17 @@ enum class FabricTensixConfig : uint32_t {
     MUX = 1,       // using mux kernel as tensix extension
 };
 
+enum class FabricType {
+    MESH = 1 << 0,
+    TORUS_X = 1 << 1,  // Connections along mesh_coord[1]
+    TORUS_Y = 1 << 2,  // Connections along mesh_coord[0]
+    TORUS_XY = (TORUS_X | TORUS_Y),
+};
+
+FabricType operator|(FabricType lhs, FabricType rhs);
+FabricType operator&(FabricType lhs, FabricType rhs);
+bool has_flag(FabricType flags, FabricType test_flag);
+
 enum class FabricReliabilityMode : uint32_t {
 
     // When fabric is initialized, user expects live links/devices to exactly match the mesh graph descriptor.
@@ -42,7 +53,7 @@ enum class FabricReliabilityMode : uint32_t {
     DYNAMIC_RECONFIGURATION_SETUP_MODE = 2,
 };
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_fabric
 
 namespace tt::tt_fabric {
 

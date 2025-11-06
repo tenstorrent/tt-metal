@@ -30,12 +30,48 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
 
 FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
     switch (fabric_config) {
-        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::MESH;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
         default: return FabricType::MESH;
     }
+}
+
+bool requires_more_connectivity(FabricType requested_type, FabricType available_type, const MeshShape& mesh_shape) {
+    // Requesting MESH is always valid (can restrict any topology to MESH)
+    if (requested_type == FabricType::MESH) {
+        return false;
+    }
+
+    // Check if available topology can satisfy the requested topology
+    if (available_type == FabricType::MESH) {
+        // Special case: 2-element dimensions make torus wrap-around equivalent to mesh neighbor connections
+        // E.g., in a 2-row mesh, north/south wrap-around just connects to the adjacent row
+        bool has_two_rows = (mesh_shape[0] == 2);
+        bool has_two_cols = (mesh_shape[1] == 2);
+
+        if (has_flag(requested_type, FabricType::TORUS_Y) && !has_two_rows) {
+            return true;
+        }
+        if (has_flag(requested_type, FabricType::TORUS_X) && !has_two_cols) {
+            return true;
+        }
+        return false;
+    }
+
+    // For non-MESH available types, check if requested features are present
+    if (requested_type == FabricType::TORUS_XY) {
+        return available_type != FabricType::TORUS_XY;
+    }
+    if (requested_type == FabricType::TORUS_X) {
+        return !has_flag(available_type, FabricType::TORUS_X);
+    }
+    if (requested_type == FabricType::TORUS_Y) {
+        return !has_flag(available_type, FabricType::TORUS_Y);
+    }
+
+    return false;
 }
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
@@ -92,7 +128,7 @@ void set_routing_mode(uint16_t routing_mode) {
     control_plane.set_routing_mode(routing_mode);
 }
 
-void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_config, uint32_t dimension /*, take more*/) {
+void set_routing_mode(Topology topology, uint32_t dimension /*, take more*/) {
     // TODO: take more parameters to set detail routing mode
     TT_FATAL(
         dimension == 1 || dimension == 2 || dimension == 3,

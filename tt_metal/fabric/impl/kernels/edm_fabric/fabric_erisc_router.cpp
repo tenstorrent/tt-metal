@@ -1423,6 +1423,9 @@ FORCE_INLINE void run_sender_channel_step(
     std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
+        // the cache is invalidated here because the channel will read some
+        // L1 locations to see if it can make progress
+        invalidate_l1_cache();
         run_sender_channel_step_impl<
             enable_packet_header_recording,
             sender_channel_index,
@@ -1618,6 +1621,7 @@ FORCE_INLINE void run_receiver_channel_step(
     std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
     const tt::tt_fabric::tensix_routing_l1_info_t& routing_table) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
+        invalidate_l1_cache();
         run_receiver_channel_step_impl<
             receiver_channel,
             to_receiver_packets_sent_streams[receiver_channel],
