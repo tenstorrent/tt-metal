@@ -207,6 +207,53 @@ def test_sampling_callback(shape, k, p, seed, device):
 @pytest.mark.parametrize(
     "shape",
     [
+        # [1, 1, 256, 256],  # llama on TG and T3K
+        [1, 1, 32, 256],  # llama on N300
+    ],
+)
+@pytest.mark.parametrize("set_seed", [True, False])
+def test_produce_sampling_output(shape, device, set_seed):
+    seed = 1234
+    torch.manual_seed(seed)
+
+    input_values = torch.randn(shape)
+    input_indices = torch.arange(0, shape[-1], dtype=torch.int32).expand(shape)
+
+    input_values_tensor = ttnn.from_torch(input_values, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    input_indices_tensor = ttnn.from_torch(input_indices, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    temp = ttnn.from_torch(torch.ones(32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    k_tensor = ttnn.from_torch(torch.tensor([32] * 32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    p_tensor = ttnn.from_torch(
+        torch.tensor([0.9] * 32), device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+    if set_seed:
+        output_tensor = ttnn.sampling(
+            input_values_tensor,
+            input_indices_tensor,
+            k=k_tensor,
+            p=p_tensor,
+            temp=temp,
+            seed=seed,
+        )
+
+    output_tensor = ttnn.sampling(
+        input_values_tensor,
+        input_indices_tensor,
+        k=k_tensor,
+        p=p_tensor,
+        temp=temp,
+    )
+
+    output = ttnn.to_torch(output_tensor)
+    print(f"output={output}")
+    return output
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
         [1, 1, 32, 32 * 2],  # llama on N300
     ],
 )
