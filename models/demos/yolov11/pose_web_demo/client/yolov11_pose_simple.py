@@ -92,14 +92,14 @@ class VideoProcessor(VideoProcessorBase):
     def recv(self, frame):
         t0 = time.time()
 
-        # Convert frame to PIL image and resize
+        # Convert frame to PIL image and resize to 640x640 for processing
         pil_image = frame.to_image()
-        pil_image = pil_image.resize((640, 640))  # Resize to target dimensions
+        pil_image_resized = pil_image.resize((640, 640))  # Resize to target dimensions
         t1 = time.time()
 
-        # Save image as JPEG in-memory with optimized settings
+        # Save resized image as JPEG for server processing
         buf = io.BytesIO()
-        pil_image.save(buf, format="JPEG", quality=85, optimize=True)
+        pil_image_resized.save(buf, format="JPEG", quality=85, optimize=True)
         byte_im = buf.getvalue()
         file = {"file": byte_im}
 
@@ -155,7 +155,13 @@ class VideoProcessor(VideoProcessorBase):
 
         # Process detections
         detections = output.get("detections", [])
-        image_final = self.plot_pose_cv2(bgr_image, detections)
+
+        # Resize frame to 640x640 for display (matches server's coordinate normalization)
+        pil_frame = frame.to_image()
+        pil_resized = pil_frame.resize((640, 640))
+        bgr_display = cv2.cvtColor(np.array(pil_resized), cv2.COLOR_RGB2BGR)
+
+        image_final = self.plot_pose_cv2(bgr_display, detections)
 
         t4 = time.time()
         logging.info(

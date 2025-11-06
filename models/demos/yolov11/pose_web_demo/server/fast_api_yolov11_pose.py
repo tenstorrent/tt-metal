@@ -230,6 +230,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         # Convert back to torch (output is in TILE_LAYOUT from DRAM)
         raw_output = ttnn.to_torch(response)
         print(f"DEBUG: TTNN raw output shape: {raw_output.shape}")
+        print(f"DEBUG: Raw output range: [{raw_output.min():.6f}, {raw_output.max():.6f}]")
 
         print("DEBUG: Applying postprocessing like offline demo...")
         # Apply postprocessing like the offline demo does
@@ -238,6 +239,7 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
 
         processed_output = apply_pytorch_postprocessing(raw_output, anchors_per_stride)
         print(f"DEBUG: Processed output shape: {processed_output.shape}")
+        print(f"DEBUG: Processed output range: [{processed_output.min():.6f}, {processed_output.max():.6f}]")
 
         # Extract components from processed output
         bbox = processed_output[0, :4, :]  # [4, num_anchors] - x, y, w, h
@@ -247,11 +249,28 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
         print(f"DEBUG: bbox shape: {bbox.shape}, conf shape: {conf.shape}, keypoints shape: {keypoints.shape}")
 
         # Apply confidence threshold
-        conf_threshold = 0.6
+        conf_threshold = 0.5
         conf_mask = conf[0, :] > conf_threshold
         valid_indices = torch.where(conf_mask)[0]
 
         print(f"DEBUG: Found {len(valid_indices)} detections above confidence threshold {conf_threshold}")
+
+        # Limit detections to prevent server hang
+        max_detections = 10
+        if len(valid_indices) > max_detections:
+            # Sort by confidence and take top N
+            conf_values = conf[0, valid_indices]
+            _, top_indices = torch.topk(conf_values, max_detections)
+            valid_indices = valid_indices[top_indices]
+            print(f"DEBUG: Limited to top {max_detections} detections")
+
+        if len(valid_indices) == 0:
+            # Debug: show max confidence found
+            max_conf = conf.max().item()
+            print(f"DEBUG: Max confidence in output: {max_conf:.6f}")
+            # Show top 5 confidence values
+            top_confs = torch.topk(conf.squeeze(), min(5, conf.numel())).values
+            print(f"DEBUG: Top confidence values: {top_confs.tolist()}")
 
         # Extract valid detections
         detections = []
@@ -274,17 +293,17 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
             pad_left = (640 - new_w) // 2
             pad_top = (640 - new_h) // 2
 
-            # Convert bbox from 640x640 coords back to original image coords, then normalize
+            # Convert bbox from 640x640 coords back to original image coords, then normalize to 640x640 display space
             x_orig = (x - pad_left) / scale
             y_orig = (y - pad_top) / scale
             w_orig = w / scale
             h_orig = h / scale
 
-            # Normalize to [0,1]
-            x_norm = x_orig / orig_w
-            y_norm = y_orig / orig_h
-            w_norm = w_orig / orig_w
-            h_norm = h_orig / orig_h
+            # Normalize to [0,1] for 640x640 display space (what client uses)
+            x_norm = x_orig / 640.0
+            y_norm = y_orig / 640.0
+            w_norm = w_orig / 640.0
+            h_norm = h_orig / 640.0
 
             # Convert keypoints from 640x640 coords back to original image coords, then normalize
             kpt_normalized = []
@@ -298,9 +317,9 @@ async def pose_estimation_v2(file: UploadFile = File(...)):
                 kx_orig = (kx_640 - pad_left) / scale
                 ky_orig = (ky_640 - pad_top) / scale
 
-                # Normalize to [0,1]
-                kx_norm = kx_orig / orig_w
-                ky_norm = ky_orig / orig_h
+                # Normalize to [0,1] for 640x640 display space
+                kx_norm = kx_orig / 640.0
+                ky_norm = ky_orig / 640.0
 
                 kpt_normalized.extend([kx_norm, ky_norm, kv])
 
