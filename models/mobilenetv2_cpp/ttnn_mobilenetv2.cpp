@@ -33,7 +33,7 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
     ttnn::TensorMemoryLayout shard_layout /* = ttnn::TensorMemoryLayout::HEIGHT_SHARDED*/,
     std::optional<ttnn::operations::unary::UnaryWithParam> activation /* = std::nullopt*/
     ) :
-    device_(device),
+    device_(std::move(device)),
     parameters(parameters),
     activation_dtype(activation_dtype),
     input_params(input_params),
@@ -43,7 +43,7 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
     block_shard(block_shard),
     deallocate_activation(deallocate_activation),
     output_layout(output_layout),
-    width_shard(width_shard),
+    // width_shard(width_shard),
     act_blocks(act_blocks),
     enable_act_double_buffer(enable_act_double_buffer),
     reshard_if_not_optimal(reshard_if_not_optimal),
@@ -163,7 +163,7 @@ TtInvertedResidual::TtInvertedResidual(
     int id,
     bool block_shard /* = false*/
     ) :
-    device_(device),
+    device_(std::move(device)),
     // batchsize(batchsize),
     // stride(stride),
     // expand_ratio(expand_ratio),
@@ -171,9 +171,9 @@ TtInvertedResidual::TtInvertedResidual(
     // out_channels(out_channels),
     // block_shard(block_shard),
     // id(id),
-    use_res_connect(false) {
+    use_res_connect(stride == 1 && in_channels == out_channels) {
     int hidden_dim = static_cast<int>(std::round(in_channels * expand_ratio));
-    use_res_connect = (stride == 1 && in_channels == out_channels);
+    // use_res_connect = (stride == 1 && in_channels == out_channels);
 
     if (expand_ratio != 1) {
         conv1 = std::make_unique<TtMobileNetV2Conv2D>(

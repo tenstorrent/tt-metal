@@ -29,7 +29,7 @@ std::tuple<at::Tensor, ttnn::Tensor> create_mobilenetv2_input_tensors(
     int batch = 1, int input_channels = 3, int input_height = 224, int input_width = 224);
 
 std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameters(
-    const torch::jit::Module& model, std::shared_ptr<ttnn::MeshDevice> device);
+    const torch::jit::Module& model, const std::shared_ptr<ttnn::MeshDevice>& device);
 
 uint32_t get_ttbuffer_address(const ttnn::Tensor& tensor);
 
@@ -42,6 +42,6 @@ bool isWormholeB0();
 torch::jit::Module loadTorchModel();
 
 std::shared_ptr<TtMobileNetV2> loadTtnnModel(
-    std::shared_ptr<ttnn::MeshDevice> device, const torch::jit::Module& torch_model, int batch_size);
+    const std::shared_ptr<ttnn::MeshDevice>& device, const torch::jit::Module& torch_model, int batch_size);
 
 #endif  // MOBILENETV2_CPP_HELPER_FUNCS

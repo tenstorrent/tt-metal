@@ -19,7 +19,7 @@ double measure_time(
     return std::chrono::duration<double>(end - start).count();
 }
 
-void test_run_mobilenetv2_trace_2cqs_inference(std::shared_ptr<ttnn::MeshDevice> device, int batch_size) {
+void test_run_mobilenetv2_trace_2cqs_inference(const std::shared_ptr<ttnn::MeshDevice>& device, int batch_size) {
     // Prepare input tensor
     torch::Tensor torch_input_tensor =
         torch::randn({batch_size, 3, 224, 224}, torch::TensorOptions().dtype(torch::kFloat32));

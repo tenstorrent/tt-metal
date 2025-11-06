@@ -30,7 +30,7 @@ public:
     OneConfResult setupL1ShardedInput(torch::Tensor torch_input_tensor = torch::Tensor());
 
     TwoConfResult setupDramShardedInput(
-        std::shared_ptr<ttnn::MeshDevice> device, torch::Tensor torch_input_tensor = torch::Tensor());
+        const std::shared_ptr<ttnn::MeshDevice>& device, torch::Tensor torch_input_tensor = torch::Tensor());
 
     void validate(std::optional<ttnn::Tensor> output_tensor = std::nullopt);
 
