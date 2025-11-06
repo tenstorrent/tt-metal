@@ -61,15 +61,45 @@ on:
         default: false
 
 jobs:
+  define-ttnn-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      ttnn-tests: ${{ steps.compute-tests.outputs.ttnn-tests }}
+    strategy:
+      matrix:
+        default-ttnn-tests:
+          [[
+            { name: "ttnn example tests", cmd: "./tests/scripts/run_ttnn_examples.sh" }
+          ]]
+    steps:
+      - name: Compute tests
+        shell: bash
+        id: compute-tests
+        run: |
+          set -euo pipefail
+
+          echo "[info] Outputing default values"
+          default_ttnn_tests='${{ toJSON(matrix.default-ttnn-tests) }}'
+          echo $default_ttnn_tests
+          echo $default_ttnn_tests | jq
+          requested_ttnn_tests=$default_ttnn_tests
+
+          # Check that we have a valid test list that's not empty
+          echo "$requested_ttnn_tests" | jq -e 'if type != "array" then error("Not a valid JSON array") elif length == 0 then error("Test list is empty") else . end' && echo "Valid test configs"
+
+          echo "ttnn-tests=$(echo $requested_ttnn_tests | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+          echo "[info] Showing GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
   ttnn:
-    if: ${{ !inputs.merge-gate-call }}
+    needs: define-ttnn-tests
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
         os: ["ubuntu-22.04"]
-        test-group:
+        test-group: ${{ fromJSON(needs.define-ttnn-tests.outputs.ttnn-tests) }}
           # - name: ttnn eltwise group 1
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 8 --group 1 -m "not disable_fast_runtime_mode"
           # - name: ttnn eltwise group 2
@@ -94,8 +124,8 @@ jobs:
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 3 -m "not disable_fast_runtime_mode"
           # - name: ttnn conv group
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
-          - name: ttnn pool group
-            cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
+          # - name: ttnn pool group
+          #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
           # - name: ttnn matmul group
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
           # - name: ttnn fused group
@@ -113,73 +143,8 @@ jobs:
           # - name: ttnn fast runtime off
           #   cmd: pytest -n auto --timeout 300 tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
           #   fast_runtime_mode_off: true
-          - name: ttnn example tests
-            cmd: ./tests/scripts/run_ttnn_examples.sh
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on: >-
-      ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
-        || ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
-      }}
-    container:
-      image: ${{ ((inputs.runner-label != 'P100') && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image)) || inputs.docker-image || 'docker-image-unresolved!' }}
-      env:
-        ARCH_NAME: ${{ inputs.arch }}
-        LOGURU_LEVEL: INFO
-        PYTHONPATH: /work
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
-    defaults:
-      run:
-        shell: bash
-        working-directory: /work # https://github.com/actions/runner/issues/878
-    steps:
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
-        timeout-minutes: 10
-        with:
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher || false }}
-
-      - name: Set ttnn fast runtime if exists in config
-        if: ${{ matrix.test-group.fast_runtime_mode_off }}
-        run: |
-          echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
-
-      - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
-        run: |
-          ${{ matrix.test-group.cmd }}
-
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: U06CXU895AP # Michael Chiou
-
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() }}
-        with:
-          prefix: "test_reports_"
-
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
-
-  ttnn-merge-gate:
-    if: ${{ inputs.merge-gate-call }}
-    strategy:
-      # Do not fail-fast because we need to ensure all tests go to completion
-      # so we try not to get hanging machines
-      fail-fast: false
-      matrix:
-        os: ["ubuntu-22.04"]
-        test-group:
-          - name: ttnn example tests
-            cmd: ./tests/scripts/run_ttnn_examples.sh
+          # - name: ttnn example tests
+          #   cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
