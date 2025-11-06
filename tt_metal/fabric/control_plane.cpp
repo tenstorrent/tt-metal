@@ -775,9 +775,6 @@ void ControlPlane::order_ethernet_channels() {
                     break;
                 }
             }
-            TT_ASSERT(
-                !neighbor_asic_id.has_value(), "Cannot find neighbor asic_id for fabric_node_id: {}", fabric_node_id);
-
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
             if (src_asic_id > neighbor_asic_id) {
                 std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
@@ -785,7 +782,7 @@ void ControlPlane::order_ethernet_channels() {
                     auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
                     return translated_coords_a.x < translated_coords_b.x;
                 });
-            } else {
+            } else if (neighbor_asic_id.has_value()) {
                 std::sort(eth_connections.begin(), eth_connections.end(), [&soc_desc](const auto& a, const auto& b) {
                     auto translated_coords_a = soc_desc.get_eth_core_for_channel(a.dst_chan, CoordSystem::TRANSLATED);
                     auto translated_coords_b = soc_desc.get_eth_core_for_channel(b.dst_chan, CoordSystem::TRANSLATED);
