@@ -1110,3 +1110,84 @@ def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end, step, layout",
+    (([1, 16, 128, 2880], 2, [0, 0, 32, 0], [1, 16, 64, 2880], 1, ttnn.TILE_LAYOUT),),
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
+def test_slice_tensor_args_mesh_device(mesh_device, input_shape, dim, start, end, step, layout):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    torch_start_tensor = torch.tensor(start)
+    torch_end_tensor = torch.tensor(end)
+
+    slices = tuple(slice(start[i], end[i]) for i in range(len(start)))
+
+    # Slice the tensor using the slices for each dimension
+    torch_output_tensor = torch_input[slices]
+
+    ttnn_start_tensor = ttnn.from_torch(
+        torch_start_tensor, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+    ttnn_end_tensor = ttnn.from_torch(
+        torch_end_tensor, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+    )
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
+    ttnn_output = ttnn.slice(
+        ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor, slice_dim=dim, num_devices=num_devices_calc
+    )
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    for i in range(32):
+        assert_with_pcc(torch_output_tensor[0, :, :, :], ttnn_output_tensor[i, :, :, :], 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, start, end, step, layout",
+    (
+        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 2048, 2880], 2, [0, 0, 512, 0], [1, 1, 1024, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 4096, 2880], 2, [0, 0, 2048, 0], [1, 1, 3072, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 65536, 2880], 2, [0, 0, 49152, 0], [1, 1, 65536, 2880], 1, ttnn.TILE_LAYOUT),
+    ),
+)
+def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layout, device):
+    # Create tensor where each tile has a unique value for easy tile debugging
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+
+    torch_start_tensor = torch.tensor(start)
+    torch_end_tensor = torch.tensor(end)
+
+    slices = tuple(slice(start[i], end[i]) for i in range(len(start)))
+
+    # Slice the tensor using the slices for each dimension
+    torch_output_tensor = torch_input[slices]
+
+    ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
+    ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
+
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device)
+
+    # Calculate num_devices from the slice pattern
+    num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
+    ttnn_output = ttnn.slice(
+        ttnn_tensor, ttnn_start_tensor, ttnn_end_tensor, slice_dim=dim, num_devices=num_devices_calc
+    )
+
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
