@@ -106,6 +106,7 @@ def _initialize():
     sys.path.append(str(ttml_dir))
 
     import importlib
+    import importlib.util
 
     ttml_module = importlib.util.find_spec("_ttml", package=None)
 
