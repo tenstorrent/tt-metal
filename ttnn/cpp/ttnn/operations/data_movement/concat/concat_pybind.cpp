@@ -28,16 +28,7 @@ Keyword Args:
 
 Returns:
     ttnn.Tensor: the output tensor.
-
-Example:
-
-    >>> tensor1 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> tensor2 = ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16), device=device)
-    >>> output = ttnn.concat([tensor1, tensor2], dim=3)
-    >>> print(output.shape)
-    [1, 1, 64, 64]
-
-    )doc";
+)doc";
 
     using OperationType = decltype(ttnn::concat);
     ttnn::bind_registered_operation(

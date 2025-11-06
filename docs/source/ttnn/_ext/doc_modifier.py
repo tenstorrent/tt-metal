@@ -11,7 +11,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from tests.ttnn.docs_examples.examples_mapping import EXAMPLES_DICT
+from tests.ttnn.docs_examples.examples_mapping import FUNCTION_TO_EXAMPLES_MAPPING_DICT
 
 
 def process_docstring(app, what, name, obj, options, lines):
@@ -39,12 +39,13 @@ def process_docstring(app, what, name, obj, options, lines):
         - Preserves existing docstring content and appends the example section
         - Uses inspect.getsource() to extract source code from example functions
     """
-    if name in EXAMPLES_DICT:
+    if name in FUNCTION_TO_EXAMPLES_MAPPING_DICT:
+        print("---------- Modifying docstring for:", name, "----------")
         # Get current docstring
-        current_doc = getattr(obj, "__doc__", "") or ""
+        current_doc = lines
 
         # Get the example function
-        function = EXAMPLES_DICT.get(name, None)
+        function = FUNCTION_TO_EXAMPLES_MAPPING_DICT.get(name, None)
         if function is None:
             # No function found for example, skip modification
             return
@@ -62,13 +63,12 @@ def process_docstring(app, what, name, obj, options, lines):
                 continue
             if in_body:
                 body_lines.append(line)
-        body_code = "\n\t".join(body_lines)
-        additional_doc = f"\n\tExample:\n\n\t.. code-block:: python\n\n\t{body_code}\n"
+        body_code = "\n    ".join(body_lines)
+        additional_doc = f"\n.. admonition:: Example\n\n    .. code-block:: python\n\n    {body_code}\n\n"
 
         # Replace existing lines with updated content
         new_lines = []
-        if current_doc.strip():
-            new_lines.extend(current_doc.splitlines())
+        new_lines.extend(current_doc)
         new_lines.extend(additional_doc.splitlines())
 
         for line in new_lines:
