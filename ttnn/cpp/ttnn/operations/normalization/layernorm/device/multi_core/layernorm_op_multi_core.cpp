@@ -1315,11 +1315,10 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         compute_defines["RMSNORM"] = "1";
     }
 
-    // Create the sharded reciprocal LUT tensor if using Welford.
-    // The size has to be a compile-time constant in the kernel,
-    // so we'll take the max of the padded and unpadded partial reduce widths.
-    uint32_t per_core_recip_lut_size = std::max(num_rows_per_all_to_all_worker, num_rows_per_all_to_all_worker_last);
-    per_core_recip_lut_size *= row_wise ? tt::constants::TILE_WIDTH : tt::constants::TILE_HEIGHT;
+    // The last core may not need the entire block_w worth of reciprocals,
+    // but the table size has to be a compile-time argument, so we use
+    // the max value that it'll be.
+    uint32_t per_core_recip_lut_size = block_w;
     auto [recip_tensor, reciprocal_CB_size_bytes] =
         create_reciprocal_tensor_if_needed(device, per_core_recip_lut_size, all_cores, use_welford);
 
