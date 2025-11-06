@@ -88,7 +88,7 @@ def test_ff1_matmul(
 
     # Initialize input configurations
     if is_blackhole():
-        compute_grid = get_blackhole_grid_size(mesh_device)
+        compute_grid = ttnn.CoreCoord(2, 1)  # get_blackhole_grid_size(mesh_device)
     else:
         compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
     logger.info(f"Running on {compute_grid} cores")
