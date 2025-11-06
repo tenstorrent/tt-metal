@@ -18,7 +18,7 @@ def test_perf_device_bare_metal_retinanet(batch_size, model_name, expected_perf)
     num_iterations = 1
     margin = 0.1
 
-    command = f"pytest models/experimental/retinanet/tests/test_resnet50_backbone.py::test_backbone"
+    command = f"pytest models/experimental/retinanet/tests/pcc/test_resnet50_backbone.py::test_backbone"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

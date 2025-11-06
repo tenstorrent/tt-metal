@@ -9,14 +9,14 @@ from PIL import Image
 from torchvision import transforms
 from torchvision.models.detection import retinanet_resnet50_fpn_v2, RetinaNet_ResNet50_FPN_V2_Weights
 
-from models.experimental.retinanet.TTNN.tt_backbone import TTBackbone
-from models.experimental.retinanet.TTNN.custom_preprocessor import (
+from models.experimental.retinanet.tt.tt_backbone import TTBackbone
+from models.experimental.retinanet.tt.custom_preprocessor import (
     create_custom_mesh_preprocessor,
     preprocess_regression_head_parameters,
     preprocess_classification_head_parameters,
 )
-from models.experimental.retinanet.TTNN.regression_head import ttnn_retinanet_regression_head
-from models.experimental.retinanet.TTNN.classification_head import ttnn_retinanet_classification_head
+from models.experimental.retinanet.tt.tt_regression_head import ttnn_retinanet_regression_head
+from models.experimental.retinanet.tt.tt_classification_head import ttnn_retinanet_classification_head
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.common.utility_functions import divup, is_wormhole_b0
