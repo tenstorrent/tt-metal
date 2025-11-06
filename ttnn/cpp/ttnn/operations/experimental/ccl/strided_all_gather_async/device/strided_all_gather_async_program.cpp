@@ -560,7 +560,7 @@ tt::tt_metal::operation::ProgramWithCallbacks strided_all_gather_async_minimal_d
                         writer_rt_args,
                         num_workers_per_direction * num_links,
                         worker + link * num_workers_per_direction,
-                        1);
+                        2);
                 }
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
             }

@@ -234,6 +234,10 @@ void MatmulFusedOpSignaler::init_fused_op(
         for (uint32_t i = 0; i < ring_size; i++) {
             this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
         }
+    } else if (fused_op_type == MatmulFusedOpSignalerType::STRIDED_ALL_GATHER) {
+        this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+        this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+        this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
     } else {
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
         this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
@@ -301,6 +305,9 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(std::vector<uint32_t>& 
     out_rt_args.push_back(static_cast<uint32_t>(this->is_clockwise_dir));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+    if (fused_op_type == MatmulFusedOpSignalerType::STRIDED_ALL_GATHER) {
+        out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[2]));
+    }
 }
 
 void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, tt::tt_metal::Program& program) {
