@@ -369,13 +369,13 @@ def prepare_sharded_ttnn_grid(
 @pytest.mark.parametrize(
     "mode",
     [
-        "bilinear",
+        "nearest",
     ],
 )
 @pytest.mark.parametrize(
     "align_corners",
     [
-        False,
+        True,
     ],
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid):

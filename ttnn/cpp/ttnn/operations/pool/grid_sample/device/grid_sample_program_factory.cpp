@@ -165,27 +165,34 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             tt::tt_metal::create_cb(cb_idx++, program, all_cores, grid_stick_size, 1, grid_cb_data_format, nullptr);
     }
 
-    const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
-    const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
-    const auto [input_cb_index_0, input_cb_handle_0] = tt::tt_metal::create_cb(
-        cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
+    uint32_t input_cb_index_0 = DUMMY_CB_ID, input_cb_index_1 = DUMMY_CB_ID;
+    tt::tt_metal::CBHandle input_cb_handle_0 = 0, input_cb_handle_1 = 0;
+    uint32_t in_ntiles_c = 0, input_cb_page_size = 0;
 
-    uint32_t input_cb_index_1 = DUMMY_CB_ID;
-    tt::tt_metal::CBHandle input_cb_handle_1 = 0;
-    if (is_sharded && enable_split_reader) {
-        std::tie(input_cb_index_1, input_cb_handle_1) = tt::tt_metal::create_cb(
+    if (mode == "bilinear") {
+        in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
+        input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
+        std::tie(input_cb_index_0, input_cb_handle_0) = tt::tt_metal::create_cb(
             cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
+
+        if (is_sharded && enable_split_reader) {
+            std::tie(input_cb_index_1, input_cb_handle_1) = tt::tt_metal::create_cb(
+                cb_idx++, program, all_cores, input_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
+        }
     }
 
-    const uint32_t scalar_cb_page_size = tt::tile_size(input_cb_data_format);
-    const auto [scalar_cb_index_0, scalar_cb_handle_0] = tt::tt_metal::create_cb(
-        cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
+    uint32_t scalar_cb_index_0 = DUMMY_CB_ID, scalar_cb_index_1 = DUMMY_CB_ID;
+    tt::tt_metal::CBHandle scalar_cb_handle_0 = 0, scalar_cb_handle_1 = 0;
 
-    uint32_t scalar_cb_index_1 = DUMMY_CB_ID;
-    tt::tt_metal::CBHandle scalar_cb_handle_1 = 0;
-    if (is_sharded && enable_split_reader) {
-        std::tie(scalar_cb_index_1, scalar_cb_handle_1) = tt::tt_metal::create_cb(
+    if (mode == "bilinear") {
+        const uint32_t scalar_cb_page_size = tt::tile_size(input_cb_data_format);
+        std::tie(scalar_cb_index_0, scalar_cb_handle_0) = tt::tt_metal::create_cb(
             cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
+
+        if (is_sharded && enable_split_reader) {
+            std::tie(scalar_cb_index_1, scalar_cb_handle_1) = tt::tt_metal::create_cb(
+                cb_idx++, program, all_cores, scalar_cb_page_size, BUFFERING_FACTOR, input_cb_data_format);
+        }
     }
 
     const uint32_t out_ntiles_c =
@@ -289,7 +296,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     // Compute kernels
     const uint32_t channels_per_shard = input_shape[-1];
-    const uint32_t in_nblocks_c = (uint32_t)std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION);
+    const uint32_t in_nblocks_c =
+        (mode == "bilinear") ? (uint32_t)std::ceil((float)in_ntiles_c / MAX_TILES_PER_REDUCTION) : 0;
     if (mode == "bilinear") {
         auto create_compute_kernel = [&](tt::tt_metal::CoreRangeSet cores, uint32_t total_interpolations) {
             // Compute kernel compile-time arguments
