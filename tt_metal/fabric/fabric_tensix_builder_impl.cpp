@@ -291,31 +291,6 @@ void FabricTensixDatamoverBaseConfig::append_default_stream_ids_to_ct_args(std::
     }
 }
 
-std::vector<uint32_t> FabricTensixDatamoverBaseConfig::get_compile_time_main_args(
-    const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
-    TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
-    TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
-    return std::vector<uint32_t>{
-        num_full_size_channels_,
-        num_buffers_full_size_channel_,
-        buffer_size_bytes_full_size_channel_,
-        num_header_only_channels_,
-        num_buffers_header_only_channel_,
-        status_region_.get_address(),
-        termination_signal_region_.get_address(),
-        connection_info_region_.get_address(),
-        connection_handshake_region_.get_address(),
-        flow_control_region_.get_address(),
-        full_size_channels_region_.get_address(),
-        local_fabric_router_status_region_.get_address(),
-        fabric_endpoint_status_address_,
-        fabric_endpoint_channel_num_buffers_,
-        num_full_size_channel_iters_,
-        num_iters_between_teardown_checks_,
-        core_type_index_,
-        (uint32_t)wait_for_fabric_endpoint_ready_};
-}
-
 // ==================================================================================================
 // FabricTensixDatamoverMuxConfig Implementation
 // ==================================================================================================
@@ -346,9 +321,30 @@ std::vector<uint32_t> FabricTensixDatamoverMuxConfig::get_compile_time_args(
 
     fabric_endpoint_channel_num_buffers_ = static_channel_allocator->get_sender_channel_number_of_slots(0);
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
+    wait_for_fabric_endpoint_ready_ = true;
 
-    auto ct_args = get_compile_time_main_args(fabric_router_config);
-    return ct_args;
+    TT_FATAL(fabric_endpoint_channel_num_buffers_ > 0, "fabric_endpoint_channel_num_buffers_ must be larger than 0");
+    TT_FATAL(fabric_endpoint_status_address_ != 0, "fabric_endpoint_status_address_ must not be invalid address 0");
+
+    return std::vector<uint32_t>{
+        num_full_size_channels_,
+        num_buffers_full_size_channel_,
+        buffer_size_bytes_full_size_channel_,
+        num_header_only_channels_,
+        num_buffers_header_only_channel_,
+        status_region_.get_address(),
+        termination_signal_region_.get_address(),
+        connection_info_region_.get_address(),
+        connection_handshake_region_.get_address(),
+        flow_control_region_.get_address(),
+        full_size_channels_region_.get_address(),
+        local_fabric_router_status_region_.get_address(),
+        fabric_endpoint_status_address_,
+        fabric_endpoint_channel_num_buffers_,
+        num_full_size_channel_iters_,
+        num_iters_between_teardown_checks_,
+        core_type_index_,
+        (uint32_t)wait_for_fabric_endpoint_ready_};
 }
 
 // ==================================================================================================
@@ -370,7 +366,7 @@ FabricTensixDatamoverRelayConfig::FabricTensixDatamoverRelayConfig(
         core_type) {}
 
 std::vector<uint32_t> FabricTensixDatamoverRelayConfig::get_compile_time_args(
-    const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const {
+    const tt::tt_fabric::FabricEriscDatamoverConfig&) const {
     std::vector<uint32_t> ct_args;
     return ct_args;
 }
@@ -477,15 +473,6 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args(tt:
         }
     }();
 
-    auto channel_allocator_base = fabric_router_config.channel_allocator.get();
-    const auto channel_allocator =
-        dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator_base);
-    TT_FATAL(channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
-
-    config_->set_fabric_endpoint_channel_num_buffers(channel_allocator->get_sender_channel_number_of_slots(0));
-    config_->set_wait_for_fabric_endpoint_ready(true);
-    config_->set_fabric_endpoint_status_address(fabric_router_config.edm_status_address);
-
     auto ct_args = config_->get_compile_time_args(fabric_router_config);
 
     // Add number of upstream routers and sync address
@@ -501,14 +488,12 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args(tt:
     std::vector<uint32_t> fabric_stream_ids;
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
         for (uint8_t channel = 0; channel < num_full_size_channels; channel++) {
-            const auto worker_stream_id =
-                tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, channel, core_id_);
+            const auto worker_stream_id = tensix_config.get_channel_credits_stream_id(channel, core_id_);
             fabric_stream_ids.push_back(worker_stream_id);
         }
     } else {
         const auto worker_channel = is_2d_fabric ? direction_ : 0;
-        const auto worker_stream_id =
-            tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel, core_id_);
+        const auto worker_stream_id = tensix_config.get_channel_credits_stream_id(worker_channel, core_id_);
         // MUX mode: topology-based channels (includes fabric routers)
         switch (topology) {
             case tt::tt_fabric::Topology::Linear:
@@ -630,12 +615,12 @@ void FabricTensixDatamoverRelayBuilder::create_and_compile(
     tt::tt_metal::SetRuntimeArgs(program, relay_kernel, my_core_logical_, get_runtime_args(program));
 }
 
-std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args(tt::tt_metal::IDevice* device) const {
+std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_compile_time_args(tt::tt_metal::IDevice*) const {
     std::vector<uint32_t> ct_args;
     return ct_args;
 }
 
-std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_runtime_args(tt::tt_metal::Program& program) const {
+std::vector<uint32_t> FabricTensixDatamoverRelayBuilder::get_runtime_args(tt::tt_metal::Program&) const {
     std::vector<uint32_t> runtime_args;
     return runtime_args;
 }

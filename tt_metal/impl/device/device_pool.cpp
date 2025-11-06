@@ -924,7 +924,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool /*skip
                 for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
                     auto core_id = tensix_config.get_core_id_for_channel(dev->id(), eth_chan_id);
                     auto [tensix_termination_address, tensix_signal] =
-                        tensix_config.get_termination_address_and_signal(dev->id(), eth_chan_id, core_id);
+                        tensix_config.get_termination_address_and_signal(core_id);
                     std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
                     auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
 
