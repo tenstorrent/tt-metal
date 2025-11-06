@@ -5,7 +5,8 @@ import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
-from .attention import Attention
+from .attention import Attention, AttentionConfig
+from .attention_configs import GPTOSSAttentionProgramConfig
 from .mlp import MLP
 from .rms_norm import RMSNorm
 
@@ -51,17 +52,31 @@ class DecoderLayer:
 
         self.attention_type = hf_config.layer_types[layer_idx]
 
+        # Create attention configuration
+        attention_config = AttentionConfig(
+            hidden_size=hf_config.hidden_size,
+            num_heads=hf_config.num_attention_heads,
+            num_kv_heads=hf_config.num_key_value_heads,
+            head_dim=hf_config.head_dim,
+            max_seq_len=hf_config.max_position_embeddings,
+            sliding_window=hf_config.sliding_window,
+        )
+
+        # Create attention program config
+        attention_program_config = GPTOSSAttentionProgramConfig()
+
         self.self_attn = Attention(
-            mesh_device,
-            hf_config,
-            substate(state_dict, "self_attn"),
-            layer_idx,
-            ccl_manager,
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
-            paged_attention_config=paged_attention_config,
+            mesh_device=mesh_device,
+            config=attention_config,
+            state_dict=substate(state_dict, "self_attn"),
+            ccl_manager=ccl_manager,
             mesh_config=mesh_config,
-            create_kv_cache=create_kv_cache,
+            program_config=attention_program_config,
+            layer_idx=layer_idx,
+            paged_attention_config=paged_attention_config,
             transformation_mats=transformation_mats,
+            tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
+            create_kv_cache=create_kv_cache,
         )
         self.mesh_device = mesh_device
 
