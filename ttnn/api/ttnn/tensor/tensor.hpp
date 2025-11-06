@@ -266,7 +266,7 @@ public:
 
     static void set_tensor_id_counter(std::uint64_t id) { tensor_id_counter.store(id, std::memory_order_relaxed); }
 
-    static std::uint64_t fetch_and_increment_tensor_id_counter() { return tensor_id_counter.fetch_add(1); }
+    static std::uint64_t fetch_and_increment_tensor_id_counter() { return tensor_id_counter.fetch_add(1, std::memory_order_relaxed); }
 
 private:
     inline static std::atomic<std::uint64_t> tensor_id_counter{0};
