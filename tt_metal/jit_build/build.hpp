@@ -117,18 +117,17 @@ protected:
     std::string default_linker_opt_level_;
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
-    size_t compile(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
+    size_t compile(const std::string& out_path, const JitBuildSettings* settings) const;
     void compile_one(
-        const std::string& log_file,
         const std::string& out_path,
         const JitBuildSettings* settings,
         const std::string& src,
         const std::string& obj) const;
     bool need_link(const std::string& out_dir) const;
-    void link(const std::string& log_file, const std::string& out_path, const JitBuildSettings* settings) const;
-    void weaken(const std::string& log_file, const std::string& out_path) const;
+    void link(const std::string& out_path, const JitBuildSettings* settings) const;
+    void weaken(const std::string& out_path) const;
     std::string weakened_firmeware_elf_name() const;
-    void extract_zone_src_locations(const std::string& log_file) const;
+    void extract_zone_src_locations(const std::string& out_dir) const;
 
 public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);

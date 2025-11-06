@@ -389,11 +389,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 }
 
 void JitBuildState::compile_one(
-    const string& log_file,
-    const string& out_dir,
-    const JitBuildSettings* settings,
-    const string& src,
-    const string& obj) const {
+    const string& out_dir, const JitBuildSettings* settings, const string& src, const string& obj) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -456,6 +452,8 @@ void JitBuildState::compile_one(
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
+    std::string log_file = out_dir + obj + ".log";
+    fs::remove(log_file);
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "compile", cmd, log_file);
     }
@@ -467,15 +465,13 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
-size_t JitBuildState::compile(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
+size_t JitBuildState::compile(const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (need_compile(out_dir, this->objs_[i])) {
             launch_build_step(
-                [this, &log_file, &out_dir, settings, i] {
-                    this->compile_one(log_file, out_dir, settings, this->srcs_[i], this->objs_[i]);
-                },
+                [this, &out_dir, settings, i] { this->compile_one(out_dir, settings, this->srcs_[i], this->objs_[i]); },
                 events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
@@ -495,7 +491,7 @@ bool JitBuildState::need_link(const string& out_dir) const {
     return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
-void JitBuildState::link(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
+void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
@@ -520,15 +516,17 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     // Append common args provided by the build state
     cmd += lflags;
     cmd += this->link_objs_;
-    std::string elf_name = this->target_name_ + ".elf";
-    cmd += "-o " + out_dir + elf_name;
+    std::string elf_name = out_dir + this->target_name_ + ".elf";
+    cmd += "-o " + elf_name;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
+    std::string log_file = elf_name + ".log";
+    fs::remove(log_file);
     if (!tt::jit_build::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "link", cmd, log_file);
     }
-    std::string hash_path = out_dir + elf_name + ".dephash";
+    std::string hash_path = elf_name + ".dephash";
     std::ofstream hash_file(hash_path);
     jit_build::write_dependency_hashes({{elf_name, std::move(link_deps)}}, out_dir, elf_name, hash_file);
     hash_file.close();
@@ -542,7 +540,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propogate link addresses
-void JitBuildState::weaken(const string& /*log_file*/, const string& out_dir) const {
+void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
     std::string pathname_in = out_dir + target_name_ + ".elf";
@@ -559,7 +557,7 @@ std::string JitBuildState::weakened_firmeware_elf_name() const {
     return fmt::format("{}{}/{}_weakened.elf", this->env_.out_firmware_root_, this->target_name_, this->target_name_);
 }
 
-void JitBuildState::extract_zone_src_locations(const string& log_file) const {
+void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
     if (tt::tt_metal::getDeviceProfilerState()) {
@@ -571,18 +569,7 @@ void JitBuildState::extract_zone_src_locations(const string& log_file) const {
             tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
-        // Cache zone src locations to per-kernel location, so this info is not lost
-        // next time when the jit build cache is reused (no compile logs to look at).
-        auto cached_path = fs::path(log_file).replace_filename("zone_src_locations.txt");
-        std::string cmd;
-        if (fs::exists(cached_path)) {
-            // Append cached zone src locations to the new log
-            cmd = "cat " + cached_path.string();
-        } else {
-            // Only interested in log entries with KERNEL_PROFILER inside them as device code
-            // tags source location info with it using pragma messages
-            cmd = fmt::format("grep KERNEL_PROFILER {} | tee {}", log_file, cached_path.string());
-        }
+        auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
         tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
     }
 }
@@ -594,20 +581,16 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
                          : this->out_path_ + settings->get_full_kernel_name() + this->target_name_ + "/";
 
     fs::create_directories(out_dir);
-    string log_file = out_dir + "build.log";
-    if (fs::exists(log_file)) {
-        fs::resize_file(log_file, 0);
-    }
-    if (compile(log_file, out_dir, settings) > 0 || need_link(out_dir)) {
-        link(log_file, out_dir, settings);
+    if (compile(out_dir, settings) > 0 || need_link(out_dir)) {
+        link(out_dir, settings);
         if (this->is_fw_) {
-            weaken(log_file, out_dir);
+            weaken(out_dir);
         }
     }
 
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.
-    extract_zone_src_locations(log_file);
+    extract_zone_src_locations(out_dir);
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
