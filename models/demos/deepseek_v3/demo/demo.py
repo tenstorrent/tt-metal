@@ -12,7 +12,7 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.tt.generator_pp import DeepseekGenerator as DeepseekGeneratorPP
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 
@@ -94,7 +94,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--generator",
         choices=["pp", "bp"],
         default="bp",
-        help="Select generator implementation: default (batch parallel), pp (pipeline parallel).",
+        help="Select generator implementation: default = bp (batch parallel), pp (pipeline parallel).",
     )
     return p
 
@@ -267,7 +267,7 @@ def run_demo(
 
             token_acc = TokenAccuracy(str(reference_file), prompt_len=tf_prompt_len)
         if generator == "bp":
-            gen = DeepseekGenerator(
+            gen = DeepseekGeneratorDP(
                 mesh_device=mesh_device,
                 model_path=Path(model_path),
                 cache_dir=Path(cache_dir),
