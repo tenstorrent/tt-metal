@@ -122,3 +122,11 @@ def test_tilize(device):
 
     # Tilize the tensor
     tilized_tensor = ttnn.tilize(input_tensor)
+
+
+def test_tilize_with_val_padding(device):
+    # Create a tensor to tilize with value padding
+    input_tensor = ttnn.rand([1, 1, 64, 32], ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Tilize the tensor with value padding
+    tilized_tensor = ttnn.tilize_with_val_padding(input_tensor, output_tensor_shape=[1, 1, 64, 64], pad_value=0.0)

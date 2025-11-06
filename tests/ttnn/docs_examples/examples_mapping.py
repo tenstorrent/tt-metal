@@ -15,7 +15,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.repeat_interleave": data_movement.test_repeat_interleave,
     "ttnn.slice": data_movement.test_slice,
     "ttnn.tilize": data_movement.test_tilize,
-    # "ttnn.tilize_with_val_padding" : data_movement.test_tilize_with_val_padding,
+    "ttnn.tilize_with_val_padding": data_movement.test_tilize_with_val_padding,
     # "ttnn.fill_rm" : data_movement.test_fill_rm,
     # "ttnn.fill_ones_rm" : data_movement.test_fill_ones_rm,
     # "ttnn.untilize" : data_movement.test_untilize,
