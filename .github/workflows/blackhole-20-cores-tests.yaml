@@ -54,10 +54,12 @@ jobs:
     steps:
       - name: Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@5b5c6ff5b54025e165d189371cda93d2b9ef6115
+        timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run ${{ matrix.test-group.name }}
+        timeout-minutes: 10
         env:
           ARCH_NAME: ${{ inputs.arch }}
           TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4, 3"
