@@ -285,8 +285,21 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         WriteCBGuard cb_output_write_guard{cb_output, ONE_TILE};
         tile_regs_acquire();
 
-        add_tiles_init(cb_cumsum_stage_X, cb_output);
-        add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
+        binary_op_init_common(cb_cumsum_stage_X, cb_axis_3_buffer_read, cb_output);
+        UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read)));
+        UNPACK(
+            (llk_unpack_AB<BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, 31)));
+
+        MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>()));
+        MATH((llk_math_eltwise_binary<
+              EltwiseBinaryType::ELWADD,
+              BroadcastType::ROW,
+              false,  // if anything, investigate later
+              0,
+              EltwiseBinaryReuseDestType::NONE>(WORKING_REG, false)));
+
+        // add_tiles_init(cb_cumsum_stage_X, cb_output);
+        // add_tiles(cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
         tile_regs_wait();
         tile_regs_commit();
@@ -336,7 +349,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // consume: cb_cumsum_stage_2 32tm axis_3_buffer_1_cb 32t
                 // produce: cb_output 1t x32
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_2_cb, ctas.axis_3_buffer_0_cb, ctas.output_cb, block_depth);
             } else {
                 // consume: cb_cumsum_stage_1 32t
                 // produce: cb_output 1t x32
@@ -352,7 +365,7 @@ FORCE_INLINE void perform_intimg_along_row_chunk(
                 // consume: cb_cumsum_stage_1 32t, axis_3_buffer_1_cb 32t
                 // produce: cb_output 1t x32
                 get_and_propagate_adder_cube(
-                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_1_cb, ctas.output_cb, block_depth);
+                    ctas.cumsum_stage_1_cb, ctas.axis_3_buffer_0_cb, ctas.output_cb, block_depth);
             } else {
                 // consume: cb_cumsum_stage_0 32t
                 // produce: cumsummed down cube (cb_output 1t x32)
