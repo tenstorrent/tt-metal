@@ -88,7 +88,17 @@ MeshGraph::MeshGraph(const std::string& mesh_graph_desc_file_path, std::optional
         MeshGraphDescriptor mgd(filepath, true);
         this->initialize_from_mgd(mgd, fabric_config);
     } else {
-        TT_THROW("Mesh graph descriptor file must end with .textproto");
+        TT_THROW(
+            "Mesh graph descriptor file must use the .textproto format. "
+            "The YAML format (MGD 1.0) has been deprecated.\n\n"
+            "Please convert your YAML mesh graph descriptor to textproto format.\n\n"
+            "For examples of textproto format, see:\n"
+            "  - tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto\n"
+            "  - tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto\n\n"
+            "For conversion instructions from MGD 1.0 (YAML) to MGD (textproto), see:\n"
+            "  - tt_metal/fabric/MGD_README.md (section: Converting from MGD 1.0 to MGD)\n\n"
+            "File provided: {}",
+            mesh_graph_desc_file_path);
     }
 }
 
