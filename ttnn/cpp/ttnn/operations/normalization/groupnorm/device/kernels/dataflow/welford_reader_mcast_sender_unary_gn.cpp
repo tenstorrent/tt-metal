@@ -21,21 +21,13 @@ void kernel_main() {
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
-    constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
-    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("TILE_HEIGHT");
 
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
-    constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
     constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
-    constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     // These are numbers in absolute terms, on a per batch, per group, per core basis without tiling
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
@@ -194,7 +186,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_reserve_back(cb_repack, per_core_N);
         uint32_t l1_write_addr_repack = get_write_ptr(cb_repack);
-        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;

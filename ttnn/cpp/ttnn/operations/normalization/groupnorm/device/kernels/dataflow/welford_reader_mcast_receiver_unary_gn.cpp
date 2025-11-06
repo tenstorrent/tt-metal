@@ -15,42 +15,27 @@ void kernel_main() {
 
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
-
     constexpr uint32_t num_groups = num_batch_group / num_batches;
 
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
-    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("TILE_HEIGHT");
 
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
-    constexpr uint32_t block_hw = get_named_compile_time_arg_val("block_hw");
 
-    constexpr uint32_t num_cols_per_group = get_named_compile_time_arg_val("num_cols_per_group");
     constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
 
-    constexpr uint32_t block_w_last = get_named_compile_time_arg_val("block_w_last");
-    constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_named_compile_time_arg_val("GROUP_SIZE_IS_POWER_OF_2");
-    constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
-    constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
-    // These are numbers in absolute terms, on a per group, per batch without tiling
+    // These are numbers in absolute terms, on a per batch, per group, per core basis without tiling
     constexpr uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
     constexpr uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
-    constexpr auto out_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-
-    constexpr uint32_t block_w_minus_one = block_w - 1;
-    constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t tile_w_minux_group_size = tt::constants::TILE_WIDTH - num_cols_per_group;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t out_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
-    const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
@@ -70,6 +55,11 @@ void kernel_main() {
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
     constexpr uint32_t src0_tile_bytes = get_tile_size(cb_in0);
 
+    // This is the stride between two consecutive local means/variances in the cb_ex_partial
+    constexpr uint32_t local_stride = 2;
+    constexpr uint32_t single_row_size_bytes = single_tile_size_bytes / tt::constants::TILE_HEIGHT;
+    constexpr uint32_t local_stride_per_group = local_stride * single_row_size_bytes;
+
     const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -78,7 +68,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_reserve_back(cb_repack, per_core_N);
         uint32_t l1_write_addr_repack = get_write_ptr(cb_repack);
-        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < tt::constants::TILE_HEIGHT; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
@@ -144,7 +134,7 @@ void kernel_main() {
             auto local_result = combine_welford_stats<
                 tt::constants::TILE_WIDTH,
                 num_channels_per_group * num_rows_per_group / tt::constants::TILE_WIDTH,
-                2>(p_local_means, p_local_vars);
+                local_stride>(p_local_means, p_local_vars);
 
             // Write this to cb_ex_global
             auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
@@ -159,8 +149,8 @@ void kernel_main() {
             noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
             noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
 
-            local_means_ptr += 128;
-            local_vars_ptr += 128;
+            local_means_ptr += local_stride_per_group;
+            local_vars_ptr += local_stride_per_group;
             global_means_ptr += 2 * single_tile_size_bytes;
             global_vars_ptr += 2 * single_tile_size_bytes;
         }

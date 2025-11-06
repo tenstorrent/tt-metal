@@ -1,9 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <optional>
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_SCALAR
@@ -11,6 +10,7 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
+#include "tt-metalium/constants.hpp"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
@@ -28,7 +28,7 @@ void MAIN {
     constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
     constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
 
-    constexpr uint32_t batch = get_named_compile_time_arg_val("batch");
+    constexpr uint32_t num_batches = get_named_compile_time_arg_val("batch");
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("group");
 
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
@@ -39,9 +39,7 @@ void MAIN {
     constexpr uint32_t per_core_MN = get_named_compile_time_arg_val("per_core_MN");
 
     constexpr uint32_t single_tile_size_bytes = get_named_compile_time_arg_val("single_tile_size_bytes");
-
     constexpr uint32_t num_tiles_input_mask = get_named_compile_time_arg_val("num_tiles_input_mask");
-
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
 
     // These are numbers in absolute terms, on a per group, per batch without tiling
@@ -164,17 +162,16 @@ void MAIN {
         cb_wait_front(cb_beta, per_core_N);
     }
 
-    for (uint32_t b = 0; b < batch; ++b) {
+    for (uint32_t b = 0; b < num_batches; ++b) {
         cb_reserve_back(cb_ex_partial, 2);
         reconfig_data_format_srcb(cb_in0);
         transpose_wh_init(cb_in0, cb_ex_partial);
-        welford_init();
         tile_regs_acquire();
+        welford_init();
 
         uint32_t block_xy_coord = 0;
         uint32_t block_xy_limit = num_channels_per_group;
 
-        welford_clear_previous_mean_and_m2();
         for (uint32_t g = 0; g < num_groups; ++g) {
             welford_store_mean_m2_to_dst(mean_dst, g);
         }
@@ -211,16 +208,16 @@ void MAIN {
                     cb_wait_front(cb_in0, 1);
 #ifdef TILIZE_IN
                     transpose_wh_init_short(cb_in);
-                    transpose_wh_tile(cb_in, 0, dst0);
+                    transpose_wh_tile(cb_in, 0, input_dst);
 #else
                     transpose_wh_init_short(cb_in0);
-                    transpose_wh_tile(cb_in0, 0, dst0);
+                    transpose_wh_tile(cb_in0, 0, input_dst);
 #endif
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         // Start Welford's Calculation
-                        uint32_t cols_available = TILE_WIDTH - group_offset;
+                        uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                         welford_load_mean_m2_from_dst(mean_dst, g);
@@ -248,7 +245,7 @@ void MAIN {
 
                         // All available columns have been used for this tile, so we don't do any
                         // more groups for this tile.
-                        if (group_offset == TILE_WIDTH) {
+                        if (group_offset == tt::constants::TILE_WIDTH) {
                             break;
                         }
                     }
@@ -267,12 +264,12 @@ void MAIN {
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile_block(1, cb_ex_partial, 2);
+        pack_tile_block(mean_dst, cb_ex_partial, 2);
         tile_regs_release();
         cb_push_back(cb_ex_partial, 2);
 
         // Start Variance Calc
-        //  global reduce results
+        // Wait for final welford values in cb_ex_global
         cb_wait_front(cb_ex_global, 2 * num_groups);
         cb_reserve_back(cb_ex2pe, num_groups);
         // (Var + eps)
@@ -281,6 +278,7 @@ void MAIN {
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
             add_tiles(cb_ex_global, cb_eps, 1 + (g << 1), 0, dst0);
+
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
@@ -359,7 +357,7 @@ void MAIN {
                         // // c. a * b
                         cb_wait_front(cb_xmm, 2);
                         mul_tiles_init(cb_xmm, cb_xmm);
-                        reconfig_data_format_srcb(cb_input_mask, cb_xmm);
+                        reconfig_data_format_srcb(cb_ex2pe, cb_xmm);
                         tile_regs_acquire();
                         mul_tiles(cb_xmm, cb_xmm, 0, 1, dst0);
                         tile_regs_commit();
@@ -403,7 +401,7 @@ void MAIN {
                         tile_regs_release();
                         cb_push_back(cb_x, 1);
 
-                        uint32_t cols_available = TILE_WIDTH - group_offset;
+                        uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
                         uint32_t cols_consumed = std::min(cols_available, channels_left);
                         channels_left -= cols_consumed;
                         group_offset += cols_consumed;
@@ -426,7 +424,7 @@ void MAIN {
 
                         // All available columns have been used for this tile, so we don't do any
                         // more groups for this tile.
-                        if (group_offset == TILE_WIDTH) {
+                        if (group_offset == tt::constants::TILE_WIDTH) {
                             break;
                         }
                     }
