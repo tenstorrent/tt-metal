@@ -74,24 +74,21 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                 float x_coord = static_cast<float>(input_buffer[x_idx]);
                 float y_coord = static_cast<float>(input_buffer[y_idx]);
 
-                // Transform to image coordinates - different formulas for align_corners
-                float h_coord_image, w_coord_image;
-                if (mode == "bilinear" && !align_corners) {
-                    // Original bilinear transform for align_corners=False (legacy behavior)
-                    h_coord_image = (y_coord * height_scale) + (height_scale - 0.5f);
-                    w_coord_image = (x_coord * width_scale) + (width_scale - 0.5f);
-                } else {
-                    // Standard transform for nearest mode and align_corners=True
-                    h_coord_image = (y_coord + 1.0f) * height_scale + height_offset;
-                    w_coord_image = (x_coord + 1.0f) * width_scale + width_offset;
-                }
+                // Transform to image coordinates - use consistent formula
+                float h_coord_image = (y_coord + 1.0f) * height_scale + height_offset;
+                float w_coord_image = (x_coord + 1.0f) * width_scale + width_offset;
 
                 if (mode == "nearest") {
-                    // For nearest neighbor: use floor(coord + 0.5) to match PyTorch behavior
-                    int32_t h_nearest = static_cast<int32_t>(
-                        align_corners ? std::floor(h_coord_image) : std::floor(h_coord_image + 0.5f));
-                    int32_t w_nearest = static_cast<int32_t>(
-                        align_corners ? std::floor(w_coord_image) : std::floor(w_coord_image + 0.5f));
+                    // For nearest neighbor: use round() for align_corners=True, floor(coord + 0.5) for
+                    // align_corners=False
+                    int32_t h_nearest, w_nearest;
+                    if (align_corners) {
+                        h_nearest = static_cast<int32_t>(std::round(h_coord_image));
+                        w_nearest = static_cast<int32_t>(std::round(w_coord_image));
+                    } else {
+                        h_nearest = static_cast<int32_t>(std::floor(h_coord_image + 0.5f));
+                        w_nearest = static_cast<int32_t>(std::floor(w_coord_image + 0.5f));
+                    }
 
                     // Check if coordinates are valid - proper pixel bounds
                     bool h_valid = (h_nearest >= 0) && (h_nearest < static_cast<int32_t>(input_h));

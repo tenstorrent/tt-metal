@@ -60,21 +60,13 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     } else {
-        const uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
         const auto compute_grid_size = device->compute_with_storage_grid_size();
+        uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
+
+        grid_nsticks = round_up(grid_nsticks, compute_grid_size.x * compute_grid_size.y);
+
         auto [num_cores_used, all_cores_range, core_group_1_range, core_group_2_range, num_sticks_1, num_sticks_2] =
             tt::tt_metal::split_work_to_cores(compute_grid_size, grid_nsticks);
-
-        // Debug work division
-        log_info(LogMetal, "WORK DIVISION: grid_nsticks={}, num_cores_used={}", grid_nsticks, num_cores_used);
-        log_info(LogMetal, "  Group 1: {} cores, {} sticks per core", core_group_1_range.num_cores(), num_sticks_1);
-        log_info(LogMetal, "  Group 2: {} cores, {} sticks per core", core_group_2_range.num_cores(), num_sticks_2);
-        log_info(LogMetal, "  Group 1 range: {}", core_group_1_range);
-        log_info(LogMetal, "  Group 2 range: {}", core_group_2_range);
-        log_info(
-            LogMetal,
-            "  Total work assigned: {}",
-            core_group_1_range.num_cores() * num_sticks_1 + core_group_2_range.num_cores() * num_sticks_2);
 
         std::tie(num_cores, all_cores, core_group_1, core_group_2) =
             std::make_tuple(num_cores_used, all_cores_range, core_group_1_range, core_group_2_range);
@@ -222,6 +214,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
 
         if (enable_split_reader) {
             auto writer1_compile_time_args = writer_compile_time_args;
+            writer1_compile_time_args[0] = grid_cb_index_1;  // ct_arg[12]: reader_id = 1
             writer1_compile_time_args[12] = 1;  // ct_arg[12]: reader_id = 1
 
             writer1_kernel_id = tt::tt_metal::CreateKernel(
@@ -265,31 +258,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
                     core_group_1.contains(core) ? num_sticks_per_core_group_1 : num_sticks_per_core_group_2;
                 const uint32_t output_sticks = batch_output_channels ? grid_sticks : grid_sticks * grid_batching_factor;
 
-                // Debug core assignment - show range for each core
-                const uint32_t start_pos = grid_processed;
-                const uint32_t end_pos_exclusive = grid_processed + grid_sticks;
-                const uint32_t end_pos_inclusive = (grid_sticks > 0) ? end_pos_exclusive - 1 : start_pos;
-                log_info(
-                    LogMetal,
-                    "Core ({},{}) idx {} group 1 assigned range [{}, {}] (inclusive) = [{}, {}) (exclusive), {} "
-                    "positions",
-                    core.x,
-                    core.y,
-                    i,
-                    start_pos,
-                    end_pos_inclusive,
-                    start_pos,
-                    end_pos_exclusive,
-                    grid_sticks);
-
-                // Check if this range includes any failing positions
-                std::vector<uint32_t> failing_positions = {212, 283, 354, 567, 638, 709, 922, 993, 1064, 1277, 1348};
-                for (uint32_t fail_pos : failing_positions) {
-                    if (fail_pos >= start_pos && fail_pos < end_pos_exclusive) {
-                        log_info(LogMetal, "  FAILING POSITION {} assigned to Core ({},{})", fail_pos, core.x, core.y);
-                    }
-                }
-
                 // Runtime arguments for interleaved reader
                 std::vector<uint32_t> reader_runtime_args = {
                     input_tensor.buffer()->address(),  // rt_arg[0]: input_buffer_address
@@ -315,31 +283,6 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_nearest_program_factor
                 const CoreCoord& core = cores_2[i];
                 const uint32_t grid_sticks = num_sticks_per_core_group_2;
                 const uint32_t output_sticks = batch_output_channels ? grid_sticks : grid_sticks * grid_batching_factor;
-
-                // Debug core assignment - show range for each core
-                const uint32_t start_pos = grid_processed;
-                const uint32_t end_pos_exclusive = grid_processed + grid_sticks;
-                const uint32_t end_pos_inclusive = (grid_sticks > 0) ? end_pos_exclusive - 1 : start_pos;
-                log_info(
-                    LogMetal,
-                    "Core ({},{}) idx {} group 2 assigned range [{}, {}] (inclusive) = [{}, {}) (exclusive), {} "
-                    "positions",
-                    core.x,
-                    core.y,
-                    i,
-                    start_pos,
-                    end_pos_inclusive,
-                    start_pos,
-                    end_pos_exclusive,
-                    grid_sticks);
-
-                // Check if this range includes any failing positions
-                std::vector<uint32_t> failing_positions = {212, 283, 354, 567, 638, 709, 922, 993, 1064, 1277, 1348};
-                for (uint32_t fail_pos : failing_positions) {
-                    if (fail_pos >= start_pos && fail_pos < end_pos_exclusive) {
-                        log_info(LogMetal, "  FAILING POSITION {} assigned to Core ({},{})", fail_pos, core.x, core.y);
-                    }
-                }
 
                 // Runtime arguments for interleaved reader
                 std::vector<uint32_t> reader_runtime_args = {

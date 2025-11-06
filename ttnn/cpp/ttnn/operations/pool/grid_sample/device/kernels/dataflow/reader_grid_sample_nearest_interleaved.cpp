@@ -140,13 +140,6 @@ void kernel_main() {
     // Get output CB base address like sharded writer
     const uint32_t l1_write_output_base_addr = get_write_ptr(output_cb_index);
 
-// Debug range information
-#if PRINT_AND_PROFILE
-    DPRINT << "CORE RANGE: start_page_id=" << start_page_id << " num_pages=" << num_pages << " end_id=" << end_id
-           << " (exclusive)" << ENDL();
-    DPRINT << "BATCH SETUP: output_hw_size=" << output_hw_size << " curr_batch=" << curr_batch
-           << " batch_offset=" << batch_offset << ENDL();
-#endif
     //  Outer loop: iterate over spatial positions (output sticks)
     for (uint32_t spatial_pos = start_page_id; spatial_pos < end_id; ++spatial_pos) {
         // Read the grid stick for this spatial position (contains grid_batches sets of coordinates)
