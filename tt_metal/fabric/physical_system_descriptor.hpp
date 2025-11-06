@@ -245,6 +245,7 @@ private:
     ExitNodeConnectionTable exit_node_connection_table_;
     bool all_hostnames_unique_ = true;
     tt::umd::semver_t ethernet_firmware_version_;
+    std::unordered_map<uint64_t, TrayID> board_id_to_tray_id;
 };
 
 }  // namespace tt::tt_metal

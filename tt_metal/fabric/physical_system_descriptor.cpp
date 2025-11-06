@@ -93,7 +93,11 @@ TrayID get_tray_id_for_chip(
 }
 
 std::pair<TrayID, ASICLocation> get_asic_position(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, tt::ARCH arch, ChipId chip_id, bool using_mock_cluster_desc) {
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    tt::ARCH arch,
+    ChipId chip_id,
+    bool using_mock_cluster_desc,
+    std::unordered_map<uint64_t, TrayID>& board_id_to_tray_id) {
     auto cluster_desc = cluster->get_cluster_description();
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB_WORMHOLE ||
         cluster_desc->get_board_type(chip_id) == BoardType::UBB_BLACKHOLE) {
@@ -103,6 +107,19 @@ std::pair<TrayID, ASICLocation> get_asic_position(
             using_mock_cluster_desc || get_mobo_name() == ubb_mobo_name, "UBB systems must use S7T-MB motherboard.");
         auto ubb_id = tt::tt_fabric::get_ubb_id(chip_id);
         return {TrayID{ubb_id.tray_id}, ASICLocation{ubb_id.asic_id}};
+    } else if (cluster_desc->get_board_type(chip_id) == BoardType::P300 && cluster_desc->get_number_of_chips() == 4) {
+        // Special Handling for Blackhole Quietbox GE
+        TT_FATAL(
+            using_mock_cluster_desc || get_mobo_name() == "B850M-C",
+            "Blackhole Quietbox GE systems must use B850M-C motherboard.");
+        // Assign Tray ID arbitrarily based on board id (this works because the cross-board/WARP connections in the QBGE
+        // are symmetric)
+        auto curr_board_id = cluster_desc->get_board_id_for_chip(chip_id);
+        if (board_id_to_tray_id.find(curr_board_id) == board_id_to_tray_id.end()) {
+            auto new_tray_id = board_id_to_tray_id.size() + 1;
+            board_id_to_tray_id[curr_board_id] = TrayID{new_tray_id};
+        }
+        return {board_id_to_tray_id[curr_board_id], ASICLocation{cluster_desc->get_asic_location(chip_id)}};
     } else {
         auto tray_id = get_tray_id_for_chip(cluster, chip_id, get_mobo_name(), using_mock_cluster_desc);
         ASICLocation asic_location;
@@ -278,8 +295,12 @@ void PhysicalSystemDescriptor::run_local_discovery(bool run_live_discovery) {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, ChipId src_chip_id) {
-        auto [tray_id, asic_location] =
-            get_asic_position(cluster_, get_arch(cluster_desc_), src_chip_id, target_device_type_ != TargetDevice::Silicon);
+        auto [tray_id, asic_location] = get_asic_position(
+            cluster_,
+            get_arch(cluster_desc_),
+            src_chip_id,
+            target_device_type_ != TargetDevice::Silicon,
+            board_id_to_tray_id);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc_->get_board_type(src_chip_id), src_unique_id, hostname};
     };
