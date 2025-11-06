@@ -50,6 +50,8 @@ class DumpWaitGlobalsData:
     x: int | None = triage_field("x", verbose=2)
     y: int | None = triage_field("y", verbose=2)
     last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq", verbose=2)
+    # New field: live semaphore minus local_count_ (wrap-aware 32-bit arithmetic)
+    sem_minus_local: int | None = triage_field("sem_minus_local", verbose=1)
 
 
 def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
@@ -201,6 +203,32 @@ def read_wait_globals(
         # Wrap the global wait count to the stream width, to match the stream wrap behavior
         last_wait_count = last_wait_count & ((1 << stream_width) - 1)
 
+    # Compute sem_minus_local for dispatcher kernels by reading the live semaphore and subtracting local_count_
+    sem_minus_local: int | None = None
+    try:
+        # Prefer constexprs from the kernel; fall back to Tensix index 0 for core type
+        my_dispatch_cb_sem_id = kernel_elf.get_constant("my_dispatch_cb_sem_id")
+        try:
+            fd_core_type_idx = kernel_elf.get_constant("fd_core_type")
+        except Exception:
+            fd_core_type_idx = 0
+
+        # sem_l1_base is a firmware global array of L1 pointers; index by core type
+        sem_base_ptr = int(kernel_elf.get_global("sem_l1_base", loc_mem_access)[fd_core_type_idx])
+        # L1 alignment is 16 bytes for semaphores
+        sem_addr = sem_base_ptr + my_dispatch_cb_sem_id * 16
+        sem_value = read_word_from_device(location, sem_addr)
+
+        # Read local_count_ from dispatch_cb_reader
+        local_count = int(kernel_elf.get_global("dispatch_cb_reader", loc_mem_access).local_count_)
+
+        # Two's-complement 32-bit wrapping difference
+        delta = (int(sem_value) - int(local_count)) & 0xFFFFFFFF
+        sem_minus_local = delta - 0x100000000 if (delta & 0x80000000) else delta
+    except Exception:
+        # Leave as None if any lookups fail
+        sem_minus_local = None
+
     # Get virtual coordinate for this specific core
     virtual_coord = location.to("translated")
     # This device._id might mismatch with the tt_cxy_pair::chip_id
@@ -233,6 +261,7 @@ def read_wait_globals(
         cq_id=getattr(core_info, "cqId", None),
         servicing_device_id=getattr(core_info, "servicingDeviceId", None),
         last_event_issued_to_cq=getattr(core_info, "eventID", None),
+        sem_minus_local=sem_minus_local,
     )
 
 
