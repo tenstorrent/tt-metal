@@ -327,7 +327,6 @@ void set_or_update_runtime_arguments(
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
-    auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
@@ -463,6 +462,10 @@ void set_or_update_runtime_arguments(
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_b.value(), output.dtype());
         } else if (variant == TernaryVariant::TST) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
+        } else if (
+            operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+            operation_attributes.scalar_input_a.has_value()) {
+            scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         }
         auto [freq, counter] = [&] {
             switch (broadcast_type) {
@@ -566,9 +569,9 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     // Create c_1 based on variant - this is the primary tensor CB
     uint32_t value_true_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_true_tensor_cb_handle;
+    [[maybe_unused]] tt::tt_metal::CBHandle value_true_tensor_cb_handle;
     uint32_t value_false_tensor_cb = 0;
-    tt::tt_metal::CBHandle value_false_tensor_cb_handle;
+    [[maybe_unused]] tt::tt_metal::CBHandle value_false_tensor_cb_handle;
 
     if (variant == TernaryVariant::TTS) {
         // TTS: c_1 = value_true tensor (value_false is scalar)

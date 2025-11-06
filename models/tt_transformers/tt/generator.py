@@ -4,6 +4,7 @@
 
 from collections import defaultdict
 from dataclasses import dataclass
+from typing import List
 
 import torch
 from loguru import logger
@@ -18,6 +19,7 @@ from models.common.llama_models import (
     extract_images_from_messages,
     sample_top_p,
 )
+from models.common.tt_sampling import format_sampling_params
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
@@ -38,6 +40,18 @@ class SamplingParams:
     temperature: float | list[float]
     top_k: int | list[int]
     top_p: float | list[float]
+
+
+# Split lists into chunks
+def split_list(lst, n):
+    """Split list into n equal parts"""
+    chunk_size = len(lst) // n
+    chunks = []
+    start = 0
+    for i in range(n):
+        chunks.append(list(lst[start : start + chunk_size]))  # Convert to list explicitly
+        start = end
+    return chunks
 
 
 class Generator:
@@ -62,6 +76,9 @@ class Generator:
         self.trace_id_prefill = defaultdict(lambda: None)
         self.trace_inputs_prefill = defaultdict(lambda: None)
         self.trace_output_prefill = defaultdict(lambda: None)
+        self.trace_ids_decode = defaultdict(lambda: None)  # {device_sampling_bool: {device_id: trace_id}}
+        self.trace_inputs_decode = defaultdict(lambda: None)
+        self.trace_output_decode = defaultdict(lambda: None)
 
     def _capture_trace_prefill(
         self,
@@ -116,6 +133,7 @@ class Generator:
         prefill_seq_len=None,
         **kwargs,
     ):
+        # We are not appending host/device here because we never do device sampling in prefill with TTT
         trace_key = f"{prefill_seq_len}_{model_id}"
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -388,25 +406,47 @@ class Generator:
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
     ):
-        assert (
-            sampling_params is None or sampling_params.temperature == 0
-        ), "Currently only supporting greedy decoding (temperature=0) on device"
-        argmax_on_device = sampling_params is not None and sampling_params.temperature == 0
+        sampling_on_device = sampling_params is not None
 
         B = tokens.shape[0]
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
 
+        if sampling_on_device:
+            if not isinstance(sampling_params.temperature, List):
+                sampling_params_list = [sampling_params] * self.data_parallel
+            else:
+                temperature_chunks = split_list(sampling_params.temperature, self.data_parallel)
+                top_k_chunks = split_list(sampling_params.top_k, self.data_parallel)
+                top_p_chunks = split_list(sampling_params.top_p, self.data_parallel)
+
+                # Create new SamplingParams objects for each chunk
+                sampling_params_list = []
+                for i in range(self.data_parallel):
+                    new_params = SamplingParams(
+                        temperature=temperature_chunks[i], top_k=top_k_chunks[i], top_p=top_p_chunks[i]
+                    )
+                    sampling_params_list.append(new_params)
+
+            for i in range(self.data_parallel):
+                formatted_params = format_sampling_params(
+                    sampling_params_list[i], 32
+                )  # Sampling needs params padded to 32 regardless of batch_size
+                self.model[i].tt_sampling.reset_params(
+                    k=formatted_params.top_k,
+                    p=formatted_params.top_p,
+                    temp=formatted_params.temperature,
+                )
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
-            "argmax_on_device": argmax_on_device,
+            "sampling_on_device": sampling_on_device,
         }
         if enable_trace:
-            tt_decode_output = self._easy_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs)
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
@@ -422,7 +462,7 @@ class Generator:
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
+        sampling_on_device=False,
     ):
         """
         Performs text decode step.
@@ -456,19 +496,19 @@ class Generator:
                 rot_mat_idxs=tt_rot_mat_idxs[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
-                argmax_on_device=argmax_on_device,
+                sampling_on_device=sampling_on_device,
             )
             tt_logits.append(tt_logits_i)
 
         return tt_logits
 
-    def _capture_trace_text(
+    def _capture_decode_trace_text(
         self,
         tokens,
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
+        sampling_on_device=False,
     ):
         """
         Captures a trace for the decode_forward method.
@@ -476,7 +516,11 @@ class Generator:
 
         # Compile run
         self._decode_forward_no_trace_text(
-            tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+            tokens,
+            current_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            sampling_on_device=sampling_on_device,
         )
         logger.info("Done Compiling Model")
 
@@ -500,38 +544,42 @@ class Generator:
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             tt_out_trace.append(
                 self.model[i].ttnn_decode_forward(
-                    *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
+                    *device_inputs[i],
+                    kv_cache=user_kv_cache,
+                    sampling_on_device=sampling_on_device,
                 )
             )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
 
-    def _easy_trace_text(
+    def _decode_forward_trace_text(
         self,
         tokens,
         current_pos,
         page_table=None,
         kv_cache=None,
-        argmax_on_device=False,
+        sampling_on_device=False,
     ):
         """
-        Tracing is easy! Just call this method and we'll handle tracing for you.
+        Run decode forward text with tracing
         """
-        if not hasattr(self, "trace_ids_text"):
-            trace_ids, tt_out_trace, *device_inputs = self._capture_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, argmax_on_device=argmax_on_device
+        # The trace is different depending on whether we are doing device sampling or not
+        if not self.trace_ids_decode[sampling_on_device]:
+            trace_ids, tt_out_trace, *device_inputs = self._capture_decode_trace_text(
+                tokens, current_pos, page_table=page_table, kv_cache=kv_cache, sampling_on_device=sampling_on_device
             )
-            self.trace_ids_text = trace_ids
-            self.trace_inputs_text = device_inputs
-            self.trace_output_text = tt_out_trace
+            self.trace_ids_decode[sampling_on_device] = trace_ids
+            self.trace_inputs_decode[sampling_on_device] = device_inputs
+            self.trace_output_decode[sampling_on_device] = tt_out_trace
 
-        reset_inputs = not argmax_on_device
+        reset_inputs = not sampling_on_device
         if self.prev_page_table is None or any(
             not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
         ):
+            # If the page table has changed, it means that the inputs have shuffled, so we need to copy them from host again
             reset_inputs = True
-            self.prev_page_table = page_table
+            self.prev_page_table = tuple(pt.clone() for pt in page_table)
 
         if reset_inputs:
             for i in range(self.data_parallel):
@@ -540,13 +588,13 @@ class Generator:
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_text[i],
+                    device_tensors=self.trace_inputs_decode[sampling_on_device][i],
                 )
 
-        for i, trace_id in self.trace_ids_text.items():
+        for i, trace_id in self.trace_ids_decode[sampling_on_device].items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
 
-        return self.trace_output_text
+        return self.trace_output_decode[sampling_on_device]
 
     def _prefill_forward_single_user(
         self,
