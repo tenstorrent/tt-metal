@@ -98,6 +98,8 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
     Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
     {
+        // disable program cache to avoid writing to it with unallocated memory addresses. See #25772
+        device->disable_and_clear_program_cache();
         auto capture_outer = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
 
         // helper lambda to transform TensorSpec to DeviceTensor
