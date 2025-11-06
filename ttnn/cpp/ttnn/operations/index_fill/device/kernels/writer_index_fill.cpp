@@ -23,7 +23,7 @@ void kernel_main() {
     uint32_t end_row = get_arg_val<uint32_t>(2);
     uint32_t num_rows_in_dim = get_arg_val<uint32_t>(3);
     uint32_t dim_size = get_arg_val<uint32_t>(4);
-    uint32_t fill_value = get_arg_val<uint32_t>(5);
+    uint32_t fill_value_ = get_arg_val<uint32_t>(5);
 
     // Derived
     static_assert(elem_size == 2 || elem_size == 4, "Unsupported elem_size");
@@ -34,6 +34,8 @@ void kernel_main() {
     constexpr uint32_t fill_cb_id = tt::CBIndex::c_2;
     constexpr uint32_t onepage = 1;
     constexpr uint32_t row_size = output_page_size / elem_size;
+
+    IntType fill_value = static_cast<IntType>(fill_value_);
 
     const auto s = TensorAccessor(dst_args, output_buffer_address, output_page_size);
 
