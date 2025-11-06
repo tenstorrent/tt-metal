@@ -20,13 +20,16 @@
 #include "compute_kernel_api/lcm.h"
 #include "compute_kernel_api/xlogy.h"
 #include "compute_kernel_api/binary_comp.h"
-
+#include "compute_kernel_api/eltwise_unary/where.h"
+#include "compute_kernel_api/eltwise_unary/fill.h"
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
 namespace NAMESPACE {
 void MAIN {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    const uint32_t scalar_value = get_arg_val<uint32_t>(3);
+    const auto scalar_val = reinterpret_cast<const float*>(&scalar_value);
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
@@ -59,6 +62,47 @@ void MAIN {
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
+
+#if (WHERE_TST) || (WHERE_TTS)
+        // the dst_regs used here are under assumption that num_tiles_per_cycle = 1
+        // this should be changed if num_tiles_per_cycle > 1
+        // Always copy condition to dst_reg 0
+        copy_tile_to_dst_init_short(cb_post_lhs);
+        copy_tile(cb_post_lhs, 0, 0);  // Copy condition to dst_reg 0
+        copy_tile_to_dst_init_short(cb_post_rhs);
+        // TTS: tensor is true value, goes to dst_reg 1
+#if WHERE_TTS
+        copy_tile(cb_post_rhs, 0, 1);  // Copy true tensor to dst_reg 1
+        fill_tile_init();
+        // TTS: scalar is false value, goes to dst_reg 2
+#ifdef FILL_WITH_VALUE_FLOAT
+        FILL_LLK(2, *scalar_val);
+#endif
+#ifdef FILL_WITH_VALUE_INT
+        FILL_LLK(2, scalar_value);
+#endif
+#endif
+// TST: tensor is false value, goes to dst_reg 2
+#if WHERE_TST
+        copy_tile(cb_post_rhs, 0, 2);  // Copy false tensor to dst_reg 2
+        fill_tile_init();
+        // TTS: scalar is true value, goes to dst_reg 1
+#ifdef FILL_WITH_VALUE_FLOAT
+        FILL_LLK(1, *scalar_val);
+#endif
+#ifdef FILL_WITH_VALUE_INT
+        FILL_LLK(1, scalar_value);
+#endif
+#endif
+
+        BINARY_SFPU_OP(0, 1, 2, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+
+        pack_tile(0, cb_out);
+        tile_regs_release();
+
+#else
         copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_lhs, i, i * 2);
@@ -70,6 +114,7 @@ void MAIN {
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
+
         tile_regs_commit();
 
         tile_regs_wait();
@@ -78,6 +123,7 @@ void MAIN {
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
+#endif
 
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);

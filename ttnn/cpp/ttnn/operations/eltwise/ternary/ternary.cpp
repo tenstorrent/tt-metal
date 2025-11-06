@@ -142,6 +142,7 @@ Tensor invoke_impl(
     }
     // Currently ports only non_bcast inputs to binary_ng implementation.
     if (broadcast_type == TernaryBroadcastType::NONE) {
+        std::cout << "\nTTS: Broadcast type is NONE - Binary op \n" << std::endl;
         return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TTS>::invoke(
             condition,
             t_true,
@@ -188,6 +189,7 @@ Tensor invoke_impl(
 
     // Currently ports only non_bcast inputs to binary_ng implementation.
     if (broadcast_type == TernaryBroadcastType::NONE) {
+        std::cout << "\nTST: Broadcast type is NONE - Binary op \n" << std::endl;
         return binary::WhereOperationWithScalar<binary::BinaryOpType::WHERE_TST>::invoke(
             condition,
             t_false,
