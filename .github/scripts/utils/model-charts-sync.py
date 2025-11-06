@@ -5,6 +5,8 @@ import json
 # This script is used to parse and compare the model charts in the featured section of tt_metal/README.md and the full list of models in tt_metal/models/READMe.md.
 # It relies on the structure of the Markdown files to extract model information and validate that featured models are correctly represented in the full model list.
 # It enforces that featured models reflect the attributes of models in the full list, ensuring consistency across the documentation.
+# The script supports multiple model entries under the same header for different device compatibility.
+# Each row under a model header is treated as a separate model instance that must match an entry in the full models list.
 
 
 def strip_md_links(text):
@@ -18,14 +20,17 @@ def strip_md_links(text):
 def _norm(text):
     if text is None:
         return None
-    # Remove whitespace and '*'', lowercase.
-    return re.sub(r"[\s\*]", "", str(text)).lower()
+    # Remove HTML tags, whitespace, '*', parentheses, and convert to lowercase
+    result = re.sub(r"<[^>]+>", "", str(text))  # Remove HTML tags like <br>
+    result = re.sub(r"[\s\*\(\)]", "", result)  # Remove whitespace, asterisks, parentheses
+    return result.lower()
 
 
 def parse_featured_models(md_file_path):
     """Parse the ## Featured Models section from a Markdown file.
     This function expects the Markdown file to have a section starting with '## Featured Models'
     and each model entry to be under a '### Model Name' header followed by an attributes chart.
+    Multiple model entries (rows) are supported under the same header for different device compatibility.
     Args:
         md_file_path (str): Path to the Markdown file.
     Returns:
@@ -77,27 +82,33 @@ def parse_featured_models(md_file_path):
                 )
                 i += 1
                 continue
-            if len(table_lines) != 3:
+            if len(table_lines) < 3:
                 table_start_line = i + 2
                 errors.append(
                     f"ERROR: Attributes chart under '{model_name}' at line {table_start_line} seems to be malformed."
-                    f"\nExpected 3 rows (header / markdown chars / values) but found {len(table_lines)} rows instead."
+                    f"\nExpected at least 3 rows (header / markdown chars / values) but found {len(table_lines)} rows instead."
                 )
                 i = j
                 continue
             header_cells = [strip_md_links(cell) for cell in table_lines[0].strip("|").split("|")]
-            value_cells = [
-                strip_md_links(cell) if cell.strip() else None for cell in table_lines[2].strip("|").split("|")
-            ]
-            if len(header_cells) != len(value_cells):
-                table_start_line = i + 2
-                errors.append(
-                    f"ERROR: Malformed attributes chart under '{model_name}' at line {table_start_line} (header/value cell count mismatch)"
-                )
-                i = j
-                continue
-            attrib = dict(zip(header_cells, value_cells))
-            models.append({"name": model_name, "attributes": attrib})
+
+            # Process all value rows (skip header row 0 and separator row 1)
+            for row_idx in range(2, len(table_lines)):
+                value_cells = [
+                    strip_md_links(cell) if cell.strip() else None
+                    for cell in table_lines[row_idx].strip("|").split("|")
+                ]
+                if len(header_cells) != len(value_cells):
+                    table_start_line = i + 2 + (row_idx - 1)  # Adjust line number for the specific row
+                    errors.append(
+                        f"ERROR: Malformed attributes chart under '{model_name}' at line {table_start_line} (header/value cell count mismatch)"
+                    )
+                    continue
+                attrib = dict(zip(header_cells, value_cells))
+
+                # Each row represents a different instance of the same model (same name from header)
+                # but with different attributes that should match separate entries in the full models list
+                models.append({"name": model_name, "attributes": attrib})
             last_norm_header = [_norm(h) for h in header_cells]
             i = j
             continue
