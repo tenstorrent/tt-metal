@@ -37,7 +37,6 @@ jobs:
     runs-on:
       - in-service
       - arch-blackhole
-      - pipeline-functional
       - ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
