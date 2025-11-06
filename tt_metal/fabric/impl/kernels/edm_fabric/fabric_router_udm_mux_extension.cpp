@@ -186,6 +186,10 @@ void kernel_main() {
     constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
         fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
 
+    // Relay termination signal address (for mux to signal relay during teardown)
+    constexpr size_t RELAY_TERMINATION_SIGNAL_IDX = IS_PERSISTENT_CHANNELS_START_IDX + NUM_TOTAL_CHANNELS;
+    constexpr size_t relay_termination_signal_address = get_compile_time_arg_val(RELAY_TERMINATION_SIGNAL_IDX);
+
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
     size_t connection_handshake_address = connection_handshake_base_address;
@@ -280,6 +284,11 @@ void kernel_main() {
             }
         }
     }
+
+    // Signal relay to terminate (mux and relay are on the same core, so just write to L1 directly)
+    volatile auto relay_termination_signal_ptr =
+        reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(relay_termination_signal_address);
+    *relay_termination_signal_ptr = tt::tt_fabric::termination_interface::immediate_terminate_value;
 
     fabric_connection.close();
     noc_async_write_barrier();

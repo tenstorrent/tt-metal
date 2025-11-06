@@ -517,36 +517,26 @@ void FabricTensixDatamoverMuxBuilder::create_and_compile(tt::tt_metal::Program& 
     tt::tt_metal::SetRuntimeArgs(program, mux_kernel, my_core_logical_, get_runtime_args(program));
 }
 
-std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() const {
+std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_channel_stream_ids(uint8_t num_full_size_channels) const {
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
-    const auto& fabric_router_config = fabric_context.get_fabric_router_config(
-        tt::tt_fabric::FabricEriscDatamoverType::Default,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-        fabric_tensix_config);
-
-    auto ct_args = config_->get_compile_time_args();
-
-    // Add number of upstream routers and sync address
-    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
-    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
-
-    // Get stream IDs based on mode
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
     const auto& tensix_config = fabric_context.get_tensix_config();
-    uint8_t num_full_size_channels = config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
 
     std::vector<uint32_t> fabric_stream_ids;
+
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        // UDM mode: one stream ID per channel
         for (uint8_t channel = 0; channel < num_full_size_channels; channel++) {
             const auto worker_stream_id = tensix_config.get_channel_credits_stream_id(channel, core_id_);
             fabric_stream_ids.push_back(worker_stream_id);
         }
     } else {
+        // MUX mode: topology-based channels (includes fabric routers)
+        const auto topology = fabric_context.get_fabric_topology();
+        const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
         const auto worker_channel = is_2d_fabric ? direction_ : 0;
         const auto worker_stream_id = tensix_config.get_channel_credits_stream_id(worker_channel, core_id_);
-        // MUX mode: topology-based channels (includes fabric routers)
+
         switch (topology) {
             case tt::tt_fabric::Topology::Linear:
             case tt::tt_fabric::Topology::Ring:
@@ -569,12 +559,17 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
     TT_FATAL(
         num_full_size_channels == fabric_stream_ids.size(),
         "the number of fabric stream ids used must equal to the number of mux channels");
-    ct_args.insert(ct_args.end(), fabric_stream_ids.begin(), fabric_stream_ids.end());
 
-    // Add persistent channels flags
+    return fabric_stream_ids;
+}
+
+std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_persistent_channels_flags(
+    uint8_t num_full_size_channels) const {
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
     std::vector<uint32_t> is_persistent_channels(num_full_size_channels, 0);
+
     if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
-        // In UDM mode, ensure relay and inter-mux channels are persistent
+        // UDM mode: ensure relay and inter-mux channels are persistent
         TT_FATAL(
             num_full_size_channels > static_cast<uint32_t>(UdmMuxChannelId::INTER_MUX_CHANNEL),
             "UDM mode requires at least {} channels (got {})",
@@ -592,7 +587,38 @@ std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() c
         }
     }
 
+    return is_persistent_channels;
+}
+
+std::vector<uint32_t> FabricTensixDatamoverMuxBuilder::get_compile_time_args() const {
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    const auto& fabric_router_config = fabric_context.get_fabric_router_config(
+        tt::tt_fabric::FabricEriscDatamoverType::Default,
+        tt::tt_fabric::FabricEriscDatamoverAxis::Short,
+        fabric_tensix_config);
+
+    auto ct_args = config_->get_compile_time_args();
+
+    // Add number of upstream routers and sync address
+    ct_args.push_back(static_cast<uint32_t>(upstream_routers_noc_x_.size()));
+    ct_args.push_back(fabric_router_config.edm_local_tensix_sync_address);
+
+    // Get stream IDs and persistent channels flags
+    uint8_t num_full_size_channels = config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
+    auto fabric_stream_ids = get_channel_stream_ids(num_full_size_channels);
+    auto is_persistent_channels = get_persistent_channels_flags(num_full_size_channels);
+
+    ct_args.insert(ct_args.end(), fabric_stream_ids.begin(), fabric_stream_ids.end());
     ct_args.insert(ct_args.end(), is_persistent_channels.begin(), is_persistent_channels.end());
+
+    // In UDM mode, add relay's termination signal address for mux to write during teardown
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::UDM) {
+        const auto& tensix_config = fabric_context.get_tensix_config();
+        auto relay_config = tensix_config.get_config(FabricTensixCoreType::RELAY);
+        auto relay_config_typed = std::dynamic_pointer_cast<const FabricTensixDatamoverRelayConfig>(relay_config);
+        ct_args.push_back(relay_config_typed->get_relay_termination_signal_address());
+    }
 
     return ct_args;
 }

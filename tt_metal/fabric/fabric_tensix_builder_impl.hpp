@@ -199,6 +199,9 @@ public:
         return mux_relay_buffer_index_semaphore_region_.get_address();
     }
 
+    // Get relay termination signal address (for mux to write during teardown)
+    size_t get_relay_termination_signal_address() const { return termination_signal_region_.get_address(); }
+
 private:
     // Semaphore regions for relay → mux connection (mux writes to these in relay's L1)
     MemoryRegion mux_relay_flow_control_semaphore_region_{};
@@ -245,6 +248,10 @@ private:
     const char* get_kernel_file_path() const;
     std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
+
+    // Helper methods for get_compile_time_args
+    std::vector<uint32_t> get_channel_stream_ids(uint8_t num_full_size_channels) const;
+    std::vector<uint32_t> get_persistent_channels_flags(uint8_t num_full_size_channels) const;
 
     // Core and fabric configuration
     CoreCoord my_core_logical_;
