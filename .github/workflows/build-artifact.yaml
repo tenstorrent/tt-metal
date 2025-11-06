@@ -166,9 +166,6 @@ jobs:
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
     outputs:
       build-artifact-name: ${{ steps.download.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ steps.download.outputs.wheel-artifact-name }}
