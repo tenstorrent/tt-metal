@@ -45,7 +45,7 @@ done
 # Set defaults based on profile if not explicitly provided
 if [[ "$PROFILE" == "loudboxes" ]]; then
     USER="${USER:-ttuser}"
-    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama7b_pp_fabric.yaml}"
+    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama8b_pp_fabric.yaml}"
     HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5loudboxes/hosts.txt}"
     RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5loudboxes/rank_bindings.yaml}"
 elif [[ "$PROFILE" == "galaxies" ]]; then
