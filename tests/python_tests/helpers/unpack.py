@@ -120,14 +120,26 @@ _UNPACKERS = {
 }
 
 
-def unpack_res_tiles(packed_list, formats, tile_count=1, sfpu=False, num_faces=4):
+def unpack_res_tiles(
+    packed_list, formats, tile_count=1, sfpu=False, num_faces=4, face_r_dim=16
+):
     output_format = formats.output_format
     output_dtype = format_dict[output_format]
-    tile_size = format_tile_sizes[output_format]
-    face_size = tile_size // 4
 
-    # Depending on the value of 'num_faces' (1, 2, 4), select the first 1, 2 or all 4 faces of a tile
-    elements_per_tile_needed = face_size * num_faces
+    # Calculate tile size and determine elements per tile needed
+    tile_size = format_tile_sizes[output_format]  # Full tile size in bytes
+
+    if face_r_dim == 16:
+        # Backward compatibility: calculate face size in bytes (original logic)
+        face_size = tile_size // 4  # Each face is 1/4 of a tile in bytes
+        elements_per_tile_needed = face_size * num_faces  # In bytes
+    else:
+        # Variable face dimensions: calculate in elements, convert to bytes
+        face_c_dim = 16
+        elements_per_face = face_r_dim * face_c_dim
+        elements_per_tile_needed = (
+            elements_per_face * num_faces * output_format.size
+        )  # Convert to bytes
     total_elements_needed = tile_count * elements_per_tile_needed
     if total_elements_needed > len(packed_list):
         raise IndexError("Buffer access out of bounds")
@@ -141,6 +153,7 @@ def unpack_res_tiles(packed_list, formats, tile_count=1, sfpu=False, num_faces=4
 
     # Write only values from the selected faces into unpacked_tile
     for tile in range(tile_count):
+        # Both paths use byte-based indexing since tile_size and elements_per_tile_needed are in bytes
         start_idx = tile * tile_size
         end_idx = start_idx + elements_per_tile_needed
         tile_data = packed_list[start_idx:end_idx]

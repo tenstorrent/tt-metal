@@ -141,8 +141,10 @@ def collect_results(
     sfpu: bool = False,
     tile_dimensions=[32, 32],
     num_faces: int = 4,
+    face_r_dim: int = 16,  # Default to 16 for backward compatibility
 ):
-    # Calculate tile elements based on tile dimensions
+    # Always read full tiles - hardware still outputs full tile data
+    # but with variable face dimensions, only part of it is valid
     tile_elements = tile_dimensions[0] * tile_dimensions[1]
     read_bytes_cnt = (
         formats.output_format.num_bytes_per_tile(tile_elements) * tile_count
@@ -150,7 +152,12 @@ def collect_results(
 
     read_data = read_from_device(location, address, num_bytes=read_bytes_cnt)
     res_from_L1 = unpack_res_tiles(
-        read_data, formats, tile_count=tile_count, sfpu=sfpu, num_faces=num_faces
+        read_data,
+        formats,
+        tile_count=tile_count,
+        sfpu=sfpu,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
     )
     return res_from_L1
 
