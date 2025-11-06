@@ -40,13 +40,13 @@ Note:
         :header-rows: 1
 
         * - Dtypes
-            - Layouts
+          - Layouts
         * - BFLOAT16, FLOAT32
-            - TILE
+          - TILE
         * - UINT16, UINT32
-            - TILE
+          - TILE
         * - INT32
-            - TILE
+          - TILE
 
     Supported dtypes and layout for index tensor values:
 
@@ -54,9 +54,9 @@ Note:
         :header-rows: 1
 
         * - Dtypes
-            - Layouts
+          - Layouts
         * - UINT16, UINT32
-            - TILE
+          - TILE
 
 Memory Support:
     - Interleaved: DRAM and L1

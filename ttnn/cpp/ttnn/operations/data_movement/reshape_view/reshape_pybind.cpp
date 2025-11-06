@@ -82,30 +82,23 @@ void py_bind_reshape_view(pybind11::module& module) {
     detail::bind_reshape_view(
         module,
         ttnn::reshape,
-
         R"doc(
-        Note: for a 0 cost view, the following conditions must be met:
-            * the last dimension must not change
-            * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+Note: for a 0 cost view, the following conditions must be met:
+    * the last dimension must not change
+    * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
 
-        Args:
-            * input_tensor: Input Tensor.
-            * new_shape: New shape of tensor.
+Args:
+    * input_tensor: Input Tensor.
+    * new_shape: New shape of tensor.
 
-        Keyword Args:
-            * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
-            * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
-            * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
+Keyword Args:
+    * :attr:`memory_config`: Memory Config of the output tensor. Default is to match input tensor memory config
+    * :attr:`pad_value` (number): Value to pad the output tensor. Default is 0
+    * :attr:`recreate_mapping_tensor` (bool): Advanced option. Set to true to recompute and realloc mapping tensor. This may alleviate DRAM fragmentation but is slow.
 
-        Returns:
-            ttnn.Tensor: the output tensor with the new shape.
-
-        Example:
-
-            >>> tensor = ttnn.from_torch(torch.arange(4, dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reshape(tensor, (1, 1, 2, 2))
-
-        )doc");
+Returns:
+    ttnn.Tensor: the output tensor with the new shape.
+)doc");
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -15,27 +15,20 @@ namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
 
 void bind_permute(py::module& module) {
-    auto doc =
-        R"doc(
-            Permutes the dimensions of the input tensor according to the specified permutation.
+    auto doc = R"doc(
+Permutes the dimensions of the input tensor according to the specified permutation.
 
-            Args:
-                input_tensor (ttnn.Tensor): the input tensor.
-                dim (number): tthe permutation of the dimensions of the input tensor.
+Args:
+    input_tensor (ttnn.Tensor): the input tensor.
+    dim (number): tthe permutation of the dimensions of the input tensor.
 
-            Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be random garbage values.
+Keyword Args:
+    memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+    pad_value (float, optional): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be random garbage values.
 
-           Returns:
-               List of ttnn.Tensor: the output tensor.
-
-            Example:
-
-                >>> tensor = ttnn.to_device(ttnn.from_torch(torch.zeros((1, 1, 64, 32), dtype=torch.bfloat16)), device)
-                >>> output = ttnn.permute(tensor, (0, 1, 3, 2))
-                >>> print(output.shape)
-                [1, 1, 32, 64])doc";
+Returns:
+    List of ttnn.Tensor: the output tensor.
+)doc";
 
     using OperationType = decltype(ttnn::permute);
     ttnn::bind_registered_operation(

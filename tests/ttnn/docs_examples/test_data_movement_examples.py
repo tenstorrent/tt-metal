@@ -61,3 +61,32 @@ def test_pad(device):
     # Pad the tensor with 1 zero on all sides
     padded_tensor = ttnn.pad(input_tensor, (1, 1, 1, 1), 0)
     print("Padded Tensor Shape:", padded_tensor.shape)  # [1, 1, 6, 6]
+
+
+def test_permute(device):
+    # Create a tensor to permute
+    input_tensor = ttnn.rand([1, 1, 64, 32], ttnn.bfloat16, device=device)
+
+    # Permute the tensor dimensions
+    permuted_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+    print("Permuted Tensor Shape:", permuted_tensor.shape)  # [1, 1, 32, 64]
+
+
+def test_reshape(device):
+    # Create a tensor to reshape
+    input_tensor = torch.arange(4, dtype=torch.bfloat16)
+    input_tensor_tt = ttnn.from_torch(input_tensor, device=device)
+
+    # Reshape the tensor
+    reshaped_tensor = ttnn.reshape(input_tensor_tt, (1, 1, 2, 2))
+    print("Reshaped Tensor Shape:", reshaped_tensor.shape)  # [1, 1, 2, 2]
+
+
+def test_repeat(device):
+    # Create a tensor to repeat
+    input_tensor = torch.tensor([[1, 2], [3, 4]])
+    input_tensor_tt = ttnn.from_torch(input_tensor, device=device)
+
+    # Repeat the tensor along specified dimensions
+    repeated_tensor = ttnn.repeat(input_tensor_tt, (1, 2))
+    print("Repeated Tensor Shape:", repeated_tensor.shape)  # [1, 2], [1, 2], [3, 4], [3, 4]]
