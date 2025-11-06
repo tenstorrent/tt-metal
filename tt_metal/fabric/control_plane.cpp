@@ -1128,6 +1128,46 @@ eth_chan_directions ControlPlane::get_eth_chan_direction(FabricNodeId fabric_nod
     TT_THROW("Cannot Find Ethernet Channel Direction");
 }
 
+std::vector<chan_id_t> ControlPlane::get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const {
+    std::vector<chan_id_t> channels;
+    auto it = this->exit_node_directions_.find(fabric_node_id);
+    if (it == this->exit_node_directions_.end()) {
+        return channels;
+    }
+    channels.reserve(it->second.size());
+    for (const auto& [chan_id, _] : it->second) {
+        channels.push_back(chan_id);
+    }
+    return channels;
+}
+
+std::vector<chan_id_t> ControlPlane::get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const {
+    std::vector<chan_id_t> channels;
+    if (!this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
+        return channels;
+    }
+
+    std::unordered_set<chan_id_t> intermesh_channels;
+    if (auto it = this->exit_node_directions_.find(fabric_node_id); it != this->exit_node_directions_.end()) {
+        for (const auto& [chan_id, _] : it->second) {
+            intermesh_channels.insert(chan_id);
+        }
+    }
+
+    const auto& dir_map = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+    for (const auto& [_, eth_chans] : dir_map) {
+        for (const auto& chan_id : eth_chans) {
+            if (intermesh_channels.find(chan_id) == intermesh_channels.end()) {
+                channels.push_back(chan_id);
+            }
+        }
+    }
+
+    std::sort(channels.begin(), channels.end());
+    channels.erase(std::unique(channels.begin(), channels.end()), channels.end());
+    return channels;
+}
+
 std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const {
     // Query the mesh coord range owned by the current host

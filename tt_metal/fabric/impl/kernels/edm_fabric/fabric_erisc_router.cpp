@@ -559,6 +559,54 @@ FORCE_INLINE bool downstreams_have_space(
                    downstream_edm_interfaces_vc0, downstream_edm_interface_vc1));
 }
 
+#ifdef FABRIC_2D
+FORCE_INLINE uint32_t recompute_path(PACKET_HEADER_TYPE* packet_header, ROUTING_FIELDS_TYPE& cached_routing_fields) {
+    fabric_set_unicast_route<true, static_cast<eth_chan_directions>(my_direction)>(
+        packet_header, packet_header->dst_start_chip_id, packet_header->dst_start_mesh_id);
+    cached_routing_fields.hop_index = 0;
+    packet_header->routing_fields.hop_index = 0;
+    return (uint32_t)packet_header->route_buffer[0];
+}
+
+FORCE_INLINE uint32_t get_cmd_with_mesh_boundary_adjustment(
+    PACKET_HEADER_TYPE* packet_header,
+    ROUTING_FIELDS_TYPE& cached_routing_fields,
+    const tt::tt_fabric::tensix_routing_l1_info_t& routing_table) {
+    uint32_t hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
+    if constexpr (is_intermesh_router_on_edge || is_intramesh_router_on_edge) {
+        if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
+            // Arrive at another mesh
+            hop_cmd = recompute_path(packet_header, cached_routing_fields);
+        } else {
+            if constexpr (is_intramesh_router_on_edge) {
+                // Arrive at exit_node from its mesh. when src != exit node
+                if (packet_header->dst_start_mesh_id != routing_table.my_mesh_id) {
+                    if constexpr (my_direction == EAST) {
+                        if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_EAST) {
+                            hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                        }
+                    } else if constexpr (my_direction == WEST) {
+                        if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_WEST) {
+                            hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                        }
+                    } else if constexpr (my_direction == NORTH) {
+                        if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_NORTH) {
+                            hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                        }
+                    } else if constexpr (my_direction == SOUTH) {
+                        if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_SOUTH) {
+                            hop_cmd = recompute_path(packet_header, cached_routing_fields);
+                        }
+                    } else {
+                        ASSERT(false);
+                    }
+                }
+            }
+        }
+    }
+    return hop_cmd;
+}
+
 template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_completely(
     uint32_t hop_cmd,
@@ -659,7 +707,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     return ret_val;
 }
 
-#ifndef FABRIC_2D
+#else
+
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 template <uint8_t rx_channel_id, typename DownstreamSenderT>
 FORCE_INLINE void receiver_forward_packet(
@@ -1306,24 +1355,6 @@ FORCE_INLINE void run_sender_channel_step_impl(
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
             update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
         }
-        // uint32_t packed_debug_value =
-        //     ((uint32_t)((pkt_header->routing_fields.hop_index & 0xFF) | 0b00010000) << 24) |
-        //     ((uint32_t)(pkt_header->route_buffer[pkt_header->routing_fields.hop_index] & 0xFF) << 16) |
-        //     ((uint32_t)(routing_table->my_mesh_id & 0xF) << 12) |
-        //     ((uint32_t)(pkt_header->dst_start_mesh_id & 0xF) << 8) |
-        //     ((uint32_t)(routing_table->my_device_id & 0xF) << 4) |
-        //     ((uint32_t)(pkt_header->dst_start_chip_id & 0xF));
-        // WATCHER_RING_BUFFER_PUSH(packed_debug_value);
-        // const auto* routing_table =
-        //     reinterpret_cast<tt_l1_ptr tt::tt_fabric::tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-        // if (routing_table->my_mesh_id == 3 && pkt_header->dst_start_mesh_id == 0) {
-        //     const auto dump = reinterpret_cast<tt_l1_ptr uint8_t*>(ROUTING_PATH_BASE_1D);
-        //     for (uint8_t i =0; i < 64; i++) {
-        //         dump[i] = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(pkt_header)[i];
-        //     }
-        //     ((uint32_t*)dump)[15] = pkt_header->src_ch_id;
-        // }
-
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
@@ -1408,16 +1439,6 @@ FORCE_INLINE void run_sender_channel_step(
     }
 }
 
-#ifdef FABRIC_2D
-uint32_t recompute_path(PACKET_HEADER_TYPE* packet_header, ROUTING_FIELDS_TYPE& cached_routing_fields) {
-    fabric_set_unicast_route<true, static_cast<eth_chan_directions>(my_direction)>(
-        packet_header, packet_header->dst_start_chip_id, packet_header->dst_start_mesh_id);
-    cached_routing_fields.hop_index = 0;
-    packet_header->routing_fields.hop_index = 0;
-    return (uint32_t)packet_header->route_buffer[0];
-}
-#endif
-
 template <
     uint8_t receiver_channel,
     uint8_t to_receiver_pkts_sent_id,
@@ -1433,7 +1454,8 @@ FORCE_INLINE void run_receiver_channel_step_impl(
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
+    const tt::tt_fabric::tensix_routing_l1_info_t& routing_table) {
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
 
@@ -1474,71 +1496,7 @@ FORCE_INLINE void run_receiver_channel_step_impl(
             //  mcast)
 #if defined(FABRIC_2D)
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
-            hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
-
-            const auto* routing_table =
-                reinterpret_cast<tt_l1_ptr tt::tt_fabric::tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
-            if (packet_header->dst_start_mesh_id != routing_table->my_mesh_id) {
-                // Arrive at exit node. Convert from local drain to forward to next mesh
-                if constexpr (my_direction == EAST) {
-                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_EAST ||
-                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                    }
-                } else if constexpr (my_direction == WEST) {
-                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_WEST ||
-                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                    }
-                } else if constexpr (my_direction == NORTH) {
-                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_NORTH ||
-                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                    }
-                } else if constexpr (my_direction == SOUTH) {
-                    if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_SOUTH ||
-                        hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                        hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                    }
-                } else {
-                    ASSERT(false);
-                }
-            } else {
-                // Arrive at target mesh if NOOP.
-
-                // mcast, firstly unicast to dst_start_chip_id, then recompute path for mcast
-                // if (packet_header->dst_start_chip_id != routing_table->my_chip_id && packet_header->mcast_params_16
-                // != 0) {
-                //     // (NOOP && same chip && mcast_params != 0) ||
-                //     // (DRAIN dir && same chip && mcast_params != 0)
-                //     if constexpr (my_direction == EAST) {
-                //         if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_EAST ||
-                //             hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                //             hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                //         }
-                //     } else if constexpr (my_direction == WEST) {
-                //         if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_WEST ||
-                //             hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                //             hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                //         }
-                //     } else if constexpr (my_direction == NORTH) {
-                //         if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_NORTH ||
-                //             hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                //             hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                //         }
-                //     } else if constexpr (my_direction == SOUTH) {
-                //         if (hop_cmd == LowLatencyMeshRoutingFields::FORWARD_SOUTH ||
-                //             hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                //             hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                //         }
-                //     } else {
-                //         ASSERT(false);
-                //     }
-                // } else
-                if (hop_cmd == LowLatencyMeshRoutingFields::NOOP) {
-                    hop_cmd = recompute_path(packet_header, cached_routing_fields);
-                }
-            }
+            hop_cmd = get_cmd_with_mesh_boundary_adjustment(packet_header, cached_routing_fields, routing_table);
             can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                 hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
 #endif
@@ -1652,13 +1610,13 @@ template <
     typename ReceiverChannelPointersT>
 FORCE_INLINE void run_receiver_channel_step(
     EthReceiverChannels& local_receiver_channels,
-    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
+    std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>& downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,
     ReceiverChannelPointersT& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders) {
+    std::array<ReceiverChannelResponseCreditSender, NUM_RECEIVER_CHANNELS>& receiver_channel_response_credit_senders,
+    const tt::tt_fabric::tensix_routing_l1_info_t& routing_table) {
     if constexpr (is_receiver_channel_serviced[receiver_channel]) {
         run_receiver_channel_step_impl<
             receiver_channel,
@@ -1674,7 +1632,8 @@ FORCE_INLINE void run_receiver_channel_step(
             receiver_channel_pointers,
             receiver_channel_trid_tracker,
             port_direction_table,
-            receiver_channel_response_credit_senders[receiver_channel]);
+            receiver_channel_response_credit_senders[receiver_channel],
+            routing_table);
     }
 }
 
@@ -1721,6 +1680,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     size_t did_nothing_count = 0;
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
+
+    const auto* routing_table_l1 =
+        reinterpret_cast<tt_l1_ptr tt::tt_fabric::tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    tt::tt_fabric::tensix_routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
     // TODO: flatten all of these arrays into a single object (one array lookup) OR
@@ -1791,7 +1754,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     receiver_channel_pointers_ch0,
                     receiver_channel_0_trid_tracker,
                     port_direction_table,
-                    receiver_channel_response_credit_senders);
+                    receiver_channel_response_credit_senders,
+                    routing_table);
             }
             if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
                 run_receiver_channel_step<1, DownstreamSenderVC0T, DownstreamSenderVC1T>(
@@ -1801,7 +1765,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     receiver_channel_pointers_ch1,
                     receiver_channel_1_trid_tracker,
                     port_direction_table,
-                    receiver_channel_response_credit_senders);
+                    receiver_channel_response_credit_senders,
+                    routing_table);
             }
 
             if constexpr (is_sender_channel_serviced[1] && !skip_sender_channel_1_connection) {

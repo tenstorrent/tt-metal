@@ -897,6 +897,20 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     bool vc1_has_different_downstream_dest =
         fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
 
+    // Compute edge-facing flags for this ethernet core/channel
+    // Use the builder's logical channel id (my_eth_channel) for facing classification
+    bool is_intermesh_router_on_edge = false;
+    bool is_intramesh_router_on_edge = false;
+    const auto& intermesh_chans = control_plane.get_intermesh_facing_eth_chans(this->local_fabric_node_id);
+    const auto& intramesh_chans = control_plane.get_intramesh_facing_eth_chans(this->local_fabric_node_id);
+    bool is_edge_chip = !intermesh_chans.empty();
+    if (is_edge_chip) {
+        is_intermesh_router_on_edge =
+            std::find(intermesh_chans.begin(), intermesh_chans.end(), this->my_eth_channel) != intermesh_chans.end();
+        is_intramesh_router_on_edge =
+            std::find(intramesh_chans.begin(), intramesh_chans.end(), this->my_eth_channel) != intramesh_chans.end();
+    }
+
     const std::vector<uint32_t> main_args_part1 = {
         num_sender_channels,
         num_receiver_channels,
@@ -992,7 +1006,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         update_pkt_hdr_on_rx_ch,
 
         requires_forced_assignment_to_noc1(),
-
+        is_intermesh_router_on_edge,
+        is_intramesh_router_on_edge,
         // Special marker to help with identifying misalignment bugs
         0x00c0ffee};
 
