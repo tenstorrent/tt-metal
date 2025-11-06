@@ -41,7 +41,7 @@ def _initialize():
 
         return False
 
-    def _preload_dev_tt_metal_libraries():
+    def _preload_dev_tt_metal_libraries(tt_metal_home):
         """
         Preload TT Metal libraries from development build directory.
 
@@ -54,21 +54,6 @@ def _initialize():
             RuntimeError: If library loading fails
         """
         import ctypes
-        import os
-        from pathlib import Path
-
-        # Determine TT Metal home directory
-        tt_metal_home = os.getenv("TT_METAL_HOME")
-        if not tt_metal_home:
-            tt_metal_home = Path.home() / "tt-metal"
-            if not tt_metal_home.exists():
-                raise EnvironmentError(
-                    "TT_METAL_HOME environment variable is not set and "
-                    f"default path {tt_metal_home} does not exist. "
-                    "Please set TT_METAL_HOME to your tt-metal installation directory."
-                )
-        else:
-            tt_metal_home = Path(tt_metal_home)
 
         lib_dir = tt_metal_home / "build" / "lib"
 
@@ -98,12 +83,40 @@ def _initialize():
                     f"Failed to load library {filename}: {e}\n" f"Path: {lib_path}"
                 ) from e
 
-    if _is_editable_install(__name__):
-        _preload_dev_tt_metal_libraries()
+    # Determine TT Metal home directory
+    import os
+    from pathlib import Path
+
+    tt_metal_home = os.getenv("TT_METAL_HOME")
+    if not tt_metal_home:
+        tt_metal_home = Path.home() / "tt-metal"
+        if not tt_metal_home.exists():
+            raise EnvironmentError(
+                "TT_METAL_HOME environment variable is not set and "
+                f"default path {tt_metal_home} does not exist. "
+                "Please set TT_METAL_HOME to your tt-metal installation directory."
+            )
+    else:
+        tt_metal_home = Path(tt_metal_home)
+
+    ttml_dir = tt_metal_home / "build" / "tt-train" / "sources" / "ttml"
+
+    import sys
+
+    sys.path.append(str(ttml_dir))
+
+    import importlib
+
+    ttml_module = importlib.util.find_spec("_ttml", package=None)
+
+    if ttml_module is None and _is_editable_install(__name__):
+        _preload_dev_tt_metal_libraries(tt_metal_home)
+
+    return ttml_module is None
 
 
 # Initialize the module
-_initialize()
-
-# Import all symbols from the compiled extension
-from ._ttml import *  # noqa: F401, F403
+if _initialize():
+    from ._ttml import *  # noqa: F401, F403
+else:
+    from _ttml import *  # noqa: F401, F403
