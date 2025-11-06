@@ -2,11 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fabric Router Relay Extension Kernel
-// TODO: Implement relay kernel functionality
-// This is a stub implementation based on the mux kernel
-// The relay kernel will have different behavior for relaying packets between fabric routers
-
 // clang-format off
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
@@ -16,43 +11,54 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 #include <cstddef>
 #include <array>
 // clang-format on
 
-constexpr size_t NUM_FULL_SIZE_CHANNELS = get_compile_time_arg_val(0);
-constexpr uint8_t NUM_BUFFERS_FULL_SIZE_CHANNEL = get_compile_time_arg_val(1);
-constexpr size_t BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL = get_compile_time_arg_val(2);
-constexpr size_t NUM_HEADER_ONLY_CHANNELS = get_compile_time_arg_val(3);
-constexpr uint8_t NUM_BUFFERS_HEADER_ONLY_CHANNEL = get_compile_time_arg_val(4);
-// header only buffer slot size is the same as the edm packet header size
+template <uint8_t FABRIC_RELAY_CHANNEL_NUM_BUFFERS>
+using FabriRelaychannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, FABRIC_RELAY_CHANNEL_NUM_BUFFERS>;
 
-constexpr size_t status_address = get_compile_time_arg_val(5);
-constexpr size_t termination_signal_address = get_compile_time_arg_val(6);
-constexpr size_t connection_info_base_address = get_compile_time_arg_val(7);
-constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(8);
-constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(9);
-constexpr size_t channels_base_l1_address = get_compile_time_arg_val(10);
-constexpr size_t local_fabric_router_status_address = get_compile_time_arg_val(11);
-constexpr size_t fabric_router_status_address = get_compile_time_arg_val(12);
+template <uint8_t FABRIC_RELAY_CHANNEL_NUM_BUFFERS>
+using FabricRelayStaticSizedChannelWorkerInterface =
+    StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, FABRIC_RELAY_CHANNEL_NUM_BUFFERS>;
 
-constexpr uint8_t NUM_EDM_BUFFERS = get_compile_time_arg_val(13);
-constexpr size_t NUM_FULL_SIZE_CHANNELS_ITERS = get_compile_time_arg_val(14);
-constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(15);
+using FabricRelayChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
 
-constexpr ProgrammableCoreType CORE_TYPE = static_cast<ProgrammableCoreType>(get_compile_time_arg_val(16));
-constexpr bool wait_for_fabric_endpoint = get_compile_time_arg_val(17) == 1;
-constexpr size_t num_upstream_routers = get_compile_time_arg_val(18);
-constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(19);
+template <uint8_t FABRIC_RELAY_CHANNEL_NUM_BUFFERS>
+using WorkerToFabricRelaySender = WorkerToFabricEdmSenderImpl<false, FABRIC_RELAY_CHANNEL_NUM_BUFFERS>;
 
-constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 20;
+using FabricRelayStatus = EDMStatus;
 
-constexpr size_t NOC_ALIGN_PADDING_BYTES = 12;
+template <uint8_t NUM_EDM_BUFFERS>
+using FabricRelayToMuxSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
 
-namespace tt::tt_fabric {
-using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>;
-}  // namespace tt::tt_fabric
+constexpr uint8_t NUM_BUFFERS = get_compile_time_arg_val(0);
+constexpr size_t BUFFER_SIZE_BYTES = get_compile_time_arg_val(1);
+constexpr size_t status_address = get_compile_time_arg_val(2);
+constexpr size_t termination_signal_address = get_compile_time_arg_val(3);
+constexpr size_t connection_info_base_address = get_compile_time_arg_val(4);
+constexpr size_t connection_handshake_base_address = get_compile_time_arg_val(5);
+constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(6);
+constexpr size_t channels_base_l1_address = get_compile_time_arg_val(7);
+constexpr size_t channel_stream_id = get_compile_time_arg_val(8);
+constexpr size_t NUM_ITERS_BETWEEN_TEARDOWN_CHECKS = get_compile_time_arg_val(9);
+// Mux connection info compile args (note: mux_noc_x/y use my_x[0]/my_y[0] instead)
+constexpr size_t mux_buffer_base_addr = get_compile_time_arg_val(10);
+constexpr size_t mux_num_buffers = get_compile_time_arg_val(11);
+constexpr size_t mux_connection_handshake_addr = get_compile_time_arg_val(12);
+constexpr size_t mux_worker_location_info_addr = get_compile_time_arg_val(13);
+constexpr size_t mux_buffer_size_bytes = get_compile_time_arg_val(14);
+constexpr size_t mux_buffer_index_addr = get_compile_time_arg_val(15);
+constexpr size_t mux_relay_flow_control_semaphore_addr = get_compile_time_arg_val(16);
+constexpr size_t mux_relay_teardown_semaphore_addr = get_compile_time_arg_val(17);
+constexpr size_t mux_relay_buffer_index_semaphore_addr = get_compile_time_arg_val(18);
+constexpr size_t mux_free_slots_stream_id = get_compile_time_arg_val(19);
+constexpr size_t local_mux_status_address = get_compile_time_arg_val(20);
+constexpr size_t router_noc_x = get_compile_time_arg_val(21);
+constexpr size_t router_noc_y = get_compile_time_arg_val(22);
+constexpr size_t fabric_router_sync_address = get_compile_time_arg_val(23);
 
 template <uint8_t NUM_BUFFERS>
 void wait_for_static_connection_to_ready(
@@ -69,92 +75,96 @@ void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
     tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
     bool& channel_connection_established,
-    uint8_t channel_id,
     size_t buffer_size_bytes,
-    size_t& channel_base_address,
-    size_t& connection_info_address,
-    size_t& connection_handshake_address,
-    size_t& sender_flow_control_address,
-    StreamId my_channel_free_slots_stream_id,
-    bool is_persistent_channel) {
+    size_t channel_base_address,
+    size_t connection_info_address,
+    size_t connection_handshake_address,
+    size_t sender_flow_control_address,
+    StreamId my_channel_free_slots_stream_id) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
         channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE));
-    channel_base_address += NUM_BUFFERS * buffer_size_bytes;
     init_ptr_val(my_channel_free_slots_stream_id, NUM_BUFFERS);
 
     auto connection_worker_info_ptr =
-        reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
-    connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
+        reinterpret_cast<volatile tt::tt_fabric::FabricRelayChannelClientLocationInfo*>(connection_info_address);
 
-    new (worker_interface_ptr) tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
+    new (worker_interface_ptr) tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>(
         connection_worker_info_ptr,
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
-        is_persistent_channel ? NUM_BUFFERS : tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
-    sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
-    connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
+        NUM_BUFFERS);  //
 
     channel_connection_established = false;
 }
 
-template <uint8_t NUM_BUFFERS>
+__attribute__((optimize("jump-tables"))) FORCE_INLINE void execute_noc_txn_to_local_chip(
+    tt_l1_ptr PACKET_HEADER_TYPE* const packet_header, uint16_t payload_size_bytes) {
+    const auto& header = *packet_header;
+    uint16_t payload_size_bytes = header->payload_size_bytes;
+    uint32_t payload_start_address = reinterpret_cast<size_t>(header) + sizeof(PACKET_HEADER_TYPE);
+
+    tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
+    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+        __builtin_unreachable();
+    }
+    switch (noc_send_type) {
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+            const auto dest_address = header.command_fields.unicast_write.noc_address;
+            noc_async_write_one_packet(payload_start_address, dest_address, payload_size_bytes);
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
+            const uint64_t dest_address = header.command_fields.unicast_seminc.noc_address;
+            const auto increment = header.command_fields.unicast_seminc.val;
+            if (header.command_fields.unicast_seminc.flush) {
+                noc_async_write_barrier();
+            }
+            noc_semaphore_inc<true>(dest_address, increment);
+
+        } break;
+
+        case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
+            const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
+            const auto value = header.command_fields.unicast_inline_write.value;
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(dest_address, value);
+        } break;
+        default: {
+            ASSERT(false);
+        } break;
+    };
+}
+
+template <uint8_t NUM_BUFFERS, uint8_t NUM_MUX_BUFFERS>
 void forward_data(
-    tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>& channel,
-    tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
-    tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
+    tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS>& channel,
+    tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
+    tt::tt_fabric::FabricRelayToMuxSender<NUM_MUX_BUFFERS>& mux_connection,
     bool& channel_connection_established,
-    StreamId my_channel_free_slots_stream_id,
-    bool is_persistent_channel,
-    uint8_t channel_id) {
+    StreamId my_channel_free_slots_stream_id) {
     bool has_unsent_payload = get_ptr_val(my_channel_free_slots_stream_id.get()) != NUM_BUFFERS;
     if (has_unsent_payload) {
         size_t buffer_address = channel.get_buffer_address(worker_interface.local_write_counter.get_buffer_index());
         invalidate_l1_cache();
         auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(buffer_address);
 
-        fabric_connection.wait_for_empty_write_slot();
-
-        fabric_connection.send_payload_flush_non_blocking_from_address(
-            (uint32_t)packet_header, packet_header->get_payload_size_including_header());
+        execute_noc_txn_to_local_chip(packet_header);
 
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
 
-        // not handling/processing acks for now, re-evaluate if needed
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
 
-        noc_async_writes_flushed();
-        if (is_persistent_channel) {
-            constexpr bool enable_deadlock_avoidance = true;  // not used
-            worker_interface.template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(1);
-        } else if (channel_connection_established) {
-            worker_interface.notify_worker_of_read_counter_update();
-        }
-    }
-
-    if (!is_persistent_channel) {
-        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
-            worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
+        constexpr bool enable_deadlock_avoidance = true;  // not used
+        worker_interface.template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(1);
     }
 }
 
 void kernel_main() {
     size_t rt_args_idx = 0;
 
-    std::array<uint8_t, num_upstream_routers> upstream_noc_x;
-    std::array<uint8_t, num_upstream_routers> upstream_noc_y;
-    if constexpr (num_upstream_routers > 0) {
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            upstream_noc_x[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
-        }
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            upstream_noc_y[i] = (uint8_t)get_arg_val<uint32_t>(rt_args_idx++);
-        }
-    }
-
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::STARTED;
+    status_ptr[0] = tt::tt_fabric::FabricRelayStatus::STARTED;
 
     // clear out memory regions
     auto num_regions_to_clear = get_arg_val<uint32_t>(rt_args_idx++);
@@ -164,160 +174,77 @@ void kernel_main() {
         zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(address), size);
     }
 
-    auto fabric_connection = tt::tt_fabric::FabricMuxToEdmSender::build_from_args<CORE_TYPE>(rt_args_idx);
+    // Construct the mux connection from compile time args directly
+    // Note: Mux is on the same core, so use my_x[0] and my_y[0] for NOC coordinates
+    constexpr bool is_persistent_fabric = true;
+    auto mux_connection = tt::tt_fabric::FabricRelayToMuxSender<mux_num_buffers>(
+        is_persistent_fabric,
+        my_x[0],
+        my_y[0],
+        mux_buffer_base_addr,
+        static_cast<uint8_t>(mux_num_buffers),
+        mux_connection_handshake_addr,
+        mux_worker_location_info_addr,
+        static_cast<uint16_t>(mux_buffer_size_bytes),
+        mux_buffer_index_addr,
+        reinterpret_cast<volatile uint32_t*>(mux_relay_flow_control_semaphore_addr),
+        reinterpret_cast<volatile uint32_t*>(mux_relay_teardown_semaphore_addr),
+        mux_relay_buffer_index_semaphore_addr,
+        static_cast<uint32_t>(mux_free_slots_stream_id),
+        StreamId{static_cast<uint32_t>(mux_free_slots_stream_id)});
 
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_FULL_SIZE_CHANNEL>, NUM_FULL_SIZE_CHANNELS>
-        full_size_channels;
-    std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_FULL_SIZE_CHANNEL>,
-        NUM_FULL_SIZE_CHANNELS>
-        full_size_channel_worker_interfaces;
-    std::array<bool, NUM_FULL_SIZE_CHANNELS> full_size_channel_connection_established;
-
-    std::array<tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS_HEADER_ONLY_CHANNEL>, NUM_HEADER_ONLY_CHANNELS>
-        header_only_channels;
-    std::array<
-        tt::tt_fabric::FabricMuxStaticSizedChannelWorkerInterface<NUM_BUFFERS_HEADER_ONLY_CHANNEL>,
-        NUM_HEADER_ONLY_CHANNELS>
-        header_only_channel_worker_interfaces;
-    std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
-
-    // Stream IDs
-    constexpr size_t NUM_TOTAL_CHANNELS = NUM_FULL_SIZE_CHANNELS + NUM_HEADER_ONLY_CHANNELS;
-    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
-        fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
-
-    // Persistent channel flags
-    constexpr size_t IS_PERSISTENT_CHANNELS_START_IDX = CHANNEL_STREAM_IDS_START_IDX + NUM_TOTAL_CHANNELS;
-    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
-        fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
+    tt::tt_fabric::FabricRelayChannelBuffer<NUM_BUFFERS> channel;
+    tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS> worker_interface;
+    bool channel_connection_established;
 
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
     size_t connection_handshake_address = connection_handshake_base_address;
     size_t sender_flow_control_address = sender_flow_control_base_address;
 
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
-            &full_size_channels[i],
-            &full_size_channel_worker_interfaces[i],
-            full_size_channel_connection_established[i],
-            i,
-            BUFFER_SIZE_BYTES_FULL_SIZE_CHANNEL,
-            channel_base_address,
-            connection_info_address,
-            connection_handshake_address,
-            sender_flow_control_address,
-            StreamId{channel_stream_ids[i]},
-            is_persistent_channels[i]);
-    }
+    setup_channel<NUM_BUFFERS>(
+        &channel,
+        &worker_interface,
+        channel_connection_established,
+        BUFFER_SIZE_BYTES,
+        channel_base_address,
+        connection_info_address,
+        connection_handshake_address,
+        sender_flow_control_address,
+        StreamId{channel_stream_id});
 
-    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        setup_channel<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-            &header_only_channels[i],
-            &header_only_channel_worker_interfaces[i],
-            header_only_channel_connection_established[i],
-            i,
-            sizeof(PACKET_HEADER_TYPE),
-            channel_base_address,
-            connection_info_address,
-            connection_handshake_address,
-            sender_flow_control_address,
-            StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]},
-            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
-    }
-
+    // this termination signal will be set by the mux kernel during teardown, so first mux receives host teardown
+    // signal, then it tells relay to teardown.
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::tt_fabric::TerminationSignal*>(termination_signal_address);
 
-    // signal the upstream routers the relay is ready
-    if constexpr (num_upstream_routers > 0) {
-        for (uint32_t i = 0; i < num_upstream_routers; i++) {
-            auto noc_addr = get_noc_addr(upstream_noc_x[i], upstream_noc_y[i], fabric_router_sync_address);
-            noc_semaphore_inc(noc_addr, 1);
-        }
+    // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
+    volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_mux_status_address);
+    while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC) {
+        invalidate_l1_cache();
     }
 
-    // wait for fabric router to be ready before setting up the connection
-    if constexpr (wait_for_fabric_endpoint) {
-        tt::tt_fabric::wait_for_fabric_endpoint_ready(
-            fabric_connection.edm_noc_x,
-            fabric_connection.edm_noc_y,
-            fabric_router_status_address,
-            local_fabric_router_status_address);
-    }
+    // this is connecting to the local mux - (always non idle eth)
+    mux_connection.open<false>();
 
-    constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
-    fabric_connection.open<use_worker_allocated_credit_address>();
+    wait_for_static_connection_to_ready<NUM_BUFFERS>(worker_interface);
 
-    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
-        if (is_persistent_channels[i]) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_FULL_SIZE_CHANNEL>(full_size_channel_worker_interfaces[i]);
-        }
-    }
+    status_ptr[0] = tt::tt_fabric::FabricRelayStatus::READY_FOR_TRAFFIC;
 
-    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
-        if (is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]) {
-            wait_for_static_connection_to_ready<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-                header_only_channel_worker_interfaces[i]);
-        }
-    }
+    // signal the fabric router (this is the router that is connecting to the relay) the relay is ready
+    auto noc_addr = get_noc_addr(router_noc_x, router_noc_y, fabric_router_sync_address);
+    noc_semaphore_inc(noc_addr, 1);
 
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
-
-#if defined(COMPILE_FOR_IDLE_ERISC)
-    uint32_t heartbeat = 0;
-#endif
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
-        bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
-        if (got_graceful_termination) {
-            bool all_channels_drained = true;
-            for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                all_channels_drained &= get_ptr_val(channel_id) == NUM_BUFFERS_FULL_SIZE_CHANNEL;
-            }
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                all_channels_drained &=
-                    get_ptr_val(channel_id + NUM_FULL_SIZE_CHANNELS) == NUM_BUFFERS_HEADER_ONLY_CHANNEL;
-            }
-
-            if (all_channels_drained) {
-                break;
-            }
-        }
-
         for (size_t i = 0; i < NUM_ITERS_BETWEEN_TEARDOWN_CHECKS; i++) {
-            for (size_t iter = 0; iter < NUM_FULL_SIZE_CHANNELS_ITERS; iter++) {
-                for (uint8_t channel_id = 0; channel_id < NUM_FULL_SIZE_CHANNELS; channel_id++) {
-                    forward_data<NUM_BUFFERS_FULL_SIZE_CHANNEL>(
-                        full_size_channels[channel_id],
-                        full_size_channel_worker_interfaces[channel_id],
-                        fabric_connection,
-                        full_size_channel_connection_established[channel_id],
-                        StreamId{channel_stream_ids[channel_id]},
-                        is_persistent_channels[channel_id],
-                        channel_id);
-                }
-            }
-
-            for (uint8_t channel_id = 0; channel_id < NUM_HEADER_ONLY_CHANNELS; channel_id++) {
-                forward_data<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
-                    header_only_channels[channel_id],
-                    header_only_channel_worker_interfaces[channel_id],
-                    fabric_connection,
-                    header_only_channel_connection_established[channel_id],
-                    StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
-                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
-                    channel_id + NUM_FULL_SIZE_CHANNELS);
-            }
+            forward_data<NUM_BUFFERS, mux_num_buffers>(
+                channel, worker_interface, mux_connection, channel_connection_established, StreamId{channel_stream_id});
         }
-#if defined(COMPILE_FOR_IDLE_ERISC)
-        RISC_POST_HEARTBEAT(heartbeat);
-#endif
     }
 
-    fabric_connection.close();
+    mux_connection.close();
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    status_ptr[0] = tt::tt_fabric::FabricRelayStatus::TERMINATED;
 }

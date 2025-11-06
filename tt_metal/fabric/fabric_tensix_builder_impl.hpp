@@ -26,6 +26,20 @@ enum class FabricMuxChannelType : uint8_t;
 enum class FabricTensixCoreType : uint8_t;
 
 /**
+ * UDM Mode Channel Assignments
+ * - Defines which channels are reserved for specific purposes in UDM mode
+ * - Channel 0: Worker channel (for local chip traffic)
+ * - Channel 1: Relay channel (relay connects to this mux channel)
+ * - Channel 2: Inter-mux channel (for forwarding traffic between muxes)
+ */
+enum class UdmMuxChannelId : uint32_t {
+    WORKER_CHANNEL_BASE = 0,  // Local worker traffic
+    RELAY_CHANNEL = 1,        // Relay connects to mux on this channel
+    INTER_MUX_CHANNEL = 2,    // Inter-mux forwarding channel
+    NUM_CHANNELS = 3
+};
+
+/**
  * FabricTensixDatamoverBaseConfig
  * - Base class for mux and relay kernel configurations
  * - Forked from FabricMuxConfig to provide common functionality
@@ -56,12 +70,12 @@ public:
     size_t get_buffer_size_bytes(FabricMuxChannelType channel_type) const;
     size_t get_status_address() const;
     size_t get_termination_signal_address() const;
-    size_t get_channel_credits_stream_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    size_t get_channel_base_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    size_t get_connection_info_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    size_t get_flow_control_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
-    size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint8_t channel_id) const;
+    size_t get_channel_credits_stream_id(FabricMuxChannelType channel_type, uint32_t channel_id) const;
+    size_t get_channel_base_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
+    size_t get_connection_info_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
+    size_t get_connection_handshake_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
+    size_t get_flow_control_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
+    size_t get_buffer_index_address(FabricMuxChannelType channel_type, uint32_t channel_id) const;
     size_t get_memory_map_end_address() const;
 
     // Configuration setters
@@ -75,8 +89,7 @@ public:
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
     // Pure virtual methods to be implemented by derived classes
-    virtual std::vector<uint32_t> get_compile_time_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const = 0;
+    virtual std::vector<uint32_t> get_compile_time_args() const = 0;
 
     virtual std::vector<uint32_t> get_run_time_args(
         const FabricNodeId& src_fabric_node_id,
@@ -157,8 +170,7 @@ public:
         size_t base_l1_address,
         CoreType core_type = CoreType::WORKER);
 
-    std::vector<uint32_t> get_compile_time_args(
-        const tt::tt_fabric::FabricEriscDatamoverConfig& fabric_router_config) const override;
+    std::vector<uint32_t> get_compile_time_args() const;
 };
 
 /**
@@ -175,7 +187,23 @@ public:
         size_t base_l1_address,
         CoreType core_type = CoreType::WORKER);
 
-    std::vector<uint32_t> get_compile_time_args(const tt::tt_fabric::FabricEriscDatamoverConfig&) const override;
+    std::vector<uint32_t> get_compile_time_args() const override;
+
+    size_t get_mux_relay_flow_control_semaphore_address() const {
+        return mux_relay_flow_control_semaphore_region_.get_address();
+    }
+    size_t get_mux_relay_teardown_semaphore_address() const {
+        return mux_relay_teardown_semaphore_region_.get_address();
+    }
+    size_t get_mux_relay_buffer_index_semaphore_address() const {
+        return mux_relay_buffer_index_semaphore_region_.get_address();
+    }
+
+private:
+    // Semaphore regions for relay → mux connection (mux writes to these in relay's L1)
+    MemoryRegion mux_relay_flow_control_semaphore_region_{};
+    MemoryRegion mux_relay_teardown_semaphore_region_{};
+    MemoryRegion mux_relay_buffer_index_semaphore_region_{};
 };
 
 /**
@@ -196,7 +224,7 @@ public:
         std::shared_ptr<FabricTensixDatamoverMuxConfig> config,
         eth_chan_directions direction);
 
-    void create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program);
+    void create_and_compile(tt::tt_metal::Program& program);
 
     // Build connection to fabric channel - returns connection specs for EDMs to connect
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const;
@@ -215,7 +243,7 @@ public:
 
 private:
     const char* get_kernel_file_path() const;
-    std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice* device) const;
+    std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
 
     // Core and fabric configuration
@@ -261,7 +289,7 @@ public:
         std::shared_ptr<FabricTensixDatamoverRelayConfig> config,
         eth_chan_directions direction);
 
-    void create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program);
+    void create_and_compile(tt::tt_metal::Program& program);
 
     // Build connection to fabric channel - returns connection specs for EDMs to connect
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const;
@@ -280,7 +308,7 @@ public:
 
 private:
     const char* get_kernel_file_path() const;
-    std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice*) const;
+    std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program&) const;
 
     // Core and fabric configuration

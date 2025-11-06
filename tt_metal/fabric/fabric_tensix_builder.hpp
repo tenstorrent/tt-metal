@@ -155,7 +155,7 @@ public:
         eth_chan_directions direction);
 
     // Create and compile the kernel(s) based on mode
-    void create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program);
+    void create_and_compile(tt::tt_metal::Program& program);
 
     // Build connection to fabric channel - returns connection specs for EDMs to connect to this mux
     tt::tt_fabric::SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t channel_id) const;
