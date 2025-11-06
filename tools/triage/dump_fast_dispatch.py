@@ -50,8 +50,8 @@ class DumpWaitGlobalsData:
     x: int | None = triage_field("x", verbose=2)
     y: int | None = triage_field("y", verbose=2)
     last_event_issued_to_cq: int | None = triage_field("last_event_issued_to_cq", verbose=2)
-    # New field: live semaphore minus local_count_ (wrap-aware 32-bit arithmetic)
-    sem_minus_local: int | None = triage_field("sem_minus_local", verbose=1)
+    # Number of extra pages available in the circular buffer that are not included in cb_fence_
+    sem_minus_local: int | None = triage_field("cb_extra_pages", verbose=1)
 
 
 def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess) -> int | None:
